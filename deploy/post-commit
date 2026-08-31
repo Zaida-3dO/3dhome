@@ -1,0 +1,97 @@
+#!/bin/sh
+# Post-commit hook: mirror the 3dHome app into Home Assistant's www/.
+#
+# Copies this repo's tree to HA's /config/www/home3d/, where HA serves it at
+# /local/home3d/ — used by the HA tablet/mobile dashboard's 3D-Home iframe
+# (the ?preview=true tile and the ?embed=1 popup).
+#
+# ---------------------------------------------------------------------------
+# PROVENANCE
+# ---------------------------------------------------------------------------
+# Retrieved verbatim from /share/Web/.git/hooks/post-commit on the NAS
+# (2026-08-31) and adapted for this repo. Before that it existed ONLY as an
+# untracked file in one checkout's .git/hooks/ — in no repository, on no
+# branch, and one disk failure from being lost, while being the sole mechanism
+# keeping the HA dashboard's 3D embed current. It is a tracked file now.
+#
+# Install with: deploy/install-hooks.sh
+#
+# ---------------------------------------------------------------------------
+# WHAT CHANGED vs. the dashboard-era original
+# ---------------------------------------------------------------------------
+# The original mirrored a SUBSET of a larger dashboard repo — an rsync filter
+# of `/home3d.html` + `/js/***` + `/data/***` and nothing else — because that
+# repo was mostly dashboard files the iframe never loaded.
+#
+# In THIS repo the whole tree IS the app, so the filter is gone and the tree
+# mirrors wholesale. That also retires a workaround the filter forced: two
+# wallpaper textures had to be DUPLICATED into an included directory purely so
+# the `--include`/`--exclude` set would carry them. They no longer need a
+# second copy.
+#
+# ---------------------------------------------------------------------------
+# TWO TRAPS — both carried over from the original, both still live
+# ---------------------------------------------------------------------------
+# 1. HA's Samba addon vetoes 5-character `icon?` filenames (`veto_files: icon?`).
+#    A file named e.g. `assets/icons/icon.png` in the MIRRORED tree becomes
+#    invisible/unwritable over Samba. The old hook dodged this by never
+#    including assets/ at all. Now that the whole tree mirrors, keep the
+#    exclude below, and do not introduce an `assets/icons/` whose contents can
+#    match `icon?`. The app already registers no favicon in ?preview / ?embed
+#    modes precisely so the absent icon does not 404 (see index.html <head>).
+#
+# 2. Landing commits via git PLUMBING does not fire post-commit.
+#    `git update-ref`, `git fast-import`, a push received into this checkout,
+#    and similar low-level paths bypass hooks entirely — the commit lands and
+#    the mirror silently stays stale. `git commit` fires it; those do not.
+#    VERIFY BY MTIME, NOT BY COMMIT LOG: check the mirrored file's timestamp,
+#      stat -c '%y %n' "$DST/index.html"
+#    and confirm it moved. A fresh commit with an old mtime on the mirror means
+#    the hook did not run.
+# ---------------------------------------------------------------------------
+set -e
+
+# Deploy ONLY from the default branch — feature-branch WIP commits must never
+# reach the live (HA-served) app. The review gate happens before anything ships.
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+if [ "$branch" != "main" ] && [ "$branch" != "master" ]; then
+  echo "[post-commit] on branch '$branch' (not main/master) - skipping deploy."
+  exit 0
+fi
+
+# Source is the repo root (this hook lives at .git/hooks/ inside it).
+SRC=$(git rev-parse --show-toplevel)
+
+# Destination depends on host:
+#   - QNAP:    /share/Container/patrick/ha-config/www/home3d
+#   - Windows: /h/www/home3d  (mapped drive in Git Bash)
+# If neither layout is present, exit silently rather than failing the commit.
+if [ -d /share/Container/patrick/ha-config/www ]; then
+  DST=/share/Container/patrick/ha-config/www/home3d
+elif [ -d /h/www ]; then
+  DST=/h/www/home3d
+else
+  echo "[post-commit] No known deploy layout present (neither /share/ nor /h/). Skipping deploy."
+  exit 0
+fi
+
+mkdir -p "$DST"
+
+# Whole tree, minus VCS/dev metadata and the Samba-hostile icons dir (trap 1).
+if command -v rsync >/dev/null 2>&1; then
+  rsync -rt --delete --delete-excluded \
+    --exclude='.git/' \
+    --exclude='.github/' \
+    --exclude='node_modules/' \
+    --exclude='assets/icons/' \
+    "$SRC/" "$DST/"
+else
+  # cp fallback (Windows Git Bash often ships no rsync). Coarser: full replace.
+  rm -rf "$DST"
+  mkdir -p "$DST"
+  ( cd "$SRC" && tar --exclude=.git --exclude=.github --exclude=node_modules \
+      --exclude=assets/icons -cf - . ) | ( cd "$DST" && tar -xf - )
+fi
+
+echo "[post-commit] 3dHome synced -> $DST"
+echo "[post-commit] verify with: stat -c '%y %n' \"$DST/index.html\""

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3dHome — URL mode smoke test</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; background: #0f0f1a; color: #e8e8f0;
+         margin: 0; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.lede { color: #9aa; margin: 0 0 20px; max-width: 70ch; }
+  #summary { font-weight: 600; padding: 10px 14px; border-radius: 8px;
+             margin-bottom: 18px; display: inline-block; background: #23233a; }
+  #summary.pass { background: #14432a; color: #7fe0a3; }
+  #summary.fail { background: #4a1620; color: #ff9aa8; }
+  .mode { border: 1px solid #2a2a44; border-radius: 8px; margin-bottom: 14px;
+          overflow: hidden; }
+  .mode > h2 { font-size: 14px; margin: 0; padding: 9px 14px; background: #1a1a2e;
+               font-family: ui-monospace, monospace; font-weight: 600; }
+  ul { list-style: none; margin: 0; padding: 6px 0; }
+  li { padding: 4px 14px; display: flex; gap: 10px; align-items: baseline; }
+  .tag { flex: none; width: 46px; font-weight: 700; font-family: ui-monospace, monospace; }
+  .ok .tag { color: #5fd48c; }
+  .no .tag { color: #ff7a8a; }
+  .no { background: rgba(255,60,80,0.07); }
+  .why { color: #8890a8; font-size: 12px; }
+  iframe { position: absolute; left: -10000px; top: 0; width: 420px; height: 300px;
+           border: 0; }
+</style>
+</head>
+<body>
+
+<h1>3dHome — URL mode smoke test</h1>
+<p class="lede">
+  Asserts that each URL mode hides and shows the chrome documented in
+  <code>docs/url-parameters.md</code>, so a refactor cannot quietly break the
+  Home Assistant dashboard embed or the sidebar preview tile. Serve this over
+  HTTP from the repo root (same origin as <code>index.html</code>) and open it:
+  <code>docs/smoke-test.html</code>.
+</p>
+
+<div id="summary">Running…</div>
+<div id="results"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const VISIBLE = 'visible', HIDDEN = 'hidden';
+
+  // Each case: the query string, and what must be true of the loaded document.
+  // `sel` is queried inside the frame; `want` is VISIBLE or HIDDEN.
+  const CASES = [
+    {
+      name: '?preview=true',
+      query: '?preview=true',
+      checks: [
+        ['.back-btn',       HIDDEN,  'preview hides the back button'],
+        ['.title-overlay',  HIDDEN,  'preview hides the title overlay'],
+        ['.top-right-btns', HIDDEN,  'preview hides the top-right buttons'],
+        ['.panel',          HIDDEN,  'preview hides the side panel'],
+        ['#ha-status',      VISIBLE, 'preview KEEPS the HA status dot'],
+      ],
+      extra: (doc) => {
+        const out = [];
+        const bg = doc.body.style.background;
+        out.push([/transparent/.test(bg), 'body background is transparent',
+                  'got ' + JSON.stringify(bg)]);
+        const st = doc.getElementById('ha-status');
+        if (st) {
+          const anyText = Array.from(st.querySelectorAll('span'))
+            .some(s => s.style.display !== 'none');
+          out.push([!anyText, 'status dot text/badge children are hidden',
+                    'a <span> inside #ha-status is still displayed']);
+        }
+        const link = doc.querySelector('link[rel="icon"]');
+        out.push([!link, 'favicon <link> is suppressed (HA mirror ships no icons dir)',
+                  'a favicon link was inserted']);
+        return out;
+      }
+    },
+    {
+      name: '?embed=1',
+      query: '?embed=1',
+      checks: [
+        ['.back-btn',      HIDDEN,  'embed hides the back button'],
+        ['.title-overlay', HIDDEN,  'embed hides the title overlay'],
+        ['.panel',         VISIBLE, 'embed KEEPS the panel (it stays interactive)'],
+      ],
+      extra: (doc) => {
+        const link = doc.querySelector('link[rel="icon"]');
+        return [[!link, 'favicon <link> is suppressed', 'a favicon link was inserted']];
+      }
+    },
+    {
+      name: 'standalone (no params)',
+      query: '',
+      checks: [
+        // NOTE: there is deliberately NO .back-btn assertion here. The element
+        // does not exist in this app — it was a "back to the dashboard"
+        // affordance from the private predecessor, and a standalone public
+        // viewer has nowhere to go back TO. Its CSS and the hide-selectors in
+        // the preview/embed branches are harmless leftovers. If a back button
+        // is ever reintroduced, add a VISIBLE assertion for it here.
+        ['.title-overlay', VISIBLE, 'standalone shows the title overlay'],
+        ['.panel',         VISIBLE, 'standalone shows the side panel'],
+      ],
+      extra: (doc) => {
+        const link = doc.querySelector('link[rel="icon"]');
+        return [[!!link, 'favicon <link> IS registered in standalone mode',
+                 'no favicon link was inserted']];
+      }
+    },
+  ];
+
+  const results = document.getElementById('results');
+  const summary = document.getElementById('summary');
+  let pass = 0, fail = 0;
+
+  // An element counts as hidden if it is absent, display:none, visibility:hidden,
+  // or has no layout box at all.
+  function isHidden(win, el) {
+    if (!el) return true;
+    const cs = win.getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return true;
+    return el.getClientRects().length === 0;
+  }
+
+  function row(ok, label, why) {
+    ok ? pass++ : fail++;
+    const li = document.createElement('li');
+    li.className = ok ? 'ok' : 'no';
+    li.innerHTML = '<span class="tag">' + (ok ? 'PASS' : 'FAIL') + '</span>' +
+                   '<span>' + label +
+                   (!ok && why ? ' <span class="why">— ' + why + '</span>' : '') +
+                   '</span>';
+    return li;
+  }
+
+  function runCase(c) {
+    return new Promise((resolve) => {
+      const box = document.createElement('div');
+      box.className = 'mode';
+      const h = document.createElement('h2');
+      h.textContent = c.name;
+      box.appendChild(h);
+      const ul = document.createElement('ul');
+      box.appendChild(ul);
+      results.appendChild(box);
+
+      const f = document.createElement('iframe');
+      // Cache-bust per run so a mode's document is never reused across cases.
+      f.src = '../index.html' + c.query +
+              (c.query ? '&' : '?') + '_smoke=' + Date.now();
+
+      const done = () => {
+        let doc, win;
+        try { doc = f.contentDocument; win = f.contentWindow; }
+        catch (e) {
+          ul.appendChild(row(false, c.name + ' — frame not readable',
+            'serve over HTTP from the repo root (file:// blocks this)'));
+          f.remove(); resolve(); return;
+        }
+        if (!doc) {
+          ul.appendChild(row(false, c.name + ' — no document', 'frame failed to load'));
+          f.remove(); resolve(); return;
+        }
+
+        for (const [sel, want, label] of c.checks) {
+          const el = doc.querySelector(sel);
+          const hidden = isHidden(win, el);
+          const ok = (want === HIDDEN) ? hidden : !hidden;
+          ul.appendChild(row(ok, label,
+            'expected ' + sel + ' ' + want + ', it was ' +
+            (hidden ? HIDDEN : VISIBLE) + (el ? '' : ' (element absent)')));
+        }
+        if (c.extra) {
+          for (const [ok, label, why] of c.extra(doc)) {
+            ul.appendChild(row(ok, label, why));
+          }
+        }
+        f.remove();
+        resolve();
+      };
+
+      // Give the mode script (which runs async) a moment past load to apply.
+      f.addEventListener('load', () => setTimeout(done, 900));
+      f.addEventListener('error', () => {
+        ul.appendChild(row(false, c.name + ' — failed to load', 'iframe error'));
+        f.remove(); resolve();
+      });
+      document.body.appendChild(f);
+    });
+  }
+
+  (async () => {
+    for (const c of CASES) await runCase(c);
+    const total = pass + fail;
+    summary.textContent = fail === 0
+      ? 'All ' + total + ' assertions passed.'
+      : fail + ' of ' + total + ' assertions FAILED.';
+    summary.className = fail === 0 ? 'pass' : 'fail';
+    // Expose for a headless runner.
+    window.__SMOKE__ = { pass, fail, total, ok: fail === 0 };
+    document.title = (fail === 0 ? 'PASS' : 'FAIL') + ' — 3dHome smoke test';
+  })();
+})();
+</script>
+</body>
+</html>
