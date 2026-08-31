@@ -6,18 +6,32 @@
   <title>3dHome</title>
   <script>
     // Favicon: only registered in standalone mode.
-    // ?preview=true / ?embed=1 run as iframes inside HA where the deployed
-    // dashboard copy does not ship assets/icons/, so requesting the favicon
-    // would just 404. Inserting the <link> conditionally avoids that.
+    // ?preview=true / ?embed=1 run as iframes inside a host dashboard, where a
+    // favicon request is pointless - the host owns the tab. Inserting the
+    // <link> conditionally avoids the request entirely.
+    //
+    // The icon is an inline SVG data URI rather than a file. There is no
+    // assets/icons/ in this repo, so a path here would 404 on every standalone
+    // load; a data URI also costs no extra request and cannot fall out of sync
+    // with a file someone forgets to ship.
     (() => {
       const p = new URLSearchParams(window.location.search);
       const isPreview = p.get('preview') === 'true';
       const isEmbed = p.get('embed') === '1' || p.get('embed') === 'true';
       if (!isPreview && !isEmbed) {
+        const svg =
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+          '<rect width="32" height="32" rx="7" fill="#0f0f1a"/>' +
+          '<path d="M6 15.5 16 7l10 8.5" fill="none" stroke="#8ab4ff" ' +
+          'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>' +
+          '<path d="M8.5 14.5V25h15V14.5" fill="none" stroke="#8ab4ff" ' +
+          'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>' +
+          '<rect x="13.5" y="18" width="5" height="7" rx="0.8" fill="#ffd479"/>' +
+          '</svg>';
         const link = document.createElement('link');
         link.rel = 'icon';
-        link.type = 'image/png';
-        link.href = 'assets/icons/favicon.png';
+        link.type = 'image/svg+xml';
+        link.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
         document.head.appendChild(link);
       }
     })();
@@ -548,8 +562,6 @@
         { name: 'MainEntranceDoorSpec', path: 'specs/MainEntranceDoorSpec.html' },
         { name: 'BalconyWindowSpec',    path: 'specs/BalconyWindowSpec.html' },
         { name: 'CurtainSpec',          path: 'specs/CurtainSpec.html' },
-        { name: 'BathroomSpec',         path: 'specs/BathroomSpec.html' },
-        { name: 'EnSuiteBathroomSpec',  path: 'specs/EnSuiteBathroomSpec.html' },
       ];
       const haStatusEl = document.getElementById('ha-status');
       const haStatusDot = document.getElementById('ha-status-dot');
