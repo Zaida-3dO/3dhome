@@ -19,7 +19,7 @@ cd "$REPO_ROOT" || { echo "FATAL: cannot cd to repo root"; exit 1; }
 
 FAILURES=0
 CHECK_NO=0
-TOTAL_CHECKS=8
+TOTAL_CHECKS=9
 
 # Personal names that must not appear in a public repo. The app was extracted
 # from a private one, so migrated files can still carry the owner's name in a
@@ -369,6 +369,50 @@ if [ -n "$NAME_HITS" ]; then
   remedy "Run: grep -rnE \"\\<(Ope|Tomi|Haven)\\>\" --exclude-dir=vendor ."
 else
   pass "no owner names or private-predecessor branding"
+fi
+
+# ---------------------------------------------------------------------------
+# Check 9 - spec pages must not cite a real interior
+#
+# specs/ holds design-reference pages for FIXTURES (a door, a window, a
+# curtain). That is safe to publish. What is not safe is a spec page that
+# reconstructs a ROOM of a real dwelling - the room's measured dimensions, the
+# building's wall schedule, or a fixture layout copied from a photograph of a
+# real interior. That describes where somebody lives just as precisely as a
+# floor plan does, and check 1 does not see it because it is prose and geometry
+# in an HTML file rather than a house directory.
+#
+# Detecting "these numbers are real" is not possible, and a check that guessed
+# would produce false positives - which teaches people to route around the
+# guard, the one outcome worse than no check. So this matches only the
+# PROVENANCE TRAIL a reconstruction leaves behind, which is unambiguous:
+#
+#   - a reference to a photograph of a real interior or exterior
+#     ("reference photo", "Street View", "bathroom 3.jpg", "the actual house")
+#   - a citation of a private dictated brief (the .ope-*.md files the spec
+#     pages were built from in the predecessor repo)
+#   - an asset path on the owner's private share (W:\assets\...)
+#
+# Each is a positive statement, written by the author, that the page was
+# derived from a real building. None of them has an innocent meaning in a
+# public fixture reference, so a hit is a genuine finding, not a guess.
+# ---------------------------------------------------------------------------
+SPEC_PROV_RE='[Rr]eference photo|[Ss]treet ?View|[Tt]he actual house|[Oo]f the real house|\.ope-[a-z0-9-]*\.md|[Ww]:\\assets'
+SPEC_HITS=""
+if [ -d specs ]; then
+  SPEC_HITS=$(grep -r -n -E -a --exclude-dir=.git -- "$SPEC_PROV_RE" specs 2>/dev/null | sed 's|^\./||' || true)
+fi
+SPEC_HITS=$(printf '%s\n' "$SPEC_HITS" | grep -v '^$' || true)
+if [ -n "$SPEC_HITS" ]; then
+  fail "spec pages do not cite a real interior"
+  printf '%s\n' "$SPEC_HITS" | while IFS= read -r h; do
+    [ -n "$h" ] && detail "$(printf '%s' "$h" | cut -c1-160)"
+  done
+  remedy "A spec page is a FIXTURE reference (a door, a window, a curtain), not a"
+  remedy "record of a real room. Remove the citation and make the dimensions"
+  remedy "illustrative defaults, or move the page into the private house overlay."
+else
+  pass "spec pages do not cite a real interior"
 fi
 
 # ---------------------------------------------------------------------------

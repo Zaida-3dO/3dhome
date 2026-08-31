@@ -34,7 +34,7 @@
 <script src="../vendor/react-dom.production.min.js"></script>
 <script src="../vendor/babel.min.js"></script>
 <script src="../vendor/three.js"></script>
-<!-- Shared harness: the owner's real tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 <script type="text/babel" src="spec-three.jsx"></script>
 
@@ -42,6 +42,14 @@
 /* =====================================================================
    CURTAIN SPEC   ·   one design for ALL house curtains (only WIDTH,
    colors, and cornice side-faces vary per room).
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT, not a survey. They are ordinary
+   UK-joinery sizes chosen so the page renders something sensible on
+   first load. This is a design reference for modelling a fixture, not a
+   record of any particular building: measure your own opening and drive
+   the geometry from the Tweaks panel.
+   ─────────────────────────────────────────────────────────────────────
 
    THE CURTAIN — floor-to-ceiling, blackout, PINCH-PLEAT, TWO-TONE,
    centre-parted on a smart SLIDER, under a CORNICE / pelmet box with a
@@ -53,7 +61,7 @@
    extreme colour from the wall edge inward, then ONE hard colour-change
    boundary landing exactly on a pleat seam, then `innerPleats` pleats of
    the inner/centre colour running to the centre part (mirrored across
-   the centre — the owner's bedroom "5 pink extremes / 2 blue inner"). No
+   the centre — e.g. 5 outer pleats / 2 inner pleats). No
    blend — the boundary is a step, coloured per-pleat-index not per-u.
    Plus a FRONT (room-facing) vs BACK (window-facing) tint multiplied on
    top — front shows the pure two-tone, back is a lining tint.

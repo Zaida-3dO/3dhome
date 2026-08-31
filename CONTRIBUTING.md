@@ -31,6 +31,12 @@ describes where somebody lives and what is installed in it.
   e.g. `light.demo_lounge_ceiling`.
 - Never commit `config.js` or `config.json`; both hold your Home Assistant token.
 - No photographs of a real home, and no screenshots of a real house model.
+- The pages under `specs/` are **fixture** design references — a door, a window,
+  a curtain. Their dimensions must stay illustrative defaults. Do not commit a
+  spec page that reconstructs a **room**: real room dimensions, a wall schedule,
+  fixture positions taken from a survey or a photograph of a real interior, or
+  the make of a real fitting. Those describe a dwelling just as precisely as a
+  floor plan does, and they belong in the private overlay.
 
 **Run the guard before you push:**
 

@@ -33,18 +33,26 @@
 <script src="../vendor/react-dom.production.min.js"></script>
 <script src="../vendor/babel.min.js"></script>
 <script src="../vendor/three.js"></script>
-<!-- Shared harness: the owner's real tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 <script type="text/babel" src="spec-three.jsx"></script>
 
 <script type="text/babel">
 /* =====================================================================
-   WINDOW SPEC   ·   the HOUSE'S REAL WINDOWS (revised)
+   WINDOW SPEC   ·   floor-standing centre-pivot window (revised)
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT, not a survey. They are ordinary
+   UK-joinery sizes chosen so the page renders something sensible on
+   first load. This is a design reference for modelling a fixture, not a
+   record of any particular building: measure your own opening and drive
+   the geometry from the Tweaks panel.
+   ─────────────────────────────────────────────────────────────────────
 
    Replaces the earlier generic casement/tilt/slider window. This models
-   the actual windows in the house: a FLOOR-STANDING, door-height window
+   a FLOOR-STANDING, door-height window
    with a fixed lower pane and a Velux-style CENTRE-PIVOT upper sash, set
-   into the SOUTH external #4+#32 wall sandwich.
+   into the SOUTH external two-leaf wall sandwich.
 
    ---------------------------------------------------------------------
    THE FOUR THINGS THAT MAKE THIS SPEC (vs a plain punched window):
@@ -73,19 +81,19 @@
         • ONE param (openPct 0→100) drives rotation-about-the-3/4-pivot
           PLUS the pivot's downward slide.
 
-   4. WALL = the SOUTH EXTERNAL #4 + #32 SANDWICH.
-        • #4 = 33 cm (inner leaf, toward the room / +z).
-        • #32 = 10 cm (outer leaf, further south / −z).
+   4. WALL = the SOUTH EXTERNAL TWO-LEAF SANDWICH.
+        • inner leaf = 30 cm (, toward the room / +z).
+        • outer leaf = 10 cm (, further south / −z).
         • Combined slab 43 cm; a hole is cut through BOTH for the glazing.
-        • The window sits in the SOUTHMOST portion of #4: the window
-          frame's SOUTH face is flush with #4's SOUTH face (NOT on #32 —
-          #32 is the outer skin further south). The frame protrudes only
-          a LITTLE northward into #4's 33 cm (it does not span the full
+        • The window sits in the SOUTHMOST portion of the inner leaf: the window
+          frame's SOUTH face is flush with the inner leaf's SOUTH face (NOT on the outer leaf —
+          the outer leaf is the outer skin further south). The frame protrudes only
+          a LITTLE northward into the inner leaf's thickness (it does not span the full
           33 cm).
 
    The WALL is REFERENCE GEOMETRY ONLY (same doctrine as DoorSpec) — it
    shows how the sandwich is carved to receive the window; when inserting
-   into the real house reuse the existing wall.
+   into your own house reuse the existing wall.
 
    Depth convention (matches DoorSpec): +z = interior / north / room,
    −z = exterior / south. So "swings out" = toward −z.
@@ -102,8 +110,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "frameThickness": 6,
   "frameDepthIntoWall": 14,
   "glassInset": 2,
-  "wall4Thickness": 33,
-  "wall32Thickness": 10,
+  "innerLeafThickness": 30,
+  "outerLeafThickness": 10,
   "wallWidth": 220,
   "wallHeight": 250
 }/*EDITMODE-END*/;
@@ -139,17 +147,12 @@ function makeWallRoughnessTexture() {
   return tex;
 }
 
-// Exterior wall face — real stacked/running-bond brick coursing, palette
-// pixel-sampled directly from the owner's reference photo:
-// W:\assets\home images\stacked brickpng.png (a close-up Street View shot
-// of the actual house's brick exterior). Warm buff/cream brick, NOT a
-// single flat colour -- per review: "it shouldn't be a single colour, it
-// should be a stacked brick pattern." 6 base shades sampled from the photo
-// (measured pixel range ~#675239..#cfc8b9) plus a small per-brick random
-// jitter so individual bricks vary naturally, same as the real photo --
-// not a repeating 3-tone wash. Procedural canvas generator, mirroring
-// home3d-scene.js's makeWallRoughnessTexture()/makeOakGrainTexture()
-// pattern -- not a base64/asset file, so it carries zero deploy risk.
+// Exterior wall face - stacked/running-bond brick coursing in a warm
+// buff/cream palette. Brickwork should NOT read as a single flat colour,
+// so this uses 6 base shades plus a small per-brick random jitter, giving
+// natural variation rather than a repeating 3-tone wash. Swap the six
+// shades below for your own brick. Procedural canvas generator (not a
+// base64/asset file), so it carries zero deploy risk.
 function jitterHex(hex, delta) {
   const n = parseInt(hex.slice(1), 16);
   const clamp = v => Math.max(0, Math.min(255, Math.round(v)));
@@ -158,13 +161,10 @@ function jitterHex(hex, delta) {
   const b = clamp((n & 255) + delta);
   return `rgb(${r},${g},${b})`;
 }
-// Real brick module, MEASURED from the reference photo by autocorrelation
-// (not assumed): course period 39px (r=0.93); perpend period 57px (r=0.94)
-// -- running bond offsets alternate courses by half a brick, which halves
-// the apparent period when averaging rows, so the true brick width is
-// 2x57 = 114px. Module aspect 114/39 = 2.92 => a standard UK 215x65mm
-// brick + 10mm joint = a 225 x 75 mm module. Used below to size the tile
-// in REAL metres.
+// Standard UK brick module: a 215 x 65 mm brick plus a 10 mm mortar joint
+// gives a 225 x 75 mm module (aspect ~2.92). Used below to size the tile
+// in REAL metres, so the coursing scales correctly against the wall
+// whatever its dimensions.
 const BRICK_MODULE_W = 0.225;   // m (215mm brick + 10mm perpend)
 const BRICK_MODULE_H = 0.075;   // m (65mm brick + 10mm bed joint)
 
@@ -241,8 +241,8 @@ function geom(t) {
 }
 
 // ============== Cross-section SVG (top-down through the sash) ==============
-// Shows the #4 + #32 sandwich and where the frame sits: frame south face
-// flush with #4 south face, protruding a little north into #4.
+// Shows the inner + outer leaf sandwich and where the frame sits: frame south face
+// flush with inner leaf south face, protruding a little north into the inner leaf.
 function CrossSection({ t }) {
   const ref = React.useRef(null);
   React.useEffect(() => {
@@ -255,17 +255,17 @@ function CrossSection({ t }) {
 
     const WIN_W = t.winWidth;
     const WALL_W = t.wallWidth;
-    const T4 = t.wall4Thickness;      // 33
-    const T32 = t.wall32Thickness;    // 10
-    const FD = t.frameDepthIntoWall;  // frame reach north into #4
+    const T4 = t.innerLeafThickness;      // 33
+    const T32 = t.outerLeafThickness;    // 10
+    const FD = t.frameDepthIntoWall;  // frame reach north into the inner leaf
 
     const margin = 30;
     const SCALE = (W - 2 * margin) / WALL_W;
 
-    // depth (z) reference: interior (north) face of #4 at zN = +TOTAL/2 side.
+    // depth (z) reference: interior (north) face of the inner leaf at zN = +TOTAL/2 side.
     // We draw z increasing DOWNWARD on screen: north (room) at top,
-    // south (exterior) at bottom. #4 occupies [0 .. T4] from north face,
-    // #32 occupies [T4 .. T4+T32]. Frame south face = T4 (= #4 south face).
+    // south (exterior) at bottom. the inner leaf occupies [0 .. T4] from north face,
+    // the outer leaf occupies [T4 .. T4+T32]. Frame south face = T4 (= inner leaf south face).
     const TOTAL = T4 + T32;
     function pp(x, zDepth) {
       // x centered; zDepth 0..TOTAL mapped to a vertical band centered on H/2
@@ -291,14 +291,14 @@ function CrossSection({ t }) {
 
     const REVEAL = 4;
     const openingHalfW = WIN_W/2 + REVEAL;
-    // #4 leaf (north/inner) segments left + right of opening
+    // inner leaf (north) segments left + right of opening
     svg.appendChild(rect(-WALL_W/2, 0, -openingHalfW, T4, '#e8e2d4', '#a89c80'));
     svg.appendChild(rect(+openingHalfW, 0, +WALL_W/2, T4, '#e8e2d4', '#a89c80'));
-    // #32 leaf (south/outer) segments left + right of opening
+    // outer leaf (south) segments left + right of opening
     svg.appendChild(rect(-WALL_W/2, T4, -openingHalfW, TOTAL, '#ddd6c4', '#a89c80'));
     svg.appendChild(rect(+openingHalfW, T4, +WALL_W/2, TOTAL, '#ddd6c4', '#a89c80'));
 
-    // FRAME jambs: south face at z=T4 (= #4 south face), reaching NORTH into #4 by FD
+    // FRAME jambs: south face at z=T4 (= inner leaf south face), reaching NORTH into the inner leaf by FD
     const frameNorth = T4 - FD;
     svg.appendChild(rect(-openingHalfW, frameNorth, -WIN_W/2, T4, '#f1ede2', '#a89c80'));
     svg.appendChild(rect(+WIN_W/2, frameNorth, +openingHalfW, T4, '#f1ede2', '#a89c80'));
@@ -308,14 +308,14 @@ function CrossSection({ t }) {
     svg.appendChild(rect(-WIN_W/2, glassZ - 0.4, +WIN_W/2, glassZ + 0.4, '#bcd4e6', '#7fa8c4'));
 
     svg.appendChild(txt(0, TOTAL + 3.0, `window ${WIN_W.toFixed(0)} cm`, { anchor:'middle', color:'#444' }));
-    svg.appendChild(txt(WALL_W/2 + 0.6, T4/2, `#4 ${T4}`, { color:'#666', size:'9' }));
-    svg.appendChild(txt(WALL_W/2 + 0.6, T4 + T32/2, `#32 ${T32}`, { color:'#666', size:'9' }));
-    svg.appendChild(txt(-WALL_W/2 - 1, T4, `#4 south face`, { anchor:'end', color:'#888', size:'8' }));
+    svg.appendChild(txt(WALL_W/2 + 0.6, T4/2, `inner ${T4}`, { color:'#666', size:'9' }));
+    svg.appendChild(txt(WALL_W/2 + 0.6, T4 + T32/2, `outer ${T32}`, { color:'#666', size:'9' }));
+    svg.appendChild(txt(-WALL_W/2 - 1, T4, `inner leaf south face`, { anchor:'end', color:'#888', size:'8' }));
 
     const head = document.createElementNS(ns, 'text');
     head.setAttribute('x', 12); head.setAttribute('y', 20);
     head.setAttribute('font-size', '12'); head.setAttribute('fill', '#333');
-    head.textContent = `Top-down — #4(${T4})+#32(${T32}) sandwich · frame S face flush w/ #4 S face`;
+    head.textContent = `Top-down — inner(${T4})+outer(${T32}) sandwich · frame S face flush w/ inner-leaf S face`;
     svg.appendChild(head);
     const sub = document.createElementNS(ns, 'text');
     sub.setAttribute('x', 12); sub.setAttribute('y', H - 8);
@@ -339,24 +339,24 @@ function buildWindow(t, group, THREE, ctx) {
   const BOT_H = g.botH * cm;
   const DIV_Y = g.divY * cm;
   const FT  = t.frameThickness * cm;         // frame face width
-  const FD  = t.frameDepthIntoWall * cm;     // frame reach north into #4
+  const FD  = t.frameDepthIntoWall * cm;     // frame reach north into the inner leaf
   const GI  = t.glassInset * cm;
-  const T4  = t.wall4Thickness * cm;         // 0.33
-  const T32 = t.wall32Thickness * cm;        // 0.10
+  const T4  = t.innerLeafThickness * cm;         // 0.33
+  const T32 = t.outerLeafThickness * cm;        // 0.10
   const TOTAL = T4 + T32;
   const WALL_W = t.wallWidth * cm;
   const WALL_H = t.wallHeight * cm;
   const REVEAL = 4 * cm;
 
   // ---- DEPTH REFERENCE FRAME ----
-  // Put the #4 SOUTH face at z = 0 (this is where the window frame's south
-  // face lines up). #4 extends NORTH (+z) to z = +T4. #32 extends SOUTH
+  // Put the inner leaf SOUTH face at z = 0 (this is where the window frame's south
+  // face lines up). the inner leaf extends NORTH (+z) to z = +T4. the outer leaf extends SOUTH
   // (−z) from z=0 to z = −T32. The room is at large +z, exterior at −z.
-  const Z_4_SOUTH = 0;                 // = #4 south face = frame south face
-  const Z_4_NORTH = +T4;               // #4 inner (room) face
-  const Z_32_SOUTH = -T32;             // #32 outer face
-  const frameSouthZ = Z_4_SOUTH;       // frame south face flush with #4 south
-  const frameNorthZ = Z_4_SOUTH + FD;  // frame reaches a little north into #4
+  const Z_4_SOUTH = 0;                 // = inner leaf south face = frame south face
+  const Z_4_NORTH = +T4;               // inner leaf (room) face
+  const Z_32_SOUTH = -T32;             // outer leaf face
+  const frameSouthZ = Z_4_SOUTH;       // frame south face flush with inner leaf south
+  const frameNorthZ = Z_4_SOUTH + FD;  // frame reaches a little north into the inner leaf
 
   const frameMat = new THREE.MeshStandardMaterial({ color:0xf1ede2, roughness:0.5 });
   const sashMat  = new THREE.MeshStandardMaterial({ color:0xf6f5f1, roughness:0.55 });
@@ -550,17 +550,17 @@ function buildWindow(t, group, THREE, ctx) {
   pivot.rotation.x = ctx.pivotAngle;
 
   // =================================================================
-  // WALL — REFERENCE GEOMETRY ONLY · #4 + #32 SANDWICH.
+  // WALL — REFERENCE GEOMETRY ONLY · inner + outer leaf SANDWICH.
   //   Cut ONE hole through BOTH leaves for the glazing. Hole runs from the
   //   platform top up to the head (bounded on all four sides).
   // =================================================================
-  // fix: #4 = inner leaf = INSIDE face -> white plasterboard (roughness-
+  // fix: inner leaf = INSIDE face -> white plasterboard (roughness-
   // only noise via roughnessMap, matching home3d-scene.js's wall
   // convention — no colour map, so `color` is free to carry the tint).
   const wall4Mat  = new THREE.MeshStandardMaterial({
     color: 0xece9e1, roughness: 0.82, roughnessMap: makeWallRoughnessTexture()
   });
-  // #32 = outer leaf = OUTSIDE face -> yellow/buff brick pattern. The tint
+  // outer leaf = OUTSIDE face -> yellow/buff brick pattern. The tint
   // lives in the canvas texture itself; `color` stays 0xffffff so it isn't
   // re-multiplied against the map (LEARNINGS #57, the multiply trap).
   const wall32Mat = new THREE.MeshStandardMaterial({
@@ -591,9 +591,9 @@ function buildWindow(t, group, THREE, ctx) {
     mesh.castShadow = true; mesh.receiveShadow = true;
     group.add(mesh);
   }
-  // #4 inner leaf: from south face (z=0) north to +T4
+  // inner leaf: from south face (z=0) north to +T4
   carvedWall(T4, Z_4_SOUTH, wall4Mat, 'wall4_REFERENCE_ONLY');
-  // #32 outer leaf: from its north face (z=0) south to −T32
+  // outer leaf: from its north face (z=0) south to −T32
   carvedWall(T32, Z_32_SOUTH, wall32Mat, 'wall32_REFERENCE_ONLY');
 }
 
@@ -613,13 +613,13 @@ function App() {
   return (
     <>
       <h1>Window Spec</h1>
-      <div className="sub">All units cm. The house's real window: floor-standing, door-height, fixed lower pane + Velux-style centre-pivot upper sash, set in the south #4+#32 wall sandwich. Use the Tweaks panel to open it (push the top sash inside-out).</div>
+      <div className="sub">All units cm. Floor-standing, door-height, fixed lower pane + Velux-style centre-pivot upper sash, set in the south two-leaf wall sandwich. Use the Tweaks panel to open it (push the top sash inside-out).</div>
 
       <div className="grid">
         <div className="card">
           <h2>Cross-section (top-down)</h2>
           <CrossSection t={t} />
-          <div className="legend">Wall sandwich: #4 {t.wall4Thickness} cm (inner) + #32 {t.wall32Thickness} cm (outer) = {t.wall4Thickness + t.wall32Thickness} cm. Window frame's south face flush with #4's south face; frame reaches {t.frameDepthIntoWall} cm north into #4 (not the full {t.wall4Thickness}).</div>
+          <div className="legend">Wall sandwich: inner leaf {t.innerLeafThickness} cm + outer leaf {t.outerLeafThickness} cm = {t.innerLeafThickness + t.outerLeafThickness} cm. Window frame's south face flush with the inner leaf's outer face; frame reaches {t.frameDepthIntoWall} cm into the inner leaf (not the full {t.innerLeafThickness}).</div>
         </div>
 
         <div className="card">
@@ -634,16 +634,16 @@ function App() {
               <tr><td>Bottom pane (fixed)</td><td className="num">{g.botH.toFixed(0)}</td><td>Derived</td></tr>
               <tr><td>Top/bottom split</td><td className="num">{(t.topSplit*100).toFixed(0)}%</td><td><b>Variable</b> — top fraction</td></tr>
               <tr><td>Frame face width</td><td className="num">{t.frameThickness.toFixed(0)}</td><td>Fixed-ish</td></tr>
-              <tr><td>Frame depth into #4</td><td className="num">{t.frameDepthIntoWall.toFixed(0)}</td><td>Protrudes into #4 (&lt; {t.wall4Thickness})</td></tr>
-              <tr><td>Wall #4 (inner)</td><td className="num">{t.wall4Thickness.toFixed(0)}</td><td>Frame S face = #4 S face</td></tr>
-              <tr><td>Wall #32 (outer)</td><td className="num">{t.wall32Thickness.toFixed(0)}</td><td>Outer skin, further south</td></tr>
+              <tr><td>Frame depth into inner leaf</td><td className="num">{t.frameDepthIntoWall.toFixed(0)}</td><td>Protrudes into the inner leaf (&lt; {t.innerLeafThickness})</td></tr>
+              <tr><td>Inner leaf</td><td className="num">{t.innerLeafThickness.toFixed(0)}</td><td>Frame S face = inner-leaf S face</td></tr>
+              <tr><td>Outer leaf</td><td className="num">{t.outerLeafThickness.toFixed(0)}</td><td>Outer skin, further south</td></tr>
               <tr><td>Open (centre-pivot)</td><td className="num">{t.openPct.toFixed(0)}%</td><td>0=closed · 100=inside-out</td></tr>
             </tbody>
           </table>
         </div>
 
         <div className="card full">
-          <h2>3D — window in #4+#32 sandwich cutout</h2>
+          <h2>3D — window in inner+outer leaf sandwich cutout</h2>
           <ThreeView
             t={t}
             buildModel={buildWindow}
@@ -664,17 +664,17 @@ function App() {
         <TweakSlider label="Top pane fraction" value={t.topSplit} min={0.3} max={0.7} step={0.01}
           onChange={v => setTweak('topSplit', v)} />
 
-        <TweakSection label="Frame (in #4)" />
+        <TweakSection label="Frame (in inner leaf)" />
         <TweakSlider label="Frame face" value={t.frameThickness} min={3} max={12} step={0.5} unit="cm"
           onChange={v => setTweak('frameThickness', v)} />
-        <TweakSlider label="Frame depth into #4" value={t.frameDepthIntoWall} min={6} max={30} step={1} unit="cm"
+        <TweakSlider label="Frame depth into inner leaf" value={t.frameDepthIntoWall} min={6} max={30} step={1} unit="cm"
           onChange={v => setTweak('frameDepthIntoWall', v)} />
 
         <TweakSection label="Wall sandwich" />
-        <TweakSlider label="#4 thickness (inner)" value={t.wall4Thickness} min={20} max={40} step={1} unit="cm"
-          onChange={v => setTweak('wall4Thickness', v)} />
-        <TweakSlider label="#32 thickness (outer)" value={t.wall32Thickness} min={5} max={20} step={1} unit="cm"
-          onChange={v => setTweak('wall32Thickness', v)} />
+        <TweakSlider label="Inner leaf thickness" value={t.innerLeafThickness} min={20} max={40} step={1} unit="cm"
+          onChange={v => setTweak('innerLeafThickness', v)} />
+        <TweakSlider label="Outer leaf thickness" value={t.outerLeafThickness} min={5} max={20} step={1} unit="cm"
+          onChange={v => setTweak('outerLeafThickness', v)} />
 
         <TweakSection label="Opening — centre-pivot (Velux)" />
         <TweakSlider label="Open" value={t.openPct} min={0} max={100} step={1} unit="%"

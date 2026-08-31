@@ -33,13 +33,21 @@
 <script src="../vendor/react-dom.production.min.js"></script>
 <script src="../vendor/babel.min.js"></script>
 <script src="../vendor/three.js"></script>
-<!-- Shared harness: the owner's real tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 <script type="text/babel" src="spec-three.jsx"></script>
 
 <script type="text/babel">
 /* =====================================================================
    DOOR SPEC   ·   reference implementation of the shared spec harness
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT, not a survey. They are ordinary
+   UK-joinery sizes chosen so the page renders something sensible on
+   first load. This is a design reference for modelling a fixture, not a
+   record of any particular building: measure your own opening and drive
+   the geometry from the Tweaks panel.
+   ─────────────────────────────────────────────────────────────────────
 
    This document specifies a complete DOOR ASSEMBLY. Anywhere you see
    the word "door" in this file (filename, headings, comments, scene
@@ -67,11 +75,11 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "openPct": 0,
   "hingeFront": false,
   "doorHeight": 198,
-  "doorThickness": 4.4,
+  "doorThickness": 4,
   "grooveHeight": 1,
   "grooveDepth": 0.1,
   "panelCount": 5,
-  "wallThickness": 10.7,
+  "wallThickness": 10,
   "wallWidth": 150,
   "wallHeight": 250,
   "doorWidth": 84
