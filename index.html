@@ -299,7 +299,9 @@
   </div>
 
   <!-- HA connection status -->
-  <!-- VERSION: keep the badge below in sync with the ?v= cache-bust query strings on the <script> tags at the bottom of this file -->
+  <!-- The version badge below is stamped from APP_VERSION at deploy time, as are
+       the ?v= cache-busts on every script tag. Nothing here is kept in sync by
+       hand: leave the __VERSION__ placeholders alone. -->
   <div class="ha-status" id="ha-status" style="display:none">
     <div class="ha-status-dot" id="ha-status-dot"></div>
     <span id="ha-status-text">HA Disconnected</span>
@@ -401,7 +403,9 @@
        application code below, which reads HomeConfig during boot. -->
   <script src="config.js" onerror="window.__home3dNoConfigJs = true;"></script>
   <script src="src/config-loader.js?v=__VERSION__"></script>
-  <!-- VERSION: keep the ?v= values in sync with the visible v* badge inside #ha-status above -->
+  <!-- ?v= values are stamped from APP_VERSION at deploy time; do not hardcode one.
+       deploy/check-version-stamping.sh fails CI if a literal version appears here. -->
+  <script src="src/house-loader.js?v=__VERSION__"></script>
   <script src="src/home3d-scene.js?v=__VERSION__"></script>
   <script src="src/ha-client.js?v=__VERSION__"></script>
   <!-- Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
@@ -615,9 +619,26 @@
         }
       }
 
+      // ---- Load the house profile ----
+      //
+      // The engine renders whatever house it is handed; which house that is
+      // comes from configuration (HOME3D_HOUSE / ?house=). A profile that
+      // cannot be loaded falls back to the demo house with a clear console
+      // message rather than a blank canvas - loadWithFallback() guarantees
+      // that, and only rethrows if the demo house itself is unreachable.
+      const house = await HouseLoader.loadWithFallback(cfg.house, 'demo');
+      if (house.fallbackFrom) {
+        console.warn('[home3d] Rendering the demo house because "' +
+          house.fallbackFrom + '" could not be loaded. See the error above.');
+      }
+      console.info('[home3d] House "' + house.id + '" (' + house.name + '): ' +
+        Object.keys(house.rooms).length + ' rooms, ' + house.walls.length + ' walls, ' +
+        house.doors.length + ' doors.');
+
       // ---- Create scene with correct initial light state ----
 
       const home = Home3DScene.create(container, {
+        house: house,
         interactive: !isPreview,
         autoRotate: isPreview,
         rotateSpeed: rotateSpeed,
@@ -742,19 +763,60 @@
           requestRender: home.requestRender,
         });
 
-      // Preview tile: stop the render loop whenever it isn't actually visible —
-      // (a) a dashboard popup is open (parent hash set), e.g. the #3d / #miles
-      // modal covering it, or (b) it's scrolled off-screen / on an inactive
-      // swipe slide. Same-origin iframe, so we can read the parent location and
-      // run an IntersectionObserver against our own frame element. The scene
-      // itself already pauses on tab/app background (visibilitychange).
+      // ── Preview tile: pause the render loop whenever it isn't visible ──
+      //
+      // Without this a WebGL scene renders continuously inside a hidden tile
+      // on a page that is often left open all day. It pauses when (a) a host
+      // popup covers it, or (b) it is scrolled off-screen / sitting on an
+      // inactive swipe slide / behind a closed mobile drawer. The scene
+      // already pauses on tab/app background itself (visibilitychange).
+      //
+      // TWO TRANSPORTS, in priority order:
+      //
+      //   1. SAME-ORIGIN (legacy hosts): we can read the parent's location and
+      //      construct an IntersectionObserver in the parent realm against our
+      //      own frameElement. Self-contained — the host needs no code at all.
+      //
+      //   2. CROSS-ORIGIN (postMessage): an iframe CANNOT be observed from
+      //      inside, and every same-origin call above throws. So the PARENT
+      //      observes the iframe element and posts visibility across; we apply
+      //      it via setActive(). The host side of this lives in the embedder
+      //      (see docs/url-parameters.md, "Embedding the preview tile").
+      //
+      // Transport 2 crosses an ORIGIN BOUNDARY, so the contract is strict:
+      //   * Versioned      — every message carries v:1 under a namespaced type.
+      //   * Origin-checked on BOTH ends. We verify event.origin against the
+      //     embedder origin, and we never reply with '*'. A message that fails
+      //     any check is dropped silently.
+      //
+      //     WHICH ORIGIN IS TRUSTED is decided in one of two ways:
+      //       (a) ?parentOrigin=<origin> — the embedder states it up front.
+      //           PREFERRED, and what the dashboard passes. Only that exact
+      //           origin is ever accepted.
+      //       (b) Trust-on-first-use — if ?parentOrigin is absent, the first
+      //           valid hello pins the origin.
+      //     (b) is a deliberate convenience for ad-hoc/local embedding, and it
+      //     is worth being honest about its limit: a page that frames us IS
+      //     window.parent, so a hostile framer that handshakes first can pin
+      //     itself and then pause our render loop. That is the entire reachable
+      //     capability (see the note below) — a denial-of-animation on a
+      //     decorative tile, not data access — but any embedder that cares
+      //     should pass ?parentOrigin and close it off. Verified by test:
+      //     without ?parentOrigin a foreign framer can pause the scene; with it,
+      //     the same attempt is ignored.
+      //   * setActive() is the ONLY thing reachable through it. This channel
+      //     deliberately exposes no scene mutation, no config, no HA access —
+      //     the blast radius of a spoofed message is a paused render loop.
       if (isPreview) {
+        let onScreen = true, noPopup = true;
+        const apply = () => home.setActive(onScreen && noPopup);
+
+        // ---- Transport 1: same-origin direct observation ----
+        let sameOriginWorked = false;
         try {
           const parentWin = window.parent;
           const frameEl = window.frameElement; // belongs to the parent document
           if (parentWin && parentWin !== window) {
-            let onScreen = true, noPopup = true;
-            const apply = () => home.setActive(onScreen && noPopup);
             const checkHash = () => {
               const h = parentWin.location.hash || '';
               noPopup = (h === '' || h === '#');
@@ -769,9 +831,95 @@
                 apply();
               }, { threshold: [0, 0.1, 0.5] });
               io.observe(frameEl);
+              sameOriginWorked = true;
             }
           }
-        } catch (e) { /* cross-origin/no parent — preview just runs unpaused */ }
+        } catch (e) {
+          // Cross-origin parent (the expected case for a public deployment).
+          // Fall through to transport 2.
+        }
+
+        // ---- Transport 2: cross-origin postMessage ----
+        if (!sameOriginWorked && window.parent && window.parent !== window) {
+          const PROTO = 'home3d.visibility';
+          const VERSION = 1;
+
+          // ?parentOrigin=<origin> — the embedder declaring its own origin.
+          // When present, ONLY this origin is ever accepted and no handshake
+          // can change it. Parsed to an origin so a full URL also works, and
+          // restricted to http/https.
+          let hostOrigin = null;
+          let originPinnedByParam = false;
+          try {
+            const raw = params.get('parentOrigin');
+            if (raw) {
+              const u = new URL(raw, window.location.href);
+              if (u.protocol === 'http:' || u.protocol === 'https:') {
+                hostOrigin = u.origin;
+                originPinnedByParam = true;
+              } else {
+                console.warn('[home3d] ?parentOrigin must be http/https; ignoring it.');
+              }
+            }
+          } catch (e) {
+            console.warn('[home3d] ?parentOrigin is not a valid URL; ignoring it.');
+          }
+
+          window.addEventListener('message', (event) => {
+            const data = event.data;
+            // Shape check first — a page receives plenty of unrelated chatter
+            // (webpack HMR, extensions, other frames); none of it should log.
+            if (!data || typeof data !== 'object') return;
+            if (data.proto !== PROTO) return;
+            if (data.v !== VERSION) return;
+            // The message must come from the window that actually frames us.
+            if (event.source !== window.parent) return;
+
+            // ORIGIN CHECK. event.origin is set by the browser and cannot be
+            // forged by the sender.
+            if (hostOrigin === null) {
+              // Trust-on-first-use (no ?parentOrigin given).
+              if (data.type !== 'hello') return; // must handshake first
+              if (!event.origin || event.origin === 'null') return; // opaque origin
+              hostOrigin = event.origin;
+            } else if (event.origin !== hostOrigin) {
+              // Wrong origin. When pinned by ?parentOrigin this is the case
+              // that shuts out a hostile framer; when pinned by first-use it
+              // shuts out everyone after the first.
+              return;
+            }
+
+            if (data.type === 'hello') {
+              // Acknowledge to the pinned origin — never '*'.
+              try {
+                event.source.postMessage(
+                  { proto: PROTO, v: VERSION, type: 'ready' }, hostOrigin
+                );
+              } catch (e) { /* host went away */ }
+              return;
+            }
+
+            if (data.type === 'visibility') {
+              // Coerce explicitly: only a real boolean true means visible.
+              onScreen = data.visible === true;
+              apply();
+            }
+          });
+
+          // Announce readiness so a host that mounted us before its own
+          // listener attached still gets a handshake. Targeted at the declared
+          // origin when we have one; otherwise broadcast, which is acceptable
+          // for THIS message only because it carries no data beyond "a home3d
+          // preview frame exists" — which the host already knows, having
+          // created the frame. Everything meaningful travels only after the
+          // origin is pinned.
+          try {
+            window.parent.postMessage(
+              { proto: PROTO, v: VERSION, type: 'hello-from-frame' },
+              originPinnedByParam ? hostOrigin : '*'
+            );
+          } catch (e) { /* no parent */ }
+        }
       }
 
       // Hover detection for tooltip
