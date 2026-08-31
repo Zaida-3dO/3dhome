@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      workflows: ${{ steps.filter.outputs.workflows }}
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            workflows:
+              - '.github/workflows/**'
+            docker:
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'deploy/**'
+              - 'docker-compose.yml'
+              - '.github/workflows/release.yml'
+
+  # --- Workflow linting (path-gated) ---------------------------------------
+
+  actionlint:
+    name: Lint GitHub Actions workflows
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: raven-actions/actionlint@v2
+
+  actionlint-gate:
+    name: Actionlint (required)
+    needs: [changes, actionlint]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pass — workflows not changed
+        if: needs.changes.outputs.workflows == 'false'
+        run: echo "No workflow files changed, skipping actionlint"
+      - name: Fail — actionlint failed
+        if: needs.changes.outputs.workflows == 'true' && needs.actionlint.result != 'success'
+        run: exit 1
+
+  # --- Always-on checks (public repo: these run on every PR) ---------------
+
+  pii-guard:
+    name: PII / secrets guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check the guard script exists
+        run: |
+          # A missing guard must FAIL, never silently pass — a guard that can be
+          # deleted to make it green is not a guard.
+          if [ ! -f scripts/check-no-pii.sh ]; then
+            echo "::error file=scripts/check-no-pii.sh::PII guard script scripts/check-no-pii.sh is missing."
+            echo "This repo is public. The PII guard is mandatory and must not be removed or renamed."
+            exit 1
+          fi
+      - name: Run the PII guard
+        run: bash scripts/check-no-pii.sh
+
+  js-syntax:
+    name: JS / JSON syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: node --check every JS file in src/ and scripts/
+        run: |
+          # No bundler, no test framework: `node --check` is the parse gate.
+          # vendor/ is skipped deliberately — third-party, and three.js is huge.
+          set -euo pipefail
+          found=0
+          while IFS= read -r -d '' f; do
+            found=$((found + 1))
+            echo "checking $f"
+            node --check "$f"
+          done < <(find src scripts -type f -name '*.js' -not -path '*/vendor/*' -print0 2>/dev/null)
+          echo "Checked $found JS file(s)."
+      - name: Validate every JSON file in houses/ and the repo root
+        run: |
+          set -euo pipefail
+          found=0
+          check() {
+            echo "checking $1"
+            node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$1"
+          }
+          while IFS= read -r -d '' f; do
+            found=$((found + 1)); check "$f"
+          done < <(find houses -type f -name '*.json' -not -path '*/vendor/*' -print0 2>/dev/null)
+          while IFS= read -r -d '' f; do
+            found=$((found + 1)); check "$f"
+          done < <(find . -maxdepth 1 -type f -name '*.json' -print0)
+          echo "Checked $found JSON file(s)."
+
+  house-profiles:
+    name: House profile validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Validate houses/*/geometry.json against houses/schema.json
+        run: |
+          set -euo pipefail
+          # houses/schema.json arrives in a later milestone. Until it exists this
+          # step is a clear no-op; once it exists, a bad profile is a hard failure.
+          if [ ! -f houses/schema.json ]; then
+            echo "houses/schema.json not present yet (later milestone) - skipping profile validation."
+            exit 0
+          fi
+          # Null-delimited into an array: safe for paths with spaces, and avoids
+          # word-splitting an unquoted expansion (shellcheck SC2086).
+          profiles=()
+          while IFS= read -r -d '' p; do
+            profiles+=("$p")
+          done < <(find houses -mindepth 2 -maxdepth 2 -name geometry.json -print0 | sort -z)
+          if [ ${#profiles[@]} -eq 0 ]; then
+            echo "houses/schema.json exists but no houses/*/geometry.json found - nothing to validate."
+            exit 0
+          fi
+          printf 'will validate %s\n' "${profiles[@]}"
+          npm install --no-save --no-audit --no-fund ajv@8 ajv-formats@3
+          node - "${profiles[@]}" <<'NODE'
+          const fs = require('fs');
+          // The house schema declares draft 2020-12, so it needs ajv's 2020
+          // entrypoint - the default require('ajv') is draft-07 and throws
+          // 'no schema with key or ref .../draft/2020-12/schema' on compile.
+          const Ajv = require('ajv/dist/2020');
+          const addFormats = require('ajv-formats');
+          const ajv = new Ajv({ allErrors: true, strict: false });
+          addFormats(ajv);
+          const schema = JSON.parse(fs.readFileSync('houses/schema.json', 'utf8'));
+          const validate = ajv.compile(schema);
+          let failed = 0;
+          for (const p of process.argv.slice(2)) {
+            const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+            if (validate(data)) {
+              console.log(`ok   ${p}`);
+            } else {
+              failed++;
+              console.log(`FAIL ${p}`);
+              for (const e of validate.errors) {
+                console.log(`     ${e.instancePath || '/'} ${e.message}`);
+              }
+            }
+          }
+          if (failed) {
+            console.error(`${failed} house profile(s) failed schema validation.`);
+            process.exit(1);
+          }
+          NODE
+
+  # --- Docker dry run (path-gated) -----------------------------------------
+
+  docker-dry-run:
+    name: Docker build (dry run)
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          build-args: |
+            APP_VERSION=ci-dry-run
+
+  docker-dry-run-gate:
+    name: Docker dry run (required)
+    needs: [changes, docker-dry-run]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pass — docker files not changed
+        if: needs.changes.outputs.docker == 'false'
+        run: echo "No Docker-relevant files changed, skipping docker-dry-run"
+      - name: Fail — docker-dry-run failed
+        if: needs.changes.outputs.docker == 'true' && needs.docker-dry-run.result != 'success'
+        run: exit 1
