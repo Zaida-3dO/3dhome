@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Main Entrance Door Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- Shared harness: the owner's real tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   MAIN ENTRANCE DOOR SPEC   ·   clone of DoorSpec on the shared harness
+
+   Specifies the MAIN ENTRANCE DOOR ASSEMBLY. Same swing kinematics and
+   handle/slab machinery as the internal DoorSpec, but sitting in the
+   THICK entrance wall #14 (30 cm), with a frame that behaves like a real
+   entrance frame rather than the thin internal-door frame.
+
+   What's different vs the internal DOOR spec (the three things a plain
+   clone doesn't cover):
+
+     1. WALL = #14 (30 cm thick). The internal spec used a thin ~10 cm
+        wall. The entrance wall is 30 cm, so the frame + reveal live in a
+        much deeper wall.
+
+     2. FRAME RUNS THE FULL WALL DEPTH + A FACE ON BOTH SIDES. Internal
+        doors have a face-frame (architrave) on BOTH wall faces, joined
+        by a lining running through the wall's thickness. The entrance is
+        the same idea but on the 30 cm #14: the frame lining spans the
+        full 30 cm, and there is a visible frame face (a shallow
+        architrave lip) proud on BOTH the inside AND outside face of the
+        wall.
+
+     3. DOOR LEAF FLUSH TO THE WALL FACE. In the internal spec the leaf
+        sits back inside the reveal (comes up short of the face). Here the
+        leaf's closing face is pushed OUT so it sits flush with the wall
+        face it closes against — it reaches all the way to the face.
+
+   Everything else (slab grooves, mirrored lever handles, both-direction
+   swing 0→150°, the reference wall carve) matches DoorSpec.
+
+   The WALL is REFERENCE GEOMETRY ONLY (same doctrine as DoorSpec) — it
+   only shows how the thick #14 must be carved to receive the assembly.
+
+   Tweaks panel + ThreeView boilerplate come from the shared harness
+   (tweaks-panel.jsx + spec-three.jsx).
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "openPct": 0,
+  "hingeFront": false,
+  "doorHeight": 210,
+  "doorThickness": 5.4,
+  "grooveHeight": 1,
+  "grooveDepth": 0.1,
+  "panelCount": 4,
+  "wallThickness": 30,
+  "wallWidth": 160,
+  "wallHeight": 250,
+  "doorWidth": 92,
+  "frameFaceLip": 5.5,
+  "leafFlush": true
+}/*EDITMODE-END*/;
+
+// ---- procedural matte-plaster roughness texture (fix: two whites) ----
+// Ported verbatim from home3d-scene.js's makeWallRoughnessTexture() — a
+// roughnessMap only (no colour), so wall + frame can share the exact same
+// `color` and still read as two different surface characters via
+// roughness alone (wall: rougher + this map = plasterboard; frame: flat
+// lower roughness, no map = smoother painted wood) — the same pattern
+// already live in home3d-scene.js at :1239 (wall) vs :1438 (frame).
+function makeWallRoughnessTexture() {
+  const size = 32;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#d9d9d9';
+  ctx.fillRect(0, 0, size, size);
+  const id = ctx.getImageData(0, 0, size, size);
+  const data = id.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const noise = (Math.random() - 0.5) * 40;
+    const v = Math.max(0, Math.min(255, 217 + noise));
+    data[i] = data[i + 1] = data[i + 2] = v;
+  }
+  ctx.putImageData(id, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 3);
+  return tex;
+}
+
+// ============== Cross-section SVG (top-down) ==============
+function CrossSection({ t }) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const svg = ref.current;
+    if (!svg) return;
+    svg.innerHTML = '';
+    const ns = 'http://www.w3.org/2000/svg';
+    const W = 560, H = 240;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    const DOOR_W = t.doorWidth;
+    const DOOR_T = t.doorThickness;
+    const WALL_W = t.wallWidth;
+    const WALL_T = t.wallThickness;      // 30 cm for #14
+    const LIP = t.frameFaceLip;
+
+    const margin = 30;
+    const SCALE = (W - 2 * margin) / WALL_W;
+
+    function pp(x, y) {
+      const ox = W * 0.5, oy = H * 0.5;
+      return [ox + x * SCALE, oy + y * SCALE];
+    }
+    function rect(x1, y1, x2, y2, fill, stroke = '#888') {
+      const r = document.createElementNS(ns, 'rect');
+      const [a,b] = pp(x1,y1), [c,d] = pp(x2,y2);
+      r.setAttribute('x', Math.min(a,c)); r.setAttribute('y', Math.min(b,d));
+      r.setAttribute('width', Math.abs(c-a)); r.setAttribute('height', Math.abs(d-b));
+      r.setAttribute('fill', fill); r.setAttribute('stroke', stroke);
+      return r;
+    }
+    function txt(x_cm, y_cm, str, opts = {}) {
+      const tt = document.createElementNS(ns, 'text');
+      const [x,y] = pp(x_cm, y_cm);
+      tt.setAttribute('x', x); tt.setAttribute('y', y);
+      tt.setAttribute('font-size', opts.size || '10');
+      tt.setAttribute('fill', opts.color || '#333');
+      if (opts.anchor) tt.setAttribute('text-anchor', opts.anchor);
+      tt.textContent = str;
+      return tt;
+    }
+
+    const REVEAL = 8.5;
+    const openingHalfW = DOOR_W/2 + REVEAL;
+    // wall segments (full 30 cm deep) either side of the opening
+    svg.appendChild(rect(-WALL_W/2, -WALL_T/2, -openingHalfW, +WALL_T/2, '#e8e2d4', '#a89c80'));
+    svg.appendChild(rect(+openingHalfW, -WALL_T/2, +WALL_W/2, +WALL_T/2, '#e8e2d4', '#a89c80'));
+
+    // frame LINING spanning the FULL wall depth in the reveal
+    svg.appendChild(rect(-openingHalfW, -WALL_T/2, -DOOR_W/2, +WALL_T/2, '#f1ede2', '#a89c80'));
+    svg.appendChild(rect(+DOOR_W/2, -WALL_T/2, +openingHalfW, +WALL_T/2, '#f1ede2', '#a89c80'));
+
+    // frame FACE lip proud on BOTH wall faces (inside + outside)
+    svg.appendChild(rect(-openingHalfW - LIP*0.0, -WALL_T/2 - LIP*0.35, -DOOR_W/2 - 0, -WALL_T/2, '#d8cbb0', '#a89c80'));
+    svg.appendChild(rect(+DOOR_W/2, -WALL_T/2 - LIP*0.35, +openingHalfW, -WALL_T/2, '#d8cbb0', '#a89c80'));
+    svg.appendChild(rect(-openingHalfW, +WALL_T/2, -DOOR_W/2, +WALL_T/2 + LIP*0.35, '#d8cbb0', '#a89c80'));
+    svg.appendChild(rect(+DOOR_W/2, +WALL_T/2, +openingHalfW, +WALL_T/2 + LIP*0.35, '#d8cbb0', '#a89c80'));
+
+    // door leaf — FLUSH to the outer (−) wall face (its outer face at −WALL_T/2)
+    const leafOuter = -WALL_T/2;
+    svg.appendChild(rect(-DOOR_W/2, leafOuter, +DOOR_W/2, leafOuter + DOOR_T, '#f6f5f1', '#888'));
+
+    svg.appendChild(txt(0, WALL_T/2 + 3.0, `door ${DOOR_W.toFixed(1)} cm`, { anchor:'middle', color:'#444' }));
+    svg.appendChild(txt(WALL_W/2 + 0.6, 0.1, `${WALL_T.toFixed(0)} cm (#14)`, { color:'#666', size:'9' }));
+    svg.appendChild(txt(-(DOOR_W/2 + REVEAL/2), -WALL_T/2 - 1.4, `frame`, { anchor:'middle', color:'#666', size:'8' }));
+
+    const head = document.createElementNS(ns, 'text');
+    head.setAttribute('x', 12); head.setAttribute('y', 22);
+    head.setAttribute('font-size', '12'); head.setAttribute('fill', '#333');
+    head.textContent = `Top-down — #14 wall ${WALL_T} cm, full-depth frame, leaf flush to face`;
+    svg.appendChild(head);
+  }, [t]);
+
+  return <svg ref={ref}></svg>;
+}
+
+// ============== Door model (buildModel + kinematics) ==============
+// Injected into the shared ThreeView. `ctx` persists across frames so
+// the animate loop can lerp the pivot toward the open angle.
+function buildDoor(t, group, THREE, ctx) {
+  const cm = 0.01;
+  const DH = t.doorHeight * cm;
+  const DW = t.doorWidth * cm;
+  const DT = t.doorThickness * cm;
+  const WALL = t.wallThickness * cm;       // 0.30 m for #14
+  const WALL_W = t.wallWidth * cm;
+  const WALL_H = t.wallHeight * cm;
+  const LIP = (t.frameFaceLip || 5.5) * cm;
+
+  // fix: door colour = FRONT_DOOR_COLOR, the canonical value already
+  // established in home3d-scene.js:194/:1445 (eyeballed from the owner's real
+  // Deanta door photos) -- NOT a new/invented brown. Groove colour paired
+  // to match (home3d-scene.js:198, FRONT_DOOR_GROOVE_COLOR).
+  const slabMat   = new THREE.MeshStandardMaterial({ color:0x6E4A34, roughness:0.65 });
+  const grooveMat = new THREE.MeshStandardMaterial({ color:0x2A1D14, roughness:0.9 });
+  const chromeMat = new THREE.MeshStandardMaterial({ color:0xeef0f2, roughness:0.18, metalness:0.95 });
+
+  // ---- DOOR ASSEMBLY · root group ----
+  const doorAssembly = new THREE.Group();
+  doorAssembly.name = 'doorAssembly';
+  group.add(doorAssembly);
+
+  // Leaf placement: the door closes flush with the OUTER (−z) wall face.
+  //   outer wall face = −WALL/2 ; leaf outer face sits there, so the
+  //   leaf CENTRE z is (−WALL/2 + DT/2). If leafFlush is off, fall back to
+  //   the internal-spec behaviour (leaf near the wall centre / hinge z).
+  const hingeFront = !!t.hingeFront;
+  const leafFlush = t.leafFlush !== false;
+  // Which face the hinge knuckles ride on relative to the leaf slab:
+  const hingeZoff = hingeFront ? +DT/2 : -DT/2;
+  // leaf centre z (assembly space)
+  const leafCenterZ = leafFlush ? (-WALL/2 + DT/2) : (hingeFront ? +DT/2 : -DT/2);
+
+  // Pivot sits at the hinge jamb edge, on the leaf's hinge face, at the
+  // leaf's z so the swing is about the real hinge line.
+  const doorPivot = new THREE.Group();
+  doorPivot.name = 'doorPivot';
+  doorPivot.position.set(-DW/2, 0, leafCenterZ + hingeZoff);
+  doorAssembly.add(doorPivot);
+
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(DW, DH, DT), slabMat);
+  slab.name = 'doorSlab';
+  slab.position.set(DW/2, DH/2, -hingeZoff);   // relative to pivot → slab back on hinge face
+  slab.castShadow = true; slab.receiveShadow = true;
+  doorPivot.add(slab);
+
+  const grH = t.grooveHeight * cm;
+  const grD = t.grooveDepth * cm;
+  const grInset = 1.5 * cm;
+  const N = Math.max(2, t.panelCount|0);
+  const sectionH = DH / N;
+  for (let i = 1; i < N; i++) {
+    const cy = sectionH * i;
+    for (const sgn of [+1, -1]) {
+      const g = new THREE.Mesh(
+        new THREE.BoxGeometry(DW - grInset*2, grH, Math.max(grD*1.2, 0.0008)),
+        grooveMat
+      );
+      g.position.set(DW/2, cy, -hingeZoff + sgn * (DT/2 - grD/2));
+      doorPivot.add(g);
+    }
+  }
+
+  // ---- handles (mirrored on both faces) ----
+  const ROSETTE_D    = 5.0  * cm;
+  const ROSETTE_THK  = 0.8  * cm;
+  const STEM_LEN     = 1.6  * cm;
+  const STEM_SIDE    = 2.2  * cm;
+  const LEVER_LEN    = 13.0 * cm;
+  const LEVER_SIDE   = 1.8  * cm;
+
+  const middlePanelIdx = Math.floor(N / 2);
+  const handleY = (middlePanelIdx + 0.5) * sectionH;
+  const handleX = DW - 6 * cm;
+
+  function addHandle(zSign) {
+    const g = new THREE.Group();
+    g.name = zSign > 0 ? 'handleFront' : 'handleBack';
+    const rosette = new THREE.Mesh(
+      new THREE.CylinderGeometry(ROSETTE_D/2, ROSETTE_D/2, ROSETTE_THK, 48),
+      chromeMat
+    );
+    rosette.rotation.x = Math.PI / 2;
+    rosette.position.set(0, 0, ROSETTE_THK / 2);
+    rosette.castShadow = true;
+    g.add(rosette);
+
+    const stem = new THREE.Mesh(
+      new THREE.BoxGeometry(STEM_SIDE, STEM_SIDE, STEM_LEN),
+      chromeMat
+    );
+    stem.position.set(0, 0, ROSETTE_THK + STEM_LEN/2);
+    stem.castShadow = true;
+    g.add(stem);
+
+    const leverDir = -1;
+    const leverCenterZ = ROSETTE_THK + STEM_LEN + LEVER_SIDE/2;
+    const lever = new THREE.Mesh(
+      new THREE.BoxGeometry(LEVER_LEN, LEVER_SIDE, LEVER_SIDE),
+      chromeMat
+    );
+    lever.position.set(leverDir * (LEVER_LEN/2 - STEM_SIDE/2), 0, leverCenterZ);
+    lever.castShadow = true;
+    g.add(lever);
+
+    g.position.set(handleX, handleY, -hingeZoff + zSign * (DT/2));
+    if (zSign < 0) g.scale.z = -1;
+    doorPivot.add(g);
+  }
+  addHandle(+1);
+  addHandle(-1);
+
+  // ---- WALL — REFERENCE GEOMETRY ONLY, sibling of the assembly ----
+  // The thick #14 (30 cm). Same carve as DoorSpec: hole open to the floor.
+  // fix: was a local placeholder colour (0xe8e2d4, "wall_REFERENCE_ONLY")
+  // -- tint off the canonical WALL_COLOR (home3d-scene.js:29) instead, +
+  // the same roughnessMap convention as home3d-scene.js:1239.
+  const wallMat = new THREE.MeshStandardMaterial({
+    color: 0xece9e1, roughness: 0.82, roughnessMap: makeWallRoughnessTexture()
+  });
+  const wallShape = new THREE.Shape();
+  wallShape.moveTo(-WALL_W/2, 0);
+  wallShape.lineTo(+WALL_W/2, 0);
+  wallShape.lineTo(+WALL_W/2, WALL_H);
+  wallShape.lineTo(-WALL_W/2, WALL_H);
+  wallShape.lineTo(-WALL_W/2, 0);
+
+  const REVEAL = 8.5 * cm;
+  const holeHalfW = DW/2 + REVEAL;
+  const holeTop   = DH + REVEAL;
+  const hole = new THREE.Path();
+  hole.moveTo(-holeHalfW, 0);
+  hole.lineTo(+holeHalfW, 0);
+  hole.lineTo(+holeHalfW, holeTop);
+  hole.lineTo(-holeHalfW, holeTop);
+  hole.lineTo(-holeHalfW, 0);
+  wallShape.holes.push(hole);
+
+  const wallGeo = new THREE.ExtrudeGeometry(wallShape, {
+    depth: WALL, bevelEnabled: false, curveSegments: 1
+  });
+  wallGeo.translate(0, 0, -WALL/2);
+  const wallMesh = new THREE.Mesh(wallGeo, wallMat);
+  wallMesh.name = 'wall_REFERENCE_ONLY';
+  wallMesh.castShadow = true; wallMesh.receiveShadow = true;
+  group.add(wallMesh);
+
+  // ---- DOOR ASSEMBLY · frame (jambs + head) ----
+  // Entrance frame: the LINING runs the FULL 30 cm wall depth, and a
+  // shallow FACE lip stands proud on BOTH wall faces (inside + outside).
+  const FRAME_DEPTH = WALL;                     // full #14 depth
+  // fix (two whites): SAME colour as the wall (WALL_COLOR) — the
+  // "slightly less textured" read comes from flat roughness + no map
+  // (painted wood) vs the wall's higher roughness + roughnessMap
+  // (plasterboard) -- exactly home3d-scene.js's frameMat convention
+  // (:1438), reused verbatim rather than a second invented hex.
+  const frameMat = new THREE.MeshStandardMaterial({ color:0xece9e1, roughness:0.5 });
+  const faceMat  = new THREE.MeshStandardMaterial({ color:0xece9e1, roughness:0.5 });
+
+  // 1) full-depth lining (rectangle-with-hole extruded through the wall)
+  const REVEAL3D = 8.5 * cm;
+  const outerHalfW = DW/2 + REVEAL3D;
+  const outerTop   = DH + REVEAL3D;
+  const liningShape = new THREE.Shape();
+  liningShape.moveTo(-outerHalfW, 0);
+  liningShape.lineTo(+outerHalfW, 0);
+  liningShape.lineTo(+outerHalfW, outerTop);
+  liningShape.lineTo(-outerHalfW, outerTop);
+  liningShape.lineTo(-outerHalfW, 0);
+  const liningHole = new THREE.Path();
+  liningHole.moveTo(-DW/2, 0);
+  liningHole.lineTo(+DW/2, 0);
+  liningHole.lineTo(+DW/2, DH);
+  liningHole.lineTo(-DW/2, DH);
+  liningHole.lineTo(-DW/2, 0);
+  liningShape.holes.push(liningHole);
+  const liningGeo = new THREE.ExtrudeGeometry(liningShape, {
+    depth: FRAME_DEPTH, bevelEnabled: false, curveSegments: 1
+  });
+  liningGeo.translate(0, 0, -FRAME_DEPTH/2);
+  const liningMesh = new THREE.Mesh(liningGeo, frameMat);
+  liningMesh.name = 'doorFrameLining';
+  liningMesh.castShadow = true; liningMesh.receiveShadow = true;
+  doorAssembly.add(liningMesh);
+
+  // 2) face architrave lip — a thin rectangle-with-hole standing PROUD on
+  //    BOTH wall faces. Same profile, extruded shallow, placed at ±WALL/2.
+  const faceOuterHalfW = DW/2 + REVEAL3D + LIP;
+  const faceOuterTop   = DH + REVEAL3D + LIP;
+  const faceShape = new THREE.Shape();
+  faceShape.moveTo(-faceOuterHalfW, 0);
+  faceShape.lineTo(+faceOuterHalfW, 0);
+  faceShape.lineTo(+faceOuterHalfW, faceOuterTop);
+  faceShape.lineTo(-faceOuterHalfW, faceOuterTop);
+  faceShape.lineTo(-faceOuterHalfW, 0);
+  const faceHole = new THREE.Path();
+  faceHole.moveTo(-outerHalfW, 0);
+  faceHole.lineTo(+outerHalfW, 0);
+  faceHole.lineTo(+outerHalfW, outerTop);
+  faceHole.lineTo(-outerHalfW, outerTop);
+  faceHole.lineTo(-outerHalfW, 0);
+  faceShape.holes.push(faceHole);
+  const FACE_THK = 1.6 * cm;
+  const faceGeo = new THREE.ExtrudeGeometry(faceShape, {
+    depth: FACE_THK, bevelEnabled: false, curveSegments: 1
+  });
+  // inside-face architrave (proud toward +z past the inner wall face)
+  const faceIn = new THREE.Mesh(faceGeo, faceMat);
+  faceIn.name = 'doorFrameFaceInside';
+  faceIn.position.z = +WALL/2;      // stand proud on the inner (+z) face
+  faceIn.castShadow = true; faceIn.receiveShadow = true;
+  doorAssembly.add(faceIn);
+  // outside-face architrave (proud toward −z past the outer wall face)
+  const faceOut = new THREE.Mesh(faceGeo.clone(), faceMat);
+  faceOut.name = 'doorFrameFaceOutside';
+  faceOut.position.z = -WALL/2 - FACE_THK;   // stand proud on the outer (−z) face
+  faceOut.castShadow = true; faceOut.receiveShadow = true;
+  doorAssembly.add(faceOut);
+
+  // ---- stash for the animate loop ----
+  ctx.doorPivot = doorPivot;
+  // open % (0..100) → radians (0..150°); direction set by hinge face
+  const mag = (Math.max(0, Math.min(100, t.openPct)) / 100) * (150 * Math.PI / 180);
+  ctx.doorTargetAngle = hingeFront ? mag : -mag;
+  if (ctx.doorAngle === undefined) ctx.doorAngle = ctx.doorTargetAngle;
+}
+
+// per-frame swing lerp (mirrors DoorSpec's original RAF behaviour)
+function animateDoor(t, ctx, k) {
+  if (!ctx.doorPivot) return;
+  const target = ctx.doorTargetAngle ?? 0;
+  ctx.doorAngle += (target - ctx.doorAngle) * k;
+  ctx.doorPivot.rotation.y = -ctx.doorAngle;
+}
+
+// ============== App ==============
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  return (
+    <>
+      <h1>Main Entrance Door Spec</h1>
+      <div className="sub">All units cm. Entrance door in the thick #14 wall (30 cm) — full-depth frame with a face on both sides, leaf flush to the wall face. Use the Tweaks panel to swing it (both directions).</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Cross-section (top-down)</h2>
+          <CrossSection t={t} />
+          <div className="legend">Wall #14: {t.wallWidth} cm wide × {t.wallHeight} cm tall × <b>{t.wallThickness} cm thick</b>. Frame lining spans the full {t.wallThickness} cm; face lip proud on inside + outside. Door leaf {t.doorWidth} × {t.doorHeight} × {t.doorThickness}, closing face flush with the wall face.</div>
+        </div>
+
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Overall door width <span style={{opacity:0.6}}>(door + 2 × reveal)</span></td><td className="num">{(t.doorWidth + 2 * 8.5).toFixed(1)}</td><td><b>Variable</b> — pick to fit opening</td></tr>
+              <tr><td>Door width</td><td className="num">{t.doorWidth.toFixed(1)}</td><td>Derived: overall − 2 × reveal</td></tr>
+              <tr><td>Door height</td><td className="num">{t.doorHeight.toFixed(1)}</td><td>Fixed (entrance ~210)</td></tr>
+              <tr><td>Door thickness</td><td className="num">{t.doorThickness.toFixed(2)}</td><td>Fixed (entrance leaf)</td></tr>
+              <tr><td>Frame lining depth</td><td className="num">{t.wallThickness.toFixed(0)}</td><td><b>= wall #14</b> — full depth</td></tr>
+              <tr><td>Frame face lip (each side)</td><td className="num">{t.frameFaceLip.toFixed(1)}</td><td>Architrave proud on both faces</td></tr>
+              <tr><td>Frame reveal (left, right, top)</td><td className="num">8.5</td><td>Fixed</td></tr>
+              <tr><td>Wall height</td><td className="num">{t.wallHeight.toFixed(1)}</td><td>Typically fixed (~250)</td></tr>
+              <tr><td>Wall thickness (#14)</td><td className="num">{t.wallThickness.toFixed(0)}</td><td><b>30</b> — the entrance wall</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div className="card full">
+          <h2>3D — entrance door + #14 wall</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildDoor}
+            animate={animateDoor}
+            heightOf={tt => tt.doorHeight * 0.01}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Door" />
+        <TweakToggle label="Hinge on front face" value={t.hingeFront}
+          onChange={v => setTweak('hingeFront', v)} />
+        <TweakToggle label="Leaf flush to wall face" value={t.leafFlush}
+          onChange={v => setTweak('leafFlush', v)} />
+        <TweakSlider label="Door width" value={t.doorWidth} min={70} max={120} step={1} unit="cm"
+          onChange={v => setTweak('doorWidth', v)} />
+        <TweakSlider label="Door height" value={t.doorHeight} min={190} max={230} step={1} unit="cm"
+          onChange={v => setTweak('doorHeight', v)} />
+        <TweakSection label="Wall #14 & frame" />
+        <TweakSlider label="Wall thickness (#14)" value={t.wallThickness} min={20} max={40} step={1} unit="cm"
+          onChange={v => setTweak('wallThickness', v)} />
+        <TweakSlider label="Frame face lip" value={t.frameFaceLip} min={2} max={10} step={0.5} unit="cm"
+          onChange={v => setTweak('frameFaceLip', v)} />
+        <TweakSection label="Swing" />
+        <TweakSlider label="Open" value={t.openPct} min={0} max={100} step={1} unit="%"
+          onChange={v => setTweak('openPct', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// Self-post it so the panel is visible when there's no host driving it.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>

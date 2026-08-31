@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3dHome</title>
+  <script>
+    // Favicon: only registered in standalone mode.
+    // ?preview=true / ?embed=1 run as iframes inside HA where the deployed
+    // dashboard copy does not ship assets/icons/, so requesting the favicon
+    // would just 404. Inserting the <link> conditionally avoids that.
+    (() => {
+      const p = new URLSearchParams(window.location.search);
+      const isPreview = p.get('preview') === 'true';
+      const isEmbed = p.get('embed') === '1' || p.get('embed') === 'true';
+      if (!isPreview && !isEmbed) {
+        const link = document.createElement('link');
+        link.rel = 'icon';
+        link.type = 'image/png';
+        link.href = 'assets/icons/favicon.png';
+        document.head.appendChild(link);
+      }
+    })();
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f0f1a; color: #fff; overflow: hidden; }
+
+    /* Back button */
+    .back-btn {
+      position: fixed; top: 16px; left: 16px; z-index: 40;
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 16px; border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(0,0,0,0.5); backdrop-filter: blur(12px);
+      color: #fff; font-size: 13px; font-weight: 500; cursor: pointer;
+      text-decoration: none; transition: background 0.2s;
+    }
+    .back-btn:hover { background: rgba(255,255,255,0.1); }
+    .back-btn svg { width: 16px; height: 16px; }
+
+    /* Title overlay */
+    .title-overlay {
+      position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 30;
+      text-align: center; pointer-events: none;
+    }
+    .title-overlay h1 { font-size: 18px; font-weight: 700; text-shadow: 0 2px 8px rgba(0,0,0,0.6); }
+    .title-overlay p { font-size: 11px; opacity: 0.5; margin-top: 2px; }
+
+    /* Compass overlay — pinned bottom-right of the view. OFF by default
+       (display:none). The whole rose (#compass-rose) rotates each frame to keep
+       North pointing at model-north as the camera orbits. See the compass IIFE
+       near the bottom of this file. */
+    .compass {
+      position: fixed; right: 16px; bottom: 16px; z-index: 35;
+      width: 84px; height: 84px; display: none; pointer-events: none;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5));
+    }
+    .compass.visible { display: block; }
+
+    /* Hover tooltip */
+    .room-tooltip {
+      position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+      padding: 5px 12px; border-radius: 6px; background: rgba(0,0,0,0.7);
+      color: #fff; font-size: 12px; z-index: 20; pointer-events: none;
+      display: none;
+    }
+    .room-tooltip.visible { display: block; }
+
+    /* Lights button */
+    /* Top-right button group */
+    .top-right-btns {
+      position: fixed; top: 16px; right: 16px; z-index: 40;
+      display: flex; gap: 8px;
+    }
+    .top-btn {
+      padding: 8px 16px; border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(0,0,0,0.5); backdrop-filter: blur(12px);
+      color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .top-btn:hover { background: rgba(255,255,255,0.1); }
+
+    /* 3D container */
+    #scene-container { width: 100vw; height: 100vh; touch-action: none; }
+
+    /* ---- Light Control Panel ---- */
+    .panel {
+      position: fixed; top: 0; right: 0; width: 300px; height: 100%;
+      background: rgba(10,10,20,0.92); backdrop-filter: blur(20px);
+      border-left: 1px solid rgba(255,255,255,0.08);
+      color: #fff; display: flex; flex-direction: column; z-index: 50;
+      transform: translateX(100%); transition: transform 0.25s ease;
+    }
+    .panel.open { transform: translateX(0); }
+
+    .panel-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .panel-header-left { display: flex; align-items: center; gap: 8px; }
+    .panel-back { background: none; border: none; color: #888; cursor: pointer; font-size: 16px; padding: 0; }
+    .panel-title { font-size: 14px; font-weight: 600; }
+    .panel-area { font-size: 11px; opacity: 0.4; }
+    .panel-close { background: none; border: none; color: #666; cursor: pointer; font-size: 18px; padding: 0; }
+
+    .panel-body { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+    /* Room list items */
+    .room-list-item {
+      width: 100%; padding: 10px 16px; border: none;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      background: transparent; color: #fff; cursor: pointer;
+      display: flex; align-items: center; justify-content: space-between;
+      text-align: left; transition: background 0.15s;
+    }
+    .room-list-item:hover { background: rgba(255,255,255,0.04); }
+    .room-list-name { font-size: 13px; font-weight: 500; }
+    .room-list-area { font-size: 10px; opacity: 0.4; }
+    .room-list-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #333; flex-shrink: 0;
+    }
+    .room-list-dot.on { background: #ffd43b; box-shadow: 0 0 8px #ffd43b; }
+
+    /* Control section */
+    .control-section { padding: 8px 16px; }
+    .control-group { margin-bottom: 20px; }
+    .control-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .control-label { font-size: 12px; font-weight: 600; opacity: 0.7; }
+
+    /* Toggle switch */
+    .toggle {
+      width: 40px; height: 22px; border-radius: 11px; border: none;
+      cursor: pointer; position: relative; transition: background 0.2s;
+      background: rgba(255,255,255,0.15); padding: 0;
+    }
+    .toggle.on { background: #6366f1; }
+    .toggle.galaxy.on { background: #7c3aed; }
+    .toggle-knob {
+      width: 16px; height: 16px; border-radius: 50%; background: #fff;
+      position: absolute; top: 3px; left: 3px; transition: left 0.2s;
+    }
+    .toggle.on .toggle-knob { left: 21px; }
+
+    /* Slider */
+    .slider-row { margin-bottom: 10px; }
+    .slider-label { font-size: 11px; opacity: 0.5; margin-bottom: 4px; }
+    .slider {
+      width: 100%; height: 6px; border-radius: 3px;
+      -webkit-appearance: none; appearance: none;
+      background: rgba(255,255,255,0.15); outline: none; cursor: pointer;
+    }
+    .slider::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 14px; height: 14px;
+      border-radius: 50%; background: #fff; cursor: pointer;
+    }
+    .slider.temp {
+      background: linear-gradient(to right, #ffaa55, #fff, #aaccff);
+    }
+
+    /* Color swatches */
+    .color-swatches { display: flex; gap: 5px; flex-wrap: wrap; }
+    .color-swatch {
+      width: 26px; height: 26px; border-radius: 5px;
+      border: 1px solid rgba(255,255,255,0.2);
+      cursor: pointer; padding: 0;
+    }
+    .color-swatch.selected { border: 2px solid #fff; }
+    .color-input {
+      width: 100%; height: 28px; border: none; border-radius: 4px;
+      cursor: pointer; background: transparent; margin-top: 8px;
+    }
+
+    /* Strip positions info */
+    .strip-info {
+      padding: 8px 10px; border-radius: 6px;
+      background: rgba(255,255,255,0.04);
+      font-size: 10px; opacity: 0.4; line-height: 1.5; margin-top: 6px;
+    }
+    .strip-info-title { font-weight: 600; margin-bottom: 2px; }
+
+    /* Sun mode button group */
+    .sun-mode-group {
+      display: flex; gap: 3px;
+    }
+    .sun-mode-btn {
+      width: 28px; height: 28px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.5); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      padding: 0;
+    }
+    .sun-mode-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+    .sun-mode-btn.active { background: rgba(255,200,50,0.18); border-color: rgba(255,200,50,0.5); color: #ffd43b; }
+    .sun-mode-btn.active.night { background: rgba(100,120,200,0.18); border-color: rgba(100,120,200,0.5); color: #aab4ff; }
+    .sun-mode-btn svg { width: 14px; height: 14px; }
+
+    /* Panel footer */
+    .panel-footer {
+      padding: 10px 16px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .panel-footer-row { display: flex; gap: 6px; }
+    .panel-footer-btn {
+      flex: 1; padding: 6px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.06);
+      color: #fff; font-size: 11px; cursor: pointer;
+      transition: background 0.15s;
+    }
+    .panel-footer-btn:hover { background: rgba(255,255,255,0.12); }
+    .panel-footer-btn.export { color: rgba(255,255,255,0.6); font-size: 11px; }
+
+    /* HA status indicator */
+    .ha-status {
+      position: fixed; bottom: 16px; left: 16px; z-index: 40;
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 10px; border-radius: 6px;
+      background: rgba(0,0,0,0.5); backdrop-filter: blur(12px);
+      font-size: 10px; opacity: 0.6; transition: opacity 0.3s;
+    }
+    .ha-status:hover { opacity: 1; }
+    .ha-status-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: #666;
+    }
+    .ha-status-dot.connected { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+    .ha-status-dot.polling { background: #eab308; box-shadow: 0 0 6px #eab308; }
+    .ha-status-dot.syncing { background: #eab308; box-shadow: 0 0 6px #eab308; }
+    .ha-status-dot.disconnected { background: #666; }
+    .ha-status-dot.auth_failed { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+    .ha-status-dot.sync_failed { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+
+    /* Shadow toggle row in panel */
+    .panel-toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .panel-toggle-label { font-size: 12px; font-weight: 500; opacity: 0.7; }
+
+    /* Settings-page section heading + Specs button list */
+    .panel-section-title {
+      font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; opacity: 0.4;
+      padding: 16px 16px 8px;
+    }
+    .spec-list { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 12px; }
+    .spec-btn {
+      display: flex; align-items: center; justify-content: space-between;
+      width: 100%; padding: 9px 12px; border-radius: 7px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.05);
+      color: #fff; font-size: 12px; font-weight: 500; cursor: pointer;
+      text-align: left; text-decoration: none; transition: background 0.15s, border-color 0.15s;
+    }
+    .spec-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); }
+    .spec-btn .spec-ext { opacity: 0.35; }
+
+    /* Wide screen: panel always open, no close/lights button */
+    @media (min-width: 1500px) {
+      .panel { transform: translateX(0) !important; }
+      .panel-close { display: none !important; }
+      .top-right-btns { display: none !important; }
+      #scene-container { width: calc(100vw - 300px); }
+      /* Keep the compass inside the visible canvas, not under the always-open
+         300px control panel. */
+      .compass { right: calc(300px + 16px); }
+      /* Grid legend sits bottom-LEFT so the panel (right) never covers it. */
+    }
+
+    @media (max-width: 600px) {
+      .panel { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Title -->
+  <div class="title-overlay">
+    <h1 id="house-title">My Home</h1>
+    <p>Click room to control lights &middot; Drag to orbit &middot; Scroll to zoom</p>
+  </div>
+
+  <!-- Hover tooltip -->
+  <div class="room-tooltip" id="room-tooltip"></div>
+
+  <!-- Top-right controls -->
+  <div class="top-right-btns" id="top-right-btns">
+    <button class="top-btn" id="lights-btn">Controls</button>
+  </div>
+
+  <!-- HA connection status -->
+  <!-- VERSION: keep the badge below in sync with the ?v= cache-bust query strings on the <script> tags at the bottom of this file -->
+  <div class="ha-status" id="ha-status" style="display:none">
+    <div class="ha-status-dot" id="ha-status-dot"></div>
+    <span id="ha-status-text">HA Disconnected</span>
+    <span style="opacity:0.4; margin-left:6px;">v__VERSION__</span>
+  </div>
+
+  <!-- 3D canvas mount -->
+  <div id="scene-container"></div>
+
+  <!-- Compass overlay (OFF by default; toggle in Controls sidebar). The outer
+       ring + backdrop are static; #compass-rose rotates each rendered frame so
+       North always points at model-north (see the compass IIFE below). N is
+       red. viewBox is 100×100, centred at (50,50). -->
+  <div class="compass" id="compass" aria-hidden="true">
+    <svg viewBox="0 0 100 100" width="100%" height="100%">
+      <circle cx="50" cy="50" r="46" fill="rgba(15,20,30,0.55)" stroke="rgba(255,255,255,0.35)" stroke-width="1.5"/>
+      <g id="compass-rose">
+        <!-- North needle (red) -->
+        <polygon points="50,8 44,50 56,50" fill="#ff3b30"/>
+        <!-- South needle (light) -->
+        <polygon points="50,92 44,50 56,50" fill="#e8edf5"/>
+        <!-- Cardinal letters -->
+        <text x="50" y="22" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="14" font-weight="700" fill="#ff3b30">N</text>
+        <text x="50" y="86" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11" font-weight="600" fill="#c7d0dc">S</text>
+        <text x="83" y="55" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11" font-weight="600" fill="#c7d0dc">E</text>
+        <text x="17" y="55" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11" font-weight="600" fill="#c7d0dc">W</text>
+      </g>
+      <circle cx="50" cy="50" r="3" fill="#c7d0dc"/>
+    </svg>
+  </div>
+
+  <!-- Light Control Panel -->
+  <div class="panel" id="panel">
+    <div class="panel-header">
+      <div class="panel-header-left">
+        <button class="panel-back" id="panel-back" style="display:none">&larr;</button>
+        <span class="panel-title" id="panel-title">Controls</span>
+        <span class="panel-area" id="panel-area"></span>
+      </div>
+      <button class="panel-close" id="panel-close">&times;</button>
+    </div>
+    <div class="panel-body" id="panel-body"></div>
+    <div class="panel-footer" id="panel-footer">
+      <div class="panel-footer-row">
+        <button class="panel-footer-btn" id="settings-btn">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:5px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile debug: visit with ?debug=1 to load Eruda (mobile DevTools).
+       Tap the floating icon (bottom-right) for console / network / elements.
+       Also installs a global error listener that paints visible errors so
+       failures show up without opening Eruda first. -->
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search);
+      if (params.get('debug') !== '1') return;
+      // Visible error banner (shows BEFORE Eruda loads + catches its load failures)
+      const box = document.createElement('div');
+      box.id = 'debug-errors';
+      Object.assign(box.style, {
+        position: 'fixed', top: '60px', left: '8px', right: '8px',
+        zIndex: '9999', background: 'rgba(180,0,0,0.92)', color: '#fff',
+        font: '12px/1.4 monospace', padding: '8px 10px', borderRadius: '6px',
+        maxHeight: '40vh', overflow: 'auto', whiteSpace: 'pre-wrap',
+        display: 'none', boxShadow: '0 4px 18px rgba(0,0,0,0.4)'
+      });
+      document.addEventListener('DOMContentLoaded', () => document.body.appendChild(box));
+      const push = (msg) => {
+        box.style.display = 'block';
+        box.textContent += msg + '\n────────\n';
+      };
+      window.addEventListener('error', e => push('ERROR: ' + (e.error?.stack || e.message) + ' @ ' + e.filename + ':' + e.lineno));
+      window.addEventListener('unhandledrejection', e => push('PROMISE: ' + (e.reason?.stack || e.reason)));
+      // Load Eruda from jsDelivr CDN
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/eruda';
+      s.onload = () => { try { eruda.init(); } catch (e) { push('Eruda init failed: ' + e); } };
+      s.onerror = () => push('Eruda CDN load failed — likely no internet from device, or CSP blocked. The native error overlay above will still work.');
+      document.head.appendChild(s);
+    })();
+  </script>
+  <script src="vendor/three.js"></script>
+  <!-- Runtime configuration, highest-priority source first.
+
+       config.js is GENERATED at container start by deploy/generate-config.sh
+       from environment variables, and is NOT in the repo. Its absence is the
+       normal case for a bare checkout, so the onerror handler swallows the
+       404 quietly: without it the browser logs a console error on every
+       zero-config load, which reads as a broken app when nothing is wrong.
+       The loader then falls through to config.json, then to the committed
+       config.example.json, then to its own built-in default.
+
+       Deliberately NOT cache-busted with ?v= - config.js is served with
+       Cache-Control: no-store precisely because it carries the HA token, and
+       a stale one would pin an old token. Both tags must precede the
+       application code below, which reads HomeConfig during boot. -->
+  <script src="config.js" onerror="window.__home3dNoConfigJs = true;"></script>
+  <script src="src/config-loader.js?v=__VERSION__"></script>
+  <!-- VERSION: keep the ?v= values in sync with the visible v* badge inside #ha-status above -->
+  <script src="src/home3d-scene.js?v=__VERSION__"></script>
+  <script src="src/ha-client.js?v=__VERSION__"></script>
+  <!-- Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
+       Shift+D, or the Settings sidebar "Wall numbers" switch). Isolated
+       module -- see js/wall-debug-overlay.js header. -->
+  <script src="src/overlays/wall-debug-overlay.js?v=__VERSION__"></script>
+  <!-- Coordinate-grid overlay (off by default; ?grid=1 or 'G'). Isolated
+       module -- see js/home3d-grid-overlay.js header. Toggle also in sidebar. -->
+  <script src="src/overlays/home3d-grid-overlay.js?v=__VERSION__"></script>
+  <!-- Door-numbering debug overlay (off by default; ?debugDoors=1 or the
+       Settings sidebar "Door numbers" switch). Isolated module -- see
+       src/overlays/door-debug-overlay.js header. -->
+  <script src="src/overlays/door-debug-overlay.js?v=__VERSION__"></script>
+  <script>
+    (async function() {
+      const params = new URLSearchParams(window.location.search);
+      // Preview mode: ?preview=true — slow rotation, no interaction, no UI
+      const isPreview = params.get('preview') === 'true';
+      // Embed mode: ?embed=1 — fully interactive + Light Controls kept, but
+      // page chrome (back button, title) hidden so it sits cleanly inside a
+      // dashboard pop-up iframe.
+      const isEmbed = params.get('embed') === '1' || params.get('embed') === 'true';
+      // ?haUrl=<absolute-url> — HA URL override, passed by an embedder
+      //   (e.g. the HA dashboard button-card injects location.origin).
+      //   When set, ha-client uses ONLY this URL for fetchInitialState + WS;
+      //   when unset, the configured url + fallbackUrl pair is used
+      //   (race-to-connect). Required for the embedded modes
+      //   (?preview=true / ?embed=1) because the configured URLs may not be
+      //   reachable from the embedder's network (a private HA hostname may
+      //   only resolve on the LAN or VPN).
+      //
+      //   READ AND APPLIED IN src/config-loader.js, not here - it resolves
+      //   the parameter, restricts it to http/https (the token is sent to
+      //   this origin) and CLEARS fallbackUrl so nothing races a host the
+      //   embedder did not name. By the time cfg.url is read below the
+      //   override is already folded in; do not re-apply it.
+      // ?rotateSpeed=<radians-per-second> — preview rotation speed override.
+      //   Only takes effect when ?preview=true (autoRotate is off otherwise).
+      //   Unit: radians per second. To convert from "seconds per full turn":
+      //     rad/s = (2 * Math.PI) / seconds_per_turn
+      //   Examples:
+      //     ?preview=true                           → default, 2 min/turn (~0.0524 rad/s)
+      //     ?preview=true&rotateSpeed=0.1047        → 1 min/turn
+      //     ?preview=true&rotateSpeed=0.01745       → 6 min/turn
+      //     ?preview=true&rotateSpeed=0             → frozen (no rotation)
+      //   To change the *default* for everyone, edit the fallback expression below.
+      //   Note: Home3DScene.create()'s own default is 0.024 rad/s (~262s/turn) — used
+      //   when no rotateSpeed is passed at all (e.g. callers in main.js / house pages).
+      const rotateSpeedParam = parseFloat(params.get('rotateSpeed'));
+      const rotateSpeed = Number.isFinite(rotateSpeedParam) ? rotateSpeedParam : (Math.PI * 2) / 120;
+
+      // ?camera=<preset> — jump the orbit camera to a named view on load, so
+      //   visual-review agents can reach a useful angle without driving
+      //   OrbitControls via synthetic mouse events (the custom orbit camera
+      //   resists those — First Mate LEARNINGS #55). Applied AFTER scene create
+      //   (see below). Presets (defined in js/home3d-scene.js CAMERA_PRESETS):
+      //     top / topdown  → straight top-down floor-plan view
+      //     front          → north / entrance elevation
+      //     back/east/west → the other three elevations
+      //     se sw ne nw    → the four corner 3/4 aerial views (se = the
+      //                       interior 3/4 used for the wall-transparency bug)
+      //     iso            → default pleasant isometric-ish 3/4
+      //   Unknown/absent → normal default view (no change). Only overrides the
+      //   INITIAL pose; the user can still orbit/pan freely afterwards.
+      //   Ignored in ?preview=true (that mode auto-rotates from its own pose).
+      const cameraPreset = params.get('camera');
+
+      // ── Power/quality settings (overridable via URL for A/B testing) ──
+      //   ?shadows=auto|low|off   ?fps=<n>
+      // Defaults: the PREVIEW tile is a tiny, slowly-rotating thumbnail that used
+      // to render the FULL scene (10 shadow-casting lights, antialias, dpr 2) at
+      // the display's full refresh rate, forever — a constant GPU furnace. It now
+      // runs at 15fps / dpr 1 / no AA and the cheap shadow preset:
+      //   preview        -> 'low'  (sun shadow @512², no room-shadow lights — a
+      //                             soft grounded drop-shadow, ~negligible cost at
+      //                             15fps; no 10-cubemap room-light passes)
+      //   embed (#3d)    -> 'high' (ALWAYS the full set incl. the 10 room-shadow
+      //                             lights; on-demand rendering keeps it ~free when
+      //                             idle and only goes to 60fps while you move it)
+      //   standalone page-> 'auto' (best the device can do when viewed directly)
+      const shadows = params.get('shadows') || (isPreview ? 'low' : (isEmbed ? 'high' : 'auto'));
+      const fpsParam = parseInt(params.get('fps'), 10);
+      const maxFps = Number.isFinite(fpsParam) ? fpsParam : (isPreview ? 15 : 60);
+      const scenePixelRatio = isPreview ? 1 : Math.min(window.devicePixelRatio, 2);
+
+      if (isPreview) {
+        document.querySelectorAll('.back-btn, .title-overlay, .room-tooltip, .top-right-btns, .panel').forEach(el => {
+          if (el) el.style.display = 'none';
+        });
+        // Preview keeps just the HA status dot (colour only — no text, no
+        // version badge, no chrome) as a tiny health indicator. Shown from
+        // the start so users see the colour transition as HA connects.
+        const haStatusElPreview = document.getElementById('ha-status');
+        if (haStatusElPreview) {
+          haStatusElPreview.style.display = 'flex';
+          haStatusElPreview.style.background = 'transparent';
+          haStatusElPreview.style.backdropFilter = 'none';
+          haStatusElPreview.style.padding = '0';
+          haStatusElPreview.style.opacity = '1';
+          // Hide all text children (status text + version badge); leave the dot
+          haStatusElPreview.querySelectorAll('span').forEach(s => s.style.display = 'none');
+        }
+        document.body.style.background = 'transparent';
+      }
+      if (isEmbed) {
+        document.querySelectorAll('.back-btn, .title-overlay, .room-tooltip').forEach(el => {
+          if (el) el.style.display = 'none';
+        });
+      }
+
+      const container = document.getElementById('scene-container');
+      const panel = document.getElementById('panel');
+      const panelBody = document.getElementById('panel-body');
+      const panelTitle = document.getElementById('panel-title');
+      const panelArea = document.getElementById('panel-area');
+      const panelBack = document.getElementById('panel-back');
+      const panelClose = document.getElementById('panel-close');
+      const lightsBtn = document.getElementById('lights-btn');
+      const tooltip = document.getElementById('room-tooltip');
+      const panelFooter = document.getElementById('panel-footer');
+      const settingsBtn = document.getElementById('settings-btn');
+
+      // Sidebar has two top-level "views": the default Controls page (room list
+      // + Settings button) and the Settings page (Sun/Compass/Grid +
+      // Door-numbers toggle + Specs buttons). This flag is the single source of
+      // truth for which one renderPanel() draws; the room-detail panel is a
+      // third state driven by `selectedRoom` (unchanged). Selecting a room from
+      // Controls does NOT change panelView, so backing out of a room returns to
+      // Controls, and Settings is only ever reached via its button.
+      let panelView = 'controls'; // 'controls' | 'settings'
+
+      // Specs section — growable list. Each entry becomes a button in Settings
+      // that opens the spec page in a new tab. Add more { name, path } here as
+      // specs are built; no other change needed. Paths are fixed/known even for
+      // specs still on an unmerged branch — such a link simply 404s harmlessly
+      // until that branch merges, at which point it resolves with no code change.
+      const SPEC_PAGES = [
+        { name: 'DoorSpec',             path: 'specs/DoorSpec.html' },
+        { name: 'WindowSpec',           path: 'specs/WindowSpec.html' },
+        { name: 'MainEntranceDoorSpec', path: 'specs/MainEntranceDoorSpec.html' },
+        { name: 'BalconyWindowSpec',    path: 'specs/BalconyWindowSpec.html' },
+        { name: 'CurtainSpec',          path: 'specs/CurtainSpec.html' },
+        { name: 'BathroomSpec',         path: 'specs/BathroomSpec.html' },
+        { name: 'EnSuiteBathroomSpec',  path: 'specs/EnSuiteBathroomSpec.html' },
+      ];
+      const haStatusEl = document.getElementById('ha-status');
+      const haStatusDot = document.getElementById('ha-status-dot');
+      const haStatusText = document.getElementById('ha-status-text');
+
+      let selectedRoom = null;
+
+      // ---- Fetch HA state before creating scene (no flash) ----
+
+      let ha = null;
+      let haConfig = null;
+      let haToken = null;
+      let initialState = null;
+
+      // Resolve the configuration through the precedence chain in
+      // src/config-loader.js: ?haUrl= > config.js (env) > config.json >
+      // config.example.json > a built-in default. load() never rejects - the
+      // worst case is the built-in, which renders the demo house with Home
+      // Assistant off. That guarantee is what makes a bare checkout boot.
+      const cfg = await HomeConfig.load();
+
+      // The room -> entity map lives with the house profile, not with the
+      // connection settings: which lights exist is a property of the house,
+      // while the URL and token are properties of the deployment. A missing
+      // or malformed rooms.json disables HA rather than throwing - the house
+      // still renders, just without live light state.
+      let rooms = null;
+      try {
+        const roomsResp = await fetch('houses/' + cfg.house + '/rooms.json', { cache: 'no-store' });
+        if (roomsResp.ok) {
+          const roomsDoc = await roomsResp.json();
+          rooms = roomsDoc && roomsDoc.rooms ? roomsDoc.rooms : null;
+        } else {
+          console.warn('[home3d] houses/' + cfg.house + '/rooms.json returned HTTP ' +
+            roomsResp.status + '; Home Assistant integration disabled.');
+        }
+      } catch (e) {
+        console.warn('[home3d] could not load houses/' + cfg.house +
+          '/rooms.json (' + e.message + '); Home Assistant integration disabled.');
+      }
+
+      if (cfg.enabled && rooms) {
+        // haConfig mirrors the shape the code below already expects. cfg.url
+        // is ALREADY the resolved URL: when ?haUrl= was supplied the loader
+        // has put it here and cleared fallbackUrl, so the "use that URL and
+        // no other" contract is preserved without a second check here.
+        haConfig = {
+          enabled: true,
+          url: cfg.url,
+          fallbackUrl: cfg.fallbackUrl || null,
+          rooms: rooms,
+          wsReconnectMs: cfg.wsReconnectMs,
+          pollIntervalMs: cfg.pollIntervalMs
+        };
+        haToken = cfg.token;
+
+        try {
+          initialState = await HAClient.fetchInitialState(
+            haConfig.url,
+            haToken,
+            haConfig.rooms,
+            haConfig.fallbackUrl
+          );
+        } catch (e) {
+          console.warn('[home3d] Home Assistant initial state fetch failed (' +
+            e.message + '); rendering with default light state.');
+        }
+      }
+
+      // ---- Create scene with correct initial light state ----
+
+      const home = Home3DScene.create(container, {
+        interactive: !isPreview,
+        autoRotate: isPreview,
+        rotateSpeed: rotateSpeed,
+        initialState: initialState,
+        shadows: shadows,
+        maxFps: maxFps,
+        pixelRatio: scenePixelRatio,
+        antialias: !isPreview,
+        onRoomClick: isPreview ? undefined : (roomId => { selectedRoom = roomId; openPanel(); renderPanel(); })
+      });
+
+      // Apply a ?camera=<preset> view override on load (no-op if unset/unknown,
+      // or in preview mode which drives its own auto-rotating pose). See the
+      // param read above + CAMERA_PRESETS in js/home3d-scene.js.
+      if (cameraPreset && !isPreview && typeof home.setView === 'function') {
+        home.setView(cameraPreset);
+      }
+
+      // Dev-only wall-numbering debug overlay -- SINGLE call site, fully
+      // isolated in js/wall-debug-overlay.js. Off by default; toggled from the
+      // Settings sidebar "Wall numbers" switch, ?debugWalls=1, or Shift+D.
+      // `wallNums` is read by renderPanel() to drive that toggle's on/off state
+      // + click. onChange keeps the sidebar switch in sync when the overlay is
+      // flipped by the Shift+D shortcut instead of the switch (mirrors Grid's G).
+      // Note: WallDebugOverlay/Home3DScene are top-level `const`s from
+      // classic (non-module) <script> tags -- real global-scope bindings,
+      // but NOT `window.*` properties, so we reference them directly here
+      // (same as every other Home3DScene.* call in this file already does).
+      const wallNums = WallDebugOverlay.attachWallDebugOverlay(home.scene, Home3DScene.WALL_SEGMENTS_WORLD, {
+        wallHeight: Home3DScene.WALL_HEIGHT,
+        requestRender: home.requestRender,
+        onChange: (on) => {
+          // Reflect a keyboard-driven (Shift+D) toggle in the sidebar switch
+          // (no-op if the Settings panel isn't currently shown).
+          const btn = document.getElementById('panel-wall-numbers-toggle');
+          if (btn) btn.classList.toggle('on', on);
+        },
+      });
+
+      // ================= Compass + Coordinate-grid overlays =================
+      // Both OFF by default; toggled in the Controls sidebar (grid also via 'G').
+      // See renderPanel() for the two toggle switches.
+
+      // ---- Compass overlay (bottom-right rose that tracks model-north) ----
+      const compassEl = document.getElementById('compass');
+      const compassRose = document.getElementById('compass-rose');
+      let compassOn = false;
+
+      // ORIENTATION CONSTANT — the ONE place to correct which way is North.
+      // Model-north is the world-space direction below. Derivation (from
+      // home3d-scene.js): tz(y) = (y - OY) * S with S > 0, so model y maps to
+      // world +Z; the model's own convention (100s of code comments + the floor
+      // plan the authors used) is North = smaller y. Therefore North = -Z.
+      // East (facing north, to the right) = +X, West = -X, South = +Z.
+      //
+      // If this reads wrong against your real home -- "north is actually THAT
+      // way" -- change ONLY the offset below (degrees, clockwise on screen).
+      // No other math needs touching.
+      const COMPASS_NORTH_WORLD = new THREE.Vector3(0, 0, -1); // model-north in world space
+      const COMPASS_NORTH_OFFSET_DEG = 0; // one-line nudge; 0 = North is world -Z
+
+      // Rotate the rose so its N arrow points at model-north in SCREEN space.
+      // Approach: transform the model-north DIRECTION vector into the camera's
+      // view space (rotation only — position-independent, numerically stable at
+      // any orbit angle/zoom). In view space, +X is screen-right and +Y is
+      // screen-up. atan2(viewX, viewY) is then the clockwise angle of north from
+      // screen-up — exactly what the SVG's upward-pointing N arrow needs
+      // (SVG rotate() is clockwise-positive). Runs each rendered frame.
+      const _north = new THREE.Vector3();
+      const _camQuatInv = new THREE.Quaternion();
+      function updateCompass(cam) {
+        if (!compassOn) return;
+        // World direction -> camera/view space via the INVERSE of the camera's
+        // world rotation (position-independent). Using the camera quaternion
+        // keeps this correct even when called outside the render loop (e.g. the
+        // moment the toggle flips on), where matrixWorldInverse could be stale.
+        cam.updateMatrixWorld();
+        _camQuatInv.copy(cam.quaternion).invert();
+        _north.copy(COMPASS_NORTH_WORLD).applyQuaternion(_camQuatInv);
+        // In view space +X is screen-right, +Y is screen-up. atan2(x, y) is the
+        // clockwise angle of north from screen-up — what the SVG N arrow needs.
+        let deg = Math.atan2(_north.x, _north.y) * 180 / Math.PI + COMPASS_NORTH_OFFSET_DEG;
+        compassRose.setAttribute('transform', 'rotate(' + deg.toFixed(2) + ' 50 50)');
+      }
+      home.onRender(updateCompass);
+
+      function setCompass(on) {
+        compassOn = !!on;
+        compassEl.classList.toggle('visible', compassOn);
+        if (compassOn) { updateCompass(home.getCamera()); home.requestRender(); }
+      }
+
+      // ---- Coordinate-grid overlay (isolated module) ----
+      // onChange keeps the sidebar toggle in sync when the grid is flipped by
+      // the 'G' keyboard shortcut instead of the switch.
+      let gridOn = false;
+      const grid = HomeGridOverlay.attachGridOverlay(home.scene, {
+        bounds: Home3DScene.FOOTPRINT_BOUNDS,
+        transform: Home3DScene.COORD_TRANSFORM,
+        wallHeight: Home3DScene.WALL_HEIGHT,
+        requestRender: home.requestRender,
+        onChange: (on) => {
+          gridOn = on;
+          // Reflect a keyboard-driven toggle in the sidebar switch (no-op if the
+          // root panel isn't currently shown).
+          const btn = document.getElementById('panel-grid-toggle');
+          if (btn) btn.classList.toggle('on', gridOn);
+        },
+      });
+
+      // ---- Door-numbering debug overlay (isolated module) ----
+      // Floats a numbered label over each door so doors can be referenced
+      // precisely ("door #3"). OFF by default; toggled from the Settings
+      // sidebar "Door numbers" switch or forced on with ?debugDoors=1. Single
+      // call site, exactly as documented in the module's own header. The
+      // DOOR_LABELS_WORLD export it consumes is produced by home3d-scene.js.
+      let panelReady = false; // true once renderPanel()'s deps exist (guards an
+                              // onChange-fires-during-attach TDZ crash)
+      const doorNums = DoorDebugOverlay.attachDoorDebugOverlay(
+        home.scene, Home3DScene.DOOR_LABELS_WORLD, {
+          doorHeight: 2.03,
+          requestRender: home.requestRender,
+        });
+
+      // Preview tile: stop the render loop whenever it isn't actually visible —
+      // (a) a dashboard popup is open (parent hash set), e.g. the #3d / #miles
+      // modal covering it, or (b) it's scrolled off-screen / on an inactive
+      // swipe slide. Same-origin iframe, so we can read the parent location and
+      // run an IntersectionObserver against our own frame element. The scene
+      // itself already pauses on tab/app background (visibilitychange).
+      if (isPreview) {
+        try {
+          const parentWin = window.parent;
+          const frameEl = window.frameElement; // belongs to the parent document
+          if (parentWin && parentWin !== window) {
+            let onScreen = true, noPopup = true;
+            const apply = () => home.setActive(onScreen && noPopup);
+            const checkHash = () => {
+              const h = parentWin.location.hash || '';
+              noPopup = (h === '' || h === '#');
+              apply();
+            };
+            parentWin.addEventListener('hashchange', checkHash);
+            checkHash();
+            if (frameEl && parentWin.IntersectionObserver) {
+              const io = new parentWin.IntersectionObserver((entries) => {
+                const e = entries[entries.length - 1];
+                onScreen = e.isIntersecting && e.intersectionRatio > 0.1;
+                apply();
+              }, { threshold: [0, 0.1, 0.5] });
+              io.observe(frameEl);
+            }
+          }
+        } catch (e) { /* cross-origin/no parent — preview just runs unpaused */ }
+      }
+
+      // Hover detection for tooltip
+      const rc = new THREE.Raycaster();
+      const mouse = new THREE.Vector2();
+      container.addEventListener('pointermove', e => {
+        const r = container.getBoundingClientRect();
+        mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+        mouse.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+        if (panel.classList.contains('open')) { tooltip.classList.remove('visible'); return; }
+        // tooltip hover raycasting — camera not accessible here, skip silently
+      });
+
+      // Sun state (shadows are fixed per scene mode — no in-panel control)
+      const topRightBtns = document.getElementById('top-right-btns');
+      let sunOn = true;
+
+      // Wide screen detection — panel always open above 1500px
+      const WIDE_BREAKPOINT = 1500;
+      function isWideScreen() { return window.innerWidth >= WIDE_BREAKPOINT; }
+
+      // Panel logic
+      function openPanel() { panel.classList.add('open'); topRightBtns.style.display = 'none'; }
+      function closePanel() {
+        if (isWideScreen()) { selectedRoom = null; renderPanel(); return; }
+        panel.classList.remove('open'); topRightBtns.style.display = ''; selectedRoom = null;
+      }
+
+      // Auto-open on wide screens
+      if (isWideScreen()) { openPanel(); setTimeout(() => renderPanel(), 0); }
+      window.addEventListener('resize', () => {
+        if (isWideScreen()) { openPanel(); renderPanel(); }
+      });
+
+      lightsBtn.addEventListener('click', () => { selectedRoom = null; panelView = 'controls'; openPanel(); renderPanel(); });
+      panelClose.addEventListener('click', closePanel);
+      // Back affordance is shared by the room-detail panel AND the Settings
+      // view. From Settings it returns to Controls; from a room it clears the
+      // selection (also returning to Controls). Settings takes priority so
+      // that if a room were ever open while in settings state, back still does
+      // the expected single step. In practice only one is active at a time.
+      panelBack.addEventListener('click', () => {
+        if (panelView === 'settings') { panelView = 'controls'; renderPanel(); return; }
+        selectedRoom = null; renderPanel();
+      });
+      // Settings button (Controls footer) -> switch the sidebar to the Settings
+      // view. renderPanel() reads panelView; the panelReady guard is already
+      // true by the time any click can happen, so this re-render is safe.
+      settingsBtn.addEventListener('click', () => { panelView = 'settings'; renderPanel(); });
+
+      // ---- Connect WebSocket for live updates ----
+
+      if (haConfig && haToken) {
+        ha = HAClient.create({
+          // Already resolved by HomeConfig - including the ?haUrl= override,
+          // which cleared fallbackUrl so nothing can race a second host.
+          url: haConfig.url,
+          fallbackUrl: haConfig.fallbackUrl,
+          token: haToken,
+          rooms: haConfig.rooms,
+          wsReconnectMs: haConfig.wsReconnectMs || 5000,
+          pollIntervalMs: haConfig.pollIntervalMs || 5000
+        });
+
+        haStatusEl.style.display = '';
+
+        ha.onStatusChange(status => {
+          haStatusDot.className = 'ha-status-dot ' + status;
+          const activeUrl = ha.activeUrl || '';
+          // "Local" means we connected on the primary configured URL; "Remote"
+          // means we fell through to fallbackUrl. Derived from config rather
+          // than matched against hardcoded hostnames or LAN ranges, so the
+          // label is correct for any deployment (and this public repo carries
+          // nobody's network details).
+          const primaryUrl = (haConfig && haConfig.url) || '';
+          const isLocal = Boolean(activeUrl) && activeUrl === primaryUrl;
+          const via = activeUrl ? ' · ' + (isLocal ? 'Local' : 'Remote') : '';
+          const labels = {
+            connected:    'HA Connected' + via,
+            disconnected: 'HA Disconnected',
+            polling:      'HA Polling' + via,
+            syncing:      'HA Syncing' + via,
+            auth_failed:  'HA Auth Failed',
+            sync_failed:  'HA Sync Failed'
+          };
+          haStatusText.textContent = labels[status] || 'HA';
+        });
+
+        ha.onStateChange((roomId, group, state) => {
+          const ls = home.lightState[roomId];
+          if (!ls || !ls[group]) return;
+          ls[group].on = state.on;
+          if (state.bri !== undefined) ls[group].bri = state.bri;
+          if (state.temp !== undefined && group === 'main') ls[group].temp = state.temp;
+          if (state.color !== undefined && group === 'ambient') ls[group].color = state.color;
+          home.updateLights();
+          renderPanel();
+        });
+
+        ha.connect();
+      }
+
+      // Phase 3: Send state from 3D controls → HA
+      function sendToHA(roomId, group, state, debounceMs) {
+        if (!ha || !haConfig) return;
+        const entities = haConfig.rooms[roomId]?.[group];
+        if (!entities?.length) return;
+
+        const target = { entity_id: entities };
+        const key = roomId + '-' + group;
+
+        if (!state.on) {
+          ha.callServiceDebounced('light', 'turn_off', {}, target, key, debounceMs || 0);
+        } else {
+          const data = {};
+          if (state.bri !== undefined) data.brightness = Math.round(state.bri * 2.55);
+          if (state.temp !== undefined && group === 'main') data.color_temp_kelvin = state.temp;
+          if (state.color !== undefined && group === 'ambient') {
+            const c = state.color;
+            data.rgb_color = [parseInt(c.slice(1,3),16), parseInt(c.slice(3,5),16), parseInt(c.slice(5,7),16)];
+          }
+          ha.callServiceDebounced('light', 'turn_on', data, target, key, debounceMs || 0);
+        }
+      }
+
+      // ---- Panel rendering ----
+      // Three panel states:
+      //   1. Controls  (panelView==='controls', no room)  — room list + Settings btn
+      //   2. Settings  (panelView==='settings', no room)  — Sun/Compass/Grid
+      //                                                      + Wall numbers + Specs + back
+      //   3. Room       (selectedRoom set)                 — per-room light controls
+      // The old "All On / All Off" footer buttons were removed; the footer now
+      // holds the single Settings button (shown only on the Controls page).
+
+      function renderPanel() {
+        panelReady = true; // reached here => all panel deps are declared; safe
+                           // for an overlay onChange to re-render now.
+
+        // ===== SETTINGS view (only when no room is open) =====
+        if (!selectedRoom && panelView === 'settings') {
+          panelTitle.textContent = 'Settings';
+          panelArea.textContent = '';
+          panelBack.style.display = '';       // back arrow -> returns to Controls
+          panelFooter.style.display = 'none'; // no Settings button on this page
+
+          const curMode = home.getSunMode();
+          const SVG_AUTO     = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+          const SVG_MORNING  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M4.93 4.93l2.83 2.83M2 12h4M4.93 19.07l2.83-2.83M12 18v4M19.07 19.07l-2.83-2.83M22 12h-4M19.07 4.93l-2.83 2.83"/><path d="M12 7a5 5 0 0 0 0 10" stroke-dasharray="3 2"/></svg>';
+          const SVG_NOON     = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5" fill="currentColor"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="4.22" y1="4.22" x2="6.34" y2="6.34"/><line x1="17.66" y1="17.66" x2="19.78" y2="19.78"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/><line x1="4.22" y1="19.78" x2="6.34" y2="17.66"/><line x1="17.66" y1="6.34" x2="19.78" y2="4.22"/></svg>';
+          const SVG_NIGHT    = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+          const sunModeGroup = sunOn ? (
+            '<div class="sun-mode-group">' +
+            '<button class="sun-mode-btn ' + (curMode==='auto'?'active':'') + '" data-sun-mode="auto" title="Auto (time-based)">' + SVG_AUTO + '</button>' +
+            '<button class="sun-mode-btn ' + (curMode==='morning'?'active':'') + '" data-sun-mode="morning" title="Morning / Evening">' + SVG_MORNING + '</button>' +
+            '<button class="sun-mode-btn ' + (curMode==='noon'?'active':'') + '" data-sun-mode="noon" title="Noon (brightest)">' + SVG_NOON + '</button>' +
+            '<button class="sun-mode-btn night ' + (curMode==='night'?'active':'') + '" data-sun-mode="night" title="Night">' + SVG_NIGHT + '</button>' +
+            '</div>'
+          ) : '';
+
+          let html = '<div class="panel-toggle-row">' +
+            '<span class="panel-toggle-label">Sun</span>' +
+            sunModeGroup +
+            '<button class="toggle ' + (sunOn ? 'on' : '') + '" id="panel-sun-toggle"><div class="toggle-knob"></div></button>' +
+            '</div>';
+
+          html += '<div class="panel-toggle-row">' +
+            '<span class="panel-toggle-label">Compass</span>' +
+            '<button class="toggle ' + (compassOn ? 'on' : '') + '" id="panel-compass-toggle"><div class="toggle-knob"></div></button>' +
+            '</div>';
+
+          html += '<div class="panel-toggle-row">' +
+            '<span class="panel-toggle-label">Grid <span style="opacity:0.4;font-weight:400;">(G)</span></span>' +
+            '<button class="toggle ' + (gridOn ? 'on' : '') + '" id="panel-grid-toggle"><div class="toggle-knob"></div></button>' +
+            '</div>';
+
+          // Wall-numbers debug toggle — floats each wall segment's number above
+          // the wall in the 3D view (see src/overlays/wall-debug-overlay.js). Also toggled
+          // by Shift+D; the two stay in sync via the overlay's onChange.
+          html += '<div class="panel-toggle-row">' +
+            '<span class="panel-toggle-label">Wall numbers <span style="opacity:0.4;font-weight:400;">(⇧D)</span></span>' +
+            '<button class="toggle ' + (wallNums.isEnabled() ? 'on' : '') + '" id="panel-wall-numbers-toggle"><div class="toggle-knob"></div></button>' +
+            '</div>';
+
+          // Door-numbers debug toggle — floats each door's number above the door
+          // head in the 3D view (see src/overlays/door-debug-overlay.js). This
+          // switch is the intended surface; ?debugDoors=1 also forces it on.
+          html += '<div class="panel-toggle-row">' +
+            '<span class="panel-toggle-label">Door numbers</span>' +
+            '<button class="toggle ' + (doorNums.isEnabled() ? 'on' : '') + '" id="panel-door-numbers-toggle"><div class="toggle-knob"></div></button>' +
+            '</div>';
+
+          // Specs section — buttons that open each spec page in a new tab.
+          html += '<div class="panel-section-title">Specs</div>';
+          html += '<div class="spec-list">' +
+            SPEC_PAGES.map(sp =>
+              '<a class="spec-btn" href="' + sp.path + '" target="_blank" rel="noopener">' +
+              '<span>' + sp.name + '</span>' +
+              '<svg class="spec-ext" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' +
+              '</a>'
+            ).join('') +
+            '</div>';
+
+          panelBody.innerHTML = html;
+
+          const panelSunToggle = document.getElementById('panel-sun-toggle');
+          if (panelSunToggle) {
+            panelSunToggle.addEventListener('click', () => { sunOn = !sunOn; home.setSun(sunOn); renderPanel(); });
+          }
+          const panelCompassToggle = document.getElementById('panel-compass-toggle');
+          if (panelCompassToggle) {
+            panelCompassToggle.addEventListener('click', () => { setCompass(!compassOn); renderPanel(); });
+          }
+          const panelGridToggle = document.getElementById('panel-grid-toggle');
+          if (panelGridToggle) {
+            panelGridToggle.addEventListener('click', () => { grid.toggle(); renderPanel(); });
+          }
+          const panelWallNumbersToggle = document.getElementById('panel-wall-numbers-toggle');
+          if (panelWallNumbersToggle) {
+            panelWallNumbersToggle.addEventListener('click', () => { wallNums.toggle(); renderPanel(); });
+          }
+          const panelDoorNumbersToggle = document.getElementById('panel-door-numbers-toggle');
+          if (panelDoorNumbersToggle) {
+            panelDoorNumbersToggle.addEventListener('click', () => { doorNums.toggle(); renderPanel(); });
+          }
+          panelBody.querySelectorAll('[data-sun-mode]').forEach(btn => {
+            btn.addEventListener('click', () => { home.setSunMode(btn.dataset.sunMode); renderPanel(); });
+          });
+          return;
+        }
+
+        // ===== CONTROLS view (default; no room) =====
+        if (!selectedRoom) {
+          panelView = 'controls'; // normalise (e.g. after backing out of a room)
+          panelTitle.textContent = 'Controls';
+          panelArea.textContent = '';
+          panelBack.style.display = 'none';
+          panelFooter.style.display = ''; // Settings button visible here
+
+          let html = home.roomIds.map(id => {
+            const rm = Home3DScene.ROOMS[id];
+            const s = home.lightState[id];
+            const any = s.main.on || s.ambient?.on || s.galaxy?.on;
+            return `<button class="room-list-item" data-room="${id}">
+              <div><div class="room-list-name">${rm?.name || id}</div><div class="room-list-area">${rm?.area || ''}</div></div>
+              <div class="room-list-dot ${any ? 'on' : ''}"></div>
+            </button>`;
+          }).join('');
+
+          panelBody.innerHTML = html;
+
+          panelBody.querySelectorAll('.room-list-item').forEach(btn => {
+            btn.addEventListener('click', () => { selectedRoom = btn.dataset.room; renderPanel(); });
+          });
+        } else {
+          const rm = Home3DScene.ROOMS[selectedRoom];
+          const lc = Home3DScene.LIGHTS[selectedRoom];
+          const s = home.lightState[selectedRoom];
+          const rid = selectedRoom;
+          panelTitle.textContent = rm?.name || selectedRoom;
+          panelArea.textContent = rm?.area || '';
+          panelBack.style.display = '';
+          panelFooter.style.display = 'none'; // no Settings button inside a room
+
+          let html = '<div class="control-section">';
+
+          // Main light
+          html += `<div class="control-group">
+            <div class="control-header">
+              <span class="control-label">MAIN LIGHT</span>
+              <button class="toggle ${s.main.on ? 'on' : ''}" data-action="toggle-main">
+                <div class="toggle-knob"></div>
+              </button>
+            </div>`;
+          if (s.main.on) {
+            html += `<div class="slider-row">
+              <div class="slider-label">Brightness: ${s.main.bri}%</div>
+              <input type="range" class="slider" min="5" max="100" value="${s.main.bri}" data-action="bri-main">
+            </div>
+            <div class="slider-row">
+              <div class="slider-label">Temperature: ${s.main.temp}K ${s.main.temp < 3200 ? 'Warm' : s.main.temp > 5000 ? 'Cool' : 'Neutral'}</div>
+              <input type="range" class="slider temp" min="2700" max="6500" step="100" value="${s.main.temp}" data-action="temp-main">
+            </div>`;
+          }
+          html += '</div>';
+
+          // Ambient
+          if (s.ambient) {
+            html += `<div class="control-group">
+              <div class="control-header">
+                <span class="control-label">${lc.ambient.name.toUpperCase()}</span>
+                <button class="toggle ${s.ambient.on ? 'on' : ''}" data-action="toggle-ambient">
+                  <div class="toggle-knob"></div>
+                </button>
+              </div>`;
+            if (s.ambient.on) {
+              const colors = ["#ff3300","#ff6600","#ffaa00","#ff0066","#cc00ff","#6600ff","#0066ff","#00ccff","#00ff66","#ffffff"];
+              html += `<div class="slider-row">
+                <div class="slider-label">Brightness: ${s.ambient.bri}%</div>
+                <input type="range" class="slider" min="5" max="100" value="${s.ambient.bri}" data-action="bri-ambient">
+              </div>
+              <div class="slider-row">
+                <div class="slider-label">Color</div>
+                <div class="color-swatches">
+                  ${colors.map(c => `<button class="color-swatch ${s.ambient.color === c ? 'selected' : ''}" style="background:${c}" data-action="color-ambient" data-color="${c}"></button>`).join('')}
+                </div>
+                <input type="color" class="color-input" value="${s.ambient.color}" data-action="color-input-ambient">
+              </div>
+              <div class="strip-info">
+                <div class="strip-info-title">Strip positions:</div>
+                ${lc.ambient.pos.map(p => `<div>&#8226; ${p}</div>`).join('')}
+              </div>`;
+            }
+            html += '</div>';
+          }
+
+          // Door openness (UI-only slider — not wired to HA). 0 = fully closed,
+          // 100 = fully open at the door's collision-solved max angle, always in
+          // its fixed single swing direction. Rooms without a door (living room)
+          // get no section. The hallway's door is the front door.
+          const doorPct = home.getDoorOpen(rid);
+          if (doorPct !== null) {
+            const doorLabel = rid === 'hallway' ? 'FRONT DOOR' : 'DOOR';
+            html += `<div class="control-group">
+              <div class="control-header">
+                <span class="control-label">${doorLabel}</span>
+              </div>
+              <div class="slider-row">
+                <div class="slider-label">Open: ${Math.round(doorPct)}%</div>
+                <input type="range" class="slider" min="0" max="100" value="${Math.round(doorPct)}" data-action="door-open">
+              </div>
+            </div>`;
+          }
+
+          // Galaxy
+          if (s.galaxy) {
+            html += `<div class="control-group">
+              <div class="control-header">
+                <span class="control-label">GALAXY PROJECTOR</span>
+                <button class="toggle galaxy ${s.galaxy.on ? 'on' : ''}" data-action="toggle-galaxy">
+                  <div class="toggle-knob"></div>
+                </button>
+              </div>`;
+            if (s.galaxy.on) {
+              html += `<div class="slider-row">
+                <div class="slider-label">Brightness: ${s.galaxy.bri}%</div>
+                <input type="range" class="slider" min="5" max="100" value="${s.galaxy.bri}" data-action="bri-galaxy">
+              </div>`;
+            }
+            html += '</div>';
+          }
+
+          html += '</div>';
+          panelBody.innerHTML = html;
+
+          // Wire up controls with HA integration
+          panelBody.querySelectorAll('[data-action]').forEach(el => {
+            const action = el.dataset.action;
+
+            if (action === 'toggle-main') el.addEventListener('click', () => {
+              s.main.on = !s.main.on; home.updateLights(); sendToHA(rid, 'main', s.main, 0); renderPanel();
+            });
+            if (action === 'toggle-ambient') el.addEventListener('click', () => {
+              s.ambient.on = !s.ambient.on; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 0); renderPanel();
+            });
+            if (action === 'toggle-galaxy') el.addEventListener('click', () => {
+              s.galaxy.on = !s.galaxy.on; home.updateLights(); sendToHA(rid, 'galaxy', s.galaxy, 0); renderPanel();
+            });
+            if (action === 'bri-main') el.addEventListener('input', e => {
+              s.main.bri = +e.target.value; home.updateLights();
+              el.previousElementSibling.textContent = `Brightness: ${s.main.bri}%`;
+              sendToHA(rid, 'main', s.main, 200);
+            });
+            if (action === 'temp-main') el.addEventListener('input', e => {
+              s.main.temp = +e.target.value; home.updateLights();
+              const t = s.main.temp; el.previousElementSibling.textContent = `Temperature: ${t}K ${t<3200?'Warm':t>5000?'Cool':'Neutral'}`;
+              sendToHA(rid, 'main', s.main, 200);
+            });
+            if (action === 'bri-ambient') el.addEventListener('input', e => {
+              s.ambient.bri = +e.target.value; home.updateLights();
+              el.previousElementSibling.textContent = `Brightness: ${s.ambient.bri}%`;
+              sendToHA(rid, 'ambient', s.ambient, 200);
+            });
+            if (action === 'color-ambient') el.addEventListener('click', () => {
+              s.ambient.color = el.dataset.color; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 0); renderPanel();
+            });
+            if (action === 'color-input-ambient') el.addEventListener('input', e => {
+              s.ambient.color = e.target.value; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 200); renderPanel();
+            });
+            if (action === 'door-open') el.addEventListener('input', e => {
+              const pct = +e.target.value;
+              home.setDoorOpen(rid, pct);
+              el.previousElementSibling.textContent = `Open: ${pct}%`;
+            });
+            if (action === 'bri-galaxy') el.addEventListener('input', e => {
+              s.galaxy.bri = +e.target.value; home.updateLights();
+              el.previousElementSibling.textContent = `Brightness: ${s.galaxy.bri}%`;
+              sendToHA(rid, 'galaxy', s.galaxy, 200);
+            });
+          });
+        }
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Curtain Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .sw { display:inline-block; width:11px; height:11px; border-radius:2px; vertical-align:middle; margin-right:5px; border:1px solid rgba(0,0,0,.2); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- Shared harness: the owner's real tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   CURTAIN SPEC   ·   one design for ALL house curtains (only WIDTH,
+   colors, and cornice side-faces vary per room).
+
+   THE CURTAIN — floor-to-ceiling, blackout, PINCH-PLEAT, TWO-TONE,
+   centre-parted on a smart SLIDER, under a CORNICE / pelmet box with a
+   continuous strip light.
+
+   TWO-TONE (across the closed width, L→R) — SHARP CUT, not a gradient:
+       [outer ×N pleats] || [inner ×M pleats] | [inner ×M] || [outer ×N]
+   Each half is a hard-edged block: `outerPleats` pleats of the outer/
+   extreme colour from the wall edge inward, then ONE hard colour-change
+   boundary landing exactly on a pleat seam, then `innerPleats` pleats of
+   the inner/centre colour running to the centre part (mirrored across
+   the centre — the owner's bedroom "5 pink extremes / 2 blue inner"). No
+   blend — the boundary is a step, coloured per-pleat-index not per-u.
+   Plus a FRONT (room-facing) vs BACK (window-facing) tint multiplied on
+   top — front shows the pure two-tone, back is a lining tint.
+
+   CORNICE / PELMET — 3 rectangles, solid WHITE throughout: a FRONT face
+   parallel to the wall + 2 SIDE faces at 90° closing it back to the
+   wall. `hasSideFaces=false` (living-room, wall-to-wall) drops the
+   sides and spans the whole wall; the strip LIGHT still runs the full
+   cornice length either way. The cornice is anchored into the room shell:
+   its TOP touches the CEILING, its SIDE-BACKS touch the BACK WALL (no
+   render gap) — see ROOM SHELL below.
+
+   ROOM SHELL — a CEILING (bottom face at curtain-height) and a BACK WALL
+   (front face at z=0, i.e. flush with the cornice side-backs) are added
+   so the cornice has real surfaces to sit against. The curtain itself is
+   anchored HALFWAY through the cornice depth (mid-depth), not at the
+   front or back plane.
+
+   PLEAT FOLD SHAPE — looking at the sideways cross-section, the curtain
+   is NOT flat: the top of the fabric is centred on the cornice mid-depth,
+   and each pleat fold alternates FORWARD (toward the room, +z) and
+   BACKWARD (toward the window, -z) around that centreline as you go
+   down, with the fold depth growing with height gathered — a gentle
+   zig-zag, not a one-sided billow.
+
+   KINEMATICS (the tricky bit — ANIMATED, not a toggle). ONE `openPct`
+   (0 = closed, 100 = open) drives BOTH:
+     • the centre-part SLIDE — each half's leading (centre) edge sweeps
+       out to its own wall as it opens;
+     • the PINCH-PLEAT GATHER — the same fabric compresses (fold spacing
+       shrinks) and bunches DEEPER (billow amplitude grows) as it opens.
+   Modelled as one continuous wavy vertical surface per half whose span
+   compresses and whose billow deepens with openPct. `animate()` eases a
+   persisted current-open toward the target every frame and re-lays the
+   fold vertices — so dragging the slider genuinely animates.
+
+   Harness: tweaks-panel.jsx (controls) + spec-three.jsx (ThreeView).
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "openPct": 0,
+  "width": 220,
+  "height": 250,
+  "pleats": 7,
+  "outerPleats": 5,
+  "innerPleats": 2,
+  "outerColor": "#d98aa8",
+  "innerColor": "#5f86c4",
+  "frontColor": "#ffffff",
+  "backColor": "#e7dcc4",
+  "hasSideFaces": true,
+  "wallWidth": 320,
+  "corniceDepth": 18,
+  "corniceHeight": 24,
+  "corniceColor": "#ffffff",
+  "corniceLightOn": true,
+  "corniceLightColor": "#ffe6bd",
+  "corniceLightIntensity": 1.5,
+  "corniceLightHeightPct": 35
+}/*EDITMODE-END*/;
+
+const CM = 0.01;
+const clamp01 = (n) => Math.max(0, Math.min(1, n));
+
+// Module-scoped so the eased open-amount survives buildModel rebuilds
+// (the harness wipes ctx each rebuild). One curtain view per page.
+let _openCurrent = null;
+
+// ---- fold vertex placement — the single source of the kinematics ----
+// side: -1 left half, +1 right half. u∈[0,1] across the span from the
+// OUTER (wall) edge → the centre part. v∈[0,1] floor→ceiling.
+function foldVertex(u, v, side, isBack, openN, P) {
+  // span compresses from ~half-width (closed) toward a small gathered
+  // stack (open). The outer edge is anchored at the wall; the centre
+  // (leading) edge therefore sweeps outward → the slide + the gather.
+  const span = P.closedSpan + (P.gatherFrac * P.width / 2 - P.closedSpan) * openN;
+  const anchorX = side < 0 ? -P.width / 2 : +P.width / 2;
+  const x = side < 0 ? anchorX + u * span : anchorX - u * span;
+  const y = v * P.height;
+
+  // pinch: near the top the folds are pinched to the rail (small amp);
+  // they open up below the heading. v=1 is the ceiling/top (anchored,
+  // centred on the cornice mid-depth); v=0 is the floor — fold depth
+  // GROWS downward from the pinched top.
+  const pv = v >= 0.80 ? (1 - (v - 0.80) / 0.20 * 0.88) : 1;
+  const depthGrow = 0.35 + 0.65 * (1 - v);            // shallow at top → deep at floor
+  const gatherAmp = 1 + 1.3 * openN;                  // bunches deeper when gathered
+  const amp = P.ampBase * pv * depthGrow * gatherAmp;
+  // zig-zag: each pleat fold alternates FORWARD (+z, toward the room)
+  // and BACKWARD (-z, toward the window) around the centreline — a
+  // plain sine oscillates through 0 at every pleat seam and peaks at
+  // alternating signs pleat-to-pleat, unlike the old one-sided bulge.
+  const bump = Math.sin(u * P.pleats * 2 * Math.PI);
+  let z = P.corniceMidZ + amp * bump;
+  if (isBack) z -= P.thickness;                      // lining sits just behind
+  return [x, y, z];
+}
+
+// ============== Cross-section SVG (top-down through the curtain) ==============
+function CrossSection({ t }) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const svg = ref.current;
+    if (!svg) return;
+    svg.innerHTML = '';
+    const ns = 'http://www.w3.org/2000/svg';
+    const W = 560, H = 240;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    const width = t.width, pleats = Math.max(2, t.pleats | 0);
+    const cDepth = t.corniceDepth;
+    const cWidth = t.hasSideFaces ? width * 1.04 : t.wallWidth;
+    const openN = clamp01(t.openPct / 100);
+
+    const margin = 34;
+    const SCALE = (W - 2 * margin) / Math.max(cWidth, width);
+    const midX = W / 2;
+    const wallY = 54;                                  // wall (z=0) near the top
+    const px = (x_cm) => midX + x_cm * SCALE;          // x_cm centred on 0
+    const pz = (z_cm) => wallY + z_cm * SCALE;         // depth grows downward (toward room)
+
+    function line(x1, y1, x2, y2, stroke, w = 1.5, dash) {
+      const l = document.createElementNS(ns, 'line');
+      l.setAttribute('x1', x1); l.setAttribute('y1', y1);
+      l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+      l.setAttribute('stroke', stroke); l.setAttribute('stroke-width', w);
+      if (dash) l.setAttribute('stroke-dasharray', dash);
+      svg.appendChild(l);
+    }
+    function txt(x, y, s, o = {}) {
+      const tt = document.createElementNS(ns, 'text');
+      tt.setAttribute('x', x); tt.setAttribute('y', y);
+      tt.setAttribute('font-size', o.size || '10'); tt.setAttribute('fill', o.color || '#444');
+      if (o.anchor) tt.setAttribute('text-anchor', o.anchor);
+      tt.textContent = s; svg.appendChild(tt);
+    }
+
+    // wall
+    line(px(-cWidth / 2), wallY, px(cWidth / 2), wallY, '#a89c80', 3);
+    txt(px(-cWidth / 2), wallY - 6, 'wall', { color: '#a89c80', size: '9' });
+
+    // cornice front face (parallel to wall) + side faces
+    const cy = pz(cDepth);
+    line(px(-cWidth / 2), cy, px(cWidth / 2), cy, '#6b6b72', 4);
+    txt(px(cWidth / 2) + 4, cy + 3, 'cornice front', { color: '#6b6b72', size: '9' });
+    if (t.hasSideFaces) {
+      line(px(-cWidth / 2), wallY, px(-cWidth / 2), cy, '#6b6b72', 4);
+      line(px(cWidth / 2), wallY, px(cWidth / 2), cy, '#6b6b72', 4);
+    }
+
+    // mid-cornice-depth centreline — the curtain's anchor plane (fix #4)
+    const midZ = pz(cDepth / 2);
+    line(px(-cWidth / 2), midZ, px(cWidth / 2), midZ, '#8a8a90', 1, '4,3');
+    txt(px(-cWidth / 2) - 2, midZ + 3, 'mid-depth anchor', { anchor: 'end', color: '#8a8a90', size: '8' });
+
+    // curtain fold line (each half): a top-down "cross-section" read as
+    // depth-vs-width, zig-zagging FORWARD/BACKWARD around the mid-depth
+    // centreline (fix #4), coloured with the SHARP two-tone cut (fix #1)
+    // — segment colour flips at the pleat seam, no gradient blend.
+    const outerPleats = Math.min(pleats, Math.max(0, t.outerPleats ?? 5));
+    const P = { width, pleats, closedSpan: width / 2 * 1.03,
+                gatherFrac: 0.16, ampBase: 5.5, thickness: 0.02 };
+    for (const side of [-1, 1]) {
+      const N = pleats * 10;
+      // build per-pleat-segment polylines so the stroke colour can hard-cut
+      let segPts = [];
+      let segPleat = -1;
+      const flushSeg = () => {
+        if (segPts.length > 1) {
+          const poly = document.createElementNS(ns, 'polyline');
+          poly.setAttribute('points', segPts.map(p => p.join(',')).join(' '));
+          poly.setAttribute('fill', 'none');
+          poly.setAttribute('stroke', segPleat < outerPleats ? t.outerColor : t.innerColor);
+          poly.setAttribute('stroke-width', '2');
+          svg.appendChild(poly);
+        }
+        segPts = [];
+      };
+      for (let i = 0; i <= N; i++) {
+        const u = i / N;
+        const span = P.closedSpan + (P.gatherFrac * P.width / 2 - P.closedSpan) * openN;
+        const anchorX = side < 0 ? -width / 2 : +width / 2;
+        const x = side < 0 ? anchorX + u * span : anchorX - u * span;
+        const gatherAmp = 1 + 1.3 * openN;
+        // zig-zag around the mid-depth centreline, not a one-sided bulge
+        const z = cDepth / 2 + P.ampBase * gatherAmp * Math.sin(u * pleats * 2 * Math.PI);
+        const pleatIdx = Math.min(pleats - 1, Math.floor(u * pleats));
+        if (pleatIdx !== segPleat) { flushSeg(); segPleat = pleatIdx; segPts.push([px(x), pz(z)]); }
+        segPts.push([px(x), pz(z)]);
+      }
+      flushSeg();
+    }
+
+    // width dimension
+    const dimY = H - 22;
+    line(px(-width / 2), dimY, px(width / 2), dimY, '#999', 1);
+    line(px(-width / 2), dimY - 4, px(-width / 2), dimY + 4, '#999', 1);
+    line(px(width / 2), dimY - 4, px(width / 2), dimY + 4, '#999', 1);
+    txt(midX, dimY - 6, `width ${width} cm`, { anchor: 'middle', color: '#666', size: '10' });
+
+    const head = document.createElementNS(ns, 'text');
+    head.setAttribute('x', 12); head.setAttribute('y', 22);
+    head.setAttribute('font-size', '12'); head.setAttribute('fill', '#333');
+    head.textContent = `Top-down — pinch-pleat scallops @ ${t.openPct}% open`;
+    svg.appendChild(head);
+  }, [t]);
+  return <svg ref={ref}></svg>;
+}
+
+// ============== Curtain model (buildModel + kinematics) ==============
+function buildCurtain(t, group, THREE, ctx) {
+  const width = t.width * CM;
+  const height = t.height * CM;
+  const pleats = Math.max(2, t.pleats | 0);
+  const cDepth0 = t.corniceDepth * CM;
+  // sharp two-tone cut: outerPleats of outer colour from the wall edge
+  // inward, then a HARD boundary at a pleat seam, then innerPleats of
+  // inner colour to the centre part. Clamp so the split never exceeds
+  // the actual pleat count.
+  const outerPleats = Math.min(pleats, Math.max(0, t.outerPleats | 0));
+  const P = {
+    width, height, pleats,
+    ampBase: 0.055,          // base fold depth (m)
+    thickness: 0.02,         // fabric front→back offset (m)
+    gatherFrac: 0.16,        // gathered span = this × half-width
+    closedSpan: width / 2 * 1.03, // slight centre overlap when closed
+    corniceMidZ: cDepth0 / 2, // curtain anchored halfway through cornice depth (fix #4)
+  };
+
+  const outer = new THREE.Color(t.outerColor);
+  const inner = new THREE.Color(t.innerColor);
+  const front = new THREE.Color(t.frontColor);
+  const back  = new THREE.Color(t.backColor);
+
+  const nU = pleats * 6, nV = 16;
+  ctx.fabrics = [];
+
+  function makeSurface(side, isBack) {
+    const cols = nU + 1, rows = nV + 1;
+    const pos = new Float32Array(cols * rows * 3);
+    const col = new Float32Array(cols * rows * 3);
+    const us = new Float32Array(cols * rows);
+    const vs = new Float32Array(cols * rows);
+    let p = 0;
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const u = i / nU, v = j / nV;
+        us[p] = u; vs[p] = v;
+        // two-tone: SHARP CUT at a pleat seam — u=0 is the outer/wall
+        // edge, u=1 is the centre part. Pleat index (not u) decides the
+        // colour, so the boundary always lands exactly on a fold, never
+        // a blend.
+        const pleatIdx = Math.min(pleats - 1, Math.floor(u * pleats));
+        const base = (pleatIdx < outerPleats ? outer : inner).clone();
+        base.multiply(isBack ? back : front);
+        col[p * 3] = base.r; col[p * 3 + 1] = base.g; col[p * 3 + 2] = base.b;
+        p++;
+      }
+    }
+    const idx = [];
+    for (let j = 0; j < nV; j++) {
+      for (let i = 0; i < nU; i++) {
+        const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1;
+        if (!isBack) { idx.push(a, c, b, b, c, d); }
+        else { idx.push(a, b, c, b, d, c); }   // reversed winding for the lining
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    geo.userData = { us, vs, side, isBack };
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 0.92, metalness: 0.0, side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = `curtain_${side < 0 ? 'L' : 'R'}_${isBack ? 'back' : 'front'}`;
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    group.add(mesh);
+    ctx.fabrics.push({ geo });
+  }
+  makeSurface(-1, false); makeSurface(-1, true);
+  makeSurface(+1, false); makeSurface(+1, true);
+
+  // re-lay all fold vertices for a given open amount (called every frame)
+  ctx.updateFolds = (openN) => {
+    for (const { geo } of ctx.fabrics) {
+      const { us, vs, side, isBack } = geo.userData;
+      const pos = geo.attributes.position.array;
+      for (let k = 0; k < us.length; k++) {
+        const [x, y, z] = foldVertex(us[k], vs[k], side, isBack, openN, P);
+        pos[k * 3] = x; pos[k * 3 + 1] = y; pos[k * 3 + 2] = z;
+      }
+      geo.attributes.position.needsUpdate = true;
+      geo.computeVertexNormals();
+      geo.computeBoundingSphere();
+    }
+  };
+
+  // =================================================================
+  // CORNICE / PELMET BOX  — front face + optional 2 side faces.
+  // WHITE throughout (fix #6). Anchored: top → ceiling bottom (both at
+  // y=height, exact contact, fix #4); side-backs → back wall face (both
+  // at z=0, exact contact, fix #3+#4).
+  // =================================================================
+  const cDepth = t.corniceDepth * CM;
+  const cHeight = t.corniceHeight * CM;
+  const cWidth = t.hasSideFaces ? width * 1.04 : t.wallWidth * CM;
+  const cMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(t.corniceColor), roughness: 0.7 });
+  const cMidY = height - cHeight / 2;   // box top lands exactly at y=height (ceiling line)
+
+  // fix (v3): frontFace used to span exactly `cWidth`, landing its L/R
+  // edges on the SIDE FACES' CENTRELINE (x=±cWidth/2) rather than their
+  // true outer (room-visible) face (x=±(cWidth/2+0.01)) — a 1cm step at
+  // each corner. Side faces are unchanged (still centred at ±cWidth/2);
+  // widen the front face by the side panel's full thickness (0.02) so its
+  // edges land exactly on the sides' outer faces → a clean sharp 90°.
+  const frontFaceW = t.hasSideFaces ? cWidth + 0.02 : cWidth;
+  const frontFace = new THREE.Mesh(new THREE.BoxGeometry(frontFaceW, cHeight, 0.02), cMat);
+  frontFace.name = 'corniceFront';
+  frontFace.position.set(0, cMidY, cDepth);
+  frontFace.castShadow = true;
+  group.add(frontFace);
+
+  if (t.hasSideFaces) {
+    for (const sx of [-1, 1]) {
+      // depth cDepth, centred at z=cDepth/2 → back edge exactly at z=0
+      // (the back-wall face), front edge exactly at z=cDepth (flush
+      // with the front face) — no render gap either end.
+      const sideFace = new THREE.Mesh(new THREE.BoxGeometry(0.02, cHeight, cDepth), cMat);
+      sideFace.name = `corniceSide_${sx < 0 ? 'L' : 'R'}`;
+      sideFace.position.set(sx * cWidth / 2, cMidY, cDepth / 2);
+      sideFace.castShadow = true;
+      group.add(sideFace);
+    }
+  }
+
+  // strip LIGHT running the full cornice length — anchored to the
+  // INSIDE of the FRONT face, HIGHER in the box: ~30-40% of the
+  // cornice height down from the TOP (fix #5), not near the bottom.
+  if (t.corniceLightOn) {
+    const lc = new THREE.Color(t.corniceLightColor);
+    const inten = t.corniceLightIntensity;
+    const lightDownFrac = clamp01((t.corniceLightHeightPct ?? 35) / 100);
+    const lightY = height - cHeight * lightDownFrac;      // e.g. 35% down from the top
+    const lightZ = cDepth - 0.025;                        // just inside the front face
+    const strip = new THREE.Mesh(
+      new THREE.BoxGeometry(cWidth * 0.96, 0.02, 0.03),
+      new THREE.MeshStandardMaterial({ color: lc, emissive: lc, emissiveIntensity: Math.max(0.5, inten) })
+    );
+    strip.name = 'corniceLightStrip';
+    strip.position.set(0, lightY, lightZ);
+    group.add(strip);
+
+    const nL = 3;
+    for (let i = 0; i < nL; i++) {
+      const lx = -cWidth * 0.42 + i * (cWidth * 0.84) / (nL - 1);
+      const pl = new THREE.PointLight(lc, inten, 3.2, 1.4);
+      pl.position.set(lx, lightY, lightZ);
+      // fix (v3): these uplights never cast shadows, so the cornice front
+      // face — which DOES castShadow — never occludes them from the
+      // ceiling. Occlusion needs all three of {light.castShadow,
+      // occluder.castShadow, receiver.receiveShadow}; the cornice + ceiling
+      // sides were already correct, only this was missing. That's the 3
+      // discrete warm pools on the ceiling review flagged (one per light).
+      pl.castShadow = true;
+      pl.shadow.mapSize.set(512, 512); // point-light shadows are a 6-face
+      // cube map (costlier than the scene's single 1024x1024 key light) —
+      // 512 keeps 3 of them bounded rather than scene-breaking.
+      group.add(pl);
+    }
+  }
+
+  // =================================================================
+  // ROOM SHELL — back wall + ceiling + floor (fix #4). The back wall's
+  // FRONT face sits at z=0 so the cornice side-backs touch it exactly;
+  // the ceiling's BOTTOM face sits at y=height so the cornice top
+  // touches it exactly. Both sized generously beyond the cornice/
+  // curtain footprint so they read as a real room, not a cutout.
+  // =================================================================
+  const shellSpan = Math.max(cWidth, width) * 1.6;
+  const roomDepth = 1.4;   // how far the room extends toward the viewer (+z)
+
+  // fix (v3): wall + ceiling used to be zero-thickness planes — "not just
+  // flat sheet" per review. Give both a modest, real-construction thickness,
+  // growing AWAY from the room so the room-facing contact surfaces the
+  // cornice touches (wall front face at z=0; ceiling bottom face at
+  // y=height) stay exactly where they were — the cornice's flush-touch
+  // fixes (side-backs @ z=0, top @ y=height) are unaffected.
+  const WALL_THICKNESS = 0.10;     // 10cm — modest stud-wall depth
+  const CEILING_THICKNESS = 0.10;  // 10cm — modest slab depth
+
+  const wall = new THREE.Mesh(
+    new THREE.BoxGeometry(shellSpan, height * 1.15, WALL_THICKNESS),
+    new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 })
+  );
+  wall.name = 'backWall';
+  // front (room-facing) face stays at z=0; the box grows backward (-z).
+  wall.position.set(0, height / 2, -WALL_THICKNESS / 2);
+  wall.receiveShadow = true;
+  group.add(wall);
+
+  const ceiling = new THREE.Mesh(
+    new THREE.BoxGeometry(shellSpan, CEILING_THICKNESS, roomDepth + cDepth * 0.5),
+    new THREE.MeshStandardMaterial({ color: 0x2e2e32, roughness: 1 })
+  );
+  ceiling.name = 'ceiling';
+  // bottom (room-facing) face stays at y=height; the box grows upward.
+  ceiling.position.set(0, height + CEILING_THICKNESS / 2, roomDepth / 2);
+  ceiling.receiveShadow = true;
+  group.add(ceiling);
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(shellSpan, roomDepth),
+    new THREE.MeshStandardMaterial({ color: 0x1e1e20, roughness: 1 })
+  );
+  floor.name = 'floor';
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(0, 0, roomDepth / 2);
+  floor.receiveShadow = true;
+  group.add(floor);
+
+  // lay out at the current eased open amount (persisted across rebuilds)
+  if (_openCurrent == null) _openCurrent = clamp01(t.openPct / 100);
+  ctx.updateFolds(_openCurrent);
+}
+
+// per-frame: ease current open → target, re-lay the folds (real animation)
+function animateCurtain(t, ctx, k) {
+  if (!ctx.updateFolds) return;
+  const target = clamp01((t.openPct || 0) / 100);
+  if (_openCurrent == null) _openCurrent = target;
+  _openCurrent += (target - _openCurrent) * k;
+  if (Math.abs(target - _openCurrent) < 0.0008) _openCurrent = target;
+  ctx.updateFolds(_openCurrent);
+}
+
+// ============== App ==============
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  return (
+    <>
+      <h1>Curtain Spec</h1>
+      <div className="sub">All units cm. One design for every house curtain — floor-to-ceiling blackout pinch-pleat, two-tone, centre-parted slider, under a lit cornice. Only WIDTH, colours + cornice side-faces vary per room. Use the Tweaks panel.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Cross-section (top-down)</h2>
+          <CrossSection t={t} />
+          <div className="legend">
+            <span className="sw" style={{ background: t.outerColor }}></span>outer/extreme colour × {t.outerPleats} pleats ·
+            <span className="sw" style={{ background: t.innerColor, marginLeft: 8 }}></span>inner/centre colour × {t.innerPleats} pleats — SHARP cut, no gradient.
+            Cornice depth {t.corniceDepth} cm{t.hasSideFaces ? ' with side faces' : ' — wall-to-wall (no sides)'}, touching the back wall. Dashed line = curtain's mid-cornice-depth anchor.
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">value</th><th>Variability</th></tr>
+              <tr><td>Width</td><td className="num">{t.width}</td><td><b>Variable</b> — the per-curtain size</td></tr>
+              <tr><td>Height (floor→ceiling)</td><td className="num">{t.height}</td><td>Per room</td></tr>
+              <tr><td>Pleats per half</td><td className="num">{t.pleats}</td><td>Fold count</td></tr>
+              <tr><td>Open</td><td className="num">{t.openPct}%</td><td><b>Animated</b> — slide + gather</td></tr>
+              <tr><td>Outer/extreme colour × count</td><td className="num"><span className="sw" style={{ background: t.outerColor }}></span>×{t.outerPleats}</td><td>Two-tone (edges) — sharp cut</td></tr>
+              <tr><td>Inner/centre colour × count</td><td className="num"><span className="sw" style={{ background: t.innerColor }}></span>×{t.innerPleats}</td><td>Two-tone (centre) — sharp cut</td></tr>
+              <tr><td>Front / back tint</td><td className="num"><span className="sw" style={{ background: t.frontColor }}></span><span className="sw" style={{ background: t.backColor, marginLeft: 4 }}></span></td><td>Room vs window face</td></tr>
+              <tr><td>Cornice side faces</td><td className="num">{t.hasSideFaces ? 'yes' : 'no'}</td><td><b>Variable</b> — off = wall-to-wall</td></tr>
+              <tr><td>Cornice depth × height</td><td className="num">{t.corniceDepth}×{t.corniceHeight}</td><td>Pelmet box — white, touches ceiling + back wall</td></tr>
+              <tr><td>Cornice light</td><td className="num">{t.corniceLightOn ? `on ${t.corniceLightIntensity}` : 'off'}</td><td>Full-length strip, {t.corniceLightHeightPct}% down from top, inside front face</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div className="card full">
+          <h2>3D — curtain under cornice</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildCurtain}
+            animate={animateCurtain}
+            heightOf={tt => tt.height * CM}
+          />
+          <div className="legend">Drag the <b>Open</b> slider 0→100: the two halves slide apart AND the pinch pleats gather/compress (animated, not a swap). Cornice sits flush against the added ceiling + back wall; pleats zig-zag forward/backward around the mid-cornice-depth anchor.</div>
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Size" />
+        <TweakSlider label="Width" value={t.width} min={60} max={480} step={2} unit="cm"
+          onChange={v => setTweak('width', v)} />
+        <TweakSlider label="Height" value={t.height} min={180} max={320} step={2} unit="cm"
+          onChange={v => setTweak('height', v)} />
+        <TweakSlider label="Pleats / half" value={t.pleats} min={3} max={12} step={1}
+          onChange={v => setTweak('pleats', v)} />
+
+        <TweakSection label="Open (animated)" />
+        <TweakSlider label="Open" value={t.openPct} min={0} max={100} step={1} unit="%"
+          onChange={v => setTweak('openPct', v)} />
+
+        <TweakSection label="Two-tone colours — sharp cut" />
+        <TweakColor label="Outer / extreme" value={t.outerColor}
+          onChange={v => setTweak('outerColor', v)} />
+        <TweakSlider label="Outer pleats" value={t.outerPleats} min={0} max={t.pleats} step={1}
+          onChange={v => setTweak('outerPleats', v)} />
+        <TweakColor label="Inner / centre" value={t.innerColor}
+          onChange={v => setTweak('innerColor', v)} />
+        <TweakSlider label="Inner pleats" value={t.innerPleats} min={0} max={t.pleats} step={1}
+          onChange={v => setTweak('innerPleats', v)} />
+        <TweakColor label="Front tint (room)" value={t.frontColor}
+          onChange={v => setTweak('frontColor', v)} />
+        <TweakColor label="Back tint (window)" value={t.backColor}
+          onChange={v => setTweak('backColor', v)} />
+
+        <TweakSection label="Cornice / pelmet — white, touches ceiling + wall" />
+        <TweakToggle label="Side faces (box)" value={t.hasSideFaces}
+          onChange={v => setTweak('hasSideFaces', v)} />
+        {!t.hasSideFaces &&
+          <TweakSlider label="Wall width" value={t.wallWidth} min={120} max={600} step={4} unit="cm"
+            onChange={v => setTweak('wallWidth', v)} />}
+        <TweakSlider label="Cornice depth" value={t.corniceDepth} min={8} max={40} step={1} unit="cm"
+          onChange={v => setTweak('corniceDepth', v)} />
+        <TweakSlider label="Cornice height" value={t.corniceHeight} min={12} max={50} step={1} unit="cm"
+          onChange={v => setTweak('corniceHeight', v)} />
+        <TweakColor label="Cornice colour" value={t.corniceColor}
+          onChange={v => setTweak('corniceColor', v)} />
+
+        <TweakSection label="Cornice light" />
+        <TweakToggle label="Light on" value={t.corniceLightOn}
+          onChange={v => setTweak('corniceLightOn', v)} />
+        <TweakColor label="Light colour" value={t.corniceLightColor}
+          onChange={v => setTweak('corniceLightColor', v)} />
+        <TweakSlider label="Light intensity" value={t.corniceLightIntensity} min={0} max={6} step={0.1}
+          onChange={v => setTweak('corniceLightIntensity', v)} />
+        <TweakSlider label="Light height (% down from top)" value={t.corniceLightHeightPct} min={10} max={90} step={5} unit="%"
+          onChange={v => setTweak('corniceLightHeightPct', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// Self-post it so the panel is visible when there's no host driving it.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>

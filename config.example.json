@@ -1,0 +1,21 @@
+{
+  "_comment": "The committed demo default -- the bottom of the configuration chain. src/config-loader.js falls back to this file when neither config.js (generated from environment variables) nor config.json (an operator file) is present, so a bare `git clone` plus `python -m http.server` boots into a working app with the demo house and Home Assistant switched off. Copy this file to config.json and edit it to configure a static deployment by hand; config.json is gitignored. Every value here is deliberately inert: no host, no token, no real entity ids.",
+
+  "enabled": false,
+  "url": "",
+  "fallbackUrl": "",
+  "token": "",
+  "house": "demo",
+  "wsReconnectMs": 5000,
+  "pollIntervalMs": 5000,
+
+  "_fields": {
+    "enabled": "Whether to attempt a Home Assistant connection. Ignored (treated as false) unless both url and token are non-empty -- a half-configured deployment renders a static house rather than failing at runtime.",
+    "url": "Base URL of your Home Assistant, e.g. https://homeassistant.example.com. Overridden by the ?haUrl= URL parameter when present.",
+    "fallbackUrl": "A second URL tried when url is unreachable, e.g. a VPN hostname. NOT used at all when ?haUrl= is set -- an explicit embedder override means that URL and no other.",
+    "token": "A Home Assistant long-lived access token. WARNING: this is served to every browser that can load the page. Only deploy behind authentication. Prefer supplying it via the HOME3D_HA_TOKEN environment variable so it is never written into a file in the repo.",
+    "house": "Which profile under houses/ to render. Lowercase letters, digits, _ and -.",
+    "wsReconnectMs": "Delay in milliseconds before retrying a dropped websocket.",
+    "pollIntervalMs": "REST poll interval in milliseconds, used when the websocket is unavailable."
+  }
+}
