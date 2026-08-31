@@ -115,17 +115,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-python@v6
         with:
-          node-version: 24
-      - name: Validate houses/*/geometry.json against houses/schema.json
+          python-version: '3.12'
+      - name: Install jsonschema
+        # The validator degrades to structural-only checks without this and says
+        # so on stdout - but a degraded pass in CI is a pass that missed things,
+        # so install it rather than relying on the fallback.
+        run: python -m pip install --disable-pip-version-check --quiet jsonschema
+      - name: Validate every house profile with scripts/validate-house.py
         run: |
           set -euo pipefail
-          # houses/schema.json arrives in a later milestone. Until it exists this
-          # step is a clear no-op; once it exists, a bad profile is a hard failure.
+          # The validator is the single source of truth for what a valid house
+          # is (schema + cross-file checks). CI runs THAT script rather than
+          # reimplementing validation, so the two can never drift apart.
+          if [ ! -f scripts/validate-house.py ]; then
+            echo "::error file=scripts/validate-house.py::House validator scripts/validate-house.py is missing."
+            exit 1
+          fi
           if [ ! -f houses/schema.json ]; then
-            echo "houses/schema.json not present yet (later milestone) - skipping profile validation."
-            exit 0
+            echo "::error file=houses/schema.json::houses/schema.json is missing - the validator cannot run."
+            exit 1
           fi
           # Null-delimited into an array: safe for paths with spaces, and avoids
           # word-splitting an unquoted expansion (shellcheck SC2086).
@@ -134,40 +144,18 @@ jobs:
             profiles+=("$p")
           done < <(find houses -mindepth 2 -maxdepth 2 -name geometry.json -print0 | sort -z)
           if [ ${#profiles[@]} -eq 0 ]; then
-            echo "houses/schema.json exists but no houses/*/geometry.json found - nothing to validate."
+            echo "No houses/*/geometry.json found - nothing to validate."
             exit 0
           fi
           printf 'will validate %s\n' "${profiles[@]}"
-          npm install --no-save --no-audit --no-fund ajv@8 ajv-formats@3
-          node - "${profiles[@]}" <<'NODE'
-          const fs = require('fs');
-          // The house schema declares draft 2020-12, so it needs ajv's 2020
-          // entrypoint - the default require('ajv') is draft-07 and throws
-          // 'no schema with key or ref .../draft/2020-12/schema' on compile.
-          const Ajv = require('ajv/dist/2020');
-          const addFormats = require('ajv-formats');
-          const ajv = new Ajv({ allErrors: true, strict: false });
-          addFormats(ajv);
-          const schema = JSON.parse(fs.readFileSync('houses/schema.json', 'utf8'));
-          const validate = ajv.compile(schema);
-          let failed = 0;
-          for (const p of process.argv.slice(2)) {
-            const data = JSON.parse(fs.readFileSync(p, 'utf8'));
-            if (validate(data)) {
-              console.log(`ok   ${p}`);
-            } else {
-              failed++;
-              console.log(`FAIL ${p}`);
-              for (const e of validate.errors) {
-                console.log(`     ${e.instancePath || '/'} ${e.message}`);
-              }
-            }
-          }
-          if (failed) {
-            console.error(`${failed} house profile(s) failed schema validation.`);
-            process.exit(1);
-          }
-          NODE
+          # Pass the house DIRECTORY, not the bare geometry.json: only the
+          # directory form also validates rooms.json and the cross-file
+          # geometry<->rooms reference checks.
+          dirs=()
+          for p in "${profiles[@]}"; do
+            dirs+=("$(dirname "$p")")
+          done
+          python scripts/validate-house.py "${dirs[@]}"
 
   # --- Docker dry run (path-gated) -----------------------------------------
 
@@ -178,7 +166,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Is there a Dockerfile to build?
+        id: dockerfile
+        run: |
+          # The `docker` path filter also matches .dockerignore and deploy/**,
+          # either of which can legitimately change while the Dockerfile itself
+          # has not landed yet. Without this probe buildx dies with an opaque
+          # "failed to read dockerfile: no such file or directory" and the gate
+          # reports a red build for a file nobody touched.
+          if [ -f Dockerfile ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Dockerfile at the repo root yet - skipping the dry-run build."
+          fi
       - name: Build Docker image (no push)
+        if: steps.dockerfile.outputs.present == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .

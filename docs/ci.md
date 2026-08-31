@@ -64,8 +64,8 @@ So the required check is always reported, and an unchanged path is never punishe
 | `actionlint-gate` | always | **Required check** for the above. |
 | `pii-guard` | always | Runs `scripts/check-no-pii.sh`. |
 | `js-syntax` | always | `node --check` on every `.js` in `src/` and `scripts/`; `JSON.parse` on every `.json` in `houses/` and the repo root. |
-| `house-profiles` | always | Validates each `houses/*/geometry.json` against `houses/schema.json` with ajv. |
-| `docker-dry-run` | Docker-relevant paths | Builds the image with `push: false`. |
+| `house-profiles` | always | Runs `scripts/validate-house.py` over every `houses/*/` profile directory. |
+| `docker-dry-run` | Docker-relevant paths | Builds the image with `push: false` (skips if there is no `Dockerfile` yet). |
 | `docker-dry-run-gate` | always | **Required check** for the above. |
 
 ### Notes on individual jobs
@@ -81,11 +81,31 @@ deliberately skips `vendor/` — that is third-party code we do not edit, and th
 is large enough to dominate the job's runtime for no benefit. Node 24 parses ESM in
 `.js` files transparently, so `import`/`export` at the top level is fine.
 
-**`house-profiles` skips gracefully only while the schema is genuinely absent.**
-`houses/schema.json` landed as part of a later milestone. Until it exists the job
-prints a clear message and exits 0. Once it exists, a profile that fails validation
-is a **hard failure** — the skip is for the missing-schema case only, never for a
-bad profile.
+**`house-profiles` runs the real validator, not a copy of it.** The job invokes
+`scripts/validate-house.py` — the same script contributors run locally — rather than
+reimplementing schema validation inside the workflow. That is deliberate: a
+second, workflow-local implementation would inevitably drift from the script, and
+the cross-file checks (geometry ↔ rooms reference integrity) only exist in the
+script anyway. It passes each house **directory**, not the bare `geometry.json`,
+because only the directory form also validates `rooms.json` and the cross-file
+references.
+
+`jsonschema` is installed explicitly. Without it the validator still runs its
+structural and cross-reference checks and prints a note saying schema validation
+was skipped — useful locally, but a degraded pass in CI is a pass that missed
+things, so CI installs the dependency rather than relying on that fallback.
+
+Both `scripts/validate-house.py` and `houses/schema.json` missing is a **hard
+failure**, for the same reason `pii-guard` fails when its script is gone. The only
+green-with-nothing-checked case is "no `houses/*/geometry.json` exists yet", which
+is stated explicitly in the log.
+
+**`docker-dry-run` tolerates a Dockerfile that has not landed yet.** The `docker`
+path filter also matches `.dockerignore` and `deploy/**`, either of which can change
+while the `Dockerfile` itself is still in flight. The job probes for the file first
+and skips with a notice if it is absent — otherwise buildx fails with an opaque
+`failed to read dockerfile: no such file or directory` and the required gate reports
+red for a file nobody touched.
 
 ---
 
