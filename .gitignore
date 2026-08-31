@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# 3dHome — .gitignore
+#
+# This repo is PUBLIC. The rules below are a privacy boundary, not just noise
+# reduction. Anything describing a real home must never be committed.
+# `scripts/check-no-pii.sh` enforces the same boundary in CI.
+# ---------------------------------------------------------------------------
+
+# --- House profiles --------------------------------------------------------
+# Every house is private by default. Only the fictional demo house is public.
+# Order matters: the broad ignore must come BEFORE the negation, and the
+# directory itself must be re-included before anything inside it can be.
+houses/*/
+!houses/demo/
+
+# --- Generated / operator config (may contain the HA token) ----------------
+config.js
+config.json
+secrets.json
+*secrets*.json
+.env
+.env.*
+!.env.example
+*.local.*
+
+# --- Planning docs carried over from the private predecessor ---------------
+# PLAN.md documents the migration using REAL entity ids, hostnames and LAN
+# addresses as examples. It is deliberately never committed here.
+PLAN.md
+
+# --- Renders of a real home ------------------------------------------------
+.playwright-mcp/
+screenshots/
+
+# --- OS / editor noise -----------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# --- Python (the `python -m http.server` quick-start path) -----------------
+__pycache__/
+*.py[cod]
