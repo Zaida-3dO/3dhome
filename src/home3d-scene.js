@@ -34,6 +34,7 @@ const Home3DScene = (() => {
   let OX = 0, OY = 0, S = 0.01;  // coordinate transform (per house, never a constant)
   let WH = 2.5;                  // wall height, metres
   let WT_CM = 10;                // default wall thickness, cm
+  let WT = 0.10;                 // the same, in metres (WT_CM * S)
   let WALLS = [];                // authored centrelines
   let WALL_EXT = [];             // corner-filled centrelines (see house-loader)
   let ROOMS = {};                // room id -> { poly, derived bbox, name, area, ... }
@@ -79,6 +80,7 @@ const Home3DScene = (() => {
 
     WH = house.wallHeight;
     WT_CM = house.wallThickness;
+    WT = WT_CM * S;
     WALLS = house.walls;
     WALL_EXT = house.wallsExt;
     ROOMS = house.rooms;
@@ -612,6 +614,7 @@ const Home3DScene = (() => {
    */
   function buildAcousticPanelWall25(scene, wallMeshes) {
     const wall25 = WALLS.find(w => w.id === 25);
+    if (!wall25) return;   // this house has no wall 25 — nothing to panel
     if (!wall25) return null;
     const wall25ThicknessCm = wall25.thickness != null ? wall25.thickness : (WT * 100);
     const wall25ThicknessM = wall25ThicknessCm * S;
@@ -766,6 +769,7 @@ const Home3DScene = (() => {
   function buildAcousticPanelLivingRoomWall1Wall3(scene, wallMeshes) {
     const wall1 = WALLS.find(w => w.id === 1);
     const wall3 = WALLS.find(w => w.id === 3);
+    if (!wall1 || !wall3) return;   // this house lacks those walls — nothing to panel
     const wall1ThicknessM = (wall1.thickness != null ? wall1.thickness : WT_CM) * S;
     const wall3ThicknessM = (wall3.thickness != null ? wall3.thickness : WT_CM) * S;
     const wall1FaceX = tx(wall1.x1) + wall1ThicknessM / 2;  // wall #1's room-facing (east) face
@@ -900,6 +904,9 @@ const Home3DScene = (() => {
    */
   function buildScene(scene, quality) {
     const mainLights = {}, mainMeshes = {}, ambientLights = {}, ambientMeshes = {};
+    // Channels beyond 'main' and 'ambient' (a profile may declare any number --
+    // the reference house had a 'galaxy' star projector). Keyed room -> channel.
+    const extraLights = {}, extraMeshes = {};
     // quality = { tier, maxFragU, sunShadow, roomShadowLights, ambientStrips, shadowMapScale }
     // Set by create() based on the GPU's MAX_FRAGMENT_UNIFORM_VECTORS (and the
     // caller's `shadows` override). On low-uniform mobile GPUs (Z Fold 6 Adreno
@@ -928,9 +935,16 @@ const Home3DScene = (() => {
 
     // Ground (color updated by updateSunlight)
     const gndMat = new THREE.MeshStandardMaterial({ color: 0x181828, roughness: 0.9 });
-    const gnd = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), gndMat);
+    // Sized and centred on THIS house's footprint (it used to be a fixed 30 m
+    // square at one specific plan coordinate, which left a larger house sitting
+    // off the edge of its own ground).
+    const _groundSpan = Math.max(30, Math.max(
+      (HOUSE.footprint.maxX - HOUSE.footprint.minX) * S,
+      (HOUSE.footprint.maxY - HOUSE.footprint.minY) * S
+    ) * 3);
+    const gnd = new THREE.Mesh(new THREE.PlaneGeometry(_groundSpan, _groundSpan), gndMat);
     gnd.rotation.x = -Math.PI / 2;
-    gnd.position.set(tx(790), -0.02, tz(400));
+    gnd.position.set(tx(HOUSE.centre[0]), -0.02, tz(HOUSE.centre[1]));
     gnd.receiveShadow = true;
     scene.add(gnd);
 
@@ -946,38 +960,80 @@ const Home3DScene = (() => {
     // matching how the low tier already sheds the heaviest per-frame costs).
     const wallRoughMap = quality.tier !== 'low' ? makeWallRoughnessTexture() : null;
 
-    // WALL FACE TEXTURES (ported from experimental 2026-07-11, zabine-wall25) ---
-    // A per-face material array lets a single wall box carry a photo texture on
-    // ONE of its 6 local faces (BoxGeometry default order [+x,-x,+y,-y,+z,-z])
-    // while every other face keeps the plain wall material — no new architecture,
-    // every other wall is untouched (still one shared material). `faceAxis` names
-    // the LOCAL box face (before this wall's own rotation) the texture belongs on.
-    // For a wall running along Z (x1===x2, vertical in plan) with zero rotation,
-    // local +x === world +x — verify per-wall, don't assume.
+    // WALL FACE TEXTURES ---------------------------------------------------
+    // A per-face material array lets a single wall box carry an image on ONE of
+    // its 6 local faces (BoxGeometry default order [+x,-x,+y,-y,+z,-z]) while
+    // every other face keeps the plain wall material. Which face is named by the
+    // profile as a COMPASS side (`faceTexture.side`), because that is how a
+    // person describes it standing in the room; it is resolved to a local box
+    // face here against the wall's own orientation.
+    //
+    // The reference implementation hardcoded two image paths pointing into a
+    // deploy directory, and kept a DUPLICATE COPY of each PNG so a deploy hook
+    // that copied only one tree would still ship them. Profile-relative texture
+    // paths retire that hack entirely: a texture lives in the house directory
+    // beside the profile that references it.
     const wallTexLoader = new THREE.TextureLoader();
-    const WALL_FACE_TEXTURES = {
-      // Wall #25 — bedroom/home_office divider (interior, outer:0). the owner's real
-      // photographed beach-mural wallpaper covers the ENTIRE home_office-facing
-      // side only; the bedroom side keeps plain paint (+ the acoustic slat panel
-      // bolted on separately by buildAcousticPanelWall25). Cropped variant
-      // (1446x793 = 1.823 aspect) matches #25's rendered face better than the
-      // full image. home_office sits EAST of this wall (ROOMS.home_office x:931+
-      // vs bedroom x:651-924, confirmed live) and #25 has zero rotation (x1===x2,
-      // y2>y1 => angle=0), so local +x === world +x === the home_office side.
-      // faceAxis 'px'. PNG lives in data/ (NOT assets/) so the deploy hook — which
-      // copies js/+data/+home3d.html but NOT assets/ — actually ships it.
-      25: { faceAxis: 'px', url: 'data/wallpaper-homeoffice-wall25-cropped.png' }
-    };
-    // Builds the 6-entry material array for a face-textured wall box. `lm`/`h`
-    // are THIS box's live rendered length/height (m) — nothing hardcoded to a
-    // fixed cm face, so a wall #25 coordinate shift reflows the crop math instead
-    // of stretching. `outer` gates transparency to match the plain path.
+
+    /**
+     * Compass side -> local BoxGeometry face for a wall.
+     *
+     * A wall box is built along its own long axis. For a wall running east-west
+     * (x1 != x2, y1 == y2) the box's local +z/-z faces point south/north; for a
+     * wall running north-south the local +x/-x faces point east/west. Returns
+     * 'px' or 'nx' — the two the material builder below understands — or null
+     * when the requested side is an END of the wall rather than a long face.
+     */
+    function sideToFaceAxis(wall, side) {
+      const horizontal = Math.abs(wall.y1 - wall.y2) < Math.abs(wall.x1 - wall.x2);
+      if (horizontal) {
+        // Long faces look north and south.
+        if (side === 'south') return 'px';
+        if (side === 'north') return 'nx';
+      } else {
+        // Long faces look east and west.
+        if (side === 'east') return 'px';
+        if (side === 'west') return 'nx';
+      }
+      return null;
+    }
+
+    // wall id -> { faceAxis, url } for every wall the profile papers.
+    const WALL_FACE_TEXTURES = {};
+    Object.keys(HOUSE.wallFaceTextures).forEach(wid => {
+      const ft = HOUSE.wallFaceTextures[wid];
+      const wall = HOUSE.wallsById[wid];
+      if (!wall) return;
+      const faceAxis = sideToFaceAxis(wall, ft.side);
+      if (!faceAxis) {
+        console.warn(
+          '[Home3DScene] wall ' + wid + ' asks for a texture on its "' + ft.side + '" face, but that ' +
+          'is an END of the wall, not one of its two long faces — ignored.'
+        );
+        return;
+      }
+      WALL_FACE_TEXTURES[wid] = { faceAxis: faceAxis, url: ft.url };
+    });
+
     function buildFaceTexturedMaterials(faceAxis, url, plainMatFactory, lm, h, isOuter) {
+      // Start as the ordinary wall paint. If the image loads it is applied on
+      // top; if it does NOT (a profile referencing a texture that was not
+      // shipped, a 404, a zero-byte placeholder) the wall simply stays painted.
+      // Without this the face rendered as an unlit black panel, which looks like
+      // a hole in the building rather than a missing decoration -- and a missing
+      // texture is exactly what happens when a house profile is shared without
+      // its images, so it has to degrade gracefully.
       const wallpaperMat = new THREE.MeshStandardMaterial({
+        color: WALL_COLOR,
         roughness: 0.85, side: THREE.DoubleSide,
         transparent: !!isOuter, opacity: 1
       });
       wallTexLoader.load(url, (tex) => {
+        if (!tex.image || !tex.image.width || !tex.image.height) {
+          console.warn('[Home3DScene] wall texture "' + url + '" decoded to an empty image; ' +
+            'leaving the wall painted.');
+          return;
+        }
         if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; // r152+
         else tex.encoding = THREE.sRGBEncoding; // older three.js fallback
         tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
@@ -1004,8 +1060,14 @@ const Home3DScene = (() => {
         tex.repeat.set(coverRX, rY);
         tex.offset.set(coverOX, oY);
         tex.needsUpdate = true;
+        // The map multiplies the material colour, so drop the paint tint to
+        // white or the photo would be shaded by it.
+        wallpaperMat.color.setHex(0xffffff);
         wallpaperMat.map = tex;
         wallpaperMat.needsUpdate = true;
+      }, undefined, () => {
+        console.warn('[Home3DScene] wall texture "' + url + '" could not be loaded; ' +
+          'leaving the wall painted.');
       });
       const plain = plainMatFactory();
       // BoxGeometry material groups, order [+x,-x,+y,-y,+z,-z].
@@ -1150,16 +1212,28 @@ const Home3DScene = (() => {
     // outer:0 (interior partition) → these overlays never fade, so they are NOT
     // pushed into wallMeshes (no exterior-fade wiring). Gated on quality.tier
     // like every other procedural/photo texture — 'low' tier stays plain wall.
-    {
-      const wall22 = WALL_EXT.find(w => w.id === 22 && Math.abs(w.x1 - w.x2) < 0.5);
+    // Runs for EVERY wall whose profile entry asks for a texture clipped to one
+    // room (`faceTexture.clipToRoom`). A long wall often runs past several rooms
+    // while the paper covers only one of them; without the clip the image
+    // stretches across the whole run. Which wall, which room and which image are
+    // all profile data — this used to be hardcoded for one wall and one room.
+    Object.keys(HOUSE.wallFaceTextures).forEach(_wid => {
+      const _overlaySpec = HOUSE.wallFaceTextures[_wid];
+      if (!_overlaySpec.clipToRoom) return;
+      const _clipRoom = ROOMS[_overlaySpec.clipToRoom];
+      if (!_clipRoom) return;
+      // Only north-south walls take this path today (the clip is expressed as a
+      // y-range along the wall). An east-west wall keeps the whole-face texture
+      // built in the wall loop above.
+      const wall22 = WALL_EXT.find(w => String(w.id) === String(_wid) && Math.abs(w.x1 - w.x2) < 0.5);
       if (wall22 && quality.tier !== 'low') {
-        const panelThicknessM = 0.006; // thin flush overlay, nudged outward to avoid z-fighting with #22's own face
-        const overlayTexUrl = 'data/wallpaper-hallway-wall22-monstera.png'; // in data/ (NOT assets/) so the deploy hook ships it
-        // Hallway adjacency along #22, from the LIVE hallway poly east edge
-        // (authoritative — NOT the wall's full y-span, which continues past the
-        // hallway into home_office south and bathroom/ensuite east).
-        const northY = 95.6;              // hallway poly [1059.4,95.6]
-        const southY = ROOMS.hallway.y2;  // = 293.6, hallway poly [1059.4,293.6]
+        const panelThicknessM = 0.006; // thin flush overlay, nudged outward to avoid z-fighting with the wall's own face
+        const overlayTexUrl = _overlaySpec.url;
+        // The clipped room's extent along the wall, from the room's DERIVED
+        // bounding box — authoritative, and not the wall's full span, which
+        // continues past the room into its neighbours.
+        const northY = _clipRoom.y1;
+        const southY = _clipRoom.y2;
         // #22 rotation is exactly 180deg (dx=0, dz<0 => atan2 = pi), but a box
         // rotated by pi stays axis-aligned in world space (thickness spans world
         // X, length spans world Z, mirrored). West (lower world X) = hallway
@@ -1206,8 +1280,15 @@ const Home3DScene = (() => {
           const mesh = new THREE.Mesh(new THREE.BoxGeometry(panelThicknessM, h, lm), mat);
           mesh.position.set(overlayX, yc, zc);
           mesh.receiveShadow = true;
+          // HIDDEN UNTIL THE IMAGE ARRIVES. tex is an empty THREE.Texture until
+          // the loader fills it in, and an empty map samples black -- so a
+          // profile whose texture is missing or 404s would paste a black panel
+          // over the wall, which reads as a hole in the building. The panel is
+          // only shown once a real image is in hand; otherwise the wall behind
+          // it simply stays as it is.
+          mesh.visible = false;
           scene.add(mesh);
-          overlayPanels.push({ tex });
+          overlayPanels.push({ tex, mesh });
         };
         // Mirror the main door-carving loop's solid/opening split for whichever
         // doors on this wall fall inside the hallway clip — found live (not
@@ -1233,18 +1314,30 @@ const Home3DScene = (() => {
         // (Panels are built synchronously above, so this async callback always
         // sees the full set — same pattern as wall #25's wallpaper.)
         if (overlayPanels.length) {
-          new THREE.TextureLoader().load(overlayTexUrl, (loaded) => {
-            const img = loaded.image;
-            overlayPanels.forEach(p => {
-              p.tex.image = img;
-              if ('colorSpace' in p.tex) p.tex.colorSpace = THREE.SRGBColorSpace; // r152+
-              else p.tex.encoding = THREE.sRGBEncoding; // older three.js fallback
-              p.tex.needsUpdate = true;
-            });
-          });
+          new THREE.TextureLoader().load(
+            overlayTexUrl,
+            (loaded) => {
+              const img = loaded.image;
+              if (!img || !img.width || !img.height) {
+                console.warn('[Home3DScene] wall overlay texture "' + overlayTexUrl +
+                  '" decoded to an empty image; leaving the wall as it is.');
+                return;
+              }
+              overlayPanels.forEach(p => {
+                p.tex.image = img;
+                if ('colorSpace' in p.tex) p.tex.colorSpace = THREE.SRGBColorSpace; // r152+
+                else p.tex.encoding = THREE.sRGBEncoding; // older three.js fallback
+                p.tex.needsUpdate = true;
+                p.mesh.visible = true;
+              });
+            },
+            undefined,
+            () => console.warn('[Home3DScene] wall overlay texture "' + overlayTexUrl +
+              '" could not be loaded; leaving the wall as it is.')
+          );
         }
       }
-    }
+    });
 
     // === Door assemblies (frame + swinging slab + handles, per DoorSpec) ===
     // One Group per door pivoted at the hinge edge; slab + grooves + mirrored
@@ -1271,9 +1364,15 @@ const Home3DScene = (() => {
       const frontDoorSlabMat = new THREE.MeshStandardMaterial({ color: FRONT_DOOR_COLOR, roughness: 0.65 });
       const frontDoorGrooveMat = new THREE.MeshStandardMaterial({ color: FRONT_DOOR_GROOVE_COLOR, roughness: 0.9 });
       const V = THREE.Vector3;
+      const doorLeafMatCache = {};
       const doorAngles = computeDoorAngles(DOORS); // collision-aware max open angles (deg)
       DOORS.forEach((d, di) => {
-        const isFrontDoor = d.name === "Front door";
+        // A front door gets an exterior finish (a darker leaf, an extra groove).
+        // Keyed off the profile's `kind`, NOT off the door's display label --
+        // matching the English string "Front door" meant a house whose door was
+        // labelled anything else, in any other language, silently rendered as an
+        // internal door. `kind` is the schema's field for exactly this.
+        const isFrontDoor = d.kind === "front";
         const w = d.w * S, H = DOOR_H, T = DOOR_T;
         // opening centre in world (on the wall line, at floor level)
         const oc = d.wall === 'x' ? new V(tx(d.c), 0, tz(d.at)) : new V(tx(d.at), 0, tz(d.c));
@@ -1319,7 +1418,23 @@ const Home3DScene = (() => {
         pivot.rotation.y = swingSign * restRad;
         mount.userData = { doorId: d.name, maxAngleDeg: maxDeg, swingSign };
         if (d.room) doorByRoom[d.room] = { name: d.name, pivot, maxDeg, swingSign, openPct: DOOR_REST * 100 };
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(w, H, T), isFrontDoor ? frontDoorSlabMat : slabMat);
+        // A door may name its own leaf colour in the profile; otherwise a front
+        // door gets the exterior finish and everything else the house's default
+        // internal slab colour. Per-door materials are cached so a house with
+        // many same-coloured doors still shares one material.
+        let leafMat;
+        if (d.color) {
+          const key = String(d.color).toLowerCase();
+          if (!doorLeafMatCache[key]) {
+            doorLeafMatCache[key] = new THREE.MeshStandardMaterial({
+              color: new THREE.Color(d.color), roughness: 0.65
+            });
+          }
+          leafMat = doorLeafMatCache[key];
+        } else {
+          leafMat = isFrontDoor ? frontDoorSlabMat : slabMat;
+        }
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(w, H, T), leafMat);
         slab.position.set(w / 2, H / 2, 0);
         slab.castShadow = true;
         slab.receiveShadow = true;
@@ -1365,40 +1480,53 @@ const Home3DScene = (() => {
     // outline. External walls run y -0.15 .. WH (through the floor, up to the
     // ceiling underside); internal walls run y 0 .. WH (see the wall build above).
     //
-    // FLOOR (inner-face) slab polygon (cm, clockwise from SW) — UNCHANGED:
-    //   [303.3,748.8] SW, [303.3,10.2] NW (#14 inner face, straight north edge)
-    //   to the NE cut, [1028.7,10.2] then [1028.7,95.0] step S (#19/#20 inner),
-    //   [1281.5,95.0] over the bathroom, [1281.5,748.8] SE (#21/#4 inner faces).
-    //   NE-cut notch (x>1028.7, 10.2<y<95.0) is outside. Extent 9.78 x 7.39m.
-    //   The floor spans ONLY the room interior — external walls sit ON it.
-    const SLAB_POLY = [
-      [303.3, 748.8], [303.3, 10.2], [1028.7, 10.2],
-      [1028.7, 95.0], [1281.5, 95.0], [1281.5, 748.8]
-    ];
-    // CEILING (outer-flush) slab polygon (cm, clockwise from SW) — HEIGHTS
-    // REMODEL (2026-07-11, ACK'd): the ceiling ALONE extends OUT to the OUTER
-    // faces of all external walls (the full building footprint), capping OVER the
-    // external walls out to their outer edge. Floor + ceiling are NO LONGER the
-    // same outline. Per Rosa S7 (outer-flush): west #1 outer 273.3, east #21
-    // outer 1311.5, south #32 outer 791.8, north #5=#14 outer flush -19.8, bath
-    // #20 outer 65.0, cut #19 outer 1058.7. Extent 10.38 x 8.12m, NE cut on the
-    // outer edge. (Floor stays on SLAB_POLY inner faces above.)
-    const CEIL_POLY = [
-      [273.3, 791.8], [273.3, -19.8], [1058.7, -19.8],
-      [1058.7, 65.0], [1311.5, 65.0], [1311.5, 791.8]
-    ];
+    // BOTH OUTLINES ARE NOW DERIVED FROM THE PROFILE. They used to be two
+    // hand-traced rings describing one specific flat, re-traced by hand whenever
+    // a wall moved.
+    //
+    // FLOOR — the room interior. Every room polygon is laid down, so the floor
+    // covers exactly the rooms the profile declares and nothing else; external
+    // walls sit ON it. Using the ROOMS rather than the wall footprint is what
+    // keeps a re-entrant plan (an L, a cut corner, a courtyard) correct without
+    // anyone tracing its outline: a notch is simply a place where no room is.
+    //
+    // CEILING — the full building envelope, out to the OUTER faces of the
+    // exterior walls, so it caps over them. Each exterior wall contributes its
+    // own slab rectangle (centreline expanded by half its thickness); together
+    // with the rooms that is the envelope. Floor and ceiling are deliberately
+    // NOT the same outline: external walls run from below the floor up to the
+    // ceiling underside, internal walls only from the floor up.
+    //
+    // Both are a LIST OF PIECES rather than one ring, because THREE.Shape can
+    // only describe a single ring. The pieces are extruded together into one
+    // geometry, which is visually identical (they abut exactly) and removes the
+    // hand-tracing step completely.
+    const SLAB_PIECES = HOUSE.roomOrder.map(rid => ROOMS[rid].poly);
+    const CEIL_PIECES = SLAB_PIECES.concat(
+      HOUSE.wallsExt.filter(w => w.outer).map(w => {
+        const dx = w.x2 - w.x1, dy = w.y2 - w.y1;
+        const len = Math.hypot(dx, dy) || 1;
+        // Unit normal to the wall, scaled to half its thickness.
+        const nx = (-dy / len) * (w.thickness / 2);
+        const ny = (dx / len) * (w.thickness / 2);
+        return [
+          [w.x1 + nx, w.y1 + ny], [w.x2 + nx, w.y2 + ny],
+          [w.x2 - nx, w.y2 - ny], [w.x1 - nx, w.y1 - ny]
+        ];
+      })
+    );
     const SLAB_THICK = 0.15; // 15cm, both floor + ceiling
     // Build a THREE.Shape from a cm polygon using the same (tx, -tz) convention
-    // the old per-room floors used (so the -PI/2 X-rotation lands it correctly).
-    const slabShape = new THREE.Shape();
-    slabShape.moveTo(tx(SLAB_POLY[0][0]), -tz(SLAB_POLY[0][1]));
-    for (let i = 1; i < SLAB_POLY.length; i++) slabShape.lineTo(tx(SLAB_POLY[i][0]), -tz(SLAB_POLY[i][1]));
-    slabShape.closePath();
-    // Separate shape for the ceiling (outer-flush outline).
-    const ceilShape = new THREE.Shape();
-    ceilShape.moveTo(tx(CEIL_POLY[0][0]), -tz(CEIL_POLY[0][1]));
-    for (let i = 1; i < CEIL_POLY.length; i++) ceilShape.lineTo(tx(CEIL_POLY[i][0]), -tz(CEIL_POLY[i][1]));
-    ceilShape.closePath();
+    // the per-room floors used, so the -PI/2 X-rotation lands it correctly.
+    const shapeFromPoly = poly => {
+      const sh = new THREE.Shape();
+      sh.moveTo(tx(poly[0][0]), -tz(poly[0][1]));
+      for (let i = 1; i < poly.length; i++) sh.lineTo(tx(poly[i][0]), -tz(poly[i][1]));
+      sh.closePath();
+      return sh;
+    };
+    const slabShapes = SLAB_PIECES.map(shapeFromPoly);
+    const ceilShapes = CEIL_PIECES.map(shapeFromPoly);
 
     // Whole-house floor material: Ashy Oak LVT (Floored.co.uk "LVT Ashy Oak") —
     // the home's real flooring. Weathered grey-toned oak, 18.5cm x 121.5cm planks, long
@@ -1421,7 +1549,9 @@ const Home3DScene = (() => {
     // the slab with planks at the true 18.5 x 121.5 cm. Only the top face is ever
     // visible (bottom is underground, sides hidden in the walls), so cap/side uvs
     // sharing this planar mapping is harmless.
-    const _sx = SLAB_POLY.map(p => p[0]), _sy = SLAB_POLY.map(p => p[1]);
+    const _sxAll = [], _syAll = [];
+    SLAB_PIECES.forEach(poly => poly.forEach(pt => { _sxAll.push(pt[0]); _syAll.push(pt[1]); }));
+    const _sx = _sxAll, _sy = _syAll;
     const slabMinXW = tx(Math.min(..._sx)), slabMaxXW = tx(Math.max(..._sx)); // E-W world (u)
     const _yA = -tz(Math.min(..._sy)), _yB = -tz(Math.max(..._sy));           // shape-Y = -tz(y)
     const slabMinYW = Math.min(_yA, _yB), slabMaxYW = Math.max(_yA, _yB);     // N-S world (v)
@@ -1437,7 +1567,9 @@ const Home3DScene = (() => {
     // Floor: extrude 15cm; after the -PI/2 X-rotation the extrude runs to world
     // +Y, so drop the mesh by SLAB_THICK-0.005 to put the walkable TOP face at
     // y=0.005 and the 15cm body BELOW it (grows downward, into the ground).
-    const floorGeo = new THREE.ExtrudeGeometry(slabShape, { depth: SLAB_THICK, bevelEnabled: false });
+    // ExtrudeGeometry accepts an array of shapes and emits one geometry, so the
+    // multi-piece floor is still a single mesh and a single draw call.
+    const floorGeo = new THREE.ExtrudeGeometry(slabShapes, { depth: SLAB_THICK, bevelEnabled: false });
     // --- Custom planar UVs (the fix). The shape is authored in the X-Y plane
     // (shape.x = world X, shape.y = -tz(y)); after the -PI/2 X-rotation shape.y
     // becomes world Z. Both are already in metres. Write uv = (shape.x, shape.y)
@@ -1466,10 +1598,10 @@ const Home3DScene = (() => {
     // (transparent when the camera is above the house, solid from inside) —
     // driven by ceilingMesh.material.opacity in the render loop.
     const ceilMat = new THREE.MeshStandardMaterial({
-      color: 0xf2efe9, roughness: 0.9, side: THREE.DoubleSide,
+      color: CEILING_COLOR, roughness: 0.9, side: THREE.DoubleSide,
       transparent: true, opacity: 0, depthWrite: false
     });
-    const ceilGeo = new THREE.ExtrudeGeometry(ceilShape, { depth: SLAB_THICK, bevelEnabled: false });
+    const ceilGeo = new THREE.ExtrudeGeometry(ceilShapes, { depth: SLAB_THICK, bevelEnabled: false });
     const ceilingMesh = new THREE.Mesh(ceilGeo, ceilMat);
     ceilingMesh.rotation.x = -Math.PI / 2;
     ceilingMesh.position.set(0, WH, 0);
@@ -1477,18 +1609,42 @@ const Home3DScene = (() => {
     ceilingMesh.receiveShadow = true;
     scene.add(ceilingMesh);
 
-    // Rug diffuse — the REAL grey plush-rug photo (CGTrader "Contemporary Carpet
-    // Rug 12" diffuse, downsized to 256px, embedded as a base64 data-URI so it
-    // ships inside js/ with ZERO deploy-hook change — the hook copies js/ but NOT
-    // assets/, and the URI lives here in the JS). research-rug2 confirmed the old
-    // 0xE2DFDA was far too light (a pale oatmeal); this real diffuse is the correct
-    // warm-neutral MID-grey plush rug. Built ONCE and shared by every rug mesh
-    // (same shared-instance pattern as the wall-roughness texture). Material tint
-    // stays white (0xFFFFFF) so the photo's own colour shows true.
-    const RUG_DIFFUSE_URI = "REMOVED-TEXTURE-OF-UNKNOWN-PROVENANCE";
-    const rugDiffuseTex = new THREE.TextureLoader().load(RUG_DIFFUSE_URI);
-    rugDiffuseTex.wrapS = rugDiffuseTex.wrapT = THREE.RepeatWrapping;
-    rugDiffuseTex.anisotropy = 4;
+    // Rug diffuse — a procedural plush-pile texture, generated at runtime like
+    // every other floor material here. It replaces an embedded base64
+    // PHOTOGRAPH of a specific real rug that used to live in this file: a photo
+    // of somebody's furniture is not something a general-purpose renderer should
+    // carry, it cannot be licensed onward, and it made the engine 14 KB heavier
+    // for one house's benefit. A house that wants its own rug image supplies one
+    // through the profile (`room.rug.texture`), which is loaded over this.
+    //
+    // The pattern is a warm-neutral mid-grey with fine directional noise, which
+    // is what reads as cut pile at the scale a rug is seen from.
+    const rugDiffuseTex = (() => {
+      const size = 128;
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const g = c.getContext('2d');
+      const img = g.createImageData(size, size);
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const i = (y * size + x) * 4;
+          // Base mid-grey with a slight warm cast, plus per-pixel pile noise and
+          // a faint vertical streak so the pile has a lie to it.
+          const streak = Math.sin(x * 0.9) * 4;
+          const n = (Math.random() - 0.5) * 26 + streak;
+          img.data[i]     = Math.max(0, Math.min(255, 150 + n));
+          img.data[i + 1] = Math.max(0, Math.min(255, 145 + n));
+          img.data[i + 2] = Math.max(0, Math.min(255, 138 + n));
+          img.data[i + 3] = 255;
+        }
+      }
+      g.putImageData(img, 0, 0);
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.anisotropy = 4;
+      tex.needsUpdate = true;
+      return tex;
+    })();
 
     // Rooms (invisible click-catchers, rugs, lights)
     Object.entries(ROOMS).forEach(([id, rm]) => {
@@ -1537,61 +1693,97 @@ const Home3DScene = (() => {
       // 0xFFFFFF so the photo's own correct warm-neutral MID-grey shows true. This
       // replaces the old 0xE2DFDA procedural fill, which was far too light (it
       // double-multiplied to a pale oatmeal, not the mid-grey of the reference).
-      if (id === "bedroom" || id === "home_office") {
-        // Real grey plush-rug diffuse (shared rugDiffuseTex, built above the loop).
-        // color:0xFFFFFF => no tint, the photo's own correct mid-grey shows true.
-        // Clone the shared texture per rug so each can set its own repeat to keep
-        // the pile at a sensible real-world scale without the rugs fighting over
-        // one texture's repeat/offset state.
+      // Rugs — a thin flat mesh over the floor (y=0.01, above the slab to avoid
+      // z-fighting). WHICH rooms have one, and what shape, is now profile data
+      // (`room.rug`): the reference implementation hardcoded two room ids and an
+      // inline polygon. A rug's outline is deliberately independent of the room
+      // polygon — a rug laps over a pillar and stops short of a doorway, so it is
+      // neither the room shape nor a plain rectangle — which is exactly why the
+      // profile stores it separately rather than deriving it.
+      if (rm.rug) {
+        const rug = rm.rug;
+        // Clone so each rug can set its own repeat without the rugs fighting
+        // over one texture's repeat state. A CanvasTexture clone shares the
+        // already-drawn canvas, so it is usable immediately.
         const rt = rugDiffuseTex.clone();
+        rt.wrapS = rt.wrapT = THREE.RepeatWrapping;
         rt.needsUpdate = true;
-        let rugGeo, rugMesh;
-        if (id === "home_office") {
-          // home_office's outer L-shape EXCLUDING the ensuite (NE corner) — squared
-          // off at the SW so the #26 pillar bump is ignored (rug laps over it), i.e.
-          // NOT the ROOMS poly (which notches #26 out). Only the ensuite is cut.
-          // Built via tx()/-tz() exactly like the floor slab's ShapeGeometry so the
-          // -PI/2 X-rotation lands it flat on the floor, correctly positioned.
-          const HO_RUG_POLY = [
-            [1057.8, 303], [1057.8, 455], [1283.8, 455], [1283.8, 749],
-            [935.8, 749], [935.8, 303]
-          ];
-          const shape = new THREE.Shape();
-          shape.moveTo(tx(HO_RUG_POLY[0][0]), -tz(HO_RUG_POLY[0][1]));
-          for (let i = 1; i < HO_RUG_POLY.length; i++) shape.lineTo(tx(HO_RUG_POLY[i][0]), -tz(HO_RUG_POLY[i][1]));
-          shape.closePath();
-          rugGeo = new THREE.ShapeGeometry(shape);
-          // ShapeGeometry emits UVs straight from the shape's world-metre coords, so
-          // set repeat to 1/1.2 per metre => one carpet-photo copy per ~1.2m of rug,
-          // matching the rect rugs' plush-pile scale (round(size/1.2) copies over the
-          // same metre span). No offset needed (tile phase is cosmetic).
-          rt.repeat.set(1 / 1.2, 1 / 1.2);
-          rugMesh = new THREE.Mesh(rugGeo, new THREE.MeshStandardMaterial({ color: 0xFFFFFF, roughness: 0.95, metalness: 0.0, map: rt }));
-          // Shape is authored at absolute world coords (like the floor slab), so the
-          // mesh sits at the origin — NOT the room-centre translate the rect uses.
-          rugMesh.rotation.x = -Math.PI / 2;
-          rugMesh.position.set(0, 0.01, 0);
-        } else {
-          // Bedroom: unchanged full-rect rug (still ignores #31 pillar).
-          rugGeo = new THREE.PlaneGeometry(w, d);
-          // Tile the ~1m carpet photo ~once per 1.2m of rug so the pile reads plush.
-          rt.repeat.set(Math.max(1, Math.round(w / 1.2)), Math.max(1, Math.round(d / 1.2)));
-          rugMesh = new THREE.Mesh(rugGeo, new THREE.MeshStandardMaterial({ color: 0xFFFFFF, roughness: 0.95, metalness: 0.0, map: rt }));
-          rugMesh.rotation.x = -Math.PI / 2;
-          rugMesh.position.set(cx, 0.01, cz);
-        }
+        // Built from the rug polygon exactly like the floor slab's ShapeGeometry,
+        // so the -PI/2 X-rotation lands it flat and correctly positioned. The
+        // shape is authored at absolute world coords, so the mesh sits at the
+        // origin rather than being translated to the room centre.
+        const shape = new THREE.Shape();
+        shape.moveTo(tx(rug.poly[0][0]), -tz(rug.poly[0][1]));
+        for (let i = 1; i < rug.poly.length; i++) shape.lineTo(tx(rug.poly[i][0]), -tz(rug.poly[i][1]));
+        shape.closePath();
+        const rugGeo = new THREE.ShapeGeometry(shape);
+        // ShapeGeometry emits UVs straight from the shape's world-metre coords,
+        // so one texture copy per `repeatMetres` of rug keeps the pile at a
+        // sensible real-world scale.
+        rt.repeat.set(1 / rug.repeatMetres, 1 / rug.repeatMetres);
+        // The procedural pile is a mid-grey, and a material colour MULTIPLIES
+        // its map — so tinting with the rug's own mid-tone colour would darken
+        // it twice over and the rug would read as near-black. Divide the tint
+        // through by the pile's own mean grey so the rendered result lands on
+        // the colour the profile actually asked for.
+        const PILE_MEAN = 145 / 255;
+        const _tint = new THREE.Color(rug.color);
+        _tint.setRGB(
+          Math.min(1, _tint.r / PILE_MEAN),
+          Math.min(1, _tint.g / PILE_MEAN),
+          Math.min(1, _tint.b / PILE_MEAN)
+        );
+        const rugMesh = new THREE.Mesh(rugGeo, new THREE.MeshStandardMaterial({
+          color: _tint, roughness: 0.95, metalness: 0.0, map: rt
+        }));
+        rugMesh.rotation.x = -Math.PI / 2;
+        rugMesh.position.set(0, 0.01, 0);
         rugMesh.receiveShadow = true;
         scene.add(rugMesh);
+        if (rug.textureUrl) {
+          // A profile-supplied rug image replaces the built-in pile texture.
+          // Loaded after the mesh exists, so the callback has something to
+          // assign to; a failure leaves the procedural pile in place.
+          new THREE.TextureLoader().load(
+            rug.textureUrl,
+            loaded => {
+              loaded.wrapS = loaded.wrapT = THREE.RepeatWrapping;
+              loaded.anisotropy = 4;
+              loaded.repeat.set(1 / rug.repeatMetres, 1 / rug.repeatMetres);
+              rugMesh.material.map = loaded;
+              rugMesh.material.needsUpdate = true;
+            },
+            undefined,
+            () => console.warn('[Home3DScene] rug texture "' + rug.textureUrl +
+              '" could not be loaded; using the procedural pile instead.')
+          );
+        }
       }
 
-      // Room lights
+      // ---- Room lights ---------------------------------------------------
+      //
+      // DATA-DRIVEN. This used to be a chain of `if (id === "living_room")`
+      // branches placing fixtures at literal coordinates, with a per-room
+      // DL_SHIFT table nudging them whenever a room moved -- the single biggest
+      // reason the engine only rendered one flat. Every fixture position now
+      // comes from the profile (geometry.json -> lights[].fixtures[].positions),
+      // so this code places whatever it is given and knows nothing about any
+      // particular room.
+      //
+      // A fixture group is a `channel` (the join key to a Home Assistant entity
+      // in rooms.json) with a `fixtureType` telling us what to draw and a list
+      // of positions in plan centimetres. Positions the author did not supply
+      // were auto-placed over the room bbox by the loader.
       const mls = [], mms = [];
-      const lc = LIGHTS[id]?.main;
+      const groups = LIGHTS[id] || {};
 
       // One shadow-casting light per room for wall occlusion. Skipped on
-      // low-uniform GPUs — 10 of these × ~14 fragment-uniform vectors each
-      // alone exceeds the Adreno 256 budget. The room still has its main
-      // fixture lights; just no wall-shadowing from a hidden point source.
+      // low-uniform GPUs — these × ~14 fragment-uniform vectors each alone
+      // exceeds the Adreno 256 budget. The room still has its main fixture
+      // lights; just no wall-shadowing from a hidden point source.
+      //
+      // Its range keys off the room's bounding box, which is now DERIVED from
+      // the room polygon rather than read from a separately-authored rect.
       const FY = 0;
       const roomRange = Math.max(w, d) * 1.2;
       if (quality.roomShadowLights) {
@@ -1607,172 +1799,177 @@ const Home3DScene = (() => {
         mls.push(roomShadowLight);
       }
 
-      const addDL = (px, pz) => {
-        const bm = new THREE.MeshStandardMaterial({ color: 0xfff8e0, emissive: 0xfff4cc, emissiveIntensity: 1.5 });
+      // --- Fixture builders, one per fixtureType --------------------------
+      // Each takes a world-space position and returns nothing; it pushes the
+      // visible fixture mesh into `meshes` and its PointLight into `lights`.
+      // The emissive disc/sphere is what the user clicks to select the room, so
+      // every fixture carries { roomId, clickable }.
+
+      // Flush ceiling disc.
+      const addDownlight = (px, py, pz, meshes, lights, tint) => {
+        const bm = new THREE.MeshStandardMaterial({ color: 0xfff8e0, emissive: tint, emissiveIntensity: 1.5 });
         const b = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 0.03, 10), bm);
-        b.position.set(px, FY + WH - 0.02, pz);
+        b.position.set(px, py, pz);
         b.userData = { roomId: id, clickable: true };
         scene.add(b);
-        mms.push(b);
-        const pl = new THREE.PointLight(0xfff4cc, 0.6, Math.max(w, d) * 1.8, 1.8);
-        pl.position.set(px, FY + WH - 0.08, pz);
+        meshes.push(b);
+        const pl = new THREE.PointLight(tint, 0.6, Math.max(w, d) * 1.8, 1.8);
+        pl.position.set(px, py - 0.06, pz);
         scene.add(pl);
-        mls.push(pl);
+        lights.push(pl);
       };
 
-      if (lc.type === "dl") {
-        // Cascade carry-along (2026-07-10): the dl-type ceiling lights are placed
-        // at hardcoded cm positions, so when a room translates they must shift by
-        // the same delta or they end up off-centre (the off-centre-lights bug).
-        // DL_SHIFT is each room's (dx,dy) in cm = new-room-centre − old-room-centre
-        // (computed from the D5 room bbox vs the pre-cascade rect). Applied to
-        // every addDL below so the fixtures stay centred in the moved room.
-        // sput/e27 rooms need no entry — they position off cx/cz (the room bbox
-        // centre), which already tracks the room automatically.
-        // R4 (2026-07-10): kitchen grew a further 24cm NORTH (north edge 34.2 ->
-        // 10.2, centre 167.4 -> 155.4). The two dl rows (y=120,230; centred ~171.4
-        // after the old -3.6) were re-centred on the new room centre 155.4 by
-        // shifting them a further 16cm north: -3.6 - 16 = -19.6. (row1 100.4 +
-        // row2 210.4)/2 = 155.4 = new kitchen centre. Other rooms unchanged from R3.
-        const DL_SHIFT = {
-          living_room: [0, 0], kitchen: [0, -19.6], hallway: [2.4, -3.6],
-          bathroom: [7.2, -2.4], ensuite: [6.0, 0]
-        };
-        const [dlx, dlz] = DL_SHIFT[id] || [0, 0];
-        const dl = (x, y) => addDL(tx(x + dlx), tz(y + dlz));
-        if (id === "living_room") {
-          // 2 cols × 3 rows. Cols (x=400, x=530) line up with the kitchen's two
-          // columns above so the combined kitchen+living grid reads as 5 lights
-          // down the left rail (2 kitchen + 3 living) and 4 down the right
-          // (1 kitchen + 3 living).
-          for (let r = 0; r < 3; r++) for (let c = 0; c < 2; c++) dl(400 + c*130, 400 + r*135);
-        } else if (id === "kitchen") {
-          dl(400, 120); dl(530, 120); dl(400, 230);
-        } else if (id === "hallway") {
-          dl(750, 200); dl(850, 200); dl(960, 200); dl(1010, 80);
-        } else if (id === "bathroom") {
-          dl(1170, 150); dl(1120, 200); dl(1220, 200); dl(1170, 250);
-        } else if (id === "ensuite") {
-          dl(1130, 375); dl(1210, 375);
-        }
-      } else if (lc.type === "sput") {
-        [[0,0],[-0.18,-0.13],[0.18,-0.13],[-0.13,0.17],[0.18,0.15]].forEach(([ddx,ddz]) => {
-          const bm = new THREE.MeshStandardMaterial({ color: 0xfff8e0, emissive: 0xfff4cc, emissiveIntensity: 1.5 });
-          const b = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 10), bm);
-          b.position.set(cx + ddx, FY + WH - 0.12, cz + ddz);
-          b.userData = { roomId: id, clickable: true };
-          scene.add(b);
-          mms.push(b);
-        });
-        const pl = new THREE.PointLight(0xfff4cc, 1.0, Math.max(w, d) * 2, 1.5);
-        pl.position.set(cx, FY + WH - 0.18, cz);
-        scene.add(pl);
-        mls.push(pl);
-      } else if (lc.type === "e27") {
-        const bm = new THREE.MeshStandardMaterial({ color: 0xfff8e0, emissive: 0xfff4cc, emissiveIntensity: 1.5 });
-        const b = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 10), bm);
-        b.position.set(cx, FY + WH * 0.7, cz);
+      // Surface-mounted spot: a small sphere. Historically a room's five spots
+      // were drawn as a fixed cluster around the room centre; they are now five
+      // ordinary positions like any other fixture, and a group of spots shares
+      // ONE PointLight at the group's centroid (the cluster was always lit by a
+      // single light -- five would blow the fragment-uniform budget for no
+      // visible gain).
+      const addSpotMesh = (px, py, pz, meshes, tint) => {
+        const bm = new THREE.MeshStandardMaterial({ color: 0xfff8e0, emissive: tint, emissiveIntensity: 1.5 });
+        const b = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 10), bm);
+        b.position.set(px, py, pz);
         b.userData = { roomId: id, clickable: true };
         scene.add(b);
-        mms.push(b);
-        const pl = new THREE.PointLight(0xfff4cc, 0.5, 4, 2);
-        pl.position.set(cx, FY + WH * 0.7, cz);
+        meshes.push(b);
+      };
+
+      // Bare bulb / pendant hanging below the ceiling.
+      const addBulb = (px, py, pz, meshes, lights, tint) => {
+        const bm = new THREE.MeshStandardMaterial({ color: 0xfff8e0, emissive: tint, emissiveIntensity: 1.5 });
+        const b = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 10), bm);
+        b.position.set(px, py, pz);
+        b.userData = { roomId: id, clickable: true };
+        scene.add(b);
+        meshes.push(b);
+        const pl = new THREE.PointLight(tint, 0.5, 4, 2);
+        pl.position.set(px, py, pz);
         scene.add(pl);
-        mls.push(pl);
-      }
+        lights.push(pl);
+      };
+
+      // Linear LED run. `size` is the emitter's [length, height, depth] in cm,
+      // straight from the profile, so a 2 m cornice reads as a line not a point.
+      const addStrip = (px, py, pz, size, meshes, lights, tint) => {
+        const [sl, sh, sd] = size;
+        const m = new THREE.Mesh(
+          new THREE.BoxGeometry(sl / 100, sh / 100, sd / 100),
+          new THREE.MeshStandardMaterial({
+            color: tint, emissive: tint, emissiveIntensity: 0.8,
+            transparent: true, opacity: 0.85
+          })
+        );
+        m.position.set(px, py, pz);
+        m.userData = { roomId: id, clickable: true };
+        scene.add(m);
+        meshes.push(m);
+        const pl = new THREE.PointLight(tint, 0.2, 2.5, 2);
+        pl.position.set(px, py, pz);
+        scene.add(pl);
+        lights.push(pl);
+      };
+
+      /**
+       * Resolve a fixture position to world space.
+       *
+       * `at` is plan [x, y] in centimetres. `heightCm` is height above THIS
+       * room's floor; omitted means a ceiling fixture, which sits just below
+       * the ceiling. That default is what lets a profile list a downlight as a
+       * bare [x, y] without repeating the ceiling height on every entry.
+       */
+      const fixtureY = (pos, ceilingDrop) => (
+        pos.heightCm != null ? FY + pos.heightCm / 100 : FY + WH - ceilingDrop
+      );
+
+      // Build every channel this room declares. 'main' and 'ambient' get their
+      // own light/mesh arrays because the controls panel and the HA binding
+      // switch them independently; any other channel is its own group too.
+      const groupLights = {}, groupMeshes = {};
+      Object.keys(groups).forEach(channel => {
+        const g = groups[channel];
+        // Ambient/accent groups are the decorative layer and are dropped on the
+        // low tier (~12 PointLights x 6 vec4 of fragment uniforms we cannot
+        // afford on an Adreno 256). Visual loss is moderate; "nothing renders
+        // at all" is not.
+        const isAccent = (channel !== 'main');
+        if (isAccent && !quality.ambientStrips) return;
+
+        const ls = [], ms = [];
+        // Fixture tint from the group's colour temperature. Ambient strips have
+        // historically been a saturated accent colour rather than a white, and
+        // a profile expresses that by giving the group a low kelvin.
+        const tint = (g.fixtureType === 'strip' && isAccent) ? 0xff3300 : k2h(g.colorTemperatureK);
+
+        (g.positions || []).forEach(pos => {
+          const px = tx(pos.at[0]), pz = tz(pos.at[1]);
+          switch (g.fixtureType) {
+            case 'downlight':
+              addDownlight(px, fixtureY(pos, 0.02), pz, ms, ls, tint);
+              break;
+            case 'spot':
+              addSpotMesh(px, fixtureY(pos, 0.12), pz, ms, tint);
+              break;
+            case 'pendant':
+            case 'bulb':
+              addBulb(px, pos.heightCm != null ? FY + pos.heightCm / 100 : FY + WH * 0.7, pz, ms, ls, tint);
+              break;
+            case 'strip':
+              addStrip(px, fixtureY(pos, 0.06), pz, pos.size || [Math.max(w, d) * 70, 2.5, 2.5], ms, ls, tint);
+              break;
+            case 'projector':
+              // A special-effect emitter (e.g. a star projector). Drawn as a
+              // small bulb; the effect itself is the group being switchable.
+              addBulb(px, fixtureY(pos, 0.10), pz, ms, ls, tint);
+              break;
+            case 'none':
+              // Light with no visible fixture geometry.
+              {
+                const pl = new THREE.PointLight(tint, 0.6, Math.max(w, d) * 1.8, 1.8);
+                pl.position.set(px, fixtureY(pos, 0.08), pz);
+                scene.add(pl);
+                ls.push(pl);
+              }
+              break;
+            default:
+              addDownlight(px, fixtureY(pos, 0.02), pz, ms, ls, tint);
+          }
+        });
+
+        // A spot cluster shares one PointLight at its centroid — see addSpotMesh.
+        if (g.fixtureType === 'spot' && g.positions && g.positions.length) {
+          let sx = 0, sz = 0;
+          g.positions.forEach(pos => { sx += tx(pos.at[0]); sz += tz(pos.at[1]); });
+          const pl = new THREE.PointLight(tint, 1.0, Math.max(w, d) * 2, 1.5);
+          pl.position.set(sx / g.positions.length, FY + WH - 0.18, sz / g.positions.length);
+          scene.add(pl);
+          ls.push(pl);
+        }
+
+        groupLights[channel] = ls;
+        groupMeshes[channel] = ms;
+      });
+
+      // 'main' feeds the room's primary light arrays (and the room shadow light
+      // rides along with it, as it always did). Every other channel is stored
+      // under its own name.
+      mls.push.apply(mls, groupLights.main || []);
+      mms.push.apply(mms, groupMeshes.main || []);
       mainLights[id] = mls;
       mainMeshes[id] = mms;
 
-      // Ambient strips — skipped on low tier (~12 PointLights × 6 vec4 = ~72
-      // fragment uniforms that we can't afford on Adreno-256.) Visual loss is
-      // moderate (no decorative under-cabinet/cornice glow) but acceptable
-      // compared to "scene doesn't render at all".
-      if (LIGHTS[id]?.ambient && quality.ambientStrips) {
-        const als = [], ams = [];
-        const mkS = () => new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff3300, emissiveIntensity: 0.8, transparent: true, opacity: 0.85 });
-        const addS = (sx,sy,sz,sw,sh,sd) => {
-          const m = new THREE.Mesh(new THREE.BoxGeometry(sw, sh, sd), mkS());
-          m.position.set(sx, sy, sz);
-          scene.add(m);
-          ams.push(m);
-          const pl = new THREE.PointLight(0xff3300, 0.2, 2.5, 2);
-          pl.position.set(sx, sy, sz);
-          scene.add(pl);
-          als.push(pl);
-        };
-        if (id === "living_room") {
-          addS(cx, FY+WH-0.06, tz(753), w*0.8, 0.025, 0.025);
-          // "TV left/right cabinet" sconces (2026-07-08, item #4 follow-up):
-          // moved from wall #6 (x=647.5) to wall #1 (x=299.5), same as the
-          // "behind TV" glow below -- these three were always meant as one
-          // TV-area set (see LIGHTS.living_room.ambient.pos) and belong on
-          // the same wall the TV actually sits against.
-          // X: reuse tx(306.0), the exact inset already established for the
-          // "behind TV" fixture just below, rather than re-deriving a fresh
-          // 7.5-unit inset (647.5-640) off wall #6's old numbers -- using
-          // the same x keeps all three flush on one wall plane instead of
-          // stepping the cabinet sconces out 1 unit further than the
-          // backlight between them.
-          // Z: centered on 526.0, the same wall#1/living-room-overlap
-          // midpoint computed for "behind TV" below (not the room's raw
-          // midpoint -- wall #1 also runs along the kitchen). The original
-          // wall #6 sconces flanked their center by +-70 (460/600 around a
-          // ~530 midpoint); keeping that same +-70 spacing around the new,
-          // more precisely-computed 526.0 center reproduces the original
-          // "cabinets flank the TV" layout on the new wall.
-          // (2026-07-08, poe-3dhome-live-tweaks: recomputed 527.8 -> 526.0
-          // and 457.8/597.8 -> 456.0/596.0, same +-70 spacing, after fixing
-          // ROOMS.living_room.y2's stale 766 -> 749 below -- this fixture's
-          // position formula reads directly off that value, so it inherited
-          // the same staleness. See the y2 fix comment for root cause.)
-          addS(tx(306.0), FY+0.9, tz(456.0), 0.025, 0.7, 0.025);
-          addS(tx(306.0), FY+0.9, tz(596.0), 0.025, 0.7, 0.025);
-          // "behind TV" glow (2026-07-08, item #4): moved from wall #6
-          // (x=647.5, the room's east/interior wall) to wall #1 (x=299.5,
-          // the room's west/exterior wall) — that's where the actual TV
-          // sits. Same box orientation/size as before (both walls run
-          // along Z, so the strip's wide dimension (1.0m, along Z) and
-          // thin dimension (0.025m, perpendicular/flush to the wall) carry
-          // over unchanged; only which wall + inset direction flips.
-          // Z position is NOT wall #1's own midpoint -- wall #1 spans the
-          // kitchen too (y 32.6..752.6, per this session's wall-5-align fix
-          // -- was 31.0 when this comment was first written), so it's
-          // centered on the overlap between wall #1's span and the living
-          // room's actual footprint (ROOMS.living_room y 303..749, clipped
-          // to wall #1's own extent at 752.6): (max(32.6,303) +
-          // min(752.6,749)) / 2 = 526.0 -- which naturally lands offset
-          // toward wall #1's south end, where it meets wall #4, matching
-          // where the living room really is. (Recomputed 2026-07-08,
-          // poe-3dhome-live-tweaks, from 527.8 -> 526.0 after the y2 fix
-          // below; the max(...) term is unaffected either way since 303 is
-          // still the larger operand under both 31.0 and 32.6.)
-          addS(tx(306.0), FY+1.3, tz(526.0), 0.025, 0.4, 1.0);
-        } else if (id === "kitchen") {
-          // kitchen cornice: y shifted -3.6 (room centre moved N with the +2.4N
-          // growth); x uses cx which already tracks the room. (45 -> 41.4)
-          addS(cx, FY+WH-0.1, tz(41.4), w*0.7, 0.02, 0.02);
-          addS(cx, FY+0.1, tz(41.4), w*0.7, 0.02, 0.02);
-        } else if (id === "bedroom") {
-          // Cascade carry-along: bedroom translated +2.4E — hardcoded-x strips
-          // shift +2.4 (cx-based cornice auto-follows; y unchanged).
-          // curtain cornice
-          addS(cx, FY+WH-0.06, tz(749), w*0.7, 0.025, 0.025);
-          // bedside left drawer
-          addS(tx(722.4), FY+0.28, tz(530), 0.025, 0.1, 0.025);
-          // bedside right drawer
-          addS(tx(872.4), FY+0.28, tz(530), 0.025, 0.1, 0.025);
-        } else if (id === "home_office") {
-          // Cascade carry-along: home_office translated +4.8E — hardcoded-x
-          // strips shift +4.8 (cx-based cornice auto-follows; y unchanged).
-          // desk strips
-          addS(tx(984.8), FY+0.28, tz(600), 0.025, 0.1, 0.025);
-          addS(tx(1234.8), FY+0.28, tz(600), 0.025, 0.1, 0.025);
-          // curtain cornice
-          addS(tx(1109.8), FY+WH-0.06, tz(736), w*0.7, 0.025, 0.025);
-        }
-        ambientLights[id] = als;
-        ambientMeshes[id] = ams;
-      }
+      // Accent channels. 'ambient' keeps its dedicated arrays because the
+      // controls panel and updateLights() address it by name; anything else is
+      // kept in the same per-channel maps so a profile can declare a third
+      // switchable group without an engine change.
+      ambientLights[id] = groupLights.ambient || [];
+      ambientMeshes[id] = groupMeshes.ambient || [];
+      Object.keys(groupLights).forEach(channel => {
+        if (channel === 'main' || channel === 'ambient') return;
+        extraLights[id] = extraLights[id] || {};
+        extraMeshes[id] = extraMeshes[id] || {};
+        extraLights[id][channel] = groupLights[channel];
+        extraMeshes[id][channel] = groupMeshes[channel];
+      });
     });
 
     // (The single house-wide ceiling slab is built up front with the floor slab
@@ -1787,7 +1984,16 @@ const Home3DScene = (() => {
     // fix (see scout-blackhalf report + the render-loop fade block). wallMeshes
     // is passed so the panel meshes register into the SAME exterior-fade loop as
     // wall #1 (#1 is outer:1, so the panel DOES fade see-through from outside).
-    buildAcousticPanelLivingRoomWall1Wall3(scene, wallMeshes);
+    // Decorative slat panelling. This is bespoke geometry keyed to specific wall
+    // ids of the house it was modelled for, and there is no schema field for it —
+    // it is furniture, not building fabric. It is therefore OPT-IN: a house asks
+    // for it by passing `decor: ['acoustic-panels']` to create(). Every house that
+    // does not ask (the demo house included) simply skips it, and the functions
+    // themselves no-op when the wall ids they need are absent, so an opt-in from a
+    // house without those walls degrades quietly rather than throwing.
+    if (quality.decor.indexOf('acoustic-panels') !== -1) {
+      buildAcousticPanelLivingRoomWall1Wall3(scene, wallMeshes);
+    }
 
     // Clouds — drifting puff sprites in the sky. Shared canvas texture (a few
     // overlapping radial gradients fake a fluffy outline). Tinted by sun mode.
@@ -1811,7 +2017,7 @@ const Home3DScene = (() => {
     const clouds = [];
     const CLOUD_COUNT = 14;
     const CLOUD_SPREAD = 70;
-    const HOME_CX = tx(790), HOME_CZ = tz(400);
+    const HOME_CX = tx(HOUSE.centre[0]), HOME_CZ = tz(HOUSE.centre[1]);
     const wrapMinX = HOME_CX - CLOUD_SPREAD / 2;
     const wrapMaxX = HOME_CX + CLOUD_SPREAD / 2;
     for (let i = 0; i < CLOUD_COUNT; i++) {
@@ -1838,23 +2044,68 @@ const Home3DScene = (() => {
     // group bolted onto #25's -x face; registers its meshes into wallMeshes so
     // it fades with the bedroom's exterior wall (#4) and gets the black-half
     // depthWrite fix in the render loop. (zabine-wall25, ported 2026-07-11.)
-    buildAcousticPanelWall25(scene, wallMeshes);
+    if (quality.decor.indexOf('acoustic-panels') !== -1) {
+      buildAcousticPanelWall25(scene, wallMeshes);
+    }
 
-    return { mainLights, mainMeshes, ambientLights, ambientMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom };
+    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom };
   }
 
   /**
    * Create a 3D home instance attached to a DOM container.
    *
+   * THE HOUSE IS AN ARGUMENT. Pass either a compiled profile (from
+   * HouseLoader.load / .compile) as `opts.house`, or a profile id as
+   * `opts.houseId` and this will load it, falling back to the demo house if it
+   * cannot. Because loading is asynchronous, the id form returns a PROMISE of
+   * the instance; the compiled form returns the instance synchronously, so an
+   * embedder that already has a profile keeps the original call shape.
+   *
+   *   // synchronous — you already have a profile
+   *   const house = await HouseLoader.load('demo');
+   *   const scene = Home3DScene.create(el, { house, interactive: true });
+   *
+   *   // asynchronous — let the engine fetch it
+   *   const scene = await Home3DScene.create(el, { houseId: 'demo' });
+   *
+   * The module-level exports (ROOMS, LIGHTS, WALL_SEGMENTS_WORLD,
+   * FOOTPRINT_BOUNDS, COORD_TRANSFORM, DOOR_LABELS_WORLD) are refreshed to the
+   * house being rendered, so read them AFTER this resolves.
+   *
    * @param {HTMLElement} container
    * @param {Object} opts
+   * @param {Object}  opts.house       - a compiled house profile (preferred)
+   * @param {string}  opts.houseId     - a profile id to load; returns a Promise
+   * @param {string}  opts.fallbackHouseId - used when houseId cannot be loaded
    * @param {boolean} opts.interactive  - enable orbit/click (full page mode)
    * @param {boolean} opts.autoRotate   - slow auto-rotation (preview mode)
    * @param {number}  opts.pixelRatio   - override devicePixelRatio
    * @param {Function} opts.onRoomClick - callback(roomId) when a room is clicked
-   * @returns {{ dispose: Function, lightState: Object, updateLights: Function, scene: THREE.Scene }}
+   * @returns {Object|Promise<Object>} the instance, or a Promise of it when
+   *          `houseId` was given.
    */
   function create(container, opts = {}) {
+    // The id form is asynchronous: fetch, compile, then build synchronously.
+    if (!opts.house && opts.houseId) {
+      if (typeof HouseLoader === 'undefined') {
+        throw new Error(
+          'Home3DScene.create({ houseId }) needs src/house-loader.js to be loaded first. ' +
+          'Either include that script, or compile the profile yourself and pass it as opts.house.'
+        );
+      }
+      return HouseLoader.loadWithFallback(opts.houseId, opts.fallbackHouseId)
+        .then(loaded => create(container, Object.assign({}, opts, { house: loaded, houseId: null })));
+    }
+    if (!opts.house) {
+      throw new Error(
+        'Home3DScene.create() requires a house: pass opts.house (a compiled profile from ' +
+        'HouseLoader) or opts.houseId (a profile id under houses/). The engine no longer ' +
+        'carries a built-in house.'
+      );
+    }
+    // Bind the profile. Everything below — and every export — now describes it.
+    useHouse(opts.house);
+
     const {
       interactive = false,
       autoRotate = false,
@@ -1927,6 +2178,9 @@ const Home3DScene = (() => {
       roomShadowLights,
       ambientStrips:    tier !== 'low',
       shadowMapScale,
+      // Opt-in bespoke decoration (see the acoustic panels below). Empty by
+      // default: a house gets only what its profile describes.
+      decor: Array.isArray(opts.decor) ? opts.decor : [],
     };
     ren.shadowMap.enabled = quality.sunShadow || quality.roomShadowLights;
     console.info(
@@ -1944,7 +2198,7 @@ const Home3DScene = (() => {
     ren.domElement.style.touchAction = 'none';
     container.appendChild(ren.domElement);
 
-    const { mainLights, mainMeshes, ambientLights, ambientMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom } = buildScene(scene, quality);
+    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom } = buildScene(scene, quality);
 
     // ── On-demand render requests ──────────────────────────────────────────
     // A NON-auto-rotating scene (the #3d popup) only changes when the user moves
@@ -1960,13 +2214,20 @@ const Home3DScene = (() => {
     function requestRender() { needsRender = true; }
     function wake(ms) { wakeUntil = Math.max(wakeUntil, performance.now() + (ms || 0)); needsRender = true; }
 
-    // Light state
-    const ids = Object.keys(LIGHTS);
+    // Light state — one entry per room, one sub-entry per channel the profile
+    // declares for it. A room with no 'main' channel still gets a main entry so
+    // the controls panel and syncLights() can address every room uniformly.
+    const ids = Object.keys(ROOMS);
     const lightState = {};
     ids.forEach(id => {
+      const groups = LIGHTS[id] || {};
       lightState[id] = { main: { on: false, bri: 100, temp: 4000 } };
-      if (LIGHTS[id].ambient) lightState[id].ambient = { on: false, bri: 80, color: "#ff3300" };
-      if (LIGHTS[id].galaxy) lightState[id].galaxy = { on: false, bri: 50 };
+      Object.keys(groups).forEach(channel => {
+        if (channel === 'main') return;
+        // Accent channels default to a warm accent colour and a lower brightness;
+        // that is a display default, not a fact about the house.
+        lightState[id][channel] = { on: false, bri: 80, color: "#ff3300" };
+      });
     });
 
     // Apply initial HA state if provided
@@ -1996,16 +2257,26 @@ const Home3DScene = (() => {
           m.material.emissive.setHex(s.main.on ? mc : 0x222222);
           m.material.emissiveIntensity = s.main.on ? mb * 2 : 0.05;
         });
-        if (s.ambient) {
-          const ac = parseInt(s.ambient.color.replace("#", ""), 16), ab = s.ambient.on ? s.ambient.bri / 100 : 0;
-          (ambientLights[id] || []).forEach(l => { l.intensity = ab * 0.3; l.color.setHex(ac); });
-          (ambientMeshes[id] || []).forEach(m => {
+        // Accent channels. 'ambient' has dedicated arrays; any other channel a
+        // profile declares is driven through the same code path from the
+        // per-channel maps, so a third switchable group needs no engine change.
+        const applyAccent = (state, lights, meshes) => {
+          if (!state) return;
+          const ac = parseInt(String(state.color).replace("#", ""), 16);
+          const ab = state.on ? state.bri / 100 : 0;
+          (lights || []).forEach(l => { l.intensity = ab * 0.3; l.color.setHex(ac); });
+          (meshes || []).forEach(m => {
             m.material.color.setHex(ac);
-            m.material.emissive.setHex(s.ambient.on ? ac : 0x111111);
-            m.material.emissiveIntensity = s.ambient.on ? ab * 1.5 : 0;
-            m.material.opacity = s.ambient.on ? 0.85 : 0.15;
+            m.material.emissive.setHex(state.on ? ac : 0x111111);
+            m.material.emissiveIntensity = state.on ? ab * 1.5 : 0;
+            m.material.opacity = state.on ? 0.85 : 0.15;
           });
-        }
+        };
+        applyAccent(s.ambient, ambientLights[id], ambientMeshes[id]);
+        Object.keys(s).forEach(channel => {
+          if (channel === 'main' || channel === 'ambient') return;
+          applyAccent(s[channel], (extraLights[id] || {})[channel], (extraMeshes[id] || {})[channel]);
+        });
       });
       requestRender(); // light state changed → repaint (matters when idle/on-demand)
     }
@@ -2015,7 +2286,18 @@ const Home3DScene = (() => {
     // look-at target instead of a rotate; the two are mutually exclusive
     // (pointerdown picks one based on e.button), so px/py are shared between
     // them as "last pointer position for whichever drag is active".
-    const orb = { drag: false, pan: false, px: 0, py: 0, th: Math.PI * 0.22, ph: Math.PI * 0.32, r: 13, tgt: new THREE.Vector3(tx(790), 0, tz(400)) };
+    // The orbit target is the centre of the house's own footprint (derived from
+    // the walls), not a hardcoded plan coordinate — a different house has a
+    // different centre, and framing it on somebody else's is how a model ends up
+    // off-screen. `_defaultDistance` frames the footprint's larger dimension in
+    // the camera's field of view, so a bigger or smaller house is framed
+    // correctly without the profile having to say anything about cameras.
+    const _homeTgt = () => new THREE.Vector3(tx(HOUSE.centre[0]), 0, tz(HOUSE.centre[1]));
+    const _fpW = (HOUSE.footprint.maxX - HOUSE.footprint.minX) * S;
+    const _fpD = (HOUSE.footprint.maxY - HOUSE.footprint.minY) * S;
+    const _defaultDistance = Math.max(6, Math.max(_fpW, _fpD) / (2 * Math.tan(cam.fov * Math.PI / 360)) * 1.15);
+    const _t0 = _homeTgt();
+    const orb = { drag: false, pan: false, px: 0, py: 0, th: Math.PI * 0.22, ph: Math.PI * 0.32, r: _defaultDistance, tgt: _t0 };
     const clickStart = { x: 0, y: 0 };
     const rc = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
@@ -2063,27 +2345,46 @@ const Home3DScene = (() => {
     // The front door is in the north wall (model y≈-4.8), so the ENTRANCE/front
     // elevation is the north face → camera on the -Z side (th=3π/2). ph is the
     // polar angle from +Y: ph→0 = straight top-down, ph=π/2 = eye-level.
-    const _homeTgt = () => new THREE.Vector3(tx(790), 0, tz(400));
     const PI = Math.PI;
+    // The useful presets are DIRECTIONS — top-down, the four corner three-quarter
+    // views, the four elevations — and a direction is house-independent. What
+    // genuinely varies is the framing distance, and that is computed from the
+    // footprint above. So a profile that says nothing about cameras still gets a
+    // sensible set for its own size; `cameraPresets` in the profile overrides any
+    // of them, wholly or in part, for a house whose shape wants a different angle.
+    const _R = _defaultDistance;
     const CAMERA_PRESETS = {
-      // Straight top-down floor-plan view (r large enough to frame the whole
-      // ~10m × 7.4m footprint). ph tiny-but-nonzero avoids a gimbal-flat lookAt.
-      top:     { th: -PI / 2, ph: 0.02, r: 15 },
+      // Straight top-down floor-plan view. ph tiny-but-nonzero avoids a
+      // gimbal-flat lookAt.
+      top:     { th: -PI / 2, ph: 0.02, r: _R * 1.15 },
       // Four corner 3/4 aerial views — camera in the named corner looking into
-      // the interior. `se` is the SE-corner angle used for the wall-
-      // transparency bug (exterior walls fade, interior visible).
-      se:      { th: PI * 0.25, ph: PI * 0.34, r: 13 },
-      sw:      { th: PI * 0.75, ph: PI * 0.34, r: 13 },
-      nw:      { th: PI * 1.25, ph: PI * 0.34, r: 13 },
-      ne:      { th: PI * 1.75, ph: PI * 0.34, r: 13 },
+      // the interior.
+      se:      { th: PI * 0.25, ph: PI * 0.34, r: _R },
+      sw:      { th: PI * 0.75, ph: PI * 0.34, r: _R },
+      nw:      { th: PI * 1.25, ph: PI * 0.34, r: _R },
+      ne:      { th: PI * 1.75, ph: PI * 0.34, r: _R },
       // Elevations — camera dead-on a face, near eye-level (ph high).
-      front:   { th: PI * 1.5, ph: PI * 0.46, r: 14 }, // north / entrance face
-      back:    { th: PI * 0.5, ph: PI * 0.46, r: 14 }, // south face
-      east:    { th: 0,        ph: PI * 0.46, r: 14 },
-      west:    { th: PI,       ph: PI * 0.46, r: 14 },
+      front:   { th: PI * 1.5, ph: PI * 0.46, r: _R * 1.08 },
+      back:    { th: PI * 0.5, ph: PI * 0.46, r: _R * 1.08 },
+      east:    { th: 0,        ph: PI * 0.46, r: _R * 1.08 },
+      west:    { th: PI,       ph: PI * 0.46, r: _R * 1.08 },
       // Default pleasant isometric-ish 3/4 (mirrors the scene's own default).
-      iso:     { th: PI * 0.22, ph: PI * 0.32, r: 13 },
+      iso:     { th: PI * 0.22, ph: PI * 0.32, r: _R },
     };
+    // Per-house overrides. The profile expresses a preset in orbit terms
+    // (azimuth/polar/distance, plus an optional plan-space target); map those
+    // onto the engine's th/ph/r. A partial override keeps the engine default for
+    // any key it omits.
+    Object.keys(HOUSE.cameraPresets || {}).forEach(name => {
+      const p = HOUSE.cameraPresets[name];
+      const base = CAMERA_PRESETS[name] || CAMERA_PRESETS.iso;
+      CAMERA_PRESETS[name] = {
+        th: p.azimuth != null ? p.azimuth : base.th,
+        ph: p.polar != null ? p.polar : base.ph,
+        r: p.distance != null ? p.distance : base.r,
+        tgt: p.target ? new THREE.Vector3(tx(p.target[0]), 0, tz(p.target[1])) : undefined
+      };
+    });
     // topdown is an alias for top
     CAMERA_PRESETS.topdown = CAMERA_PRESETS.top;
 
@@ -2126,9 +2427,16 @@ const Home3DScene = (() => {
       updCam();
     }
 
-    // ---- Sunlight based on real sunrise/sunset for Woolwich, London ----
-    // Solar calculation: approximate sunrise/sunset from day-of-year and latitude
-    const LAT = 51.49; // Woolwich, London
+    // ---- Sunlight from the house's own location -------------------------
+    //
+    // GEOLOCATED PER HOUSE. This used to hardcode one city's latitude and assume
+    // solar noon at 12:00 UTC, so a house anywhere else lit up and went dark at
+    // the wrong time. Latitude and longitude now come from the profile's `site`
+    // block; a profile that omits `site` gets a fixed neutral daylight instead of
+    // somebody else's sky.
+    const LAT = HOUSE.site.latitude;
+    const LON = HOUSE.site.longitude;
+    const HAS_SITE = HOUSE.site.present;
 
     function getSunTimes() {
       const now = new Date();
@@ -2142,14 +2450,23 @@ const Home3DScene = (() => {
       const cosH = -Math.tan(latRad) * Math.tan(decl);
       const clamped = Math.max(-1, Math.min(1, cosH));
       const H = Math.acos(clamped) * 180 / Math.PI; // degrees
-      // Sunrise/sunset in hours (solar noon ≈ 12:00 UTC, Woolwich is ~0° longitude)
-      const solarNoon = 12;
+      // Solar noon in LOCAL CLOCK HOURS. Solar noon is 12:00 UTC on the prime
+      // meridian and shifts 4 minutes (1/15 h) per degree of longitude east, so
+      // the UTC instant is 12 - LON/15. Convert that to the viewer's own clock
+      // with their UTC offset, because getSunFactor() compares against local
+      // wall-clock time. (For a house at longitude 0 viewed from UTC this is
+      // exactly 12, which is what the reference implementation assumed.)
+      const utcOffsetH = -now.getTimezoneOffset() / 60;
+      const solarNoon = 12 - LON / 15 + utcOffsetH;
       const rise = solarNoon - H / 15;
       const set = solarNoon + H / 15;
       return { rise, set };
     }
 
     function getSunFactor() {
+      // No site in the profile: a fixed, neutral daylight. Better than picking a
+      // latitude on the author's behalf and being confidently wrong about it.
+      if (!HAS_SITE) return 0.85;
       const now = new Date();
       const h = now.getHours() + now.getMinutes() / 60;
       const { rise, set } = getSunTimes();
@@ -2528,54 +2845,75 @@ const Home3DScene = (() => {
     };
   }
 
-  // ---- Data export for js/wall-debug-overlay.js (optional dev tool, off by
-  // default) -- NOT used anywhere else in this file. Safe to delete this one
-  // block (and drop the two keys from the return below) if that overlay
-  // module is ever removed; nothing else in the scene reads them.
-  // `id` is carried through so the overlay labels by the wall's PERMANENT
-  // id (see WALLS comment above), not by array position -- position shifts
-  // whenever a wall is retired/merged, id does not.
-  const WALL_SEGMENTS_WORLD = WALL_EXT.map(({ id, x1, y1, x2, y2 }) => ({
-    id, x1: tx(x1), z1: tz(y1), x2: tx(x2), z2: tz(y2)
-  }));
+  // ---- Derived data exports ------------------------------------------------
+  //
+  // These are the module's PUBLIC SURFACE, consumed by the debug overlays in
+  // src/overlays/ and by embedders (index.html reads ROOMS and LIGHTS to build
+  // the controls panel). They used to be constants computed once from a
+  // hardcoded house. They are now DERIVED FROM THE LOADED PROFILE and rebuilt
+  // by refreshExports() whenever useHouse() binds a new one.
+  //
+  // The exported object identity is stable -- `api` below is created once and
+  // its properties are reassigned in place -- so a caller that captured
+  // `Home3DScene` at load time sees the current house's data. What a caller
+  // must NOT do is destructure a value out before create() has resolved: until
+  // a house is bound these are empty. Read them after create().
+  //
+  // Everything here derives from WALL_EXT (the corner-filled centrelines), not
+  // from the authored WALLS, because the overlays draw over what is actually
+  // rendered.
+  function refreshExports() {
+    // Wall segments in WORLD space for wall-debug-overlay.js. `id` is carried
+    // through so the overlay labels by the wall's PERMANENT id, never by array
+    // position -- position shifts whenever a wall is retired, the id does not.
+    api.WALL_SEGMENTS_WORLD = WALL_EXT.map(w => ({
+      id: w.id, x1: tx(w.x1), z1: tz(w.y1), x2: tx(w.x2), z2: tz(w.y2)
+    }));
 
-  // ---- Data export for js/door-debug-overlay.js (optional dev tool, off by
-  // default) -- NOT used anywhere else in this file. Safe to delete this one
-  // block (and drop the key from the return below) if that overlay module is
-  // ever removed; nothing else in the scene reads it. Mirrors the
-  // WALL_SEGMENTS_WORLD pattern above but for DOORS: each door gets a stable
-  // 1-based `num` (its position in the DOORS array + 1 -- these are user-facing
-  // debug labels like "door #3", not permanent ids) plus its opening-centre in
-  // WORLD space so the overlay can float a numbered label on each door without
-  // re-deriving the cm->world transform. Centre in cm: for an x-wall door the
-  // centre is [c, at]; for a z-wall door it's [at, c] (see DOORS/doorBasis).
-  const DOOR_LABELS_WORLD = DOORS.map((d, i) => {
-    const cxCm = d.wall === 'x' ? d.c : d.at;
-    const cyCm = d.wall === 'x' ? d.at : d.c;
-    return { num: i + 1, name: d.name, x: tx(cxCm), z: tz(cyCm) };
-  });
+    // Door label anchors in WORLD space for door-debug-overlay.js. Each door
+    // gets a stable 1-based `num` (its position in the schedule + 1 -- these
+    // are user-facing debug labels like "door #3", not permanent ids) plus its
+    // opening centre. Centre in cm: for an x-wall door that is [c, at]; for a
+    // z-wall door it is [at, c] (see doorBasis).
+    api.DOOR_LABELS_WORLD = DOORS.map((d, i) => {
+      const cxCm = d.wall === 'x' ? d.c : d.at;
+      const cyCm = d.wall === 'x' ? d.at : d.c;
+      return { num: i + 1, id: d.id, name: d.name, x: tx(cxCm), z: tz(cyCm) };
+    });
 
-  // ---- Data export for js/home3d-grid-overlay.js (optional coordinate-grid
-  // tool, off by default) -- like WALL_SEGMENTS_WORLD above, safe to delete
-  // this block (and drop the keys from the return) if that overlay is removed.
-  // The grid draws in MODEL coordinates (cm — same numbers as the WALLS/ROOMS
-  // data, e.g. x~300-1280, y~15-750) but must place geometry in WORLD space,
-  // so it needs both the model-space footprint bounds AND the tx/tz transforms.
-  const _fpXs = WALL_EXT.flatMap(w => [w.x1, w.x2]);
-  const _fpYs = WALL_EXT.flatMap(w => [w.y1, w.y2]);
-  const FOOTPRINT_BOUNDS = {
-    minX: Math.min(..._fpXs), maxX: Math.max(..._fpXs),
-    minY: Math.min(..._fpYs), maxY: Math.max(..._fpYs)
+    // Model-space footprint for home3d-grid-overlay.js. The grid draws in MODEL
+    // coordinates (cm -- the same numbers as the profile) but must place its
+    // geometry in WORLD space, so it needs the bounds AND the transform.
+    api.FOOTPRINT_BOUNDS = HOUSE
+      ? { minX: HOUSE.footprint.minX, maxX: HOUSE.footprint.maxX,
+          minY: HOUSE.footprint.minY, maxY: HOUSE.footprint.maxY }
+      : { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+
+    // Exported so the overlays position their lines and labels with the exact
+    // same transform the scene uses for walls, guaranteeing registration.
+    api.COORD_TRANSFORM = { tx, tz, S, OX, OY };
+
+    api.ROOMS = ROOMS;
+    api.LIGHTS = LIGHTS;
+    api.WALL_HEIGHT = WH;
+    api.HOUSE = activeHouse;
+  }
+
+  // The stable public object. Built once; refreshExports() reassigns the
+  // house-derived properties in place so the identity never changes.
+  const api = {
+    create,
+    useHouse,
+    k2h,
+    ROOMS: {},
+    LIGHTS: {},
+    HOUSE: null,
+    WALL_HEIGHT: 2.5,
+    WALL_SEGMENTS_WORLD: [],
+    DOOR_LABELS_WORLD: [],
+    FOOTPRINT_BOUNDS: { minX: 0, maxX: 0, minY: 0, maxY: 0 },
+    COORD_TRANSFORM: { tx, tz, S, OX, OY }
   };
-  // tx/tz map model cm -> world metres (see top of file). Exported so the grid
-  // module positions its lines/labels using the exact same transform the scene
-  // uses for walls, guaranteeing perfect registration.
-  const COORD_TRANSFORM = { tx, tz, S, OX, OY };
 
-  return {
-    create, ROOMS, LIGHTS, k2h,
-    WALL_SEGMENTS_WORLD, WALL_HEIGHT: WH,
-    DOOR_LABELS_WORLD,
-    FOOTPRINT_BOUNDS, COORD_TRANSFORM
-  };
+  return api;
 })();

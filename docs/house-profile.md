@@ -516,3 +516,77 @@ Schema cannot express:
 - a `site.latitude` precise enough to locate a building rather than a city
 
 Run it before you commit a profile, and wire it into CI.
+
+## Loading a profile — how the engine gets its house
+
+The renderer holds no house of its own. `src/house-loader.js` fetches a profile
+and compiles it into the flat structures `src/home3d-scene.js` draws from, and
+the scene is created against that. Two call shapes:
+
+```js
+// 1. You already have a profile: create() is synchronous, as it always was.
+const house = await HouseLoader.load('demo');
+const scene = Home3DScene.create(container, { house, interactive: true });
+
+// 2. Give it an id and let the engine fetch: create() returns a Promise.
+const scene = await Home3DScene.create(container, { houseId: 'demo' });
+```
+
+`opts.house` takes a compiled profile; `opts.houseId` takes a profile id under
+`houses/` and implies the fetch. Passing neither throws, on purpose — an engine
+that silently rendered *some* house would be the bug this whole format exists to
+remove.
+
+**Which house a deployment loads** comes from configuration, not from code:
+`HOME3D_HOUSE` (via `deploy/generate-config.sh`), a `config.json`, or
+`config.example.json` — see `src/config-loader.js` for the precedence chain.
+`index.html` reads it from there and calls `HouseLoader.loadWithFallback()`.
+
+### Failure is not a blank screen
+
+`loadWithFallback(id, 'demo')` renders the demo house if `id` cannot be loaded —
+a mistyped `HOME3D_HOUSE`, a profile directory that was not mounted, a malformed
+`geometry.json` — and logs what went wrong and how to fix it. It only rejects if
+the fallback itself is unreachable. The same principle runs through the loader:
+
+- a **texture that 404s or is empty** leaves the wall painted, rather than
+  rendering an unlit black panel that reads as a hole in the building
+- a **door in a wall that does not exist**, or with `hinge` parallel to `swing`,
+  is skipped with a warning rather than drawn embedded in its own wall
+- a **room with no `lights` entry** simply has no lights
+- a profile with **no `site`** gets a fixed neutral daylight, rather than the
+  engine picking a latitude on the author's behalf
+
+Every one of these logs through `console.warn` with the profile field at fault,
+and the compiled profile carries the same list on `house.warnings`.
+
+### Refusing a profile it cannot render correctly
+
+The loader hard-refuses a `schemaVersion` whose MAJOR it does not know: a newer
+major may redefine a field the engine already reads, and rendering it anyway
+would be silently wrong. A newer MINOR loads, because the schema's own contract
+says minors are additive.
+
+### What the engine exports about the loaded house
+
+`Home3DScene.ROOMS`, `.LIGHTS`, `.WALL_SEGMENTS_WORLD`, `.DOOR_LABELS_WORLD`,
+`.FOOTPRINT_BOUNDS`, `.COORD_TRANSFORM`, `.WALL_HEIGHT` and `.HOUSE` describe
+**the house currently loaded**. They are consumed by the debug overlays in
+`src/overlays/` and by embedders. The object identity is stable, so a reference
+captured at load time stays valid — but they are empty until a house is bound,
+so read them *after* `create()` resolves.
+
+`WALL_SEGMENTS_WORLD` and `FOOTPRINT_BOUNDS` derive from the **corner-extended**
+wall centrelines, not the authored ones. At a genuine L-corner the engine runs
+both walls half a thickness past the joint so their boxes overlap instead of
+leaving a notch; the overlays draw over what is actually rendered. The profile
+stores the authored centrelines because the extension is a rendering artifact,
+not a fact about the building.
+
+### Decoration that is not in the schema
+
+`opts.decor` is an opt-in list for bespoke geometry that no schema field
+describes — currently `'acoustic-panels'`, slat panelling keyed to particular
+wall ids. A house that does not ask for it gets nothing, and asking for it in a
+house without those walls is a quiet no-op. It is furniture, not building
+fabric; do not reach for it to model something the profile could express.

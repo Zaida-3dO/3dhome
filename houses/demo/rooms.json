@@ -1,22 +1,37 @@
 {
-  "_comment": "Demo house room -> Home Assistant entity map. FICTIONAL. Every entity id here uses a demo_ prefix and does not exist in any real Home Assistant instance. scripts/check-no-pii.sh enforces that.",
+  "kind": "rooms",
+  "schemaVersion": "1.0",
+  "house": "demo",
+  "homeAssistant": {
+    "enabled": false,
+    "wsReconnectMs": 5000,
+    "pollIntervalMs": 5000
+  },
   "rooms": {
-    "demo_lounge": {
-      "label": "Lounge",
+    "lounge": {
       "main": ["light.demo_lounge_ceiling"],
-      "accent": ["light.demo_lounge_lamp"]
+      "ambient": ["light.demo_lounge_cove"]
     },
-    "demo_kitchen": {
-      "label": "Kitchen",
-      "main": ["light.demo_kitchen_ceiling"]
+    "kitchen": {
+      "main": ["light.demo_kitchen_ceiling"],
+      "ambient": ["light.demo_kitchen_undercupboard"]
     },
-    "demo_bedroom": {
-      "label": "Bedroom",
-      "main": ["light.demo_bedroom_ceiling"]
+    "study": {
+      "main": ["light.demo_study_spots"],
+      "ambient": ["light.demo_study_desk_strip"]
     },
-    "demo_hall": {
-      "label": "Hall",
+    "hall": {
       "main": ["light.demo_hall_ceiling"]
+    },
+    "store": {
+      "main": ["light.demo_store_bulb"]
+    },
+    "bathroom": {
+      "main": ["light.demo_bathroom_ceiling"]
+    },
+    "bedroom": {
+      "main": ["light.demo_bedroom_spots"],
+      "ambient": ["light.demo_bedroom_bedside"]
     }
   }
 }

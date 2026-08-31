@@ -1,0 +1,903 @@
+{
+  "kind": "geometry",
+  "schemaVersion": "1.0",
+  "id": "demo",
+  "name": "Demo Flat",
+  "description": "A wholly fictional seven-room flat, invented for this repository. It exists so the app is runnable and evaluable straight after a clone, and so every feature of the engine has something to render: an L-shaped room, a pillar, interior and exterior walls, a cupboard door with a small swing, several lighting channels per room and both forms of rug. It is not anyone's home and no part of it is measured from one.",
+  "units": "cm",
+  "coordinateTransform": {
+    "originX": 450,
+    "originY": 350,
+    "scale": 0.01,
+    "planAxes": "x_east_y_south"
+  },
+  "defaults": {
+    "wallHeight": 245,
+    "wallThickness": 10,
+    "doorHeight": 203,
+    "doorThickness": 4,
+    "doorOpeningHeight": 207,
+    "doorFrameReveal": 8,
+    "doorRestOpenFraction": 0.2
+  },
+  "materials": {
+    "wallColor": "#ece9e1",
+    "ceilingColor": "#f4f2ed",
+    "doorSlabColor": "#e6ded0",
+    "exteriorColor": "#cfc7b8"
+  },
+  "site": {
+    "latitude": 52.5,
+    "longitude": 13.4,
+    "locationLabel": "Somewhere in central Europe (invented)",
+    "northOffsetDegrees": 0
+  },
+  "rooms": [
+    {
+      "id": "lounge",
+      "label": "Lounge",
+      "polygon": [
+        [
+          10,
+          10
+        ],
+        [
+          295,
+          10
+        ],
+        [
+          295,
+          275
+        ],
+        [
+          10,
+          275
+        ]
+      ],
+      "floorColor": "#b9a88d",
+      "floorMaterial": "wood",
+      "rug": {
+        "polygon": [
+          [
+            60,
+            60
+          ],
+          [
+            245,
+            60
+          ],
+          [
+            245,
+            225
+          ],
+          [
+            60,
+            225
+          ]
+        ],
+        "color": "#8d9aa6",
+        "notes": "Stops well short of the doorway on the east wall so the door leaf clears it."
+      },
+      "notes": "The main living space. Two rows of downlights plus a cove strip."
+    },
+    {
+      "id": "kitchen",
+      "label": "Kitchen",
+      "polygon": [
+        [
+          305,
+          10
+        ],
+        [
+          555,
+          10
+        ],
+        [
+          555,
+          275
+        ],
+        [
+          305,
+          275
+        ]
+      ],
+      "floorColor": "#cfc9bd",
+      "floorMaterial": "tile",
+      "notes": "Galley layout; the two ambient strips are the under-cupboard runs."
+    },
+    {
+      "id": "study",
+      "label": "Study",
+      "polygon": [
+        [
+          565,
+          10
+        ],
+        [
+          890,
+          10
+        ],
+        [
+          890,
+          275
+        ],
+        [
+          700,
+          275
+        ],
+        [
+          700,
+          180
+        ],
+        [
+          565,
+          180
+        ]
+      ],
+      "floorColor": "#b9a88d",
+      "floorMaterial": "wood",
+      "notes": "L-shaped: wraps around the chimney breast at the south-west of this room. The notch is real, not a drawing error - do not square it off."
+    },
+    {
+      "id": "hall",
+      "label": "Hall",
+      "polygon": [
+        [
+          10,
+          285
+        ],
+        [
+          890,
+          285
+        ],
+        [
+          890,
+          375
+        ],
+        [
+          10,
+          375
+        ]
+      ],
+      "floorColor": "#cfc9bd",
+      "floorMaterial": "tile",
+      "notes": "Runs the full width; every other room opens off it."
+    },
+    {
+      "id": "store",
+      "label": "Store Cupboard",
+      "polygon": [
+        [
+          10,
+          385
+        ],
+        [
+          195,
+          385
+        ],
+        [
+          195,
+          690
+        ],
+        [
+          10,
+          690
+        ]
+      ],
+      "floorColor": "#cfc9bd",
+      "floorMaterial": "tile",
+      "notes": "Narrow cupboard - its door is stopped by the return wall at about 28 degrees."
+    },
+    {
+      "id": "bathroom",
+      "label": "Bathroom",
+      "polygon": [
+        [
+          205,
+          385
+        ],
+        [
+          415,
+          385
+        ],
+        [
+          415,
+          690
+        ],
+        [
+          205,
+          690
+        ]
+      ],
+      "floorColor": "#c6cdd1",
+      "floorMaterial": "tile",
+      "notes": "Four downlights in a diamond, as bathrooms tend to have."
+    },
+    {
+      "id": "bedroom",
+      "label": "Bedroom",
+      "polygon": [
+        [
+          425,
+          385
+        ],
+        [
+          890,
+          385
+        ],
+        [
+          890,
+          690
+        ],
+        [
+          425,
+          690
+        ]
+      ],
+      "floorColor": "#b9a88d",
+      "floorMaterial": "carpet",
+      "rug": {
+        "inset": 45,
+        "color": "#9a8f80",
+        "notes": "No polygon given, so the engine insets the room bounding box - the simple case, kept here on purpose so the demo exercises both rug forms."
+      },
+      "notes": "Spot cluster overhead plus bedside strips."
+    }
+  ],
+  "walls": {
+    "highestIdEverAssigned": 15,
+    "segments": [
+      {
+        "id": 1,
+        "start": [
+          0,
+          0
+        ],
+        "end": [
+          900,
+          0
+        ],
+        "thickness": 20.0,
+        "exterior": true,
+        "notes": "North shell."
+      },
+      {
+        "id": 2,
+        "start": [
+          900,
+          0
+        ],
+        "end": [
+          900,
+          700
+        ],
+        "thickness": 20.0,
+        "exterior": true,
+        "notes": "East shell."
+      },
+      {
+        "id": 3,
+        "start": [
+          900,
+          700
+        ],
+        "end": [
+          0,
+          700
+        ],
+        "thickness": 20.0,
+        "exterior": true,
+        "notes": "South shell."
+      },
+      {
+        "id": 4,
+        "start": [
+          0,
+          700
+        ],
+        "end": [
+          0,
+          0
+        ],
+        "thickness": 20.0,
+        "exterior": true,
+        "notes": "West shell."
+      },
+      {
+        "id": 5,
+        "start": [
+          300,
+          0
+        ],
+        "end": [
+          300,
+          280
+        ],
+        "thickness": 10.0,
+        "notes": "Lounge / kitchen divider."
+      },
+      {
+        "id": 6,
+        "start": [
+          560,
+          0
+        ],
+        "end": [
+          560,
+          180
+        ],
+        "thickness": 10.0,
+        "notes": "Kitchen / study divider, north part. Stops at the study's re-entrant corner."
+      },
+      {
+        "id": 8,
+        "start": [
+          560,
+          180
+        ],
+        "end": [
+          700,
+          180
+        ],
+        "thickness": 10.0,
+        "notes": "The study's re-entrant return - the short leg of its L."
+      },
+      {
+        "id": 9,
+        "start": [
+          700,
+          180
+        ],
+        "end": [
+          700,
+          280
+        ],
+        "thickness": 10.0,
+        "notes": "Chimney-breast face; the study wraps around it."
+      },
+      {
+        "id": 10,
+        "start": [
+          0,
+          280
+        ],
+        "end": [
+          900,
+          280
+        ],
+        "thickness": 10.0,
+        "notes": "North side of the hall.",
+        "faceTexture": {
+          "side": "south",
+          "clipToRoom": "hall",
+          "texture": {
+            "path": "textures/hall-panel.png",
+            "fit": "stretch",
+            "credit": "Procedurally generated flat panel pattern (CC0)."
+          }
+        }
+      },
+      {
+        "id": 11,
+        "start": [
+          0,
+          380
+        ],
+        "end": [
+          900,
+          380
+        ],
+        "thickness": 10.0,
+        "notes": "South side of the hall."
+      },
+      {
+        "id": 12,
+        "start": [
+          200,
+          380
+        ],
+        "end": [
+          200,
+          700
+        ],
+        "thickness": 10.0,
+        "notes": "Store / bathroom divider."
+      },
+      {
+        "id": 14,
+        "start": [
+          420,
+          380
+        ],
+        "end": [
+          420,
+          700
+        ],
+        "thickness": 10.0,
+        "notes": "Bathroom / bedroom divider."
+      },
+      {
+        "id": 15,
+        "start": [
+          860,
+          420
+        ],
+        "end": [
+          860,
+          460
+        ],
+        "thickness": 40.0,
+        "notes": "Boxed-in soil stack in the bedroom's north-east corner. A pillar is just a short thick wall."
+      }
+    ]
+  },
+  "doors": [
+    {
+      "id": "front_door",
+      "label": "Front door",
+      "wall": 4,
+      "centre": 330,
+      "width": 95,
+      "hinge": "north",
+      "swing": "east",
+      "maxOpenDegrees": 90,
+      "kind": "front",
+      "room": "hall",
+      "color": "#6d4a34",
+      "notes": "In the west shell, opening into the hall."
+    },
+    {
+      "id": "lounge_door",
+      "label": "Lounge door",
+      "wall": 10,
+      "centre": 150,
+      "width": 85,
+      "hinge": "west",
+      "swing": "north",
+      "maxOpenDegrees": 90,
+      "kind": "standard",
+      "room": "lounge"
+    },
+    {
+      "id": "kitchen_door",
+      "label": "Kitchen door",
+      "wall": 10,
+      "centre": 430,
+      "width": 85,
+      "hinge": "east",
+      "swing": "north",
+      "maxOpenDegrees": 90,
+      "kind": "standard",
+      "room": "kitchen"
+    },
+    {
+      "id": "study_door",
+      "label": "Study door",
+      "wall": 9,
+      "centre": 230,
+      "width": 80,
+      "hinge": "north",
+      "swing": "east",
+      "maxOpenDegrees": 90,
+      "kind": "standard",
+      "room": "study",
+      "notes": "In the chimney-breast face, opening east into the study's lower leg."
+    },
+    {
+      "id": "store_door",
+      "label": "Store cupboard",
+      "wall": 11,
+      "centre": 105,
+      "width": 60,
+      "hinge": "west",
+      "swing": "south",
+      "maxOpenDegrees": 28,
+      "kind": "cupboard",
+      "room": "store",
+      "notes": "Stopped at about 28 degrees by the return wall - a cupboard door, not a room door."
+    },
+    {
+      "id": "bathroom_door",
+      "label": "Bathroom door",
+      "wall": 11,
+      "centre": 310,
+      "width": 80,
+      "hinge": "east",
+      "swing": "south",
+      "maxOpenDegrees": 90,
+      "kind": "standard",
+      "room": "bathroom"
+    },
+    {
+      "id": "bedroom_door",
+      "label": "Bedroom door",
+      "wall": 11,
+      "centre": 620,
+      "width": 85,
+      "hinge": "west",
+      "swing": "south",
+      "maxOpenDegrees": 90,
+      "kind": "standard",
+      "room": "bedroom"
+    }
+  ],
+  "lights": [
+    {
+      "room": "lounge",
+      "fixtures": [
+        {
+          "channel": "main",
+          "label": "Lounge Ceiling",
+          "fixtureType": "downlight",
+          "colorTemperatureK": 2700,
+          "positions": [
+            {
+              "at": [
+                95,
+                85
+              ]
+            },
+            {
+              "at": [
+                210,
+                85
+              ]
+            },
+            {
+              "at": [
+                95,
+                200
+              ]
+            },
+            {
+              "at": [
+                210,
+                200
+              ]
+            }
+          ]
+        },
+        {
+          "channel": "ambient",
+          "label": "Lounge Cove",
+          "fixtureType": "strip",
+          "colorTemperatureK": 2200,
+          "positions": [
+            {
+              "at": [
+                152,
+                20
+              ],
+              "heightCm": 236,
+              "label": "north cove run",
+              "size": [
+                250,
+                2.5,
+                2.5
+              ]
+            },
+            {
+              "at": [
+                20,
+                142
+              ],
+              "heightCm": 60,
+              "label": "behind the sofa",
+              "size": [
+                2.5,
+                8,
+                180
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "room": "kitchen",
+      "fixtures": [
+        {
+          "channel": "main",
+          "label": "Kitchen Ceiling",
+          "fixtureType": "downlight",
+          "colorTemperatureK": 4000,
+          "positions": [
+            {
+              "at": [
+                365,
+                90
+              ]
+            },
+            {
+              "at": [
+                495,
+                90
+              ]
+            },
+            {
+              "at": [
+                430,
+                210
+              ]
+            }
+          ]
+        },
+        {
+          "channel": "ambient",
+          "label": "Kitchen Under-cupboard",
+          "fixtureType": "strip",
+          "colorTemperatureK": 3000,
+          "positions": [
+            {
+              "at": [
+                430,
+                25
+              ],
+              "heightCm": 145,
+              "label": "north run",
+              "size": [
+                220,
+                2,
+                2
+              ]
+            },
+            {
+              "at": [
+                430,
+                262
+              ],
+              "heightCm": 145,
+              "label": "south run",
+              "size": [
+                220,
+                2,
+                2
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "room": "study",
+      "fixtures": [
+        {
+          "channel": "main",
+          "label": "Study Spots",
+          "fixtureType": "spot",
+          "colorTemperatureK": 4000,
+          "positions": [
+            {
+              "at": [
+                660,
+                80
+              ]
+            },
+            {
+              "at": [
+                790,
+                80
+              ]
+            },
+            {
+              "at": [
+                660,
+                200
+              ]
+            },
+            {
+              "at": [
+                790,
+                200
+              ]
+            },
+            {
+              "at": [
+                850,
+                140
+              ]
+            }
+          ]
+        },
+        {
+          "channel": "ambient",
+          "label": "Study Desk Strip",
+          "fixtureType": "strip",
+          "colorTemperatureK": 2400,
+          "positions": [
+            {
+              "at": [
+                730,
+                25
+              ],
+              "heightCm": 72,
+              "label": "under the desk",
+              "size": [
+                180,
+                6,
+                2.5
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "room": "hall",
+      "fixtures": [
+        {
+          "channel": "main",
+          "label": "Hall Ceiling",
+          "fixtureType": "downlight",
+          "colorTemperatureK": 3000,
+          "positions": [
+            {
+              "at": [
+                130,
+                330
+              ]
+            },
+            {
+              "at": [
+                370,
+                330
+              ]
+            },
+            {
+              "at": [
+                610,
+                330
+              ]
+            },
+            {
+              "at": [
+                820,
+                330
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "room": "store",
+      "fixtures": [
+        {
+          "channel": "main",
+          "label": "Store Bulb",
+          "fixtureType": "bulb",
+          "colorTemperatureK": 2700,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "room": "bathroom",
+      "fixtures": [
+        {
+          "channel": "main",
+          "label": "Bathroom Ceiling",
+          "fixtureType": "downlight",
+          "colorTemperatureK": 4000,
+          "positions": [
+            {
+              "at": [
+                310,
+                450
+              ]
+            },
+            {
+              "at": [
+                250,
+                540
+              ]
+            },
+            {
+              "at": [
+                370,
+                540
+              ]
+            },
+            {
+              "at": [
+                310,
+                630
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "room": "bedroom",
+      "fixtures": [
+        {
+          "channel": "main",
+          "label": "Bedroom Spots",
+          "fixtureType": "spot",
+          "colorTemperatureK": 2700,
+          "positions": [
+            {
+              "at": [
+                540,
+                470
+              ]
+            },
+            {
+              "at": [
+                700,
+                470
+              ]
+            },
+            {
+              "at": [
+                540,
+                610
+              ]
+            },
+            {
+              "at": [
+                700,
+                610
+              ]
+            },
+            {
+              "at": [
+                620,
+                540
+              ]
+            }
+          ]
+        },
+        {
+          "channel": "ambient",
+          "label": "Bedroom Bedside",
+          "fixtureType": "strip",
+          "colorTemperatureK": 2200,
+          "positions": [
+            {
+              "at": [
+                470,
+                540
+              ],
+              "heightCm": 45,
+              "label": "left bedside",
+              "size": [
+                2.5,
+                8,
+                40
+              ]
+            },
+            {
+              "at": [
+                770,
+                540
+              ],
+              "heightCm": 45,
+              "label": "right bedside",
+              "size": [
+                2.5,
+                8,
+                40
+              ]
+            },
+            {
+              "at": [
+                620,
+                680
+              ],
+              "heightCm": 235,
+              "label": "curtain cornice",
+              "size": [
+                300,
+                2.5,
+                2.5
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "cameraPresets": {}
+}
