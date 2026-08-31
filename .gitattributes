@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------------------
+# 3dHome - .gitattributes
+#
+# Normalise line endings so the repo is identical on every platform. This
+# matters most for scripts/check-no-pii.sh and deploy/entrypoint.sh: they are
+# committed with LF and executed by /bin/sh in CI and in the container. A CRLF
+# copy fails there with an obscure "not found" error, because the shell reads
+# the carriage return as part of the interpreter path on the shebang line.
+# ---------------------------------------------------------------------------
+
+# Default: normalise text to LF in the repository, and let git decide what a
+# working-tree checkout looks like per platform.
+* text=auto
+
+# Always LF in the working tree too - these are executed by a POSIX shell.
+*.sh            text eol=lf
+deploy/*        text eol=lf
+
+# Web sources and config: LF everywhere, so a diff is never noise.
+*.html          text eol=lf
+*.js            text eol=lf
+*.jsx           text eol=lf
+*.css           text eol=lf
+*.json          text eol=lf
+*.md            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.py            text eol=lf
+Dockerfile      text eol=lf
+.gitignore      text eol=lf
+.dockerignore   text eol=lf
+
+# Binary: never touch these.
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
