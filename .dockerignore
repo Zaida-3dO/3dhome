@@ -1,21 +1,56 @@
+# ---------------------------------------------------------------------------
+# 3dHome - .dockerignore
+#
+# The Dockerfile copies the repo into the nginx web root, so anything left here
+# is SERVED to every visitor. This file keeps development material, docs and
+# git history out of the image - smaller build context, smaller attack surface.
+# ---------------------------------------------------------------------------
+
+# --- Version control -------------------------------------------------------
 .git
-.github
 .gitignore
-.dockerignore
-docs/
+.gitattributes
+.github
+
+# --- Docs and project material (not part of the running app) ---------------
+docs
 PLAN.md
+README.md
 CONTRIBUTING.md
-scripts/
-houses/*/
-!houses/demo/
-*.tmp
-*.tmptest
-.env
-.env.*
-!.env.example
+CHANGELOG.md
+LICENSE
+
+# --- Dev / CI tooling ------------------------------------------------------
+scripts
+node_modules
+npm-debug.log
+package-lock.json
+
+# --- Never ship: local config holds the Home Assistant token ---------------
 config.js
 config.json
-node_modules/
-__pycache__/
-.playwright-mcp/
-screenshots/
+secrets.json
+*secrets*.json
+.env
+.env.*
+*.local.*
+
+# --- Never ship: private house profiles ------------------------------------
+# The demo house is re-included; a real house is mounted as a volume at run
+# time, never baked into the image.
+houses/*
+!houses/demo
+!houses/schema.json
+
+# --- Renders / artefacts ---------------------------------------------------
+.playwright-mcp
+screenshots
+
+# --- Editor and OS noise ---------------------------------------------------
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+*.swp
+*~
+__pycache__

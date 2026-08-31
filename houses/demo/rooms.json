@@ -1,0 +1,22 @@
+{
+  "_comment": "Demo house room -> Home Assistant entity map. FICTIONAL. Every entity id here uses a demo_ prefix and does not exist in any real Home Assistant instance. scripts/check-no-pii.sh enforces that.",
+  "rooms": {
+    "demo_lounge": {
+      "label": "Lounge",
+      "main": ["light.demo_lounge_ceiling"],
+      "accent": ["light.demo_lounge_lamp"]
+    },
+    "demo_kitchen": {
+      "label": "Kitchen",
+      "main": ["light.demo_kitchen_ceiling"]
+    },
+    "demo_bedroom": {
+      "label": "Bedroom",
+      "main": ["light.demo_bedroom_ceiling"]
+    },
+    "demo_hall": {
+      "label": "Hall",
+      "main": ["light.demo_hall_ceiling"]
+    }
+  }
+}

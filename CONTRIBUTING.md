@@ -1,51 +1,76 @@
-# Contributing
+# Contributing to 3dHome
 
-## No build step — keep it that way
+Thanks for taking a look. Three things matter more than anything else here.
 
-This is plain HTML, CSS and vanilla JavaScript, with dependencies vendored under `vendor/`. There is no bundler, no transpiler, no `node_modules`, no `npm run build`. Clone it, serve the directory, and it runs.
+## 1. It stays buildless
 
-That is a deliberate constraint, not an oversight. It means the app can be dropped onto any static host, debugged in a browser with no source maps, and still work in five years. Please don't introduce a build step, a framework, or a package manager for the app itself. Tooling *around* the app — the validator, the privacy guard, CI — may use Python or Node freely.
+3dHome is plain HTML, CSS and JavaScript, served as static files. There is no
+bundler, no transpiler, no `package.json`, and no `node_modules`. Open a file,
+edit it, reload the page.
 
-Dependencies are vendored rather than loaded from a CDN so the app works on a network with no internet access. Keep it that way too.
+Please do not introduce a build step. It is a deliberate constraint, not an
+oversight: it keeps the app forkable by someone who wants to change the colour
+of a wall without first installing a toolchain, and it means what you read in
+the repo is exactly what runs in the browser.
 
-## Never commit a real house
+Practical consequences:
 
-A floor plan of someone's home, and the list of every light in it, is personal data. This repository is public.
+- Third-party libraries are **vendored** into `vendor/` as files, not installed.
+- Use browser-native JavaScript. No JSX or TypeScript in `src/`. (The pages under
+  `specs/` are the one exception — they transpile JSX in the browser at runtime.)
+- Node is used in CI only, as a syntax checker and schema validator.
 
-- Only `houses/demo/` — a fictional house — is tracked. Every other profile is gitignored.
-- Keep your own house profile in a private repository or an untracked directory, and mount it at deploy time.
-- Don't commit `config.js`, `config.json`, `.env`, or anything holding a Home Assistant token.
-- Don't paste real entity ids, private network addresses, or public hostnames into code, comments, docs or commit messages.
+## 2. Never commit a real house
+
+This repo is public. A floor plan with room names and Home Assistant entity ids
+describes where somebody lives and what is installed in it.
+
+- `houses/demo/` is **fictional** and is the only house directory in the repo.
+- Every other `houses/*/` is gitignored. Keep yours there and it is safe.
+- Entity ids in `houses/demo/rooms.json` must be invented — a `demo_` prefix,
+  e.g. `light.demo_lounge_ceiling`.
+- Never commit `config.js` or `config.json`; both hold your Home Assistant token.
+- No photographs of a real home, and no screenshots of a real house model.
 
 **Run the guard before you push:**
 
-```bash
-./scripts/check-no-pii.sh
+```sh
+sh scripts/check-no-pii.sh
 ```
 
-It fails closed — if it can't establish that something is safe, it fails. That's the intended behaviour; if it flags you wrongly, fix the check rather than loosening it.
+It scans the working tree for house data, private network addresses, personal
+hostnames and credential-shaped strings, and it fails closed — if it cannot
+establish that something is safe, it fails. The same script runs on every pull
+request and is a required check. If it flags something, it will tell you the
+file, the line and what to do about it.
 
-## Before opening a pull request
+If you think it flagged you wrongly, say so in the pull request rather than
+loosening the check. A guard people route around is worse than no guard.
 
-```bash
-./scripts/check-no-pii.sh                      # privacy guard
-python scripts/validate-house.py houses/demo   # house profile still valid
-node --check src/home3d-scene.js               # and any other .js you touched
-python -m http.server 8080                     # load it and check the console
+## 3. Commits and pull requests
+
+Conventional-ish commit subjects, lowercase, imperative, with a scope when one
+is obvious:
+
+```
+feat(scene): render door swing arcs
+fix(ha-client): reconnect after a dropped websocket
+docs(readme): explain the token exposure
+chore(vendor): update three.js to r150
 ```
 
-CI runs the same checks. Please look at the browser console — this is a graphics app, and a broken scene often still returns HTTP 200.
+For a pull request:
 
-## Merge policy
+- Keep it focused; one concern per PR.
+- Say what you changed and why. If it is visual, attach a screenshot **of the
+  demo house**, never of a real one.
+- Make sure CI is green: the PII guard, `node --check` on JavaScript, and JSON
+  schema validation of any house profile.
+- If you changed how a house profile is shaped, update `houses/schema.json` and
+  `docs/house-profile.md` in the same PR.
 
-**A branch being behind `main` does not block a merge.** Only a genuine textual conflict does. Please don't enable "require branches to be up to date before merging" — rebasing every branch every time `main` moves costs more than it protects here.
+## Reporting a security issue
 
-## House profiles
-
-If you change `houses/schema.json`, bump `schemaVersion` and say in the pull request how existing profiles should migrate. Someone's hand-authored house should never silently stop loading.
-
-Wall ids are permanent: `highestIdEverAssigned` only ever increases, and retired ids are never reused. Gaps in the sequence are deliberate.
-
-## Commits
-
-Short, imperative subject line with a conventional-ish prefix (`feat:`, `fix:`, `docs:`, `ci:`, `chore:`). Explain *why* in the body when the reason isn't obvious from the diff — the next reader is usually you.
+Please do not open a public issue for a vulnerability. See the
+[Security](README.md#security) section of the README for how the app handles the
+Home Assistant token, and report anything sensitive privately to the maintainer.

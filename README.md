@@ -1,161 +1,199 @@
-# 3D Home
+# 3dHome
 
-A browser-based 3D model of your home that reflects **live Home Assistant state** — walk around your floor plan and see which lights are actually on.
+A browser-based 3D model of your home that lights up when your lights do.
 
-No build step. It is plain HTML, CSS and JavaScript with a vendored copy of three.js: clone it, serve the directory, and it runs. Your house is **data**, not code — described in a JSON profile you can edit by hand.
+3dHome renders a floor plan as an interactive 3D scene and — optionally — connects
+to [Home Assistant](https://www.home-assistant.io/) over WebSocket, so every lamp
+in the model reflects the real state of the lamp in the room: on or off, its
+brightness, its colour. Turn a light on from your phone and the model changes as
+you watch.
 
-![screenshot placeholder](docs/screenshot.png)
+It is a **static site**. No build step, no bundler, no `npm install`, no
+`node_modules` — plain HTML, CSS and JavaScript served by any web server. The
+only moving part is a small entrypoint script that writes your configuration
+into `config.js` when the container starts.
+
+<!-- TODO: screenshot -->
+<p align="center">
+  <em>Screenshot coming soon — the demo house, rendered.</em>
+</p>
 
 ---
 
 ## Quick start
 
-### Try it with the demo house
+### With Docker
 
-```bash
-git clone https://github.com/Zaida-3dO/3dhome.git
-cd 3dhome
-python -m http.server 8080
+```sh
+docker run --rm -p 8080:80 ghcr.io/zaida-3do/3dhome:latest
 ```
 
-Open <http://localhost:8080>. You get a fictional demo house with Home Assistant disabled. No configuration, no account, no container required.
+Open <http://localhost:8080>. You get the fictional demo house with Home
+Assistant disabled — enough to look around and decide whether you want it.
 
-### Run it with Docker
+To connect it to your own Home Assistant:
 
-```bash
-docker run -p 8080:80 ghcr.io/zaida-3do/3dhome:latest
-```
-
-With Home Assistant wired up:
-
-```bash
-docker run -p 8080:80 \
-  -e HOME3D_HA_URL="https://your-ha-host.example.com" \
-  -e HOME3D_HA_TOKEN="your-long-lived-access-token" \
+```sh
+docker run --rm -p 8080:80 \
+  -e HOME3D_HA_URL="https://homeassistant.example.com" \
+  -e HOME3D_HA_TOKEN="<your long-lived access token>" \
   ghcr.io/zaida-3do/3dhome:latest
 ```
 
----
+Read the [Security](#security) section before you do this. The token is served
+to the browser.
 
-## ⚠️ Security — read this before you deploy it
+### Without Docker
 
-**This app puts your Home Assistant long-lived access token in the browser.** The token is served to every client that can load the page, so anyone who can reach it can read the token and use it against your Home Assistant with full user privileges.
+There is nothing to build, so any static file server works:
 
-Deploy it **only** behind something that controls who can reach it:
+```sh
+git clone https://github.com/Zaida-3dO/3dHome.git
+cd 3dHome
+python -m http.server 8080
+```
 
-- a VPN or a mesh network such as Tailscale or NetBird
-- an authenticating reverse proxy
-- a listener bound to your LAN only
+Open <http://localhost:8080>. Home Assistant is off (there is no `config.js`),
+and the demo house renders as a static model.
 
-**Do not expose it to the public internet.**
+To point that at Home Assistant, copy the example config and edit it:
 
-Two things worth doing even so:
+```sh
+cp config.example.json config.json
+```
 
-- **Create a dedicated Home Assistant user** for this app and give it the narrowest role that works, so a leaked token is bounded rather than total.
-- **Rotate the token** if the page has ever been reachable somewhere you did not intend.
-
-This is a property of any browser app talking directly to Home Assistant, not a defect specific to this one — but it is your decision to make with the facts in hand rather than after the fact.
+`config.json` is gitignored, because it will hold your token.
 
 ---
 
 ## Configuration
 
-Everything is supplied at runtime. Nothing about your house or your network is committed to this repository.
+Configuration resolves in this order, highest priority first:
 
-| Variable | What it does | Default |
+1. **URL parameter** — `?haUrl=https://...` overrides the HA URL. Used by
+   embedders (an iframe passing its own origin).
+2. **`window.HOME3D_CONFIG`** — set by `config.js`, which the container
+   entrypoint generates from the environment variables below.
+3. **`config.json`** — a file you write yourself, for non-container deployments.
+4. **`config.example.json`** — the committed demo default, so a bare clone runs.
+
+### Environment variables
+
+Read by `deploy/entrypoint.sh` at container start.
+
+| Variable | Purpose | Default |
 |---|---|---|
-| `HOME3D_HA_URL` | Home Assistant base URL | *(unset — HA disabled)* |
-| `HOME3D_HA_FALLBACK_URL` | Second URL to try if the first is unreachable | *(unset)* |
-| `HOME3D_HA_TOKEN` | Long-lived access token — see the security note above | *(unset — HA disabled)* |
-| `HOME3D_HA_ENABLED` | Force HA on or off | `true` when URL **and** token are both set |
-| `HOME3D_HOUSE` | Which house profile to load | `demo` |
-| `HOME3D_WS_RECONNECT_MS` | WebSocket reconnect delay | `5000` |
-| `HOME3D_POLL_INTERVAL_MS` | State poll interval | `5000` |
-| `APP_VERSION` | Stamped into the page and its cache-busting | `dev` |
+| `HOME3D_HA_URL` | Home Assistant base URL, e.g. `https://homeassistant.example.com`. | *unset — HA disabled* |
+| `HOME3D_HA_FALLBACK_URL` | Second URL to race against the first. Useful when HA is reachable at one address on the LAN and another over VPN. | *unset* |
+| `HOME3D_HA_TOKEN` | A Home Assistant **long-lived access token**. See [Security](#security). | *unset — HA disabled* |
+| `HOME3D_HA_ENABLED` | Force the HA integration on or off. | `true` when URL **and** token are both set, otherwise `false` |
+| `HOME3D_HOUSE` | Which house profile to load from `houses/`. | `demo` |
+| `HOME3D_WS_RECONNECT_MS` | Delay before reconnecting a dropped WebSocket, in ms. | `5000` |
+| `HOME3D_POLL_INTERVAL_MS` | Polling interval when the WebSocket is unavailable, in ms. | `5000` |
+| `APP_VERSION` | Stamped into the page and onto every `?v=` cache-busting query. | *unset* |
 
-Configuration resolves through a precedence chain, highest first:
+---
 
-1. **`?haUrl=` URL parameter** — for an embedder that knows its own Home Assistant origin
-2. **`window.HOME3D_CONFIG`** — written by the container entrypoint from the variables above
-3. **`config.json`** — a file you mount or drop in beside the app (gitignored)
-4. **`config.example.json`** — the committed demo default
+## Security
 
-The bottom of that chain always works, which is why a bare clone runs with no setup.
+**Read this before exposing 3dHome to anything.**
 
-See [`docs/configuration.md`](docs/configuration.md) for the full detail and [`.env.example`](.env.example) for a template.
+> ### The Home Assistant token is served to the browser.
+>
+> 3dHome is a static app with no backend. It talks to Home Assistant directly
+> from the page, which means your long-lived access token is delivered to every
+> browser that loads it — in `config.js`, in plain text. **Anyone who can load
+> the page can read the token and use it against your Home Assistant with the
+> full privileges of the user who created it.**
+
+This is not a subtle flaw to be patched later; it is a consequence of the
+architecture. A static page with no server has nowhere to hide a secret. Deploy
+accordingly:
+
+**Only deploy 3dHome behind something that authenticates users:**
+
+- a VPN or [Tailscale](https://tailscale.com/) / WireGuard network,
+- an authenticating reverse proxy (Authelia, oauth2-proxy, Cloudflare Access),
+- or a listener bound to your LAN only.
+
+**Never put it on the public internet**, and never on a URL you would share.
+
+### Reducing the blast radius
+
+If you run it anyway — and plenty of people reasonably will, on a home network —
+these measurably limit the damage:
+
+- **Use a dedicated Home Assistant user.** Create a separate account for 3dHome
+  and generate the token as that user, rather than using your admin account. A
+  leaked token is then bounded by that user's permissions. 3dHome only needs to
+  read light states and (if you want the controls) call `light.turn_on` /
+  `light.turn_off`.
+- **Rotate the token.** Home Assistant long-lived tokens do not expire on their
+  own. Revoke and reissue periodically in *Profile → Security → Long-lived
+  access tokens*, and immediately if the deployment was ever reachable more
+  widely than you intended.
+- **Prefer `?haUrl=` when embedding.** An embedder on the same origin as Home
+  Assistant can pass its own origin, keeping traffic local.
+- **Keep `config.js` and `config.json` out of git.** Both are gitignored. Do not
+  override that.
+
+### Your house is data too
+
+The floor plan, room names and entity ids describe where you live and what is
+installed in it. This repo therefore ships a **fictional** house in
+`houses/demo/`, and every other `houses/*/` directory is gitignored. Keep your
+real house in a private overlay mounted at deploy time:
+
+```sh
+docker run --rm -p 8080:80 \
+  -v /srv/myhouse:/usr/share/nginx/html/houses/myhouse:ro \
+  -e HOME3D_HOUSE=myhouse \
+  ghcr.io/zaida-3do/3dhome:latest
+```
+
+`scripts/check-no-pii.sh` enforces this in CI. Run it before you push.
 
 ---
 
 ## Modelling your own house
 
-The demo house exists so the app is usable immediately. Replacing it with your own is real work — you are describing a floor plan — but it is all data:
+The demo house exists so the app is usable immediately. Replacing it with your
+own is real work — you are describing a building — but it is all data, no code.
 
-```bash
+```sh
 cp -r houses/demo houses/myhouse
-# edit houses/myhouse/geometry.json   — rooms, walls, doors, lights
-# edit houses/myhouse/rooms.json      — room id → Home Assistant entity ids
-python scripts/validate-house.py houses/myhouse
-HOME3D_HOUSE=myhouse python -m http.server 8080
 ```
 
-- **`geometry.json`** describes shapes: room polygons, walls, doors with their hinge side and swing direction, light positions, materials, and the coordinate transform from whatever tool you drew it in.
-- **`rooms.json`** maps each room to its Home Assistant entities. It is kept separate from the geometry on purpose: a floor plan is shareable, a list of the devices in your home is not.
+`houses/myhouse/` is gitignored the moment it exists, so your floor plan cannot
+be committed by accident.
 
-[`docs/house-profile.md`](docs/house-profile.md) documents every field, the units, how to derive the transform from a Sweet Home 3D export, and a worked minimal example.
+1. **`geometry.json`** — rooms, walls, doors, and light positions. This is the
+   substantial part. Measurements are in centimetres; a
+   [Sweet Home 3D](https://www.sweethome3d.com/) export is a good starting point.
+2. **`rooms.json`** — maps each room id to its Home Assistant entity ids, so the
+   model knows which lamp is which.
+3. **`textures/`** — optional wall textures. Keep them small.
 
-**Your own house profile is gitignored by default.** Only `houses/demo/` is tracked. That is deliberate — see below.
+Then point the app at it:
 
----
-
-## Privacy
-
-A model of your home is personal data. A floor plan with room names, and a list of every light in it, says a lot about where and how you live.
-
-This repository is built so that publishing the code never publishes a home:
-
-- Only `houses/demo/` — a fictional house — is committed. Every other profile is gitignored.
-- `config.js`, `config.json` and any secrets file are gitignored.
-- [`scripts/check-no-pii.sh`](scripts/check-no-pii.sh) enforces the boundary in CI and fails closed: real-looking entity ids, private network addresses, oversized textures and stray house profiles all fail the build.
-
-Run it yourself before you push:
-
-```bash
-./scripts/check-no-pii.sh
+```sh
+HOME3D_HOUSE=myhouse
 ```
 
-If you fork this to model your own house, keep your profile in a private repository or an untracked directory and mount it at deploy time.
+The full field-by-field reference is in [`docs/house-profile.md`](docs/house-profile.md),
+and [`houses/schema.json`](houses/schema.json) validates both files in CI.
 
 ---
 
-## Embedding
+## Contributing
 
-The viewer supports embedded modes driven entirely by URL parameters, so it can be dropped into a dashboard as an iframe:
+See [CONTRIBUTING.md](CONTRIBUTING.md). In short: keep it buildless, run
+`scripts/check-no-pii.sh` before pushing, and never commit a real house.
 
-- `?preview=true` — a non-interactive, slowly rotating thumbnail with all chrome hidden
-- `?embed=1` — fully interactive with light controls, chrome hidden
-- `?haUrl=<origin>` — tells the embedded copy which Home Assistant to talk to
+## License
 
-There are more — camera presets, shadow quality, frame-rate caps and several debug overlays. All of them are documented in [`docs/url-parameters.md`](docs/url-parameters.md).
+[MIT](LICENSE) © 2026 Zaida-3dO.
 
----
-
-## Development
-
-There is no build. Edit a file, reload the page.
-
-```bash
-python -m http.server 8080     # serve it
-./scripts/check-no-pii.sh      # privacy guard — run before pushing
-python scripts/validate-house.py houses/demo
-node --check src/home3d-scene.js
-```
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/ci.md`](docs/ci.md).
-
----
-
-## Licence
-
-[MIT](LICENSE).
-
-three.js, React and Babel are vendored under `vendor/` under their own licences. They are vendored rather than loaded from a CDN so the app works on a network with no internet access.
+Vendored third-party libraries in `vendor/` keep their own licences —
+[three.js](https://threejs.org/) (MIT), and React and Babel (both MIT) for the
+spec pages.
