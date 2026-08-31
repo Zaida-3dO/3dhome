@@ -74,6 +74,28 @@ jobs:
       - name: Run the PII guard
         run: bash scripts/check-no-pii.sh
 
+  version-stamping:
+    name: Version stamping guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check the guard script exists
+        run: |
+          # Same reasoning as the PII guard: a check that can be deleted to
+          # make the build green is not a check.
+          if [ ! -f deploy/check-version-stamping.sh ]; then
+            echo "::error file=deploy/check-version-stamping.sh::Version guard is missing."
+            echo "It must not be removed or renamed - see its header for the drift it prevents."
+            exit 1
+          fi
+      - name: Fail on any hardcoded version where __VERSION__ belongs
+        # The predecessor kept one version in three hand-synchronised places
+        # and they drifted three times, serving two different cached builds of
+        # the same script from one origin. The rule then was "grep before
+        # saving"; that is what failed. This is the same grep, run by CI on
+        # every PR, where forgetting is not an option.
+        run: sh deploy/check-version-stamping.sh
+
   js-syntax:
     name: JS / JSON syntax check
     runs-on: ubuntu-latest

@@ -44,6 +44,7 @@ const HomeConfig = (() => {
   // point a stranger's browser at somebody else's host.
   // ---------------------------------------------------------------------
   const BUILTIN_DEFAULT = Object.freeze({
+    version: 'dev',
     enabled: false,
     url: '',
     fallbackUrl: '',
@@ -108,6 +109,31 @@ const HomeConfig = (() => {
   // a hand-edited JSON file or (in future) a URL parameter.
   const HOUSE_ID_RE = /^[a-z][a-z0-9_-]*$/;
 
+  // ---------------------------------------------------------------------
+  // The version, and the unstamped-placeholder case.
+  //
+  // deploy/generate-config.sh replaces every __VERSION__ in index.html with
+  // APP_VERSION at container start, and writes the same value into config.js.
+  // One source, so the badge and every ?v= cache-buster are identical by
+  // construction rather than by anyone remembering to keep them in step.
+  //
+  // But the entrypoint only runs in the container. Someone who clones the repo
+  // and runs `python -m http.server` never executes it, so they get the raw
+  // placeholder: a badge reading "v__VERSION__" and script URLs ending
+  // "?v=__VERSION__". That is functionally FINE - the placeholder is a
+  // perfectly good constant cache key, identical across every tag - but it
+  // reads as a broken build to anyone seeing the repo for the first time,
+  // which is exactly the audience a public repo has.
+  //
+  // So an unsubstituted placeholder normalises to 'dev' - the same word the
+  // entrypoint uses when APP_VERSION is unset, so the two paths agree. The
+  // badge is repaired in the DOM (see stampVersionIntoDom below); the ?v=
+  // query strings are deliberately LEFT ALONE, because rewriting a script URL
+  // after the browser has already fetched it would re-request every asset for
+  // no benefit.
+  // ---------------------------------------------------------------------
+  const VERSION_PLACEHOLDER = '__' + 'VERSION' + '__';
+
   function asHouseId(value, fallback) {
     const s = asString(value, '').trim();
     if (!s) return fallback;
@@ -123,6 +149,18 @@ const HomeConfig = (() => {
   }
 
   /**
+   * Resolve a version string, mapping the unsubstituted build placeholder to
+   * 'dev'. Anything else is passed through trimmed - the value is stamped from
+   * APP_VERSION and is not this module's to validate.
+   */
+  function asVersion(value, fallback) {
+    const s = asString(value, '').trim();
+    if (!s) return fallback;
+    if (s === VERSION_PLACEHOLDER) return fallback;
+    return s;
+  }
+
+  /**
    * Fold a raw config object from any tier onto the built-in defaults.
    * Unknown keys are preserved: a house profile or a future field can ride
    * along without this module needing to know about it.
@@ -131,6 +169,7 @@ const HomeConfig = (() => {
     const src = (raw && typeof raw === 'object') ? raw : {};
     const out = Object.assign({}, src);
 
+    out.version = asVersion(src.version, BUILTIN_DEFAULT.version);
     out.url = asString(src.url, BUILTIN_DEFAULT.url).trim();
     out.fallbackUrl = asString(src.fallbackUrl, BUILTIN_DEFAULT.fallbackUrl).trim();
     out.token = asString(src.token, BUILTIN_DEFAULT.token);
@@ -263,6 +302,65 @@ const HomeConfig = (() => {
   }
 
   // ---------------------------------------------------------------------
+  // stampVersionIntoDom - the non-container half of the version story.
+  //
+  // WHY THIS EXISTS AT ALL. The container path is already correct: the
+  // entrypoint substitutes __VERSION__ everywhere before nginx starts, so a
+  // deployed page never contains a placeholder. This function is for the OTHER
+  // path - a bare checkout served by `python -m http.server`, which is how the
+  // README tells a stranger to try the app, and how every contributor runs it.
+  //
+  // Without it that reader sees a badge reading literally "v__VERSION__".
+  // Nothing is broken - it is one consistent cache key across all six script
+  // tags - but it looks like a build that failed, and a public repo's first
+  // impression is worth more than the four lines this costs.
+  //
+  // WHAT IT DELIBERATELY DOES NOT DO. It does not touch the ?v= query strings.
+  // By the time this runs the browser has already requested those URLs;
+  // rewriting them would force a second fetch of every asset to change a
+  // cache key that was already doing its job. The placeholder is a valid
+  // cache key - it just is not a pretty one, and only the visible badge is
+  // seen by a human.
+  //
+  // It is also a no-op on a stamped page: the text only changes if the
+  // placeholder is actually still there. So the container path is untouched,
+  // and this cannot itself become a source of drift - it has no version of
+  // its own, it only ever writes the one value the config chain resolved.
+  // ---------------------------------------------------------------------
+  function stampVersionIntoDom(version) {
+    if (typeof document === 'undefined' || !version) return;
+
+    const apply = () => {
+      try {
+        const status = document.getElementById('ha-status');
+        if (!status) return;
+        // Walk the text nodes rather than matching a selector or a class: the
+        // badge is an unlabelled <span> inside #ha-status and giving this
+        // function a structural dependency on that markup would make an
+        // unrelated edit to index.html silently disable it.
+        const walker = document.createTreeWalker(status, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          if (node.nodeValue && node.nodeValue.indexOf(VERSION_PLACEHOLDER) !== -1) {
+            node.nodeValue = node.nodeValue.split(VERSION_PLACEHOLDER).join(version);
+          }
+        }
+      } catch (e) {
+        // Cosmetic only. A failure here must never affect the app.
+      }
+    };
+
+    // config-loader.js is a blocking script in <head>-order terms but the
+    // badge markup sits above it in the body, so it is normally present
+    // already. readyState is checked anyway rather than assumed.
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', apply, { once: true });
+    } else {
+      apply();
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // The resolver
   // ---------------------------------------------------------------------
 
@@ -350,8 +448,12 @@ const HomeConfig = (() => {
     console.info(
       '[HomeConfig] configuration source: ' + source +
       ' (' + sourceDetail + ')  house=' + config.house +
+      '  version=' + config.version +
       '  homeAssistant=' + (config.enabled ? 'enabled' : 'disabled')
     );
+
+    // Repair an unstamped badge on the non-container path. No-op otherwise.
+    stampVersionIntoDom(config.version);
 
     return config;
   }
