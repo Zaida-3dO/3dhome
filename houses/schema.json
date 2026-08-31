@@ -1,0 +1,568 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Zaida-3dO/3dHome/houses/schema.json",
+  "title": "3dHome house profile",
+  "description": "Schema for a 3dHome house profile. A profile is a directory (houses/<id>/) containing two files:\n\n  geometry.json — the physical model of the house (rooms, walls, doors, lights, materials, coordinate transform). Shareable: it describes shapes, not accounts.\n  rooms.json    — the Home Assistant entity binding (room id -> entity ids) and HA connection defaults. Personal: it names your devices.\n\nThe split is deliberate. Geometry can be published, forked and diffed; the entity map is an inventory of what is installed in someone's home and belongs in runtime config, never in a public repo. Both files validate against this one schema: pick the branch with the `kind` discriminator ('geometry' or 'rooms').\n\nJOIN KEY: `room id`. Every room in geometry.rooms is keyed by a stable, lowercase, snake_case id. That id — NOT the display label — is what doors reference (door.room), what lights reference (light.room), what rooms.json binds entities to, what the overlays label, and what the engine uses for its per-room lookups. Renaming a room's `label` is free; renaming its id breaks every reference to it. Choose ids once and keep them.\n\nUNITS: see the `units` field on geometry. The profile is authored in CENTIMETRES in the plan's own coordinate space (the same numbers a Sweet Home 3D export produces), and the engine converts to metres at render time via `coordinateTransform`. Heights and thicknesses are also centimetres, for one consistent unit throughout the file. See docs/house-profile.md.",
+
+  "oneOf": [
+    { "$ref": "#/$defs/geometryProfile" },
+    { "$ref": "#/$defs/roomsProfile" }
+  ],
+
+  "$defs": {
+
+    "roomId": {
+      "type": "string",
+      "title": "Room id — the stable join key",
+      "description": "The identity of a room across every file in the project. Referenced by door.room, light.room, rooms.json's `rooms` map, the debug overlays and the engine's per-room state. Stable forever: change `label` for display, never this. Lowercase letters, digits and underscores only.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+
+    "hexColor": {
+      "type": "string",
+      "description": "An sRGB colour as a CSS hex string, e.g. \"#ece9e1\". Authored as a string (not a JS 0x number) so the file stays valid JSON and is greppable/diffable.",
+      "pattern": "^#[0-9a-fA-F]{6}$"
+    },
+
+    "point2d": {
+      "type": "array",
+      "description": "A point in plan coordinates, [x, y], in the profile's unit (centimetres). x increases EAST, y increases SOUTH — the Sweet Home 3D convention, kept so exported numbers can be used verbatim.",
+      "items": { "type": "number" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+
+    "texture": {
+      "type": "object",
+      "title": "A texture image reference",
+      "description": "Path is resolved RELATIVE TO THE HOUSE PROFILE DIRECTORY (houses/<id>/), never to the page or to src/. So \"textures/monstera.png\" means houses/<id>/textures/monstera.png. This keeps a profile self-contained and copy-pasteable: a house directory plus its textures is the whole unit. Absolute URLs and paths escaping the profile dir ('..') are rejected — a profile must not be able to point the engine at arbitrary hosts.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Relative path from the house profile directory to the image file.",
+          "pattern": "^(?!/)(?!.*\\.\\.)(?!https?:)[^\\\\]+\\.(png|jpg|jpeg|webp)$"
+        },
+        "fit": {
+          "type": "string",
+          "description": "How the image maps onto the surface. 'stretch' maps one copy of the image across the whole target face (a mural — one continuous picture). 'tile' repeats it (a pattern), using `repeatMetres`.",
+          "enum": ["stretch", "tile"],
+          "default": "stretch"
+        },
+        "repeatMetres": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Only meaningful when fit='tile': real-world size, in metres, that one copy of the image covers. E.g. 1.2 = one copy per 1.2 m.",
+          "default": 1
+        },
+        "credit": {
+          "type": "string",
+          "description": "Optional attribution/licence note for the image. Fill this in for a public profile — a shared house profile carrying an unlicensed photo is a licensing problem."
+        }
+      },
+      "required": ["path"],
+      "additionalProperties": false
+    },
+
+    "coordinateTransform": {
+      "type": "object",
+      "title": "Plan-space to world-space transform — PER HOUSE, never a constant",
+      "description": "Maps this house's plan coordinates onto the renderer's world axes. It MUST live in the profile: every Sweet Home 3D export has its own arbitrary origin (wherever the author happened to start drawing), so hardcoding one house's offsets in the engine makes every other house render off-centre or off-scale. The engine applies:\n\n    worldX = (planX - originX) * scale\n    worldZ = (planY - originY) * scale\n\nwith world +X = East and world +Z = South. `scale` converts the profile's unit to metres. Derive originX/originY by picking any convenient point in your plan (a corner of the building, or the plan's own bounding-box centre) — the choice only shifts where the model sits around the world origin, which matters for camera framing and for the ground/sky rig.",
+      "properties": {
+        "originX": {
+          "type": "number",
+          "description": "Plan-space x that becomes world x = 0."
+        },
+        "originY": {
+          "type": "number",
+          "description": "Plan-space y that becomes world z = 0."
+        },
+        "scale": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Multiplier from the profile's unit to metres. For centimetre-authored profiles this is 0.01.",
+          "default": 0.01
+        },
+        "planAxes": {
+          "type": "string",
+          "description": "Documents which compass directions the plan's +x/+y point at, so a plan exported with a different convention can be recognised rather than silently rendered mirrored. Only 'x_east_y_south' is supported today; the field exists so a future importer can detect and convert the others instead of guessing.",
+          "enum": ["x_east_y_south"],
+          "default": "x_east_y_south"
+        }
+      },
+      "required": ["originX", "originY", "scale"],
+      "additionalProperties": false
+    },
+
+    "room": {
+      "type": "object",
+      "title": "A room",
+      "properties": {
+        "id": { "$ref": "#/$defs/roomId" },
+        "label": {
+          "type": "string",
+          "description": "Human-readable name shown in tooltips and the controls panel, e.g. \"Living Room\". Free to change at any time; it is never a join key.",
+          "minLength": 1
+        },
+        "polygon": {
+          "type": "array",
+          "description": "The room's floor outline as an ordered ring of plan-space points. Do NOT repeat the first point at the end — the ring closes implicitly. Non-rectangular rooms (L-shapes, notches around pillars) are expressed here directly; this is why the format is a polygon rather than a bounding rectangle. The engine derives the room's bounding box, centroid and area from this.",
+          "items": { "$ref": "#/$defs/point2d" },
+          "minItems": 3
+        },
+        "areaSqm": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "OPTIONAL declared floor area in m². Omit it and the engine computes the area from `polygon` by the shoelace formula — that is the recommended default, because a hand-typed area silently goes stale the moment the polygon moves. Supply it only when the authoritative figure differs from the polygon (e.g. a surveyed/legal area that excludes a chimney breast the polygon includes); the engine then displays yours and may warn if the two disagree by more than a few percent."
+        },
+        "floorColor": {
+          "$ref": "#/$defs/hexColor",
+          "description": "Base floor colour for this room, used as a tint under the floor material and as the fallback when no texture loads."
+        },
+        "floorMaterial": {
+          "type": "string",
+          "description": "Which built-in procedural floor treatment the engine generates for this room. 'tile' and 'wood' are canvas-generated at runtime (no image file needed); 'carpet' is a noise-based pile. 'none' draws no visible floor for this room (useful when a single house-wide slab already covers it).",
+          "enum": ["tile", "wood", "carpet", "none"],
+          "default": "tile"
+        },
+        "rug": {
+          "type": "object",
+          "description": "An optional rug laid on top of the floor. Its outline is independent of the room polygon on purpose: a rug typically laps over pillars and stops short of doorways, so it is neither the room shape nor a plain rectangle.",
+          "properties": {
+            "polygon": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/point2d" },
+              "minItems": 3,
+              "description": "Rug outline in plan coordinates. Omit to lay a rug over the room's own bounding box inset by `inset`."
+            },
+            "inset": {
+              "type": "number",
+              "minimum": 0,
+              "description": "When `polygon` is absent: shrink the room's bounding box by this many centimetres on every side to get the rug.",
+              "default": 30
+            },
+            "color": { "$ref": "#/$defs/hexColor" },
+            "texture": { "$ref": "#/$defs/texture" },
+            "notes": {
+              "type": "string",
+              "description": "Why this rug's outline is what it is. Worth filling in: a rug polygon almost always differs from the room polygon for a physical reason (it laps over a pillar, it stops short of a doorway), and without the note the next editor 'corrects' it back to the room shape."
+            }
+          },
+          "additionalProperties": false
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-text note for whoever edits this profile next. Never rendered."
+        }
+      },
+      "required": ["id", "label", "polygon"],
+      "additionalProperties": false
+    },
+
+    "wall": {
+      "type": "object",
+      "title": "A wall segment",
+      "description": "One straight run of wall, given by its CENTRELINE endpoints in plan coordinates plus a thickness. Interior and exterior walls are the SAME shape of record — they differ only by the `exterior` flag, which controls fade-away behaviour when the camera looks into the house from outside. (The reference implementation this schema was derived from kept a single WALLS array with an `outer: 0|1` field and derived its exterior set from that; keeping one list avoids the class of bug where a wall is edited in one array and not the other.)\n\nPillars and stub returns are ordinary walls: a short segment with a large thickness.",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Permanent wall number. This is what a human says out loud (\"wall 22 has the wallpaper\") and what the wall-debug overlay prints, so it must NOT be derived from array position: deleting a wall would then silently renumber every later one. Retire an id when its wall is removed and never reuse it; mint new ids above `walls.highestIdEverAssigned`."
+        },
+        "start": { "$ref": "#/$defs/point2d", "description": "Centreline start point." },
+        "end": { "$ref": "#/$defs/point2d", "description": "Centreline end point." },
+        "thickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Wall thickness in centimetres, measured perpendicular to the centreline. Defaults to `defaults.wallThickness` when omitted."
+        },
+        "exterior": {
+          "type": "boolean",
+          "description": "true = part of the building's outer shell. Exterior walls participate in the camera-facing fade so you can see inside; interior walls stay solid. Note this is a RENDERING role, not a structural claim — a pillar in the middle of a room may be marked exterior purely to make it fade with the shell behind it, or interior to keep it always solid.",
+          "default": false
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Wall height in centimetres. Defaults to `defaults.wallHeight`. Override for a half-height partition or a parapet."
+        },
+        "faceTexture": {
+          "type": "object",
+          "description": "Applies wallpaper / a mural to ONE face of this wall. Which face is named by `side`.",
+          "properties": {
+            "side": {
+              "type": "string",
+              "description": "Which face of the wall carries the texture, as a compass direction. The engine resolves this against the wall's own orientation, so you name the side the way you would in the room ('the north face'), not in the renderer's local axes.",
+              "enum": ["north", "south", "east", "west"]
+            },
+            "texture": { "$ref": "#/$defs/texture" },
+            "clipToRoom": {
+              "$ref": "#/$defs/roomId",
+              "description": "Optional: paper only the portion of this wall face that borders the named room. A long wall often runs past several rooms while the wallpaper covers only one of them; without this the image stretches across the whole run."
+            }
+          },
+          "required": ["side", "texture"],
+          "additionalProperties": false
+        },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "start", "end"],
+      "additionalProperties": false
+    },
+
+    "door": {
+      "type": "object",
+      "title": "A door",
+      "description": "A door is an opening in a wall plus a swinging leaf. Position is given the way a floor plan gives it — 'in this wall, this far along, this wide' — rather than as a free-floating 3D transform, so it stays attached when the wall moves.\n\nHINGE AND SWING ARE SEPARATE AND BOTH REQUIRED. `hinge` says which END of the opening the leaf is attached to; `swing` says which SIDE of the wall it opens into. Those are independent: the same hinge end with the opposite swing gives a door that opens the other way, which is what makes it hit a cupboard instead of clearing it. Both are compass directions, so they can be read straight off an annotated plan.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable identifier for this door, e.g. \"front_door\". Used by the door-debug overlay and by anything that animates a specific door.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "label": { "type": "string", "description": "Display name, e.g. \"Front door\"." },
+        "wall": {
+          "type": "integer",
+          "description": "The `id` of the wall this door sits in. Referencing the wall by id (rather than re-stating the wall's coordinate) means moving a wall carries its doors with it, and a door in a deleted wall is a detectable error rather than a door floating in space.",
+          "minimum": 1
+        },
+        "centre": {
+          "type": "number",
+          "description": "Position of the opening's centre along the wall, in centimetres, measured in plan coordinates on the wall's own long axis (x for an east-west wall, y for a north-south wall). This is the number a plan gives you directly."
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Leaf width in centimetres (the clear opening, excluding the frame reveal)."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Leaf height in centimetres. Defaults to `defaults.doorHeight`."
+        },
+        "hinge": {
+          "type": "string",
+          "description": "Which END of the opening carries the hinges, as a compass direction. For an east-west wall use 'east' or 'west'; for a north-south wall use 'north' or 'south'. Getting this wrong mirrors the door about its centre.",
+          "enum": ["north", "south", "east", "west"]
+        },
+        "swing": {
+          "type": "string",
+          "description": "Which SIDE of the wall the leaf opens into, as a compass direction — i.e. which room it swings into. Must be perpendicular to `hinge`: an east-west wall hinges east/west and swings north/south, and vice versa. A validator should reject a parallel pair, because it is always an authoring mistake and renders as a leaf embedded in its own wall.",
+          "enum": ["north", "south", "east", "west"]
+        },
+        "maxOpenDegrees": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 180,
+          "description": "How far this door can open, in degrees — PER DOOR, because doors genuinely differ: a front or internal room door swings ~90°, while a small cupboard or utility door is stopped by an adjacent wall or its own return at roughly 25–30°. This is the *intended* maximum; the engine may reduce it further at load time if two open leaves would collide, but it will never raise it above this value. Set it from the real door, not from a category default.",
+          "default": 90
+        },
+        "kind": {
+          "type": "string",
+          "description": "What sort of door this is. Purely descriptive — it does NOT set the open angle (that is `maxOpenDegrees`, always explicit) — but it lets the engine style the leaf (a front door gets an exterior finish) and lets a collision solver decide who yields: when two leaves clash, a 'standard' door gives way before a 'cupboard' one.",
+          "enum": ["standard", "front", "cupboard", "sliding", "opening"],
+          "default": "standard"
+        },
+        "room": {
+          "$ref": "#/$defs/roomId",
+          "description": "The room this door BELONGS TO for control purposes — the room whose door-open slider drives it. Usually the room it opens into. A door between two rooms belongs to exactly one of them; pick the one a person would name when asked 'which room's door is this?'. Must be an id present in `rooms`."
+        },
+        "restOpenFraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "How far open this door sits by default, as a fraction of its solved maximum. 0 = closed, 1 = fully open. Defaults to `defaults.doorRestOpenFraction`."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "description": "Leaf colour. Defaults to `materials.doorSlabColor`. Set per-door for a front door in a different finish from the internal ones."
+        },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "label", "wall", "centre", "width", "hinge", "swing", "maxOpenDegrees", "room"],
+      "additionalProperties": false
+    },
+
+    "lightFixture": {
+      "type": "object",
+      "title": "A light fixture group within a room",
+      "description": "One controllable group of lights in a room — the thing that maps 1:1 to a Home Assistant light entity. A room typically has a 'main' group and may have others.\n\nThe `channel` field is the join to rooms.json: geometry says WHERE the bedroom's ambient lights are, rooms.json says WHICH entity switches them. The pair (room id, channel) is the composite key.\n\nFixture POSITIONS are explicit here. The reference implementation hardcoded them per-room-id inside the renderer (a chain of `if (id === \"living_room\")` blocks placing downlights at literal coordinates), which is exactly what makes it another person's-house-only. Listing positions as data is the single biggest thing that makes the engine reusable.",
+      "properties": {
+        "channel": {
+          "type": "string",
+          "description": "Which lighting channel this group is. 'main' is the room's primary ceiling light. 'ambient' is indirect/accent lighting (strips, cove, sconces). Anything else is a named special — the reference house has a 'galaxy' star projector in the bedroom — and is treated as its own independently-switchable group. Must be unique within a room.",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "label": {
+          "type": "string",
+          "description": "Display name for this group, e.g. \"Bedroom Ambience\"."
+        },
+        "fixtureType": {
+          "type": "string",
+          "description": "The visible fixture the engine draws at each position. 'downlight' = flush ceiling disc; 'spot' = surface-mounted spot; 'pendant' = hanging bulb; 'strip' = a linear LED run (uses `size`); 'bulb' = a bare E27-style bulb; 'projector' = a special effect emitter (the galaxy light); 'none' = light with no visible fixture geometry.",
+          "enum": ["downlight", "spot", "pendant", "strip", "bulb", "projector", "none"],
+          "default": "downlight"
+        },
+        "colorTemperatureK": {
+          "type": "integer",
+          "minimum": 1500,
+          "maximum": 10000,
+          "description": "Nominal colour temperature in kelvin, used to tint the emitted light when HA does not report one.",
+          "default": 2700
+        },
+        "positions": {
+          "type": "array",
+          "description": "Where the individual fixtures in this group sit. Each entry is an explicit position, so a five-downlight kitchen lists five entries. If omitted, the engine falls back to auto-placing `count` fixtures on a grid over the room polygon — convenient when starting out, but the result is generic; list positions once you care how it looks.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "$ref": "#/$defs/point2d",
+                "description": "Plan-space [x, y] of this fixture."
+              },
+              "heightCm": {
+                "type": "number",
+                "description": "Height above this room's floor, in centimetres. Omit for a ceiling fixture (the engine places it just below the ceiling). Needed for a wall-mounted strip or an under-desk light."
+              },
+              "label": {
+                "type": "string",
+                "description": "What this individual fixture is, in the owner's own words — \"under the left desk\", \"curtain cornice\", \"behind TV\". Descriptive only; it is what makes a positions list readable a year later."
+              },
+              "size": {
+                "type": "array",
+                "items": { "type": "number" },
+                "minItems": 3,
+                "maxItems": 3,
+                "description": "For fixtureType 'strip': the emitter's [length, height, depth] in centimetres, so a 2 m cornice run reads as a line rather than a point."
+              }
+            },
+            "required": ["at"],
+            "additionalProperties": false
+          }
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many fixtures to auto-place when `positions` is absent. Ignored when `positions` is given."
+        }
+      },
+      "required": ["channel"],
+      "additionalProperties": false
+    },
+
+    "roomLights": {
+      "type": "object",
+      "description": "The lighting groups for one room.",
+      "properties": {
+        "room": {
+          "$ref": "#/$defs/roomId",
+          "description": "Which room these fixtures are in. Must be an id present in `rooms`."
+        },
+        "fixtures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/lightFixture" },
+          "minItems": 1
+        }
+      },
+      "required": ["room", "fixtures"],
+      "additionalProperties": false
+    },
+
+    "cameraPreset": {
+      "type": "object",
+      "description": "A named camera pose, in orbit coordinates around the model's centre.",
+      "properties": {
+        "azimuth": {
+          "type": "number",
+          "description": "Orbit angle in radians around the vertical axis. 0 puts the camera on the +X (east) side looking west; π/2 puts it on the +Z (south) side looking north."
+        },
+        "polar": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 3.15,
+          "description": "Angle from straight-up, in radians. Near 0 is top-down (use a small non-zero value — an exactly-vertical lookAt is degenerate); π/2 is eye level."
+        },
+        "distance": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Camera distance from the target, in METRES (world units, not plan centimetres) — this is a camera property, not a plan measurement."
+        },
+        "target": {
+          "$ref": "#/$defs/point2d",
+          "description": "Optional plan-space point to orbit around. Defaults to the centre of the footprint computed from the walls, which is the right answer for almost every house."
+        }
+      },
+      "required": ["azimuth", "polar", "distance"],
+      "additionalProperties": false
+    },
+
+    "geometryProfile": {
+      "type": "object",
+      "title": "geometry.json — the physical house",
+      "properties": {
+        "kind": { "const": "geometry" },
+        "schemaVersion": {
+          "type": "string",
+          "description": "Version of THIS schema that the profile was written against, as MAJOR.MINOR. The engine refuses a profile whose MAJOR it does not know, and may run a migration for an older MINOR. Bump MINOR for additive changes, MAJOR for anything that changes the meaning of an existing field.",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "id": {
+          "type": "string",
+          "description": "Profile id. Should match the directory name under houses/, because that is what HOME3D_HOUSE / ?house= select.",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "name": { "type": "string", "description": "Human-readable name of the house, shown in the title overlay." },
+        "description": { "type": "string" },
+        "units": {
+          "type": "string",
+          "description": "The unit every plan-space number in this file is expressed in. Only 'cm' is supported, deliberately: Sweet Home 3D exports centimetres, the reference data is centimetres, and allowing a second unit would double the number of places a conversion can be forgotten. Metres appear in exactly two places — camera `distance`, and the world-space output of `coordinateTransform` — and both say so explicitly.",
+          "enum": ["cm"],
+          "default": "cm"
+        },
+        "coordinateTransform": { "$ref": "#/$defs/coordinateTransform" },
+        "defaults": {
+          "type": "object",
+          "description": "House-wide defaults. Every field here is overridable on the individual room/wall/door; these exist so a profile does not have to repeat the same number a hundred times.",
+          "properties": {
+            "wallHeight": { "type": "number", "exclusiveMinimum": 0, "description": "Default wall height, cm.", "default": 250 },
+            "wallThickness": { "type": "number", "exclusiveMinimum": 0, "description": "Default wall thickness, cm.", "default": 10 },
+            "doorHeight": { "type": "number", "exclusiveMinimum": 0, "description": "Default door leaf height, cm.", "default": 203 },
+            "doorThickness": { "type": "number", "exclusiveMinimum": 0, "description": "Door slab thickness, cm.", "default": 4 },
+            "doorOpeningHeight": { "type": "number", "exclusiveMinimum": 0, "description": "Height of the hole cut in the wall, cm. Slightly more than doorHeight; the wall above remains as a lintel.", "default": 207 },
+            "doorFrameReveal": { "type": "number", "minimum": 0, "description": "Frame reveal each side of the opening, cm.", "default": 8 },
+            "doorRestOpenFraction": { "type": "number", "minimum": 0, "maximum": 1, "description": "Default at-rest openness as a fraction of each door's solved maximum.", "default": 0.2 },
+            "ceilingHeight": { "type": "number", "exclusiveMinimum": 0, "description": "Floor-to-ceiling height, cm. Defaults to wallHeight." }
+          },
+          "additionalProperties": false
+        },
+        "materials": {
+          "type": "object",
+          "description": "House-wide surface finishes.",
+          "properties": {
+            "wallColor": {
+              "$ref": "#/$defs/hexColor",
+              "description": "Interior wall paint colour. If you know your actual paint, put its hex here; if you know only the product name, record that in `wallPaintName` and approximate the hex."
+            },
+            "wallPaintName": {
+              "type": "string",
+              "description": "The real product name of the wall paint, e.g. \"<Brand> Vinyl Matt, Soft White\". Documentation only — the engine renders `wallColor`. Retail paints rarely publish authoritative hex values, so keeping the name alongside the approximation records what the approximation is *of*."
+            },
+            "ceilingColor": { "$ref": "#/$defs/hexColor" },
+            "doorSlabColor": { "$ref": "#/$defs/hexColor", "description": "Default colour for internal door leaves." },
+            "exteriorColor": { "$ref": "#/$defs/hexColor", "description": "Outward-facing colour of the exterior shell." }
+          },
+          "additionalProperties": false
+        },
+        "site": {
+          "type": "object",
+          "description": "Where the house is, for the daylight rig ONLY. The engine derives sunrise/sunset and sun angle from latitude and the day of year, so the model lights up and goes dark in step with the real day.\n\nPRIVACY: this is the one field in geometry.json that can locate a building. Give a city-level latitude, not a rooftop one — the sun rig cannot tell the difference, and a shared profile then carries no address. Omit the block entirely for a fixed neutral daylight.",
+          "properties": {
+            "latitude": { "type": "number", "minimum": -90, "maximum": 90, "description": "Degrees north. City-level precision is enough and is what you should publish." },
+            "longitude": { "type": "number", "minimum": -180, "maximum": 180, "description": "Degrees east. Used to offset solar noon from 12:00 UTC. Omit if the house is near the prime meridian." },
+            "locationLabel": { "type": "string", "description": "Free-text label, e.g. \"London, UK\". Keep it as vague as the latitude." },
+            "northOffsetDegrees": {
+              "type": "number",
+              "description": "Rotation from plan-north to true north, in degrees clockwise. A plan is rarely drawn with its top facing true north; without this the sun comes through the wrong windows. 0 means plan +y (south in plan terms) really is south.",
+              "default": 0
+            }
+          },
+          "required": ["latitude"],
+          "additionalProperties": false
+        },
+        "rooms": {
+          "type": "array",
+          "description": "Every room in the house. Order is not significant.",
+          "items": { "$ref": "#/$defs/room" },
+          "minItems": 1
+        },
+        "walls": {
+          "type": "object",
+          "description": "The wall set. Exterior and interior walls live in the SAME list, distinguished by each wall's `exterior` flag — see the note on `wall`.",
+          "properties": {
+            "highestIdEverAssigned": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The largest wall `id` that has ever existed in this profile, including ids since retired. Mint every new wall above this number and bump it. Without this record, a deleted wall's id gets recycled and every human reference to 'wall N' — screenshots, notes, bug reports — silently points at a different wall."
+            },
+            "segments": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/wall" },
+              "minItems": 1
+            }
+          },
+          "required": ["segments"],
+          "additionalProperties": false
+        },
+        "doors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/door" },
+          "default": []
+        },
+        "lights": {
+          "type": "array",
+          "description": "Lighting, grouped by room. A room with no entry simply has no lights.",
+          "items": { "$ref": "#/$defs/roomLights" },
+          "default": []
+        },
+        "cameraPresets": {
+          "type": "object",
+          "description": "OPTIONAL per-house camera overrides, keyed by preset name ('top', 'iso', 'front', 'se', …).\n\nWHY OPTIONAL RATHER THAN REQUIRED: the useful presets are *directions* — top-down, the four corner three-quarter views, the four elevations — and a direction is house-independent. What genuinely varies is only the framing distance, and the engine can compute that from the footprint it already derives from the walls (fit the bounding box to the field of view). So the engine ships the direction set as defaults and auto-fits the distance; a house profile that says nothing about cameras still gets ten sensible presets, which is what a stranger modelling their first house needs.\n\nIt is not purely an engine concern either, though: a long thin house wants its 'iso' angle rotated to look down its length, and a house with a courtyard may want a target that is not the footprint centre. So the profile CAN override any preset, wholly or in part — which is why this is a per-house field that defaults to empty rather than a constant in the engine.\n\nEach entry may be a full preset or a partial one; keys absent from a partial fall back to the engine default for that name.",
+          "additionalProperties": { "$ref": "#/$defs/cameraPreset" },
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "default": {}
+        }
+      },
+      "required": ["kind", "schemaVersion", "id", "name", "coordinateTransform", "rooms", "walls"],
+      "additionalProperties": false
+    },
+
+    "roomsProfile": {
+      "type": "object",
+      "title": "rooms.json — the Home Assistant binding",
+      "description": "Maps room ids and light channels onto Home Assistant entity ids, and carries the HA connection defaults.\n\nThis file is kept OUT of geometry.json on purpose. Geometry describes shapes and is safe to publish, fork and diff; this file is an inventory of the devices installed in someone's home, and the URL of their Home Assistant. Keeping them apart means a house model can be shared without also handing over the device list, and the entity map can live in runtime config (bind-mounted, env-generated, gitignored) while the geometry stays in the repo.\n\nThe access token is NOT in this file and must never be — it comes from runtime config only.",
+      "properties": {
+        "kind": { "const": "rooms" },
+        "schemaVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+        "house": {
+          "type": "string",
+          "description": "The `id` of the geometry profile these bindings belong to. Guards against pairing one house's geometry with another's entity map.",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "homeAssistant": {
+          "type": "object",
+          "description": "Connection defaults. Anything here can be overridden at runtime; a public profile should leave `url`/`fallbackUrl` unset rather than committing a hostname.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false, "description": "Whether to attempt a Home Assistant connection at all. false renders the house as a static model, which is the right default for a demo profile." },
+            "url": { "type": "string", "format": "uri", "description": "Base URL of the Home Assistant instance. Prefer supplying this via runtime config: a hostname in a committed file discloses infrastructure." },
+            "fallbackUrl": { "type": "string", "format": "uri", "description": "Alternative URL tried when `url` is unreachable (e.g. a VPN hostname). Same caution applies, more so." },
+            "wsReconnectMs": { "type": "integer", "minimum": 100, "default": 5000, "description": "Delay before retrying a dropped websocket." },
+            "pollIntervalMs": { "type": "integer", "minimum": 100, "default": 5000, "description": "REST poll interval used when the websocket is unavailable." }
+          },
+          "additionalProperties": false
+        },
+        "rooms": {
+          "type": "object",
+          "description": "Room id -> channel -> entity ids. The room ids MUST exist in the paired geometry profile's `rooms`, and each channel SHOULD match a `lights[].fixtures[].channel` there — a channel with entities but no fixtures switches an entity that has nothing to draw, and fixtures with no entities render as always-off. A validator should report both as warnings rather than errors, since a half-wired house is a legitimate work-in-progress state.",
+          "propertyNames": { "$ref": "#/$defs/roomId" },
+          "additionalProperties": {
+            "type": "object",
+            "description": "Channel -> list of Home Assistant entity ids. Several entities on one channel are switched together as a group.",
+            "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "description": "A Home Assistant entity id, e.g. \"light.kitchen_ceiling\".",
+                "pattern": "^[a-z_]+\\.[a-z0-9_]+$"
+              },
+              "minItems": 1
+            }
+          }
+        }
+      },
+      "required": ["kind", "schemaVersion", "house", "rooms"],
+      "additionalProperties": false
+    }
+  }
+}
