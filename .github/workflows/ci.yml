@@ -116,6 +116,12 @@ jobs:
             node --check "$f"
           done < <(find src scripts -type f -name '*.js' -not -path '*/vendor/*' -print0 2>/dev/null)
           echo "Checked $found JS file(s)."
+      - name: Config-loader behaviour tests
+        run: |
+          # Asserts the ?house= path-traversal guard and the ?haUrl= semantics
+          # the Home Assistant embed depends on. No framework, no install.
+          set -euo pipefail
+          node scripts/test-config-loader.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

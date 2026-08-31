@@ -263,6 +263,41 @@ const HomeConfig = (() => {
   }
 
   // ---------------------------------------------------------------------
+  // Tier 1 - the ?house= URL parameter
+  //
+  // Selects which profile under houses/ to render. Useful for demoing several
+  // houses from one deployment, and for a reviewer who wants a specific
+  // profile without restarting the container to change HOME3D_HOUSE.
+  //
+  // Unlike ?haUrl= this carries no credential, so it is a far smaller surface -
+  // but it DOES become a URL path segment (houses/<id>/geometry.json), so it
+  // goes through asHouseId, which is a path-traversal guard as much as a
+  // validator: a value containing '..' or '/' fails the character class and
+  // falls back rather than escaping the houses/ directory.
+  //
+  // A rejected value falls back to the configured house rather than throwing,
+  // so a mistyped link degrades to the normal view instead of a broken app.
+  // ---------------------------------------------------------------------
+  function readHouseParam() {
+    let raw;
+    try {
+      raw = new URLSearchParams(window.location.search).get('house');
+    } catch (e) {
+      return null;
+    }
+    if (!raw) return null;
+
+    const value = raw.trim();
+    if (!value) return null;
+
+    // asHouseId warns and returns the sentinel when the id is malformed, which
+    // is how an invalid ?house= is distinguished from an absent one.
+    const REJECTED = '__home3d_house_rejected__';
+    const id = asHouseId(value, REJECTED);
+    return id === REJECTED ? null : id;
+  }
+
+  // ---------------------------------------------------------------------
   // Tiers 3 and 4 - fetched JSON
   //
   // A missing file is the NORMAL case for config.json, not an error: most
@@ -433,6 +468,19 @@ const HomeConfig = (() => {
       sourceDetail = 'embedder override - fallbackUrl deliberately not used';
     } else {
       config.haUrlOverride = false;
+    }
+
+    // --- Tier 1: ?house= override, applied last so it wins ---
+    // Independent of ?haUrl=: which house to draw and which Home Assistant to
+    // talk to are separate questions, and an embedder may legitimately set one
+    // without the other.
+    const houseParam = readHouseParam();
+    if (houseParam && houseParam !== config.house) {
+      source = '?house= (over ' + source + ')';
+      sourceDetail = 'house selected by URL parameter';
+      config.house = houseParam;
+    } else if (houseParam) {
+      config.house = houseParam;
     }
 
     config.source = source;

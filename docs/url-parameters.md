@@ -21,6 +21,7 @@ except where noted. Unknown parameters are ignored.
 | [`embed`](#embed) | `1` \| `true` | off | Interactive, page chrome hidden |
 | [`haUrl`](#haurl) | absolute http/https URL | unset | Home Assistant origin override |
 | [`parentOrigin`](#parentorigin) | origin / absolute URL | unset | Pins the embedder allowed to drive the visibility channel |
+| [`house`](#house) | house profile id | `demo` | Which house profile to render |
 | [`rotateSpeed`](#rotatespeed) | float, rad/s | `2π/120` | Preview rotation speed |
 | [`camera`](#camera) | preset name | unset | Initial camera pose |
 | [`shadows`](#shadows) | `auto` \| `low` \| `off` | mode-dependent | Shadow quality |
@@ -124,6 +125,35 @@ Validation (in `src/config-loader.js`, **not** in `index.html` — by the time
   A rejected value logs a warning and is ignored;
 - an unparseable value logs a warning and is ignored;
 - trailing slashes are stripped so callers can concatenate paths predictably.
+
+---
+
+### `house`
+
+`?house=<id>` — the id of a profile directory under `houses/`.
+
+Selects which house to render, overriding `HOME3D_HOUSE` and any `config.json`
+value. Useful for showing several houses from one deployment, and for a reviewer
+who wants a specific profile without restarting the container.
+
+```
+https://home3d.example.com/?house=cottage
+```
+
+It is independent of [`haUrl`](#haurl): which house to draw and which Home
+Assistant to talk to are separate questions, and an embedder may set either
+without the other.
+
+Validation (in `src/config-loader.js`):
+
+- the id must match `[a-z][a-z0-9_-]*` — lowercase, starting with a letter;
+- **this is a path-traversal guard, not only a style rule.** The id becomes a
+  URL path segment (`houses/<id>/geometry.json`), so a value containing `..`,
+  `/` or an encoded slash fails the character class and is rejected;
+- a rejected value logs a warning and falls back to the configured house, so a
+  mistyped link degrades to the normal view rather than a broken app;
+- naming a profile that does not exist is **not** an error here — the house
+  loader reports it and falls back to `demo`.
 
 ---
 
