@@ -218,20 +218,27 @@ const report = {};
 for (const label of Object.keys(TARGETS)) {
   const base = TARGETS[label];
   report[label] = { cams: {}, };
-  let ctx = await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
+  // newContext can itself throw when the browser died since the last target;
+  // guard it the same way the per-camera newPage below is guarded.
+  const newCtx = async () => {
+    try {
+      if (!browser.isConnected()) await freshBrowser();
+      return await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
+    } catch (e) {
+      await freshBrowser();
+      return await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
+    }
+  };
+  let ctx = await newCtx();
   for (const cam of CAMS) {
     // A browser lost since the last capture leaves the context dead too; both
     // are rebuilt before the page that would otherwise throw.
-    if (!browser.isConnected()) {
-      await freshBrowser();
-      ctx = await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
-    }
+    if (!browser.isConnected()) ctx = await newCtx();
     let page;
     try {
       page = await ctx.newPage();
     } catch (e) {
-      await freshBrowser();
-      ctx = await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
+      ctx = await newCtx();
       page = await ctx.newPage();
     }
     // Capture the scene API and the renderer, neither of which the page exposes.

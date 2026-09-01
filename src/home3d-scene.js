@@ -1708,11 +1708,18 @@ const Home3DScene = (() => {
     // The pattern is a warm-neutral grey with fine directional noise, which is
     // what reads as cut pile at the scale a rug is seen from.
     //
-    // The pile is a NEUTRAL mid-grey on purpose: it is the engine's generic
-    // fallback, and a house states the tone it actually wants through its
-    // rug `color`, which multiplies this. Baking one house's tone in here
-    // would make every other house's rug wrong.
-    const PILE_MEAN_RGB = [150, 145, 138];
+    // TONE. The mean is 94,93,87 -- a warm-neutral MID-grey, measured from the
+    // rug photograph this procedural texture replaced. It is deliberately not a
+    // lighter grey: a rug covers a whole room's floor, so its value drives how
+    // the whole room reads, and an earlier lighter pile (150,145,138) lifted
+    // both carpeted rooms visibly against the reference render.
+    //
+    // This is the engine's DEFAULT, not one house's preference. Rugs are dark
+    // relative to a floor, and a renderer's built-in should look like a rug
+    // rather than like an unpainted placeholder. A house that wants a different
+    // tone says so with `rug.color`, and one that wants a specific rug supplies
+    // `rug.texture`; neither has to know this number.
+    const PILE_MEAN_RGB = [94, 93, 87];
     const rugDiffuseTex = (() => {
       const size = 128;
       const c = document.createElement('canvas');
