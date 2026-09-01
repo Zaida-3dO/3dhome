@@ -51,10 +51,22 @@ Useful environment variables:
 
 ## Two things the harness does deliberately
 
-**It waits 7 seconds before every screenshot.** This app renders on demand and
-loads textures asynchronously. A screenshot taken on `load` shows an empty or
-half-built scene, and a previous session filed a bug against exactly that
-artefact. If you shorten the settle, verify against a known-good run first.
+**It waits 90 seconds before every screenshot.** Two separate slow things have
+to finish, and the second is much slower than it looks:
+
+- Textures load asynchronously and the scene renders on demand, so a screenshot
+  taken on `load` shows a half-built scene. A previous session filed a bug
+  against exactly that artefact.
+- Exterior walls ease their opacity toward a camera-facing target at 0.12 per
+  frame, which takes **over a minute** to converge on this scene. Two builds
+  sampled at different points on that curve differ by pixels that belong to
+  neither build. The iso view measured **5.76% mid-ease and 1.82% converged** —
+  and the mid-ease figure looked exactly like a real regression: identical
+  geometry, identical camera pose, identical materials, visibly different
+  picture. Verifying that took an afternoon.
+
+If you shorten `H3D_SETTLE`, re-check a known-good pair first — especially for
+a three-quarter view, where the most wall is in shot and mid-fade.
 
 **It parks the clouds before capturing.** Cloud sprites are positioned with
 `Math.random()` at construction and then drift on `requestAnimationFrame`, so

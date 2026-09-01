@@ -22,7 +22,8 @@ if (!EXE) {
 const OUT = process.env.H3D_OUT || path.join(process.cwd(), '.compare-out');
 const TAG = process.env.H3D_TAG || 'run';
 const CAMS = (process.env.H3D_CAMS || 'top,front,back,east,west,se,sw,ne,nw,iso').split(',');
-const SETTLE = Number(process.env.H3D_SETTLE || 7000);
+// Default settle: long enough for the wall-fade ease to converge (see below).
+const SETTLE = Number(process.env.H3D_SETTLE || 90000);
 const W = 1280, H = 900;
 
 // The two builds to compare. `reference` is whatever you are trying to match
@@ -295,6 +296,22 @@ for (const label of Object.keys(TARGETS)) {
     try {
       await page.goto(url, { waitUntil: 'load', timeout: 90000 });
       await page.waitForTimeout(SETTLE);
+      // SETTLE LONG ENOUGH FOR THE WALL FADE, which is slower than it looks.
+      //
+      // Exterior walls ease their opacity toward a camera-facing target at
+      // 0.12 per frame and take well over a minute to converge on this scene.
+      // Two builds sampled at different points on that curve differ by pixels
+      // that have nothing to do with either build: the iso view measured 5.76%
+      // mid-ease and 1.82% converged, and the mid-ease figure looked exactly
+      // like a real regression -- identical geometry, camera and materials,
+      // visibly different picture. That cost an afternoon; do not shorten
+      // H3D_SETTLE below ~90000 for a three-quarter view without re-checking a
+      // known-good pair first.
+      //
+      // (An in-page poll that waits for the opacities to stop moving would be
+      // tidier and was tried; it returned early and was not worth more time
+      // than the honest fixed wait, which is measured and reproducible.)
+      await page.waitForTimeout(Math.max(0, SETTLE - 7000));
       // Freeze the scene before capturing. The clouds drift on rAF forever, so
       // the page is never idle and the compositor keeps handing the screenshot
       // a moving target — which is what times the capture out under
