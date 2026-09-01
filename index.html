@@ -647,6 +647,16 @@
         Object.keys(house.rooms).length + ' rooms, ' + house.walls.length + ' walls, ' +
         house.doors.length + ' doors.');
 
+      // Show the house's own name. The profile has always carried one and the
+      // heading ignored it, so every house rendered under the generic markup
+      // default no matter what it called itself. textContent, never innerHTML:
+      // the name is profile data, and a profile is a file a user can be sent.
+      if (house.name) {
+        const titleEl = document.getElementById('house-title');
+        if (titleEl) titleEl.textContent = house.name;
+        document.title = house.name;
+      }
+
       // ---- Create scene with correct initial light state ----
 
       const home = Home3DScene.create(container, {
