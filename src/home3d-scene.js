@@ -1042,6 +1042,22 @@ const Home3DScene = (() => {
       return ((span[1] - span[0]) / wallLen) >= 0.9;
     }
 
+    /**
+     * Will the room-clipped overlay pass actually build this wall?
+     *
+     * The two papering passes must partition the papered walls between them:
+     * whatever the overlay will NOT build has to stay with the material array,
+     * or the texture is simply lost. The overlay only handles a partly-fronted
+     * NORTH-SOUTH wall, so an east-west wall keeps the array however little of
+     * it the room fronts — the demo house papers an east-west wall exactly this
+     * way, and routing it to the overlay would have made its texture disappear.
+     */
+    function _overlayPassOwns(wall, roomId) {
+      if (!roomId) return false;
+      if (Math.abs(wall.x1 - wall.x2) >= 0.5) return false;   // east-west: array's
+      return !_roomCoversWholeFace(wall, roomId);
+    }
+
     // wall id -> { faceAxis, url } for every wall the profile papers.
     const WALL_FACE_TEXTURES = {};
     Object.keys(HOUSE.wallFaceTextures).forEach(wid => {
@@ -1061,8 +1077,9 @@ const Home3DScene = (() => {
       // array simultaneously painted the whole wall box, so the image showed up
       // on the far side too. The array cannot express a partial run, so a wall
       // the room only partly fronts is left entirely to the overlay. Wall #25,
-      // whose home_office face IS fronted end to end, keeps the array.
-      if (ft.clipToRoom && !_roomCoversWholeFace(wall, ft.clipToRoom)) return;
+      // whose home_office face IS fronted end to end, keeps the array — as does
+      // any wall the overlay pass would not build at all.
+      if (_overlayPassOwns(wall, ft.clipToRoom)) return;
       const faceAxis = sideToFaceAxis(wall, ft.side);
       if (!faceAxis) {
         console.warn(
