@@ -497,9 +497,17 @@
       //                             soft grounded drop-shadow, ~negligible cost at
       //                             15fps; no 10-cubemap room-light passes)
       //   embed (#3d)    -> 'high' (ALWAYS the full set incl. the 10 room-shadow
-      //                             lights; on-demand rendering keeps it ~free when
-      //                             idle and only goes to 60fps while you move it)
+      //                             lights)
       //   standalone page-> 'auto' (best the device can do when viewed directly)
+      //
+      //   ⚠️ "on-demand rendering keeps it ~free when idle" USED TO BE CLAIMED
+      //   HERE AND IS WRONG ABOUT STARTUP. On-demand rendering does make an
+      //   IDLE popup cheap, but it says nothing about the FIRST frame, and the
+      //   first frame is where the cost is: measured cold on the 10-room house,
+      //   the first room-shadow pass blocks for ~30-45s (10 PointLights x a
+      //   6-face cubemap each = 4,491 draw calls in one frame; every later
+      //   identical frame costs ~30ms). So a cold ?embed=1 open freezes for
+      //   ~40-57s. See docs/perf-cold-start.md.
       const shadows = params.get('shadows') || (isPreview ? 'low' : (isEmbed ? 'high' : 'auto'));
       const fpsParam = parseInt(params.get('fps'), 10);
       const maxFps = Number.isFinite(fpsParam) ? fpsParam : (isPreview ? 15 : 60);

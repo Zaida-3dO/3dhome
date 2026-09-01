@@ -242,10 +242,22 @@ display's full refresh rate forever — a constant GPU furnace.
 | Mode | Default | Meaning |
 |---|---|---|
 | `?preview=true` | `low` | Sun shadow at 512², no room-shadow lights — a soft grounded drop shadow, near-negligible at 15 fps, with no 10-cubemap room-light passes |
-| `?embed=1` | `high` | Always the full set including the 10 room-shadow lights |
+| `?embed=1` | `high` | Always the full set including the 10 room-shadow lights — see the cold-start warning below |
 | standalone | `auto` | The best the device can do when viewed directly |
 
 An explicit `?shadows=` value overrides the mode default in every mode.
+
+> **⚠️ `?embed=1`'s `high` default is expensive on a cold open.** The 10
+> room-shadow lights are 10 six-face cubemaps, and the first frame that renders
+> them blocks for ~30–45 s on a cold GPU shader cache (every later frame costs
+> ~30 ms). A cold `?embed=1` open therefore freezes for roughly 40–57 s on the
+> 10-room house. On a top-tier GPU `high` and `auto` resolve to exactly the same
+> settings, so `high` only differs on mid-tier hardware, where it overrides the
+> tier gate that would otherwise drop the room-shadow lights.
+>
+> `?shadows=low` renders the same house — walls, wallpaper, fixtures and the
+> sun's grounding shadow — with one shadow light instead of eleven, and reaches
+> a drawn scene in ~1.7 s. See [perf-cold-start.md](perf-cold-start.md).
 
 ### `fps`
 

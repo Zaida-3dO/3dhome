@@ -2364,35 +2364,18 @@ const Home3DScene = (() => {
       // add decoration on top of the profile's own.
       decor: (HOUSE.decor || []).concat(Array.isArray(opts.decor) ? opts.decor : []),
     };
-    // ── Progressive first paint ────────────────────────────────────────────
-    // Measured on the real 10-room house: the single most expensive step of a
-    // cold start is the FIRST ren.render(), at ~300-560ms, because three.js
-    // compiles and uploads every program and renders every shadow map in that
-    // one blocking call. Steady-state frames afterwards are 10-22ms.
+    // The shadow configuration this scene was asked for, applied up front.
     //
-    // So: render the first frames with the shadow pass switched OFF (cheap and
-    // correct -- same geometry, same materials, same lights, just no cast
-    // shadows yet), then switch shadows on once the scene is up and let the
-    // shadow maps build on a later frame.
-    //
-    // This is a RAMP, NOT A DOWNGRADE. The end state is byte-for-byte the
-    // configuration the scene would have had anyway: `wantShadows` below is
-    // exactly the old `ren.shadowMap.enabled` expression, and it is restored
-    // after `PROGRESSIVE_FRAMES` rendered frames. Nothing else -- pixel ratio,
-    // antialias, light set, shadow-map size -- is touched, so the image at rest
-    // is unchanged.
-    //
-    // Opt out with progressive:false (the ?shadows= presets are unaffected: a
-    // scene that ends with no shadows simply has nothing to ramp to).
+    // There used to be a "progressive" ramp here that painted the first frames
+    // with the shadow pass off and switched it on afterwards. Measured COLD on
+    // the real 10-room house it was a net LOSS: toggling shadowMap.enabled
+    // invalidates three.js's program cache and forces a full material
+    // recompile (shader compiles 24 -> 36, program links 12 -> 18), and the
+    // settled scene arrived at ~20s with the ramp versus ~14.7s without it.
+    // The expensive part of a cold start is the first room-shadow pass, which
+    // the ramp only delays rather than avoids.
     const wantShadows = quality.sunShadow || quality.roomShadowLights;
-    const progressive = opts.progressive !== false && wantShadows;
-    // Frames to paint before turning the shadow pass on. 2 is enough to get a
-    // complete, correct image on screen (frame 1 compiles the programs, frame 2
-    // is already cheap) without the ramp being perceptible.
-    const PROGRESSIVE_FRAMES = 2;
-    let framesRendered = 0;
-    let shadowsRamped = !progressive;
-    ren.shadowMap.enabled = progressive ? false : wantShadows;
+    ren.shadowMap.enabled = wantShadows;
     console.info(
       `[Home3DScene] Quality tier=${tier} ` +
       `(MAX_FRAGMENT_UNIFORM_VECTORS=${maxFragU}) shadows=${shadows} maxFps=${maxFps || 'uncapped'}. ` +
@@ -2423,6 +2406,37 @@ const Home3DScene = (() => {
     let transitionsActive = true;  // wall/ceiling opacity still easing toward target
     function requestRender() { needsRender = true; }
     function wake(ms) { wakeUntil = Math.max(wakeUntil, performance.now() + (ms || 0)); needsRender = true; }
+
+    // ── Shader precompile, off the critical path ───────────────────────────
+    // three.js builds a program the first time a material is drawn, and the
+    // driver finishes the link lazily -- the stall surfaces later, when three
+    // reads the program back (its info log / uniforms / attributes). Measured
+    // cold on the real house that is one frame blocking for tens of seconds.
+    //
+    // renderer.compileAsync() does the same work ahead of time, polling
+    // program.isReady() via KHR_parallel_shader_compile instead of blocking on
+    // the driver, and finishes in ~2.5s. The programs built are the same ones,
+    // from the same materials, so NOTHING about the rendered image changes --
+    // only when the work happens.
+    //
+    // Note this is an INSTANCE method in r160; WebGLRenderer.prototype
+    // .compileAsync is undefined, so feature-detect on `ren`, not the prototype.
+    if (typeof ren.compileAsync === 'function') {
+      // Shadow programs are a separate set from the beauty-pass ones, so make
+      // sure the precompile covers them too when this scene uses shadows.
+      const shadowWasEnabled = ren.shadowMap.enabled;
+      ren.shadowMap.enabled = wantShadows;
+      Promise.resolve(ren.compileAsync(scene, cam))
+        .catch((e) => console.warn('[Home3DScene] shader precompile failed; ' +
+          'falling back to compiling on first render.', e))
+        .then(() => {
+          ren.shadowMap.enabled = shadowWasEnabled;
+          // REQUIRED: this scene renders on demand, so without an explicit
+          // repaint request nothing draws after the precompile resolves and
+          // the canvas stays blank.
+          requestRender();
+        });
+    }
 
     // Light state — one entry per room, one sub-entry per channel the profile
     // declares for it. A room with no 'main' channel still gets a main entry so
@@ -2857,19 +2871,6 @@ const Home3DScene = (() => {
       transitionsActive = animating;
       ren.render(scene, cam);
 
-      // Progressive ramp: once the first frames are on screen, restore the full
-      // shadow configuration this scene was asked for. Runs exactly once, and
-      // requests one more frame so the newly enabled shadow pass is painted.
-      if (!shadowsRamped && ++framesRendered >= PROGRESSIVE_FRAMES) {
-        shadowsRamped = true;
-        ren.shadowMap.enabled = wantShadows;
-        ren.shadowMap.needsUpdate = true;
-        // Materials compiled without the shadow defines must be recompiled with
-        // them, exactly as setShadows() does.
-        scene.traverse(obj => { if (obj.material) obj.material.needsUpdate = true; });
-        needsRender = true;
-        if (typeof window !== 'undefined') window.__qualityReadyAt = performance.now();
-      }
       // Notify onRender subscribers (compass overlay etc.) after the frame is
       // drawn, so screen-space overlays can track the current camera. Guarded
       // so a bad subscriber can't wedge the render loop.
@@ -3024,9 +3025,6 @@ const Home3DScene = (() => {
       // the preview tile to stop rendering behind an open popup / when off-screen.
       setActive(active) { _inactive = !active; applyPause(); },
       setShadows(enabled) {
-        // An explicit caller wins over the progressive ramp: cancel it so the
-        // ramp cannot overwrite this choice a frame later.
-        shadowsRamped = true;
         ren.shadowMap.enabled = enabled;
         ren.shadowMap.needsUpdate = true;
         // Force all materials to recompile with/without shadow defines
