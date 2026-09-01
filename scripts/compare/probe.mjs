@@ -141,7 +141,18 @@ function DIGEST() {
         pos: v3(o.position),
         rot: o.rotation ? [r(o.rotation.x), r(o.rotation.y), r(o.rotation.z)] : null,
         scale: v3(o.scale),
-        visible: o.visible, castShadow: o.castShadow, receiveShadow: o.receiveShadow,
+        visible: o.visible,
+        // EFFECTIVE visibility -- o.visible AND every ancestor's. A dev overlay
+        // hides itself by setting its GROUP invisible while each mesh inside
+        // stays visible:true, so per-mesh visibility alone cannot tell a hidden
+        // overlay from a drawn one, and a scene-graph diff would report dozens
+        // of meshes 'missing' that were never on screen in the first place.
+        visibleEffective: (function () {
+          let n = o;
+          while (n) { if (!n.visible) return false; n = n.parent; }
+          return true;
+        })(),
+        castShadow: o.castShadow, receiveShadow: o.receiveShadow,
         renderOrder: o.renderOrder,
         mat: matDigest(o.material),
       });

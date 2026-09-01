@@ -77,13 +77,34 @@ const msig = x => {
 const mc = arr => { const m = {}; arr.forEach(x => { m[msig(x)] = (m[msig(x)] || 0) + 1; }); return m; };
 const MO = mc(O.objects), MN = mc(N.objects);
 console.log('\n=== MESH BUCKETS (geometry + material) ===');
-console.log('  ' + 'type|geo|mat|color|rough|metal|transp|op|side'.padEnd(74) + 'ref  subj');
-let bucketDiffs = 0;
-for (const k of Object.keys({ ...MO, ...MN }).sort()) {
-  const a = MO[k] || 0, b = MN[k] || 0;
-  if (a !== b) { bucketDiffs++; console.log('  ' + k.padEnd(74) + String(a).padStart(4) + String(b).padStart(6) + '   DIFFER'); }
-}
-console.log('  buckets differing: ' + bucketDiffs + ' of ' + Object.keys({ ...MO, ...MN }).length);
+// Split by EFFECTIVE visibility. A dev overlay (a coordinate grid, a proposed-
+// layout layer) is built into the scene but keeps its GROUP hidden until a
+// keyboard shortcut reveals it, so its meshes are in the graph and on no
+// screen. Reporting those beside real geometry buries the differences that
+// actually matter.
+const onScreen = x => x.visibleEffective !== false;
+const hiddenOnly = x => x.visibleEffective === false;
+const bucketReport = (label, filt) => {
+  const A = mc(O.objects.filter(filt)), B = mc(N.objects.filter(filt));
+  const keys = Object.keys(Object.assign({}, A, B)).sort();
+  let d = 0;
+  const lines = [];
+  for (const k of keys) {
+    const a = A[k] || 0, b = B[k] || 0;
+    if (a !== b) {
+      d++;
+      lines.push('  ' + k.padEnd(74) + String(a).padStart(4) + String(b).padStart(6) + '   DIFFER');
+    }
+  }
+  console.log('\n-- ' + label + ' --');
+  console.log('  ' + 'type|geo|mat|color|rough|metal|transp|op|side'.padEnd(74) + ' ref  subj');
+  lines.forEach(l => console.log(l));
+  console.log('  buckets differing: ' + d + ' of ' + keys.length + (d ? '' : '   <-- ALL MATCH'));
+  return d;
+};
+const visDiffs = bucketReport('MESHES ACTUALLY RENDERED (effective visibility)', onScreen);
+bucketReport('MESHES BUILT BUT HIDDEN (dev overlays - never on screen)', hiddenOnly);
+checks++; if (visDiffs === 0) matches++;
 
 // Textures: every mapped mesh, by image and sampler state.
 const tex = arr => {

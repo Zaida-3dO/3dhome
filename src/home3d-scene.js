@@ -2078,12 +2078,30 @@ const Home3DScene = (() => {
           }
         });
 
-        // A spot cluster shares one PointLight at its centroid — see addSpotMesh.
+        // A spot cluster shares one PointLight — see addSpotMesh. WHERE it
+        // hangs depends on whether the profile said where the spots are:
+        //
+        //   AUTHORED positions mark real fixtures, so their centroid is the
+        //     genuine centre of illumination and is the right place for it.
+        //
+        //   AUTO-PLACED positions are an arbitrary grid the loader invented
+        //     because the profile gave only a count. Their centroid is an
+        //     artefact of that grid -- a part-filled last row (5 spots into a
+        //     3x2) weights it toward the fuller row -- so the light would hang
+        //     off-centre for a reason that has nothing to do with the house.
+        //     Use the room's own centre, which is what was meant by "put N
+        //     spots in this room".
         if (g.fixtureType === 'spot' && g.positions && g.positions.length) {
-          let sx = 0, sz = 0;
-          g.positions.forEach(pos => { sx += tx(pos.at[0]); sz += tz(pos.at[1]); });
+          let lx, lz;
+          if (g.autoPlaced) {
+            lx = cx; lz = cz;
+          } else {
+            let sx = 0, sz = 0;
+            g.positions.forEach(pos => { sx += tx(pos.at[0]); sz += tz(pos.at[1]); });
+            lx = sx / g.positions.length; lz = sz / g.positions.length;
+          }
           const pl = new THREE.PointLight(tint, 1.0, Math.max(w, d) * 2, 1.5);
-          pl.position.set(sx / g.positions.length, FY + WH - 0.18, sz / g.positions.length);
+          pl.position.set(lx, FY + WH - 0.18, lz);
           scene.add(pl);
           ls.push(pl);
         }
