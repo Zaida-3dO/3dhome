@@ -64,6 +64,38 @@ The harness places them deterministically in both builds immediately before the
 screenshot. This normalises a known-random element rather than hiding a real
 difference: cloud *count* and material are still compared, by the scene diff.
 
+## Know your noise floor before you trust a pixel number
+
+A pixel diff is only meaningful above the level at which a build differs from
+ITSELF. Measure that first, by diffing two captures of the *same* unmodified
+build taken in separate runs:
+
+```sh
+H3D_TAG=run-a node scripts/compare/probe.mjs
+H3D_TAG=run-b node scripts/compare/probe.mjs
+# then diff run-a's reference captures against run-b's
+```
+
+On this app, with the harness parking the clouds, that floor measured **0.00%
+on nine of ten cameras and 1.01% on `east`**, holding across four pairings of
+runs taken hours apart. So a camera reading 1.5% is at the floor and a camera
+reading 9% is real signal.
+
+Do not assume the floor is zero, and do not assume it is large. Two things in
+this scene are nondeterministic and they behave very differently:
+
+- **Clouds** are placed with `Math.random()` and drift on rAF. Left alone they
+  dominate every view containing sky. The harness parks them, which is what
+  brings the floor to ~0.
+- **The sun** is time-of-day driven, which sounds worse than it is here: its
+  POSITION is fixed and only its intensity varies, and the intensity curve is
+  flat at 1.0 between dawn and dusk. Daytime captures are therefore stable, and
+  captures either side of dawn or dusk are not comparable at all. If you are
+  measuring near sunrise or sunset, pin the sun (`setSunMode`) first.
+
+The scene-graph diff has no such caveat, which is why it is the primary
+evidence and pixels are the corroboration.
+
 ## Reading the scene diff
 
 `scene-diff.mjs` reports `MATCH`/`DIFFER` per property and finishes with a
