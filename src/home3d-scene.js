@@ -1720,7 +1720,14 @@ const Home3DScene = (() => {
     // tone says so with `rug.color`, and one that wants a specific rug supplies
     // `rug.texture`; neither has to know this number.
     const PILE_MEAN_RGB = [94, 93, 87];
-    const rugDiffuseTex = (() => {
+    // Build a pile texture whose MEAN is `mean` ([r,g,b] 0-255). The rug's
+    // colour is baked in here rather than applied as a material tint, because a
+    // material colour multiplies its map and so can only ever DARKEN it: a rug
+    // paler than the built-in pile could not be expressed at all, and three
+    // differently-coloured demo rugs all clamped to the same grey. Generating
+    // the texture at the requested value has no such ceiling and needs no
+    // colour-space correction dance at the material.
+    const makeRugPile = (mean) => {
       const size = 128;
       const c = document.createElement('canvas');
       c.width = c.height = size;
@@ -1729,13 +1736,14 @@ const Home3DScene = (() => {
       for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
           const i = (y * size + x) * 4;
-          // Base mid-grey with a slight warm cast, plus per-pixel pile noise and
-          // a faint vertical streak so the pile has a lie to it.
+          // Per-pixel pile noise plus a faint vertical streak, so the pile has
+          // a lie to it. Amplitude is a fixed number of levels, not a fraction
+          // of the mean -- cut pile of any colour has much the same grain.
           const streak = Math.sin(x * 0.9) * 4;
           const n = (Math.random() - 0.5) * 26 + streak;
-          img.data[i]     = Math.max(0, Math.min(255, PILE_MEAN_RGB[0] + n));
-          img.data[i + 1] = Math.max(0, Math.min(255, PILE_MEAN_RGB[1] + n));
-          img.data[i + 2] = Math.max(0, Math.min(255, PILE_MEAN_RGB[2] + n));
+          img.data[i]     = Math.max(0, Math.min(255, mean[0] + n));
+          img.data[i + 1] = Math.max(0, Math.min(255, mean[1] + n));
+          img.data[i + 2] = Math.max(0, Math.min(255, mean[2] + n));
           img.data[i + 3] = 255;
         }
       }
@@ -1745,7 +1753,8 @@ const Home3DScene = (() => {
       tex.anisotropy = 4;
       tex.needsUpdate = true;
       return tex;
-    })();
+    };
+    const rugDiffuseTex = makeRugPile(PILE_MEAN_RGB);
 
     // Rooms (invisible click-catchers, rugs, lights)
     Object.entries(ROOMS).forEach(([id, rm]) => {
@@ -1855,31 +1864,31 @@ const Home3DScene = (() => {
         } else {
           rt.repeat.set(1 / rug.repeatMetres, 1 / rug.repeatMetres);
         }
-        // `color` is the colour the rug should RENDER as -- the obvious reading,
-        // and the only one a profile author can predict without knowing what
-        // the engine's pile texture happens to look like.
+        // `color` is the colour the rug renders as, and it is baked into this
+        // rug's own pile texture (see makeRugPile). White -- the default, and
+        // what a house means by "just show me a rug" -- reuses the shared
+        // default pile rather than generating an identical copy per room.
         //
-        // A material colour MULTIPLIES its map, so passing the wanted colour
-        // straight through would darken it by the pile's own tone as well and
-        // land far below what was asked for. Divide it through by the pile
-        // first, PER CHANNEL: pile_c x (colour_c / pile_c) = colour_c exactly.
-        //
-        // Per channel rather than by the pile's grey mean. A single mean
-        // divisor is wrong twice over: it shifts hue whenever the pile is not
-        // perfectly neutral, and it makes the mapping unpredictable near the
-        // clamp, so an author cannot reason about what a given hex will do.
-        //
-        // The divisor comes from PILE_MEAN_RGB rather than being restated: they
-        // are the same fact, and a hardcoded copy silently stops matching if
-        // the pile is ever retoned.
-        const _tint = new THREE.Color(rug.color);
-        _tint.setRGB(
-          Math.min(1, _tint.r / (PILE_MEAN_RGB[0] / 255)),
-          Math.min(1, _tint.g / (PILE_MEAN_RGB[1] / 255)),
-          Math.min(1, _tint.b / (PILE_MEAN_RGB[2] / 255))
-        );
+        // Done in the texture, not as a material tint, for the reason given at
+        // makeRugPile: a tint multiplies and therefore only darkens, so a rug
+        // paler than the built-in pile was inexpressible and several distinct
+        // colours collapsed onto the same clamped grey.
+        // Read the profile's hex as PLAIN sRGB BYTES. THREE.Color would convert
+        // it to linear on construction, and the canvas this feeds is written in
+        // sRGB bytes -- mixing the two spaces silently lands about three times
+        // too dark, which is exactly how an earlier attempt at this went wrong.
+        const _rugHex = (typeof rug.color === 'number')
+          ? rug.color
+          : parseInt(String(rug.color).replace('#', ''), 16);
+        const _rugRGB = [(_rugHex >> 16) & 255, (_rugHex >> 8) & 255, _rugHex & 255];
+        const _wantsDefaultPile = _rugRGB[0] > 252 && _rugRGB[1] > 252 && _rugRGB[2] > 252;
+        const rugTex = _wantsDefaultPile ? rt : makeRugPile(_rugRGB);
+        rugTex.wrapS = rugTex.wrapT = THREE.RepeatWrapping;
+        rugTex.repeat.copy(rt.repeat);
+        rugTex.anisotropy = 4;
+        rugTex.needsUpdate = true;
         const rugMesh = new THREE.Mesh(rugGeo, new THREE.MeshStandardMaterial({
-          color: _tint, roughness: 0.95, metalness: 0.0, map: rt
+          color: 0xffffff, roughness: 0.95, metalness: 0.0, map: rugTex
         }));
         rugMesh.rotation.x = -Math.PI / 2;
         rugMesh.position.set(0, 0.01, 0);
