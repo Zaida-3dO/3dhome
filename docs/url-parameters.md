@@ -68,9 +68,10 @@ Fully interactive — orbit, room selection and the Light Controls panel all wor
 — but page chrome is hidden (`.back-btn`, `.title-overlay`, `.room-tooltip`) so
 it sits cleanly inside a dashboard pop-up iframe.
 
-Defaults `shadows` to `high`, which always includes the full set of room shadow
-lights; on-demand rendering keeps this near-free while idle and only reaches
-60 fps while the user is moving the camera.
+Defaults `shadows` to `low` (changed 2026-09-01). It used to be `high` — the
+full set of room-shadow lights — which cost a ~40–57 s freeze on every cold
+popup open. On-demand rendering does keep an *idle* popup near-free, but that
+says nothing about the first frame, and the first frame is where the cost is.
 
 It also **suppresses the favicon `<link>`** — see below.
 
@@ -242,22 +243,28 @@ display's full refresh rate forever — a constant GPU furnace.
 | Mode | Default | Meaning |
 |---|---|---|
 | `?preview=true` | `low` | Sun shadow at 512², no room-shadow lights — a soft grounded drop shadow, near-negligible at 15 fps, with no 10-cubemap room-light passes |
-| `?embed=1` | `high` | Always the full set including the 10 room-shadow lights — see the cold-start warning below |
+| `?embed=1` | `low` | One shadow light rather than eleven — the same house, reached in ~1.7 s instead of ~17 s. See the note below |
 | standalone | `auto` | The best the device can do when viewed directly |
 
 An explicit `?shadows=` value overrides the mode default in every mode.
 
-> **⚠️ `?embed=1`'s `high` default is expensive on a cold open.** The 10
-> room-shadow lights are 10 six-face cubemaps, and the first frame that renders
-> them blocks for ~30–45 s on a cold GPU shader cache (every later frame costs
-> ~30 ms). A cold `?embed=1` open therefore freezes for roughly 40–57 s on the
-> 10-room house. On a top-tier GPU `high` and `auto` resolve to exactly the same
-> settings, so `high` only differs on mid-tier hardware, where it overrides the
-> tier gate that would otherwise drop the room-shadow lights.
+> **Why `?embed=1` defaults to `low`.** Room-shadow lights are the dominant
+> startup cost: each is a six-face cubemap, and the first frame that renders all
+> ten blocks for ~30–45 s on a cold GPU shader cache (every later frame costs
+> ~30 ms). The old `high` default therefore froze a cold popup for ~40–57 s.
 >
-> `?shadows=low` renders the same house — walls, wallpaper, fixtures and the
-> sun's grounding shadow — with one shadow light instead of eleven, and reaches
-> a drawn scene in ~1.7 s. See [perf-cold-start.md](perf-cold-start.md).
+> `low` renders the same house — walls, wallpaper, fixtures and the sun's
+> grounding shadow — with one shadow light instead of eleven, reaching a drawn
+> scene in ~1.7 s. What it loses is soft *interior* shadowing, which at the
+> default camera is largely hidden behind walls and ceilings anyway.
+>
+> Note that shadow-map **resolution** is not the lever here: a 16× cut in texels
+> sits inside the measurement noise, while light **count** is linear. And on a
+> top-tier GPU `high` and `auto` resolve to identical settings, so `high` only
+> ever differed on mid-tier hardware, where it overrode the tier gate.
+>
+> Pass `?embed=1&shadows=auto` for the old behaviour. The standalone page is
+> unchanged and still defaults to `auto`. See [perf-cold-start.md](perf-cold-start.md).
 
 ### `fps`
 

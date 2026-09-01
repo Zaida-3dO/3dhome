@@ -496,8 +496,16 @@
       //   preview        -> 'low'  (sun shadow @512², no room-shadow lights — a
       //                             soft grounded drop-shadow, ~negligible cost at
       //                             15fps; no 10-cubemap room-light passes)
-      //   embed (#3d)    -> 'high' (ALWAYS the full set incl. the 10 room-shadow
-      //                             lights)
+      //   embed (#3d)    -> 'low'  (CHANGED 2026-09-01, owner's call. It was
+      //                             'high' - the full set incl. the 10 room-shadow
+      //                             lights - which cost a ~40-57s cold freeze on
+      //                             every popup open, for interior shadows that
+      //                             are largely hidden behind walls and ceilings
+      //                             at the default camera. Measured on the real
+      //                             house: high 17.1s vs low 1.7s to first frame.
+      //                             The standalone page keeps 'auto', so opening
+      //                             the app directly is unchanged and still gets
+      //                             the full lighting.)
       //   standalone page-> 'auto' (best the device can do when viewed directly)
       //
       //   ⚠️ "on-demand rendering keeps it ~free when idle" USED TO BE CLAIMED
@@ -508,7 +516,7 @@
       //   6-face cubemap each = 4,491 draw calls in one frame; every later
       //   identical frame costs ~30ms). So a cold ?embed=1 open freezes for
       //   ~40-57s. See docs/perf-cold-start.md.
-      const shadows = params.get('shadows') || (isPreview ? 'low' : (isEmbed ? 'high' : 'auto'));
+      const shadows = params.get('shadows') || (isPreview ? 'low' : (isEmbed ? 'low' : 'auto'));
       const fpsParam = parseInt(params.get('fps'), 10);
       const maxFps = Number.isFinite(fpsParam) ? fpsParam : (isPreview ? 15 : 60);
       const scenePixelRatio = isPreview ? 1 : Math.min(window.devicePixelRatio, 2);
