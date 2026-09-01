@@ -142,7 +142,10 @@
               "description": "When `polygon` is absent: shrink the room's bounding box by this many centimetres on every side to get the rug. Use 0 for a floor covering that reaches the walls — a fitted carpet rather than a rug laid inside the room. The default of 30 is a rug-shaped guess and is wrong for a carpeted room, so set it explicitly whenever the covering meets the skirting.",
               "default": 30
             },
-            "color": { "$ref": "#/$defs/hexColor" },
+            "color": {
+              "$ref": "#/$defs/hexColor",
+              "description": "The colour the rug should RENDER as. The engine divides it through by its own pile texture before use, so what you write is what you get -- you do not need to know what the pile looks like.\n\nOne limit: a texture cannot be brightened past its own values, so a colour lighter than the pile's grey clamps to the pile. Real rugs are darker than that; for a genuinely pale rug supply a pale `texture` instead.\n\nDefaults to white, which renders as the pile's own tone."
+            },
             "texture": { "$ref": "#/$defs/texture" },
             "notes": {
               "type": "string",

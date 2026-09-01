@@ -1848,21 +1848,28 @@ const Home3DScene = (() => {
         } else {
           rt.repeat.set(1 / rug.repeatMetres, 1 / rug.repeatMetres);
         }
-        // The procedural pile is a mid-grey and a material colour MULTIPLIES
-        // its map, so tinting with the rug's own mid-tone colour would darken
-        // it twice over and the rug would read as near-black. Divide it through by
-        // the pile's own mean first, so `color` means "render the rug THIS
-        // colour" rather than "multiply the pile by this".
+        // `color` is the colour the rug should RENDER as -- the obvious reading,
+        // and the only one a profile author can predict without knowing what
+        // the engine's pile texture happens to look like.
         //
-        // The divisor is derived from PILE_MEAN_RGB rather than restated: they
-        // are the same fact, and a hardcoded copy would silently stop matching
-        // if the pile were ever retoned.
-        const _pileMean = (PILE_MEAN_RGB[0] + PILE_MEAN_RGB[1] + PILE_MEAN_RGB[2]) / 3 / 255;
+        // A material colour MULTIPLIES its map, so passing the wanted colour
+        // straight through would darken it by the pile's own tone as well and
+        // land far below what was asked for. Divide it through by the pile
+        // first, PER CHANNEL: pile_c x (colour_c / pile_c) = colour_c exactly.
+        //
+        // Per channel rather than by the pile's grey mean. A single mean
+        // divisor is wrong twice over: it shifts hue whenever the pile is not
+        // perfectly neutral, and it makes the mapping unpredictable near the
+        // clamp, so an author cannot reason about what a given hex will do.
+        //
+        // The divisor comes from PILE_MEAN_RGB rather than being restated: they
+        // are the same fact, and a hardcoded copy silently stops matching if
+        // the pile is ever retoned.
         const _tint = new THREE.Color(rug.color);
         _tint.setRGB(
-          Math.min(1, _tint.r / _pileMean),
-          Math.min(1, _tint.g / _pileMean),
-          Math.min(1, _tint.b / _pileMean)
+          Math.min(1, _tint.r / (PILE_MEAN_RGB[0] / 255)),
+          Math.min(1, _tint.g / (PILE_MEAN_RGB[1] / 255)),
+          Math.min(1, _tint.b / (PILE_MEAN_RGB[2] / 255))
         );
         const rugMesh = new THREE.Mesh(rugGeo, new THREE.MeshStandardMaterial({
           color: _tint, roughness: 0.95, metalness: 0.0, map: rt
