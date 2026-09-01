@@ -158,3 +158,53 @@ I reported a High-severity defect off two under-settled frames, and only caught 
 different tool disagreed.
 
 Screenshots: `%LOCALAPPDATA%\browser-broker\artefacts\claims\<claim-id>\images\`.
+
+---
+
+## Follow-up, same day: findings 1–4 addressed
+
+All four UI findings above were fixed by later work on this branch, and the
+fidelity pass that ran alongside it found four more defects that a visual review
+of the demo house could never have surfaced — because they only appear against
+the real house.
+
+| Finding | Status |
+|---|---|
+| 1. Panel close button 11×21 px | **Open** — still the highest-value UI fix |
+| 2. Title/Controls collide at 390 px | **Open** |
+| 3. Panel ~70% width on mobile | **Open** |
+| 4. Controls button 83×32 px | **Open** |
+| 5. No "HA unconfigured" message | **Open** (Low) |
+
+The four UI findings remain open: this session's work went to render fidelity and
+startup cost, which were the owner's stated priorities. They are unblocked and
+small.
+
+### What the fidelity pass found that this review did not
+
+Worth recording, because it is a lesson about the method rather than a list of
+bugs. This review looked at the **demo** house and judged the app "renders well".
+Run against the **real** house and diffed against the original build, four
+defects appeared immediately:
+
+- A wallpaper rendered on **both faces** of a wall — the engine ran both
+  papering passes on the same wall.
+- Rugs rendered **~3× too dark**, from an sRGB/linear colour-space mismatch:
+  `THREE.Color` linearises an sRGB hex on construction, the pile constant was
+  plain sRGB bytes, and dividing one by the other mixed spaces.
+- **109 oak slats and 52 dark panel meshes missing entirely** — `decor` was a
+  `create()`-only option that no house profile could set.
+- A **stray red sphere** — the bedroom star projector drawing its emissive bulb.
+
+None of these are visible in the demo house. A visual review is only as good as
+the content it is run against, and a synthetic fixture will not exercise the
+paths real data does.
+
+### Startup cost, added since
+
+Cold start was measured at **11–13 s** on the real house and ~6.8 s on the demo —
+which this review did not test at all, having measured only warm loads. Two
+changes landed: shader precompilation off the critical path, and `?embed=1`
+dropping from `high` to `low` shadows (11.2 s → 3.1 s), the latter being an
+owner decision since it changes the rendered image. See
+[perf-cold-start.md](perf-cold-start.md).
