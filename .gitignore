@@ -60,3 +60,8 @@ __pycache__/
 # names a machine-specific path, so it stays local too.)
 .serve-ope/
 .serve-ope-sync.sh
+
+# --- comparison harness output ----------------------------------------------
+# scripts/compare/ writes screenshots + digests here. Captures of a REAL house,
+# so they must never be committed.
+.compare-out/
