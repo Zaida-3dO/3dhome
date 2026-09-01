@@ -459,7 +459,15 @@ const HouseLoader = (() => {
       minX: Math.min.apply(null, fpXs), maxX: Math.max.apply(null, fpXs),
       minY: Math.min.apply(null, fpYs), maxY: Math.max.apply(null, fpYs)
     };
-    const centre = [(footprint.minX + footprint.maxX) / 2, (footprint.minY + footprint.maxY) / 2];
+    // The point every default camera looks at, and where the ground plane and
+    // the cloud field are centred. The footprint's geometric middle is the
+    // right default, but it is not always the point a house is best FRAMED
+    // from: a plan with a long thin projection (a hallway arm, an outhouse)
+    // pulls the mean away from the part someone actually wants centred. So a
+    // profile may state its own, and most should not bother.
+    const centre = Array.isArray(geo.viewCentre) && geo.viewCentre.length === 2
+      ? [geo.viewCentre[0], geo.viewCentre[1]]
+      : [(footprint.minX + footprint.maxX) / 2, (footprint.minY + footprint.maxY) / 2];
 
     return {
       id: geo.id,

@@ -1705,8 +1705,14 @@ const Home3DScene = (() => {
     // for one house's benefit. A house that wants its own rug image supplies one
     // through the profile (`room.rug.texture`), which is loaded over this.
     //
-    // The pattern is a warm-neutral mid-grey with fine directional noise, which
-    // is what reads as cut pile at the scale a rug is seen from.
+    // The pattern is a warm-neutral grey with fine directional noise, which is
+    // what reads as cut pile at the scale a rug is seen from.
+    //
+    // The pile is a NEUTRAL mid-grey on purpose: it is the engine's generic
+    // fallback, and a house states the tone it actually wants through its
+    // rug `color`, which multiplies this. Baking one house's tone in here
+    // would make every other house's rug wrong.
+    const PILE_MEAN_RGB = [150, 145, 138];
     const rugDiffuseTex = (() => {
       const size = 128;
       const c = document.createElement('canvas');
@@ -1720,9 +1726,9 @@ const Home3DScene = (() => {
           // a faint vertical streak so the pile has a lie to it.
           const streak = Math.sin(x * 0.9) * 4;
           const n = (Math.random() - 0.5) * 26 + streak;
-          img.data[i]     = Math.max(0, Math.min(255, 150 + n));
-          img.data[i + 1] = Math.max(0, Math.min(255, 145 + n));
-          img.data[i + 2] = Math.max(0, Math.min(255, 138 + n));
+          img.data[i]     = Math.max(0, Math.min(255, PILE_MEAN_RGB[0] + n));
+          img.data[i + 1] = Math.max(0, Math.min(255, PILE_MEAN_RGB[1] + n));
+          img.data[i + 2] = Math.max(0, Math.min(255, PILE_MEAN_RGB[2] + n));
           img.data[i + 3] = 255;
         }
       }
@@ -1842,17 +1848,21 @@ const Home3DScene = (() => {
         } else {
           rt.repeat.set(1 / rug.repeatMetres, 1 / rug.repeatMetres);
         }
-        // The procedural pile is a mid-grey, and a material colour MULTIPLIES
-        // its map — so tinting with the rug's own mid-tone colour would darken
-        // it twice over and the rug would read as near-black. Divide the tint
-        // through by the pile's own mean grey so the rendered result lands on
-        // the colour the profile actually asked for.
-        const PILE_MEAN = 145 / 255;
+        // The procedural pile is a mid-grey and a material colour MULTIPLIES
+        // its map, so tinting with the rug's own mid-tone colour would darken
+        // it twice over and the rug would read as near-black. Divide it through by
+        // the pile's own mean first, so `color` means "render the rug THIS
+        // colour" rather than "multiply the pile by this".
+        //
+        // The divisor is derived from PILE_MEAN_RGB rather than restated: they
+        // are the same fact, and a hardcoded copy would silently stop matching
+        // if the pile were ever retoned.
+        const _pileMean = (PILE_MEAN_RGB[0] + PILE_MEAN_RGB[1] + PILE_MEAN_RGB[2]) / 3 / 255;
         const _tint = new THREE.Color(rug.color);
         _tint.setRGB(
-          Math.min(1, _tint.r / PILE_MEAN),
-          Math.min(1, _tint.g / PILE_MEAN),
-          Math.min(1, _tint.b / PILE_MEAN)
+          Math.min(1, _tint.r / _pileMean),
+          Math.min(1, _tint.g / _pileMean),
+          Math.min(1, _tint.b / _pileMean)
         );
         const rugMesh = new THREE.Mesh(rugGeo, new THREE.MeshStandardMaterial({
           color: _tint, roughness: 0.95, metalness: 0.0, map: rt

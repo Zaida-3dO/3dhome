@@ -454,6 +454,10 @@
           },
           "additionalProperties": false
         },
+        "viewCentre": {
+          "$ref": "#/$defs/point2d",
+          "description": "OPTIONAL point the default cameras look at, and the centre of the ground plane and cloud field. Defaults to the middle of the wall footprint, which is right for most plans.\n\nState it only when the geometric middle is not the point you want framed — a long thin projection (a hallway arm, an outhouse, an integral garage) drags the footprint's midpoint away from the part of the house someone actually looks at."
+        },
         "decor": {
           "type": "array",
           "items": { "type": "string", "enum": ["acoustic-panels"] },

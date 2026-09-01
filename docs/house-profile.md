@@ -130,6 +130,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | `coordinateTransform` | yes | See above. |
 | `defaults` | no | House-wide fallbacks (wall height, wall thickness, door height…) so you are not repeating `250` a hundred times. |
 | `materials` | no | House-wide finishes: wall paint colour, ceiling, door slab. |
+| `viewCentre` | no | Point the default cameras look at. Defaults to the footprint's middle. |
 | `decor` | no | Bespoke decoration this house asks for by name — see below. |
 | `site` | no | Latitude for the daylight rig. **Give a city-level latitude, not a rooftop one** — the sun calculation cannot tell the difference, and a shared profile then does not locate a building. |
 | `rooms` | yes | The rooms. |
@@ -343,6 +344,27 @@ So: **engine defaults, per-house override.** Any preset you list — wholly or
 partially — replaces the corresponding engine default; keys you omit from a
 partial override fall back to the default. Write one only when the default framing
 is actually wrong for your house.
+
+There is one more reason to write them out, worth naming because it looks like
+the anti-pattern above: **reproducing another renderer exactly.** The derived
+distance is a *better* number than any constant, but it is not the *same*
+number, and a house whose job is to match a reference render pixel for pixel
+needs the reference's framing, not a better one. That is a deliberate, stated
+choice in a profile — not a default anyone else should copy.
+
+### `viewCentre`
+
+The point the default cameras look at, and the centre of the ground plane and
+the cloud field. Defaults to the middle of the wall footprint.
+
+```json
+"viewCentre": [790, 400]
+```
+
+Set it when the geometric middle is not the point you want framed. A long thin
+projection — a hallway arm, an outhouse, an integral garage — drags the
+footprint's midpoint away from the part of the house anyone actually looks at,
+and the whole model then sits slightly off-centre in every view.
 
 ---
 
