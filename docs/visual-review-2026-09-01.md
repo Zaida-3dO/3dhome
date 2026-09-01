@@ -124,7 +124,7 @@ Checked against computed styles on the live page, not by eye:
 - **`?embed=1`** — title hidden, controls button present, `#lights-btn` in the DOM. Correct: page
   chrome hidden, light controls kept.
 
-These are the contracts the Home Assistant tablet dashboard and the Haven sidebar depend on, and both
+These are the contracts a Home Assistant tablet dashboard and an embedding dashboard depend on, and both
 survived the extraction intact.
 
 ---
