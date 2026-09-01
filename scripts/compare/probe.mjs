@@ -195,11 +195,22 @@ function DIGEST() {
   };
 }
 
-const browser = await chromium.launch({
+// Relaunched per capture rather than held for the whole run. A long software-
+// rendered session intermittently loses the browser process, and when it did
+// the entire 20-capture run aborted with nothing written -- a bad trade for a
+// script whose only job is to gather evidence. One dead browser should cost
+// one capture.
+const launchBrowser = () => chromium.launch({
   executablePath: EXE,
   headless: true,
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--hide-scrollbars'],
 });
+let browser = await launchBrowser();
+const freshBrowser = async () => {
+  try { if (browser && browser.isConnected()) await browser.close(); } catch (e) {}
+  browser = await launchBrowser();
+  return browser;
+};
 
 fs.mkdirSync(path.join(OUT, TAG), { recursive: true });
 const report = {};
@@ -207,9 +218,22 @@ const report = {};
 for (const label of Object.keys(TARGETS)) {
   const base = TARGETS[label];
   report[label] = { cams: {}, };
-  const ctx = await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
+  let ctx = await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
   for (const cam of CAMS) {
-    const page = await ctx.newPage();
+    // A browser lost since the last capture leaves the context dead too; both
+    // are rebuilt before the page that would otherwise throw.
+    if (!browser.isConnected()) {
+      await freshBrowser();
+      ctx = await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
+    }
+    let page;
+    try {
+      page = await ctx.newPage();
+    } catch (e) {
+      await freshBrowser();
+      ctx = await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
+      page = await ctx.newPage();
+    }
     // Capture the scene API and the renderer, neither of which the page exposes.
     // Both files build the scene inside an IIFE, so hook the constructors
     // themselves before any page script runs.
@@ -327,9 +351,9 @@ for (const label of Object.keys(TARGETS)) {
       errs.push('NAV: ' + String(e).slice(0, 200));
     }
     report[label].cams[cam] = { errors: errs.slice(0, 8) };
-    await page.close();
+    try { await page.close(); } catch (e) {}
   }
-  await ctx.close();
+  try { await ctx.close(); } catch (e) {}
 }
 
 fs.writeFileSync(path.join(OUT, TAG, 'digest.json'), JSON.stringify(report, null, 1));
