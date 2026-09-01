@@ -130,6 +130,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | `coordinateTransform` | yes | See above. |
 | `defaults` | no | House-wide fallbacks (wall height, wall thickness, door height…) so you are not repeating `250` a hundred times. |
 | `materials` | no | House-wide finishes: wall paint colour, ceiling, door slab. |
+| `decor` | no | Bespoke decoration this house asks for by name — see below. |
 | `site` | no | Latitude for the daylight rig. **Give a city-level latitude, not a rooftop one** — the sun calculation cannot tell the difference, and a shared profile then does not locate a building. |
 | `rooms` | yes | The rooms. |
 | `walls` | yes | The walls. |
@@ -583,10 +584,29 @@ leaving a notch; the overlays draw over what is actually rendered. The profile
 stores the authored centrelines because the extension is a rendering artifact,
 not a fact about the building.
 
-### Decoration that is not in the schema
+### Decoration that no other field describes
 
-`opts.decor` is an opt-in list for bespoke geometry that no schema field
-describes — currently `'acoustic-panels'`, slat panelling keyed to particular
-wall ids. A house that does not ask for it gets nothing, and asking for it in a
-house without those walls is a quiet no-op. It is furniture, not building
-fabric; do not reach for it to model something the profile could express.
+`decor` is an opt-in list of bespoke geometry, named rather than described —
+currently only `'acoustic-panels'`, vertical oak slat panelling keyed to
+particular wall ids. It is furniture, not building fabric; do not reach for it
+to model something the profile could already express.
+
+```json
+"decor": ["acoustic-panels"]
+```
+
+**It belongs in `geometry.json`, because it is a fact about the house.** A house
+that owns slat panelling owns it wherever the profile is loaded — the embedding
+page should not have to know, and a page that forgets would silently render a
+different building. An earlier version of this engine took decor *only* as an
+`opts.decor` argument to `create()`, with no profile field at all, so a house
+could not ask for its own panelling: the panels were simply absent from every
+load, and 158 meshes of the model went missing without any error.
+
+`opts.decor` still exists and is unioned with the profile's list, for an
+embedder that wants to add decoration on top of what the house declares.
+
+A house that says nothing gets nothing. Asking for it in a house without the
+wall ids it needs is a quiet no-op, and an unrecognised name is ignored rather
+than rejected — so a profile written for a newer engine still loads on an older
+one.

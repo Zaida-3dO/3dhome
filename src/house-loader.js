@@ -239,10 +239,18 @@ const HouseLoader = (() => {
     const rows = Math.ceil(n / cols);
     const w = room.x2 - room.x1, h = room.y2 - room.y1;
     const out = [];
+    // Lay the grid out SYMMETRICALLY about the room centre. When n does not
+    // fill the last row (5 into a 3x2 grid), spacing that row as if it were
+    // full leaves the arrangement lopsided and drags its centroid off-centre --
+    // and a spot cluster hangs its shared PointLight at exactly that centroid,
+    // so the room ends up lit from a point that is not its middle. Each row is
+    // therefore spaced across its OWN occupancy, which leaves a full grid
+    // exactly where it was and only re-centres a short final row.
     for (let r = 0; r < rows && out.length < n; r++) {
-      for (let c = 0; c < cols && out.length < n; c++) {
+      const inRow = Math.min(cols, n - r * cols);
+      for (let c = 0; c < inRow; c++) {
         out.push({ at: [
-          room.x1 + w * (c + 1) / (cols + 1),
+          room.x1 + w * (c + 1) / (inRow + 1),
           room.y1 + h * (r + 1) / (rows + 1)
         ] });
       }
@@ -484,6 +492,12 @@ const HouseLoader = (() => {
       footprint: footprint,
       centre: centre,
       cameraPresets: geo.cameraPresets || {},
+      // Opt-in bespoke decoration this house asks for (e.g. 'acoustic-panels').
+      // Decor is furniture keyed to specific wall ids, not building fabric, so
+      // it is neither derivable from the geometry nor wanted by every house —
+      // the profile has to ask for it by name. Unknown names are harmless: the
+      // engine only looks for the ones it implements.
+      decor: Array.isArray(geo.decor) ? geo.decor.filter(d => typeof d === 'string') : [],
       warnings: warnings
     };
   }

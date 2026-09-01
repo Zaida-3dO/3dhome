@@ -40,6 +40,23 @@ TEXTURE_MAX_BYTES=262144
 #     and must never be committed; check 7 enforces that separately.
 CONTENT_EXCLUDES="scripts/check-no-pii.sh PLAN.md"
 
+# Paths git is ignoring are also exempt from CONTENT scanning. This check exists
+# to stop private data being PUBLISHED, and an ignored path cannot be: it is not
+# tracked, so `git push` never carries it. Without this the local serving
+# staging directory (.serve-ope/, a copy of a REAL house profile assembled so
+# the app can be run against it) fails the scan permanently, which trains people
+# to ignore a red result -- the worst possible outcome for a fail-closed guard.
+#
+# This does NOT weaken the check on anything publishable. Checks 1 and 7 still
+# assert separately that houses/ holds only the demo and that PLAN.md is
+# untracked, so a file becoming tracked is caught there whatever .gitignore says.
+# Computed once: `git check-ignore` per file would be a process per file.
+if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+  IGNORED_PATHS=$(git ls-files --others --ignored --exclude-standard --directory 2>/dev/null || true)
+else
+  IGNORED_PATHS=""
+fi
+
 pass() { CHECK_NO=$((CHECK_NO + 1)); printf 'PASS  [%d/%d] %s\n' "$CHECK_NO" "$TOTAL_CHECKS" "$1"; }
 fail() {
   CHECK_NO=$((CHECK_NO + 1))
@@ -54,6 +71,15 @@ is_excluded() {
   _p=${1#./}
   for _e in $CONTENT_EXCLUDES; do
     [ "$_p" = "$_e" ] && return 0
+  done
+  # Ignored paths: `git ls-files --directory` reports a wholly-ignored directory
+  # as one entry with a trailing slash, so match on the prefix as well as on the
+  # exact path.
+  for _i in $IGNORED_PATHS; do
+    case "$_i" in
+      */) case "$_p/" in "$_i"*) return 0 ;; esac ;;
+      *)  [ "$_p" = "$_i" ] && return 0 ;;
+    esac
   done
   return 1
 }

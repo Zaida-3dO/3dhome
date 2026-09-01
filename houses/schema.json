@@ -139,7 +139,7 @@
             "inset": {
               "type": "number",
               "minimum": 0,
-              "description": "When `polygon` is absent: shrink the room's bounding box by this many centimetres on every side to get the rug.",
+              "description": "When `polygon` is absent: shrink the room's bounding box by this many centimetres on every side to get the rug. Use 0 for a floor covering that reaches the walls — a fitted carpet rather than a rug laid inside the room. The default of 30 is a rug-shaped guess and is wrong for a carpeted room, so set it explicitly whenever the covering meets the skirting.",
               "default": 30
             },
             "color": { "$ref": "#/$defs/hexColor" },
@@ -453,6 +453,12 @@
             "exteriorColor": { "$ref": "#/$defs/hexColor", "description": "Outward-facing colour of the exterior shell." }
           },
           "additionalProperties": false
+        },
+        "decor": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["acoustic-panels"] },
+          "uniqueItems": true,
+          "description": "OPTIONAL bespoke decoration this house asks the engine to build, by name.\n\nDecor is FURNITURE, not building fabric: it is geometry keyed to specific wall ids of a specific house, so it can be neither derived from the geometry nor assumed for every house. A house that owns it names it here and gets it wherever its profile is loaded; a house that says nothing renders none of it.\n\nRecognised names:\n  acoustic-panels — vertical oak slat panelling (Acupanel Contemporary spec) on the room-facing faces of walls 1/3 and the far face of wall 25, where those walls exist.\n\nA house lacking the wall ids a decoration needs degrades quietly to nothing, and an unrecognised name is ignored rather than rejected, so a profile written for a newer engine still loads on an older one."
         },
         "site": {
           "type": "object",

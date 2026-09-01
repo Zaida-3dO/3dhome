@@ -998,12 +998,71 @@ const Home3DScene = (() => {
       return null;
     }
 
+    /**
+     * The stretch of a north-south wall's line that a room's polygon fronts,
+     * as [minY, maxY] in plan cm — or null if the room does not front it.
+     *
+     * Taken from the polygon rather than the room's bounding box: an L-shaped
+     * room's box spans far more of the wall than the room's own edge does. The
+     * hallway's box runs y 13.2..293.6 while the edge that actually fronts wall
+     * #22 runs 95.6..293.6, so the box would claim ~0.9 m of wall that in fact
+     * fronts a different room.
+     */
+    function _roomEdgeSpanOnWall(wall, roomId) {
+      const room = ROOMS[roomId];
+      if (!room || !Array.isArray(room.poly) || room.poly.length < 2) return null;
+      if (Math.abs(wall.x1 - wall.x2) >= 0.5) return null;   // north-south walls only
+      // The room's face sits half a wall thickness off the centreline, so allow
+      // a little more than that — but stay tight enough to reject the room's
+      // OTHER vertical edges (for the hallway the next-nearest is 37.5 cm away,
+      // against the true edge's 9.5 cm).
+      const tol = (wall.thickness != null ? wall.thickness : WT_CM) * 1.6;
+      const ys = [];
+      for (let i = 0; i < room.poly.length; i++) {
+        const a = room.poly[i], b = room.poly[(i + 1) % room.poly.length];
+        if (Math.abs(a[0] - b[0]) < 0.5 && Math.abs(a[0] - wall.x1) < tol) ys.push(a[1], b[1]);
+      }
+      if (!ys.length) return null;
+      return [Math.min.apply(null, ys), Math.max.apply(null, ys)];
+    }
+
+    /**
+     * Does `roomId` front effectively the WHOLE of this wall's face?
+     *
+     * Decides which of the two papering passes owns the wall (see their call
+     * sites). The threshold is loose because a room polygon is inset from the
+     * wall centreline at each end, so a room running the full length still
+     * measures a few centimetres short of it.
+     */
+    function _roomCoversWholeFace(wall, roomId) {
+      const span = _roomEdgeSpanOnWall(wall, roomId);
+      if (!span) return false;
+      const wallLen = Math.abs(wall.y2 - wall.y1);
+      if (wallLen <= 0) return false;
+      return ((span[1] - span[0]) / wallLen) >= 0.9;
+    }
+
     // wall id -> { faceAxis, url } for every wall the profile papers.
     const WALL_FACE_TEXTURES = {};
     Object.keys(HOUSE.wallFaceTextures).forEach(wid => {
       const ft = HOUSE.wallFaceTextures[wid];
       const wall = HOUSE.wallsById[wid];
       if (!wall) return;
+      // EXACTLY ONE pass may paper a wall. There are two, and which is right
+      // depends on how much of the wall the clipped room actually fronts:
+      //
+      //   whole face  -> this pass, a 6-entry material array on the wall box
+      //                  (cheaper, and it tracks the wall's own geometry).
+      //   part of it  -> the room-clipped OVERLAY pass further down, which
+      //                  builds thin panels over just that stretch.
+      //
+      // Running both is what put wall #22's monstera on the hallway's INSIDE
+      // face: the overlay drew it correctly on the west face while the material
+      // array simultaneously painted the whole wall box, so the image showed up
+      // on the far side too. The array cannot express a partial run, so a wall
+      // the room only partly fronts is left entirely to the overlay. Wall #25,
+      // whose home_office face IS fronted end to end, keeps the array.
+      if (ft.clipToRoom && !_roomCoversWholeFace(wall, ft.clipToRoom)) return;
       const faceAxis = sideToFaceAxis(wall, ft.side);
       if (!faceAxis) {
         console.warn(
@@ -1232,8 +1291,20 @@ const Home3DScene = (() => {
         // The clipped room's extent along the wall, from the room's DERIVED
         // bounding box — authoritative, and not the wall's full span, which
         // continues past the room into its neighbours.
-        const northY = _clipRoom.y1;
-        const southY = _clipRoom.y2;
+        // Clip to the stretch of wall the room ACTUALLY fronts, taken from the
+        // room polygon — not from its bounding box. An L-shaped room's bbox
+        // spans far more of the wall than the room's own edge does: the hallway
+        // bbox runs y 13.2..293.6, while the polygon edge that fronts wall #22
+        // runs only y 95.6..293.6. Using the bbox papered ~0.9 m of wall that
+        // fronts a different room entirely, and stretched the mural to fit it.
+        //
+        // A wall the room fronts ENTIRELY was already papered by the material
+        // array in the wall loop above, which is the better path for a full
+        // face; papering it again here would double the image up.
+        if (_roomCoversWholeFace(wall22, _overlaySpec.clipToRoom)) return;
+        const _span = _roomEdgeSpanOnWall(wall22, _overlaySpec.clipToRoom);
+        const northY = _span ? _span[0] : _clipRoom.y1;
+        const southY = _span ? _span[1] : _clipRoom.y2;
         // #22 rotation is exactly 180deg (dx=0, dz<0 => atan2 = pi), but a box
         // rotated by pi stays axis-aligned in world space (thickness spans world
         // X, length spans world Z, mirrored). West (lower world X) = hallway
@@ -1720,7 +1791,40 @@ const Home3DScene = (() => {
         // ShapeGeometry emits UVs straight from the shape's world-metre coords,
         // so one texture copy per `repeatMetres` of rug keeps the pile at a
         // sensible real-world scale.
-        rt.repeat.set(1 / rug.repeatMetres, 1 / rug.repeatMetres);
+        //
+        // A RECTANGULAR rug additionally rounds to a WHOLE number of copies
+        // across each axis, so the pile pattern is not cut mid-tile at the rug's
+        // own edge (a visible seam along the border). That rounding is only
+        // meaningful when the rug's outline IS its bounding box; on an L-shaped
+        // rug the box is bigger than the rug, so rounding against it would skew
+        // the pile scale and the flat per-metre rate is the correct one.
+        const _rb = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity };
+        rug.poly.forEach(pt => {
+          if (pt[0] < _rb.x1) _rb.x1 = pt[0];
+          if (pt[0] > _rb.x2) _rb.x2 = pt[0];
+          if (pt[1] < _rb.y1) _rb.y1 = pt[1];
+          if (pt[1] > _rb.y2) _rb.y2 = pt[1];
+        });
+        const _rw = (_rb.x2 - _rb.x1) * S, _rd = (_rb.y2 - _rb.y1) * S;
+        // Rectangular iff its area fills its bounding box (4-point outlines and
+        // the degenerate collinear cases included).
+        const _rugArea = Math.abs((function () {
+          let s = 0;
+          for (let i = 0; i < rug.poly.length; i++) {
+            const a = rug.poly[i], b = rug.poly[(i + 1) % rug.poly.length];
+            s += a[0] * b[1] - b[0] * a[1];
+          }
+          return s / 2;
+        })()) * S * S;
+        const _isRect = _rw > 0 && _rd > 0 && Math.abs(_rugArea - _rw * _rd) / (_rw * _rd) < 0.01;
+        if (_isRect) {
+          rt.repeat.set(
+            Math.max(1, Math.round(_rw / rug.repeatMetres)) / _rw,
+            Math.max(1, Math.round(_rd / rug.repeatMetres)) / _rd
+          );
+        } else {
+          rt.repeat.set(1 / rug.repeatMetres, 1 / rug.repeatMetres);
+        }
         // The procedural pile is a mid-grey, and a material colour MULTIPLIES
         // its map — so tinting with the rug's own mid-tone colour would darken
         // it twice over and the rug would read as near-black. Divide the tint
@@ -1917,9 +2021,14 @@ const Home3DScene = (() => {
               addStrip(px, fixtureY(pos, 0.06), pz, pos.size || [Math.max(w, d) * 70, 2.5, 2.5], ms, ls, tint);
               break;
             case 'projector':
-              // A special-effect emitter (e.g. a star projector). Drawn as a
-              // small bulb; the effect itself is the group being switchable.
-              addBulb(px, fixtureY(pos, 0.10), pz, ms, ls, tint);
+              // A special-effect emitter (e.g. a star projector). It gets NO
+              // fixture geometry and NO point light: the real device is a small
+              // matt-black puck that throws points of light onto the ceiling,
+              // so drawing it as an emissive bulb put a glowing ball in mid-air
+              // in the middle of the room — and because an accent channel is
+              // tinted #ff3300, that ball rendered as a stray red dot. The
+              // channel still exists in lightState, so it keeps its own toggle
+              // in the controls panel; it simply has nothing to draw.
               break;
             case 'none':
               // Light with no visible fixture geometry.
@@ -2179,10 +2288,43 @@ const Home3DScene = (() => {
       ambientStrips:    tier !== 'low',
       shadowMapScale,
       // Opt-in bespoke decoration (see the acoustic panels below). Empty by
-      // default: a house gets only what its profile describes.
-      decor: Array.isArray(opts.decor) ? opts.decor : [],
+      // default: a house gets only what its profile describes. The PROFILE is
+      // the primary source — decor is per-house data, so a house that owns
+      // slat panelling should render it wherever it is loaded, without the
+      // embedding page having to know and pass a flag. The `decor` create()
+      // option still works and is unioned in, for an embedder that wants to
+      // add decoration on top of the profile's own.
+      decor: (HOUSE.decor || []).concat(Array.isArray(opts.decor) ? opts.decor : []),
     };
-    ren.shadowMap.enabled = quality.sunShadow || quality.roomShadowLights;
+    // ── Progressive first paint ────────────────────────────────────────────
+    // Measured on the real 10-room house: the single most expensive step of a
+    // cold start is the FIRST ren.render(), at ~300-560ms, because three.js
+    // compiles and uploads every program and renders every shadow map in that
+    // one blocking call. Steady-state frames afterwards are 10-22ms.
+    //
+    // So: render the first frames with the shadow pass switched OFF (cheap and
+    // correct -- same geometry, same materials, same lights, just no cast
+    // shadows yet), then switch shadows on once the scene is up and let the
+    // shadow maps build on a later frame.
+    //
+    // This is a RAMP, NOT A DOWNGRADE. The end state is byte-for-byte the
+    // configuration the scene would have had anyway: `wantShadows` below is
+    // exactly the old `ren.shadowMap.enabled` expression, and it is restored
+    // after `PROGRESSIVE_FRAMES` rendered frames. Nothing else -- pixel ratio,
+    // antialias, light set, shadow-map size -- is touched, so the image at rest
+    // is unchanged.
+    //
+    // Opt out with progressive:false (the ?shadows= presets are unaffected: a
+    // scene that ends with no shadows simply has nothing to ramp to).
+    const wantShadows = quality.sunShadow || quality.roomShadowLights;
+    const progressive = opts.progressive !== false && wantShadows;
+    // Frames to paint before turning the shadow pass on. 2 is enough to get a
+    // complete, correct image on screen (frame 1 compiles the programs, frame 2
+    // is already cheap) without the ramp being perceptible.
+    const PROGRESSIVE_FRAMES = 2;
+    let framesRendered = 0;
+    let shadowsRamped = !progressive;
+    ren.shadowMap.enabled = progressive ? false : wantShadows;
     console.info(
       `[Home3DScene] Quality tier=${tier} ` +
       `(MAX_FRAGMENT_UNIFORM_VECTORS=${maxFragU}) shadows=${shadows} maxFps=${maxFps || 'uncapped'}. ` +
@@ -2646,6 +2788,20 @@ const Home3DScene = (() => {
       }
       transitionsActive = animating;
       ren.render(scene, cam);
+
+      // Progressive ramp: once the first frames are on screen, restore the full
+      // shadow configuration this scene was asked for. Runs exactly once, and
+      // requests one more frame so the newly enabled shadow pass is painted.
+      if (!shadowsRamped && ++framesRendered >= PROGRESSIVE_FRAMES) {
+        shadowsRamped = true;
+        ren.shadowMap.enabled = wantShadows;
+        ren.shadowMap.needsUpdate = true;
+        // Materials compiled without the shadow defines must be recompiled with
+        // them, exactly as setShadows() does.
+        scene.traverse(obj => { if (obj.material) obj.material.needsUpdate = true; });
+        needsRender = true;
+        if (typeof window !== 'undefined') window.__qualityReadyAt = performance.now();
+      }
       // Notify onRender subscribers (compass overlay etc.) after the frame is
       // drawn, so screen-space overlays can track the current camera. Guarded
       // so a bad subscriber can't wedge the render loop.
@@ -2800,6 +2956,9 @@ const Home3DScene = (() => {
       // the preview tile to stop rendering behind an open popup / when off-screen.
       setActive(active) { _inactive = !active; applyPause(); },
       setShadows(enabled) {
+        // An explicit caller wins over the progressive ramp: cancel it so the
+        // ramp cannot overwrite this choice a frame later.
+        shadowsRamped = true;
         ren.shadowMap.enabled = enabled;
         ren.shadowMap.needsUpdate = true;
         // Force all materials to recompile with/without shadow defines

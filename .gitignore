@@ -51,3 +51,12 @@ $RECYCLE.BIN/
 # --- Python (the `python -m http.server` quick-start path) -----------------
 __pycache__/
 *.py[cod]
+
+# --- Local serving staging ---------------------------------------------------
+# .serve-ope/ is a throwaway COPY of src/ + index.html + a REAL house profile,
+# assembled so a real house can be served locally without that house ever
+# living in the repo. It contains private geometry and photographs of someone's
+# actual home. It must never be committed. (.serve-ope-sync.sh rebuilds it, and
+# names a machine-specific path, so it stays local too.)
+.serve-ope/
+.serve-ope-sync.sh
