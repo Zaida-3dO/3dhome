@@ -632,3 +632,54 @@ A house that says nothing gets nothing. Asking for it in a house without the
 wall ids it needs is a quiet no-op, and an unrecognised name is ignored rather
 than rejected — so a profile written for a newer engine still loads on an older
 one.
+
+### Overlay scripts a profile brings with it
+
+`extraOverlays` names JavaScript files, shipped inside the profile directory,
+that the page loads after the engine and the house are ready.
+
+```json
+"extraOverlays": ["overlays/proposed-layout.js"]
+```
+
+It looks like `decor` and is doing something quite different. `decor` names
+geometry **this engine already contains**, from a closed enum — the profile is
+only choosing to switch it on. `extraOverlays` points at code the engine does
+*not* contain and cannot validate beyond its path. The mechanism is generic; the
+overlay is the profile author's own.
+
+The reason it exists is privacy. An overlay of this kind usually draws something
+true about **one particular building** — a renovation plan, a survey annotation,
+a furniture layout resolved against photographs of a real interior. That drawing
+should not have to live in a public engine repository in order to be usable, and
+this is the supported way to keep it out: a private profile directory holds its
+geometry and its overlay together, and is mounted next to a public checkout that
+ships neither. The demo house declares no overlays, and a profile without the
+field behaves exactly as it did before the field existed.
+
+**The contract for a loaded script** is deliberately small, so a profile author
+writes an overlay rather than an integration:
+
+* It is a classic (non-module) script, loaded *after* `Home3DScene` exports are
+  populated, so it can read `COORD_TRANSFORM`, `WALL_SEGMENTS_WORLD`,
+  `FOOTPRINT_BOUNDS`, `ROOMS` and the rest directly.
+* If it assigns a function to `window.__home3dOverlayRegister`, the page calls
+  it once with `(scene, { transform, wallHeight, requestRender })` — the same
+  options the built-in overlays in `src/overlays/` receive — and keeps whatever
+  handle it returns. A script that would rather do everything itself can simply
+  register nothing.
+* It owns its own keyboard shortcuts and URL parameters. The engine reserves
+  none on its behalf, so an overlay is free to claim a key the engine does not
+  use (the built-ins take `D`, `Shift+D` and `G`).
+
+**Failure is contained.** A script that 404s or throws is logged and skipped —
+the house still renders, because a missing decoration must never cost you the
+building. Scripts load sequentially, so a profile listing several gets a
+deterministic order and each one's `attach` runs before the next is fetched.
+
+**Path rule, and what it does not protect you from.** An entry must be
+profile-relative, with no leading slash, no `..` and no absolute URL — the same
+rule textures follow — so a profile cannot point the engine at an arbitrary
+host. Understand the limit of that guard: a script named here runs with the full
+privileges of the page, so **the profile directory must be trusted exactly as
+much as the page is**. Do not load a house profile you would not run code from.

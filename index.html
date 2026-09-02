@@ -801,6 +801,74 @@
           requestRender: home.requestRender,
         });
 
+      // ── Extra overlays declared by the house profile ──────────────────────
+      //
+      // A profile may ship overlay scripts of its own beside its geometry (the
+      // `extraOverlays` field -- see docs/house-profile.md). This engine ships
+      // none: the demo house declares none, so on a stock checkout the whole
+      // block below is a no-op. It exists so a PRIVATE profile can carry a
+      // drawing that is specific to one real building -- a renovation plan, a
+      // survey annotation -- without that drawing living in this public repo.
+      //
+      // Contract for a script loaded here (kept deliberately small so a profile
+      // author writes an overlay, not an integration):
+      //
+      //   * It is a classic script, loaded after the engine and after the house
+      //     is bound, so Home3DScene.* exports are already populated.
+      //   * If it defines a global with an `attach(scene, opts)` method, it is
+      //     called with the same shape the built-in overlays receive:
+      //     { transform, wallHeight, requestRender }. Anything else it needs it
+      //     reads off Home3DScene itself.
+      //   * It owns its own keyboard shortcuts and URL parameters. The engine
+      //     does not reserve keys on its behalf.
+      //
+      // Failure is contained: a script that 404s or throws logs and is skipped,
+      // because a missing decoration must never cost the house its render.
+      // Loading is sequential so a profile listing several gets a deterministic
+      // order, and each script's attach() runs before the next one loads.
+      const extraOverlayHandles = [];
+      async function loadExtraOverlays() {
+        const list = (Home3DScene.HOUSE && Home3DScene.HOUSE.extraOverlays) || [];
+        for (const entry of list) {
+          // Globals defined by a classic <script> are not enumerable on window
+          // in a way we can diff reliably, so the script tells us its global's
+          // name by setting window.__home3dOverlayRegister -- or, more simply,
+          // by calling it. Both are supported: a script may register itself, or
+          // just do its own thing and register nothing.
+          try {
+            await new Promise((resolve, reject) => {
+              const el = document.createElement('script');
+              el.src = entry.url;
+              el.async = false;
+              el.onload = resolve;
+              el.onerror = () => reject(new Error('failed to load ' + entry.url));
+              document.head.appendChild(el);
+            });
+          } catch (err) {
+            console.error('[3dHome] extra overlay "' + entry.path + '" did not load: ' + err.message +
+                          ' -- skipped. The house renders without it.');
+            continue;
+          }
+          // If the script registered a factory, attach it with the standard opts.
+          try {
+            const reg = window.__home3dOverlayRegister;
+            if (typeof reg === 'function') {
+              window.__home3dOverlayRegister = undefined;
+              const handle = reg(home.scene, {
+                transform: Home3DScene.COORD_TRANSFORM,
+                wallHeight: Home3DScene.WALL_HEIGHT,
+                requestRender: home.requestRender,
+              });
+              if (handle) extraOverlayHandles.push(handle);
+            }
+          } catch (err) {
+            console.error('[3dHome] extra overlay "' + entry.path + '" failed to attach: ' +
+                          (err && err.message ? err.message : err) + ' -- skipped.');
+          }
+        }
+      }
+      await loadExtraOverlays();
+
       // ── Preview tile: pause the render loop whenever it isn't visible ──
       //
       // Without this a WebGL scene renders continuously inside a hidden tile

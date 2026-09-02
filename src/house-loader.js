@@ -66,6 +66,14 @@ const HouseLoader = (() => {
   // the engine at an arbitrary host.
   const TEXTURE_PATH_RE = /^(?!\/)(?!.*\.\.)(?!https?:)[^\\]+\.(png|jpg|jpeg|webp)$/i;
 
+  // Extra-overlay script paths resolve relative to the profile directory under
+  // exactly the same rule as textures: profile-relative, no leading slash, no
+  // '..', no absolute URL. This one matters MORE than the texture guard, not
+  // less -- a texture that escapes the profile paints a wrong picture, whereas
+  // a script that escapes it runs arbitrary code in the page's origin. A
+  // profile is data; it must never name an arbitrary host to execute from.
+  const OVERLAY_PATH_RE = /^(?!\/)(?!.*\.\.)(?!https?:)[^\\]+\.js$/i;
+
   /** '#rrggbb' -> 0xrrggbb, for THREE.Color. Falls back when absent/malformed. */
   function hexToInt(hex, fallback) {
     if (typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return fallback;
@@ -465,6 +473,23 @@ const HouseLoader = (() => {
     // from: a plan with a long thin projection (a hallway arm, an outhouse)
     // pulls the mean away from the part someone actually wants centred. So a
     // profile may state its own, and most should not bother.
+    // ---- Extra overlay scripts (optional) --------------------------------
+    // A profile may ship its own overlay script(s) next to its geometry. Each
+    // entry is a profile-relative .js path, resolved here to a URL the page can
+    // add a <script> tag for. Anything failing the path guard is dropped with a
+    // warning rather than throwing: one bad entry must not cost the house its
+    // render, which is the same 'warn and carry on' rule texture paths use.
+    const extraOverlays = (Array.isArray(geo.extraOverlays) ? geo.extraOverlays : [])
+      .filter(function (pth) {
+        if (typeof pth !== 'string') return false;
+        if (!OVERLAY_PATH_RE.test(pth)) {
+          warn('extraOverlays entry "' + pth + '" is not a safe profile-relative .js path -- ignored');
+          return false;
+        }
+        return true;
+      })
+      .map(function (pth) { return { path: pth, url: dir + pth }; });
+
     const centre = Array.isArray(geo.viewCentre) && geo.viewCentre.length === 2
       ? [geo.viewCentre[0], geo.viewCentre[1]]
       : [(footprint.minX + footprint.maxX) / 2, (footprint.minY + footprint.maxY) / 2];
@@ -506,6 +531,18 @@ const HouseLoader = (() => {
       // the profile has to ask for it by name. Unknown names are harmless: the
       // engine only looks for the ones it implements.
       decor: Array.isArray(geo.decor) ? geo.decor.filter(d => typeof d === 'string') : [],
+      // Optional extra overlay scripts this profile ships alongside itself,
+      // resolved to profile-relative URLs (see OVERLAY_PATH_RE). Absent for
+      // most houses -- the demo included -- and an empty list when absent, so
+      // the page's loader is a no-op by default.
+      //
+      // WHY A PROFILE FIELD and not a page setting: an overlay of this kind
+      // draws something true about ONE house, so a house that owns the drawing
+      // owns it wherever its profile loads -- the same argument `decor` makes
+      // for panelling. It is deliberately NOT part of `decor`: decor names
+      // geometry this engine builds itself from a fixed enum, whereas this
+      // points at a script the engine does not contain.
+      extraOverlays: extraOverlays,
       warnings: warnings
     };
   }

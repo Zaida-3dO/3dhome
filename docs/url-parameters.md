@@ -29,7 +29,7 @@ except where noted. Unknown parameters are ignored.
 | [`debug`](#debug) | `1` | off | Eruda mobile DevTools + error banner |
 | [`debugWalls`](#debugwalls) | `1` \| `true` | off | Wall-number overlay |
 | [`grid`](#grid) | `1` \| `true` | off | Coordinate grid overlay |
-| [`proposed`](#proposed) | — | — | **Removed. No-op.** |
+| [`proposed`](#proposed) | `1` \| `true` | off | Handled by a profile's overlay, if it ships one; otherwise inert |
 | [`debugDoors`](#debugdoors) | `1` \| `true` | off | Door-number overlay |
 | [`_`](#_-cache-bust) | any token | unset | Cache-bust; **must be session-stable** |
 
@@ -324,15 +324,26 @@ sidebar's "Door numbers" switch.
 
 ### `proposed`
 
-**Removed — this parameter is a no-op in the public app.**
+**Not handled by this repo — it belongs to an overlay a house profile may bring
+with it.**
 
-It previously toggled a "proposed renovation" overlay. That overlay depicted a
-real, specific renovation of a real home and was deliberately left behind when
-the viewer was extracted into this public repository. Passing `?proposed=1` does
-nothing at all; no code reads it.
+`?proposed=1` previously toggled a "proposed renovation" overlay. That overlay
+depicted a real, specific renovation of a real home, so it was deliberately left
+behind when the viewer was extracted into this public repository. No code *here*
+reads the parameter, and on a stock checkout — including the demo house — it
+does nothing.
 
-It is documented here rather than omitted so that an old bookmark, dashboard
-card or saved URL carrying it can be explained rather than mistaken for a bug.
+It is not, however, permanently dead. An overlay script loaded through a house
+profile's [`extraOverlays`](house-profile.md#overlay-scripts-a-profile-brings-with-it)
+field owns its own URL parameters and keyboard shortcuts, and the overlay that
+originally used this one reads `?proposed=1` itself and binds `P` (toggle the
+plan) and `L` (toggle its labels, only while the plan is shown). Mount a profile
+that ships it and the parameter works again; load any profile that does not and
+it stays inert.
+
+So: an old bookmark, dashboard card or saved URL carrying `?proposed=1` is
+explained rather than a bug, and whether it *does* anything depends entirely on
+which house profile is loaded.
 
 ---
 
