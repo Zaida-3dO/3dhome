@@ -441,6 +441,76 @@ const HouseLoader = (() => {
     // every consumer can index by room id without a null check.
     roomOrder.forEach(rid => { if (!lights[rid]) lights[rid] = {}; });
 
+    // ---- Slabs: the ONE floor and the ONE ceiling -------------------------
+    // The house has exactly one floor and exactly one ceiling. Each is emitted
+    // here as a LIST OF PIECES because THREE.Shape describes a single ring:
+    // an authored outline is a one-piece list, a derived one is many pieces
+    // extruded together into one geometry. The renderer does not branch.
+    //
+    // AUTHORED (profile has `slabs`): the two rings verbatim. They are
+    // deliberately different outlines -- the floor traces the INNER faces of
+    // the exterior walls (the walls stand on it and run down through it), the
+    // ceiling traces their OUTER faces so it caps over the shell. Nothing here
+    // can derive that asymmetry, which is exactly why a house that has measured
+    // its shell states it.
+    //
+    // DERIVED (no `slabs`): rooms UNION every wall footprint. The rooms alone
+    // are NOT enough and this is the bug that made the field necessary -- rooms
+    // stop at the wall faces, so between any two rooms there is a strip of
+    // exactly one wall thickness that no room polygon covers, and laying only
+    // the rooms leaves a visible slot in the floor under every internal wall.
+    // Adding each wall's own footprint rectangle (centreline expanded by half
+    // its thickness) fills precisely those strips. Interior walls are included
+    // for the floor as well as the ceiling: an interior wall separates two
+    // rooms, so the gap under it is the one people actually see.
+    //
+    // The derived floor therefore reaches the OUTER face of the shell rather
+    // than the inner one -- fractionally larger than a hand-trace would be, and
+    // invisible from any angle because the walls cover it. Gap-free is worth
+    // more than a hidden few centimetres.
+    const wallFootprint = w => {
+      const dx = w.x2 - w.x1, dy = w.y2 - w.y1;
+      const len = Math.hypot(dx, dy) || 1;
+      // Unit normal to the wall, scaled to half its thickness.
+      const nx = (-dy / len) * (w.thickness / 2);
+      const ny = (dx / len) * (w.thickness / 2);
+      return [
+        [w.x1 + nx, w.y1 + ny], [w.x2 + nx, w.y2 + ny],
+        [w.x2 - nx, w.y2 - ny], [w.x1 - nx, w.y1 - ny]
+      ];
+    };
+    const isRing = poly => Array.isArray(poly) && poly.length >= 3 &&
+      poly.every(pt => Array.isArray(pt) && pt.length >= 2 &&
+        typeof pt[0] === 'number' && typeof pt[1] === 'number');
+
+    const slabsIn = geo.slabs || {};
+    const derivedPieces = roomOrder.map(rid => rooms[rid].poly)
+      .concat(wallsExt.map(wallFootprint));
+    let floorPieces, ceilingPieces;
+    if (slabsIn.floor != null) {
+      if (isRing(slabsIn.floor)) {
+        floorPieces = [slabsIn.floor.map(pt => [pt[0], pt[1]])];
+      } else {
+        warn('slabs.floor is not a ring of at least 3 [x, y] points -- deriving the floor from rooms + walls instead');
+      }
+    }
+    if (slabsIn.ceiling != null) {
+      if (isRing(slabsIn.ceiling)) {
+        ceilingPieces = [slabsIn.ceiling.map(pt => [pt[0], pt[1]])];
+      } else {
+        warn('slabs.ceiling is not a ring of at least 3 [x, y] points -- deriving the ceiling from rooms + walls instead');
+      }
+    }
+    const slabs = {
+      floor: floorPieces || derivedPieces,
+      ceiling: ceilingPieces || derivedPieces,
+      floorAuthored: !!floorPieces,
+      ceilingAuthored: !!ceilingPieces,
+      // Centimetres in the profile, metres for the renderer -- like every other
+      // length the engine consumes.
+      thickness: (slabsIn.thickness != null && slabsIn.thickness > 0 ? slabsIn.thickness : 15) / 100
+    };
+
     // ---- Site / sun rig ----------------------------------------------------
     // The predecessor hardcoded LAT = 51.49 and assumed solar noon at 12:00 UTC,
     // so a house anywhere else got its sun at the wrong time of day. Latitude
@@ -517,6 +587,11 @@ const HouseLoader = (() => {
       wallsById: wallsById,
       wallFaceTextures: wallFaceTextures,
       highestWallIdEverAssigned: geo.walls.highestIdEverAssigned,
+      // The ONE floor and the ONE ceiling, each as a list of plan-space rings
+      // (see the slab section above). Authored from `slabs` when the profile
+      // states them, otherwise derived from rooms + wall footprints. thickness
+      // is in METRES here; the profile authors centimetres.
+      slabs: slabs,
       rooms: rooms,
       roomOrder: roomOrder,
       doors: doors,

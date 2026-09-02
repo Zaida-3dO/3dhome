@@ -135,6 +135,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | `site` | no | Latitude for the daylight rig. **Give a city-level latitude, not a rooftop one** — the sun calculation cannot tell the difference, and a shared profile then does not locate a building. |
 | `rooms` | yes | The rooms. |
 | `walls` | yes | The walls. |
+| `slabs` | no | Hand-traced floor and ceiling outlines. Omit and both are derived from rooms + wall footprints — see below. |
 | `doors` | no | The doors. |
 | `lights` | no | The light fixtures, grouped by room. |
 | `cameraPresets` | no | Per-house camera overrides. Usually omit — see below. |
@@ -200,6 +201,56 @@ later one, and every screenshot and note referring to "wall 22" would then point
 somewhere else. Record the highest id you have ever used in
 `walls.highestIdEverAssigned`, mint new ids above it, and never reuse a retired
 one. The validator enforces this.
+
+### Slabs — the floor and the ceiling
+
+A house has exactly **one floor** and exactly **one ceiling**. Each is a single
+continuous solid of `thickness` centimetres, and the two are deliberately **not
+the same outline**:
+
+- the **floor** is traced to the **inner** (room-facing) faces of the exterior
+  walls — the shell stands *on* the floor and runs down through it, so there is
+  no seam where a wall meets the ground;
+- the **ceiling** is traced to their **outer** faces — the full building
+  envelope — so it **caps over** the shell out to its outer edge.
+
+```json
+"slabs": {
+  "floor":   [[303.3, 748.8], [303.3, 10.2], [1028.7, 10.2],
+              [1028.7, 95.0], [1281.5, 95.0], [1281.5, 748.8]],
+  "ceiling": [[273.3, 791.8], [273.3, -19.8], [1058.7, -19.8],
+              [1058.7, 65.0], [1311.5, 65.0], [1311.5, 791.8]],
+  "thickness": 15
+}
+```
+
+Both are ordered rings of `[x, y]` plan points in the same coordinate space as
+rooms and walls, in centimetres, and — like a room polygon — **do not repeat the
+first point at the end**. Each must be a *simple* ring: `THREE.Shape` describes
+one closed loop, and a self-intersecting figure-of-eight triangulates into
+nonsense rather than failing loudly. `thickness` serves both surfaces; the floor
+grows downward from the walking surface and the ceiling upward from the wall
+head, so you never see it, but it is what stops the model reading as paper at a
+cut edge — and it is how far below zero the exterior walls run to meet the
+floor's underside.
+
+**The whole block is optional.** Omit it and the engine derives both surfaces
+from what you have already authored: the union of every room polygon **with
+every wall footprint** (each wall's centreline expanded by half its thickness).
+The wall footprints are the part that matters. Rooms stop at the wall faces, so
+between any two rooms lies a strip exactly one wall thick that no room polygon
+covers — lay down only the rooms and you get a visible slot in the floor under
+every internal wall. Adding the wall rectangles fills precisely those strips.
+
+So the derived floor is gap-free, but it reaches the **outer** face of the shell
+rather than the inner one: fractionally larger than a hand-trace, and invisible
+from any angle because the walls cover it. What the derivation *cannot* produce
+is the floor/ceiling asymmetry above — it has one outline and uses it twice.
+
+State the block when you have measured your shell and want the real rings; leave
+it out while a plan is still moving, and nothing goes wrong. `floor` and
+`ceiling` are independent, so authoring one and deriving the other is legal, if
+rarely what you want.
 
 ### Doors
 

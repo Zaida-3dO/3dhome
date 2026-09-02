@@ -1160,15 +1160,20 @@ const Home3DScene = (() => {
     //     (from the floor's walkable TOP face to the ceiling's UNDERSIDE). They
     //     no longer poke into the floor slab below y=0 or the ceiling slab above
     //     WH. Height = WH, centred at WH/2.
-    //   • EXTERNAL walls (outer:1, incl. pillars #3/#12/#26/#31) span the full
-    //     floor slab up to the ceiling underside: y = -0.15 .. WH (start below,
-    //     through the 15cm floor slab; STOP at the ceiling underside — NOT up
-    //     through the ceiling). Height = WH+0.15, centred at (WH-0.15)/2.
-    // (Previously ALL walls spanned -0.15..WH+0.15, poking into both slabs.)
-    // Doors sit at floor level (y=0) with OPEN_H=2.07 < WH=2.5, so internal
+    //   • EXTERNAL walls (outer:1, incl. pillars) span the full floor slab up
+    //     to the ceiling underside: y = -slabThickness .. WH (start below,
+    //     through the floor slab; STOP at the ceiling underside — NOT up
+    //     through the ceiling).
+    // (Previously ALL walls spanned the whole range, poking into both slabs.)
+    // Doors sit at floor level (y=0) with OPEN_H well under WH, so internal
     // walls at height WH still frame every door + lintel comfortably.
-    const WALL_INT_BOTTOM_Y = 0;          // internal walls start at floor top
-    const WALL_EXT_BOTTOM_Y = -0.15;      // external walls start at floor bottom
+    //
+    // The external walls' base is the floor slab's UNDERSIDE, so it is read
+    // from the same profile number the floor is extruded by. Hardcoding 0.15
+    // here would open a seam at the base of every exterior wall the moment a
+    // profile declared a thicker or thinner slab.
+    const WALL_INT_BOTTOM_Y = 0;                          // internal: floor top
+    const WALL_EXT_BOTTOM_Y = -HOUSE.slabs.thickness;     // external: floor bottom
     const WALL_TOP_Y = WH;                // BOTH cap at the ceiling underside
     WALL_EXT.forEach(({ id, x1, y1, x2, y2, outer, thickness }) => {
       // Per-wall vertical geometry, keyed off the outer flag (see block above).
@@ -1554,56 +1559,31 @@ const Home3DScene = (() => {
       });
     }
 
-    // ── Single house-wide FLOOR + CEILING slabs (2026-07-10 cascade rework) ──
-    // we decoupled the two concerns: (1) ONE visible tile floor + ONE ceiling,
-    // both bounded by the walls, each a real 15cm-thick extruded solid; (2)
-    // per-room INVISIBLE click-catcher meshes carry the roomId for "click room ->
-    // light controls" (the visible floor is single, so it can't carry per-room
-    // ids). Rugs are separate objects on top of the tile in the bedroom +
-    // home_office. Built once, up front, before the room loop.
+    // ── The ONE house-wide FLOOR + the ONE CEILING ────────────────────────
+    // Two concerns are decoupled here: (1) ONE visible floor and ONE ceiling,
+    // each a real solid slab bounded by the walls; (2) per-room INVISIBLE
+    // click-catcher meshes carry the roomId for "click room -> light controls"
+    // (the visible floor is a single mesh, so it cannot carry per-room ids).
+    // Rugs are separate objects sitting on top. Built once, up front, before
+    // the room loop.
     //
-    // HEIGHTS REMODEL (2026-07-11, ACK'd): the FLOOR reaches the INNER
-    // (room-facing) faces of the walls (SLAB_POLY, unchanged) while the CEILING
-    // reaches the OUTER faces (CEIL_POLY, below) — they are NO LONGER the same
-    // outline. External walls run y -0.15 .. WH (through the floor, up to the
-    // ceiling underside); internal walls run y 0 .. WH (see the wall build above).
+    // BOTH OUTLINES COME FROM THE PROFILE (house-loader's slab section). They
+    // are deliberately NOT the same outline: the FLOOR reaches the INNER
+    // (room-facing) faces of the exterior walls, while the CEILING reaches
+    // their OUTER faces and caps over them. External walls run from
+    // y = -SLAB_THICK (through the floor) up to the ceiling underside;
+    // internal walls run y = 0 .. WH.
     //
-    // BOTH OUTLINES ARE NOW DERIVED FROM THE PROFILE. They used to be two
-    // hand-traced rings describing one specific flat, re-traced by hand whenever
-    // a wall moved.
-    //
-    // FLOOR — the room interior. Every room polygon is laid down, so the floor
-    // covers exactly the rooms the profile declares and nothing else; external
-    // walls sit ON it. Using the ROOMS rather than the wall footprint is what
-    // keeps a re-entrant plan (an L, a cut corner, a courtyard) correct without
-    // anyone tracing its outline: a notch is simply a place where no room is.
-    //
-    // CEILING — the full building envelope, out to the OUTER faces of the
-    // exterior walls, so it caps over them. Each exterior wall contributes its
-    // own slab rectangle (centreline expanded by half its thickness); together
-    // with the rooms that is the envelope. Floor and ceiling are deliberately
-    // NOT the same outline: external walls run from below the floor up to the
-    // ceiling underside, internal walls only from the floor up.
-    //
-    // Both are a LIST OF PIECES rather than one ring, because THREE.Shape can
-    // only describe a single ring. The pieces are extruded together into one
-    // geometry, which is visually identical (they abut exactly) and removes the
-    // hand-tracing step completely.
-    const SLAB_PIECES = HOUSE.roomOrder.map(rid => ROOMS[rid].poly);
-    const CEIL_PIECES = SLAB_PIECES.concat(
-      HOUSE.wallsExt.filter(w => w.outer).map(w => {
-        const dx = w.x2 - w.x1, dy = w.y2 - w.y1;
-        const len = Math.hypot(dx, dy) || 1;
-        // Unit normal to the wall, scaled to half its thickness.
-        const nx = (-dy / len) * (w.thickness / 2);
-        const ny = (dx / len) * (w.thickness / 2);
-        return [
-          [w.x1 + nx, w.y1 + ny], [w.x2 + nx, w.y2 + ny],
-          [w.x2 - nx, w.y2 - ny], [w.x1 - nx, w.y1 - ny]
-        ];
-      })
-    );
-    const SLAB_THICK = 0.15; // 15cm, both floor + ceiling
+    // Each outline arrives as a LIST OF PIECES, because THREE.Shape describes
+    // exactly one ring. A profile that authored its outlines gives one piece
+    // per surface -- a single continuous ring, which is what a real floor is.
+    // A profile that did not gives the derived union of its rooms and wall
+    // footprints, several abutting pieces. ExtrudeGeometry takes an array of
+    // shapes and emits ONE geometry either way, so this is a single mesh and a
+    // single draw call in both cases and the code below never branches.
+    const SLAB_PIECES = HOUSE.slabs.floor;
+    const CEIL_PIECES = HOUSE.slabs.ceiling;
+    const SLAB_THICK = HOUSE.slabs.thickness; // metres; profile authors cm
     // Build a THREE.Shape from a cm polygon using the same (tx, -tz) convention
     // the per-room floors used, so the -PI/2 X-rotation lands it correctly.
     const shapeFromPoly = poly => {
@@ -1678,11 +1658,11 @@ const Home3DScene = (() => {
     floorSlab.receiveShadow = true;
     scene.add(floorSlab);
 
-    // Ceiling: OUTER-FLUSH outline (ceilShape, the full building footprint — see
-    // CEIL_POLY above), 15cm thick, grows UPWARD from WH (visible underside stays
-    // at y=WH; body extends up toward the roof). The ceiling is BIGGER than the
-    // floor now — it caps OVER the external walls out to their outer faces, while
-    // the floor stays at the inner faces. Keeps the fade-from-outside behaviour
+    // Ceiling: the OUTER-FLUSH outline (ceilShapes — the full building
+    // footprint), SLAB_THICK deep, growing UPWARD from WH (visible underside
+    // stays at y=WH; the body extends up toward the roof). The ceiling is
+    // BIGGER than the floor: it caps OVER the external walls out to their outer
+    // faces, while the floor stays at their inner faces. Keeps the fade-from-outside behaviour
     // (transparent when the camera is above the house, solid from inside) —
     // driven by ceilingMesh.material.opacity in the render loop.
     const ceilMat = new THREE.MeshStandardMaterial({

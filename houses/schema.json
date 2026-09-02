@@ -698,6 +698,36 @@
           ],
           "additionalProperties": false
         },
+        "slabs": {
+          "type": "object",
+          "title": "Floor and ceiling slabs — the two continuous horizontal surfaces",
+          "description": "OPTIONAL hand-traced outlines for the ONE floor slab and the ONE ceiling slab.\n\nThe house has exactly one floor and exactly one ceiling, each a real solid of `thickness` centimetres, and each is built as a SINGLE closed ring. They are deliberately NOT the same outline:\n\n  floor   — traced to the INNER (room-facing) faces of the exterior walls. The floor spans the room interior only; the exterior walls sit ON it and run down through it, so there is no seam where a wall meets the floor.\n  ceiling — traced to the OUTER faces of the exterior walls (the full building envelope), so it CAPS OVER the exterior walls out to their outer edge.\n\nWHY THIS IS AUTHORED AND NOT DERIVED. A profile that omits `slabs` still gets a floor and a ceiling: the engine unions every room polygon WITH every wall footprint, which fills the strip under each wall and is therefore gap-free. That derivation is correct but blunt — it stops at the outer face of the shell for both surfaces, so it cannot express the floor/ceiling asymmetry above, and its outline is the union of many rectangles rather than the single clean ring a hand-trace gives. A house that has measured its shell states the two rings here and gets exactly them.\n\nEach polygon is an ordered ring of [x, y] plan points in the profile's unit (centimetres), in the SAME coordinate space as rooms and walls. Do not repeat the first point at the end — the ring closes implicitly. A ring must be simple (non-self-intersecting): THREE.Shape describes one ring, and a figure-of-eight triangulates into nonsense rather than failing loudly.",
+          "properties": {
+            "floor": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/point2d"
+              },
+              "minItems": 3,
+              "description": "The FLOOR ring, traced to the inner (room-facing) faces of the exterior walls. Everything walkable is inside it; the exterior walls stand on it."
+            },
+            "ceiling": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/point2d"
+              },
+              "minItems": 3,
+              "description": "The CEILING ring, traced to the OUTER faces of the exterior walls — the full building footprint, so the ceiling caps over the shell. Normally the larger of the two rings. Omit it to let the ceiling fall back to the derived envelope while keeping an authored `floor`; the two are independent."
+            },
+            "thickness": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 15,
+              "description": "Slab depth in centimetres, used by BOTH the floor and the ceiling. The floor grows DOWNWARD from the walking surface (into the ground) and the ceiling grows UPWARD from the wall head, so this number is never visible from inside — it is what stops the model reading as paper when the camera catches a cut edge, and it is how far below zero the exterior walls must run to meet the floor's underside."
+            }
+          },
+          "additionalProperties": false
+        },
         "doors": {
           "type": "array",
           "items": {
