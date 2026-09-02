@@ -371,3 +371,69 @@ Run through this after deploying. Each item has caught a real failure.
 
 - [ ] `bash scripts/check-no-pii.sh` passes 8/8 in your checkout before pushing.
 - [ ] Your real house profile is a read-only mount, and is *not* in git.
+
+---
+
+## Deployed instance (2026-09-02)
+
+First real deployment, cut from `v0.1.0` and installed remotely over Tailscale —
+no physical access to the NAS was needed at any point.
+
+**Where it runs:** the shared `projects` compose stack on the NAS
+(`/share/Container/projects/docker-compose.yml`), alongside the other GHCR-image
+services. It follows that stack's conventions: a GHCR image rather than a local
+build, `${SERVICE}_PORT` / `_LOCATION` / `_VERSION` variables in the stack's
+shared `.env`, and no source bind-mounted.
+
+The private house profile is bind-mounted read-only from
+`/share/Container/projects/3dhome/house` onto `houses/ope`, and `HOME3D_HOUSE=ope`
+selects it. The public image itself ships only the demo house.
+
+Home Assistant is wired to `HOME3D_HA_URL` — set to a hostname that resolves both on
+the LAN and (later) remotely, rather than a LAN IP that only works from home.
+
+### The one thing that will bite you again: filesystem ACLs
+
+The bind mount worked, the container reported healthy, the root page served 200 —
+and **every request under `houses/ope` returned 404** for roughly half an hour.
+
+The cause is not POSIX permissions, and reading them will actively mislead you.
+`ls -l` showed `-rw-r--r--` (world-readable) and every parent directory looked
+traversable. But this is a QNAP share with **ACLs layered over the POSIX bits**,
+and `getfacl` told the real story:
+
+```
+/share/Container/projects        other::---     <-- no traversal for anyone but the owner
+```
+
+nginx in this image runs as **uid 101**, not root. The other services in this
+stack run as root, so they never hit it — which is exactly why the pattern looked
+safe to copy.
+
+**The fix**, granting that one uid traversal without loosening a shared directory
+for everything else:
+
+```sh
+setfacl -m u:101:rx /share/Container/projects
+setfacl -R -m u:101:rX /share/Container/projects/3dhome
+```
+
+**How to recognise it:** the container is healthy, `/` serves, and only the mounted
+path 404s. Confirm in one command — if root can read the file and the service user
+cannot, it is this:
+
+```sh
+docker exec home3d        head -c 20 /usr/share/nginx/html/houses/ope/geometry.json   # works
+docker exec -u nginx home3d head -c 20 /usr/share/nginx/html/houses/ope/geometry.json # Permission denied
+```
+
+Re-apply the `setfacl` lines after replacing the profile directory; a fresh copy
+arrives with the share's default ACL, not the one you set.
+
+### Verified after deploy
+
+Rendered over Tailscale over the VPN on the published port: 22 walls, 9 doors,
+10 rooms, the house profile's own name in the heading, `v0.1.0` stamped, no page errors. `geometry.json`,
+`rooms.json`, the renovation overlay and the wallpaper textures all serve 200. The
+Home Assistant token authenticates (`/api/` returns 200 and a real light entity
+reports its state).
