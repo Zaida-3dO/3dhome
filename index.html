@@ -879,6 +879,46 @@
       }
       await loadExtraOverlays();
 
+      // ---- Settings rows contributed by extra overlays -----------------------
+      //
+      // An overlay handle MAY expose `settingsToggles`: an array of descriptors
+      //   { key, label, hint, get(), set(v), parent }
+      // where `key` is a short slug unique within the page, `hint` is the
+      // keyboard shortcut shown greyed after the label, and `parent` (optional)
+      // names another descriptor's key to render this one as an indented
+      // sub-toggle shown only while the parent is on.
+      //
+      // An overlay that exposes nothing contributes no rows and still works --
+      // this is additive, so the older `attach()` contract is unchanged.
+      //
+      // The descriptors are re-read on every render rather than cached, so a
+      // row reflects state changed by the overlay's own keyboard shortcut.
+      function extraOverlayToggles() {
+        const out = [];
+        extraOverlayHandles.forEach(h => {
+          const list = h && h.settingsToggles;
+          if (!Array.isArray(list)) return;
+          list.forEach(t => {
+            if (!t || typeof t.get !== 'function' || typeof t.set !== 'function') return;
+            if (!t.key || !t.label) return;
+            out.push(t);
+          });
+        });
+        return out;
+      }
+
+      // One toggle row, matching the markup of the hand-written rows above so a
+      // profile's switch is indistinguishable from a built-in one.
+      function overlayToggleRow(t, indented) {
+        const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        return '<div class="panel-toggle-row"' + (indented ? ' style="padding-left:16px;"' : '') + '>' +
+          '<span class="panel-toggle-label"' + (indented ? ' style="opacity:0.85;"' : '') + '>' + esc(t.label) +
+          (t.hint ? ' <span style="opacity:0.4;font-weight:400;">(' + esc(t.hint) + ')</span>' : '') +
+          '</span>' +
+          '<button class="toggle ' + (t.get() ? 'on' : '') + '" id="panel-xo-' + esc(t.key) + '"><div class="toggle-knob"></div></button>' +
+          '</div>';
+      }
+
       // ── Preview tile: pause the render loop whenever it isn't visible ──
       //
       // Without this a WebGL scene renders continuously inside a hidden tile
@@ -1227,6 +1267,26 @@
             '<button class="toggle ' + (doorNums.isEnabled() ? 'on' : '') + '" id="panel-door-numbers-toggle"><div class="toggle-knob"></div></button>' +
             '</div>';
 
+          // Toggles contributed by a profile's `extraOverlays`. A built-in
+          // overlay gets a hand-written row above because the engine knows what
+          // it is; an extra overlay is by definition unknown here, so it
+          // DESCRIBES its own rows and this loop renders them. Without this an
+          // overlay could still be driven by its keyboard shortcut but had no
+          // switch, which is how the proposed-layout overlay lost its Settings
+          // row in the extraction (the predecessor hard-coded that one row).
+          //
+          // A row may declare `parent`, naming another row's key: it then
+          // renders indented directly beneath it and only while that parent is
+          // on — the sub-toggle pattern (a plan's labels are meaningless with
+          // the plan hidden).
+          extraOverlayToggles().forEach(t => {
+            if (t.parent) return; // rendered under its parent below
+            html += overlayToggleRow(t, false);
+            extraOverlayToggles()
+              .filter(c => c.parent === t.key && t.get())
+              .forEach(c => { html += overlayToggleRow(c, true); });
+          });
+
           // Specs section — buttons that open each spec page in a new tab.
           html += '<div class="panel-section-title">Specs</div>';
           html += '<div class="spec-list">' +
@@ -1260,6 +1320,12 @@
           if (panelDoorNumbersToggle) {
             panelDoorNumbersToggle.addEventListener('click', () => { doorNums.toggle(); renderPanel(); });
           }
+          // Wire the profile-contributed rows rendered above. Each row's id is
+          // derived from its key, so the lookup matches overlayToggleRow().
+          extraOverlayToggles().forEach(t => {
+            const el = document.getElementById('panel-xo-' + t.key);
+            if (el) el.addEventListener('click', () => { t.set(!t.get()); renderPanel(); });
+          });
           panelBody.querySelectorAll('[data-sun-mode]').forEach(btn => {
             btn.addEventListener('click', () => { home.setSunMode(btn.dataset.sunMode); renderPanel(); });
           });
