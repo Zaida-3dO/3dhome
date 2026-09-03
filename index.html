@@ -579,6 +579,16 @@
         { name: 'BalconyWindowSpec',    path: 'specs/BalconyWindowSpec.html' },
         { name: 'CurtainSpec',          path: 'specs/CurtainSpec.html' },
       ];
+
+      // The loaded house profile may ship spec pages of its own (geometry.json
+      // `specPages`), resolved by HouseLoader to profile-relative URLs. They are
+      // appended after the built-in list. This is how a house-specific document
+      // -- a spec for one real bathroom -- reaches the panel without living in
+      // this repository, the same argument `extraOverlays` makes for scripts.
+      function allSpecPages() {
+        const own = (Home3DScene.HOUSE && Home3DScene.HOUSE.specPages) || [];
+        return SPEC_PAGES.concat(own.map(sp => ({ name: sp.name, path: sp.url })));
+      }
       const haStatusEl = document.getElementById('ha-status');
       const haStatusDot = document.getElementById('ha-status-dot');
       const haStatusText = document.getElementById('ha-status-text');
@@ -1220,7 +1230,7 @@
           // Specs section — buttons that open each spec page in a new tab.
           html += '<div class="panel-section-title">Specs</div>';
           html += '<div class="spec-list">' +
-            SPEC_PAGES.map(sp =>
+            allSpecPages().map(sp =>
               '<a class="spec-btn" href="' + sp.path + '" target="_blank" rel="noopener">' +
               '<span>' + sp.name + '</span>' +
               '<svg class="spec-ext" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' +

@@ -734,3 +734,42 @@ rule textures follow — so a profile cannot point the engine at an arbitrary
 host. Understand the limit of that guard: a script named here runs with the full
 privileges of the page, so **the profile directory must be trusted exactly as
 much as the page is**. Do not load a house profile you would not run code from.
+
+### Spec pages a profile brings with it
+
+`specPages` names HTML documents, shipped inside the profile directory, that
+become buttons in the Settings panel — appended after the engine's own built-in
+spec list, and opened in a new tab.
+
+```json
+"specPages": [
+  { "name": "BathroomSpec", "path": "specs/BathroomSpec.html" }
+]
+```
+
+The argument is the one `extraOverlays` already makes, applied to documents
+instead of code. A spec page describes how one particular fitting in **one
+particular building** is built — a bathroom's tiling and fixtures, an en-suite's
+layout, measured against a real room. That is house data, not engine data, so it
+belongs to the profile and travels with it, rather than living in a public
+engine repository that has no business knowing about it.
+
+The engine keeps its own `specs/` directory for pages that describe *generic*
+components — a door, a window, a curtain — which any house can reuse. The test
+is whether the document would still make sense for a different building.
+
+**Each entry needs both `name` and `path`.** `name` is the button label; `path`
+is profile-relative, under the same rule as textures and overlays: no leading
+slash, no `..`, no absolute URL. An entry missing a field, or failing the path
+guard, is dropped with a console warning rather than failing the load — the same
+"warn and carry on" rule as everywhere else in this file, because a missing
+document must never cost you the building.
+
+Unlike an overlay script, **nothing here executes in the page's origin**. A spec
+page is opened as an ordinary link, so it cannot read the page's state or act on
+its behalf, and the trust it requires is correspondingly lower. The path guard
+is identical anyway: a profile naming an arbitrary host is wrong regardless of
+how dangerous that particular asset would be.
+
+The demo house declares no spec pages, and a profile without the field behaves
+exactly as it did before the field existed.

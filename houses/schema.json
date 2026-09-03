@@ -637,6 +637,31 @@
           "uniqueItems": true,
           "description": "OPTIONAL extra overlay scripts this profile ships next to its geometry, loaded by the page after the engine and the house are ready.\n\nUnlike `decor` — which names geometry THIS ENGINE builds, from a closed enum — an entry here points at a script the engine does not contain and cannot validate beyond its path. The mechanism is generic; what it loads is the profile author's own code.\n\nWHY IT LIVES IN THE PROFILE: an overlay of this kind draws something true about one particular house (a renovation plan for that building, a survey annotation), so a house that owns such a drawing should carry it wherever its profile is loaded, rather than the embedding page having to know. This is the argument `decor` already makes for panelling.\n\nPRIVACY: this is the supported way to keep house-specific drawings OUT of a public repository. A private profile directory can hold its own overlay script and geometry together, mounted next to a public engine that ships neither.\n\nSECURITY: a script named here runs with the page's full privileges. The path guard confines it to the profile directory so a profile cannot point the engine at an arbitrary host, but the profile directory itself must be trusted exactly as much as the page is. Do not load a profile you would not run code from.\n\nAbsent for most houses, including the demo. A profile without the field loads exactly as before."
         },
+        "specPages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "path"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The button label shown in Settings, e.g. \"BathroomSpec\"."
+              },
+              "path": {
+                "type": "string",
+                "description": "A profile-relative path to an .html file inside this house's own directory, e.g. \"specs/BathroomSpec.html\". Same path rule as textures and overlays: no leading slash, no '..', no absolute URL. An entry that breaks the rule is dropped with a console warning rather than failing the load.",
+                "pattern": "^(?!/)(?!.*\\.\\.)(?!https?:)[^\\\\]+\\.html?$"
+              }
+            }
+          },
+          "uniqueItems": true,
+          "description": "OPTIONAL spec pages this profile ships next to its geometry. Each becomes a button in the Settings panel, appended AFTER the engine's own built-in spec list, and opens in a new tab.\n\nA spec page is a static document describing how one particular fitting in one particular house is built — a bathroom's tiling and fixtures, an en-suite's layout. That makes it house data, not engine data, which is why it belongs here rather than in the engine's own specs/ directory.\n\nPRIVACY: this is the supported way to keep house-specific documents OUT of a public repository, exactly as `extraOverlays` is for scripts. A private profile directory holds its spec pages next to its geometry, mounted beside a public engine that ships neither.\n\nUnlike `extraOverlays`, nothing here is executed in the page's origin — a spec page is opened as an ordinary link — so the trust required is lower, though the path guard is the same.\n\nAbsent for most houses, including the demo. A profile without the field loads exactly as before."
+        },
         "site": {
           "type": "object",
           "description": "Where the house is, for the daylight rig ONLY. The engine derives sunrise/sunset and sun angle from latitude and the day of year, so the model lights up and goes dark in step with the real day.\n\nPRIVACY: this is the one field in geometry.json that can locate a building. Give a city-level latitude, not a rooftop one — the sun rig cannot tell the difference, and a shared profile then carries no address. Omit the block entirely for a fixed neutral daylight.",

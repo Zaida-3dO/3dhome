@@ -74,6 +74,14 @@ const HouseLoader = (() => {
   // profile is data; it must never name an arbitrary host to execute from.
   const OVERLAY_PATH_RE = /^(?!\/)(?!.*\.\.)(?!https?:)[^\\]+\.js$/i;
 
+  // Spec-page paths resolve relative to the profile directory under the same
+  // rule again. A spec page is a static .html document opened in a new tab --
+  // it is never executed in this page's origin, so the risk sits between the
+  // texture case and the overlay case. The guard is identical anyway, because
+  // a profile naming an arbitrary host is wrong for reasons that have nothing
+  // to do with how dangerous the particular asset is.
+  const SPEC_PATH_RE = /^(?!\/)(?!.*\.\.)(?!https?:)[^\\]+\.html?$/i;
+
   /** '#rrggbb' -> 0xrrggbb, for THREE.Color. Falls back when absent/malformed. */
   function hexToInt(hex, fallback) {
     if (typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return fallback;
@@ -560,6 +568,28 @@ const HouseLoader = (() => {
       })
       .map(function (pth) { return { path: pth, url: dir + pth }; });
 
+    // Spec pages the profile ships next to its geometry. Same shape and same
+    // 'warn and carry on' rule as extraOverlays: an entry that fails the path
+    // guard, or that omits either field, is dropped rather than throwing.
+    // A spec page documents one particular house's fittings, so a house that
+    // owns such a document carries it wherever its profile loads -- and, as
+    // with overlays, this is what keeps house-specific documents out of a
+    // public repository.
+    const specPages = (Array.isArray(geo.specPages) ? geo.specPages : [])
+      .filter(function (sp) {
+        if (!sp || typeof sp !== 'object') return false;
+        if (typeof sp.name !== 'string' || sp.name === '') {
+          warn('specPages entry is missing a name -- ignored');
+          return false;
+        }
+        if (typeof sp.path !== 'string' || !SPEC_PATH_RE.test(sp.path)) {
+          warn('specPages entry "' + sp.name + '" is not a safe profile-relative .html path -- ignored');
+          return false;
+        }
+        return true;
+      })
+      .map(function (sp) { return { name: sp.name, path: sp.path, url: dir + sp.path }; });
+
     const centre = Array.isArray(geo.viewCentre) && geo.viewCentre.length === 2
       ? [geo.viewCentre[0], geo.viewCentre[1]]
       : [(footprint.minX + footprint.maxX) / 2, (footprint.minY + footprint.maxY) / 2];
@@ -618,6 +648,11 @@ const HouseLoader = (() => {
       // geometry this engine builds itself from a fixed enum, whereas this
       // points at a script the engine does not contain.
       extraOverlays: extraOverlays,
+      // Profile-supplied spec pages, appended to the engine's built-in list in
+      // the Settings panel. Same privacy argument as extraOverlays: a spec that
+      // documents one real house's bathroom belongs to that house's profile,
+      // not to this repository.
+      specPages: specPages,
       warnings: warnings
     };
   }
