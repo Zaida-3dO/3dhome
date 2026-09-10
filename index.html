@@ -400,7 +400,12 @@
       document.head.appendChild(s);
     })();
   </script>
-  <script src="vendor/three.js"></script>
+  <!-- defer (not async) on this block of classic, order-dependent scripts:
+       defer preserves execution order and runs each script only after HTML
+       parsing completes, so parsing is no longer blocked script-by-script on
+       a slow connection. async would NOT preserve order and must not be
+       used here. Measured under throttled network — see docs/perf-cold-start.md. -->
+  <script src="vendor/three.js" defer></script>
   <!-- Runtime configuration, highest-priority source first.
 
        config.js is GENERATED at container start by deploy/generate-config.sh
@@ -415,25 +420,36 @@
        Cache-Control: no-store precisely because it carries the HA token, and
        a stale one would pin an old token. Both tags must precede the
        application code below, which reads HomeConfig during boot. -->
-  <script src="config.js" onerror="window.__home3dNoConfigJs = true;"></script>
-  <script src="src/config-loader.js?v=__VERSION__"></script>
+  <script src="config.js" defer onerror="window.__home3dNoConfigJs = true;"></script>
+  <script src="src/config-loader.js?v=__VERSION__" defer></script>
   <!-- ?v= values are stamped from APP_VERSION at deploy time; do not hardcode one.
        deploy/check-version-stamping.sh fails CI if a literal version appears here. -->
-  <script src="src/house-loader.js?v=__VERSION__"></script>
-  <script src="src/home3d-scene.js?v=__VERSION__"></script>
-  <script src="src/ha-client.js?v=__VERSION__"></script>
+  <script src="src/house-loader.js?v=__VERSION__" defer></script>
+  <script src="src/home3d-scene.js?v=__VERSION__" defer></script>
+  <script src="src/ha-client.js?v=__VERSION__" defer></script>
   <!-- Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
        Shift+D, or the Settings sidebar "Wall numbers" switch). Isolated
        module -- see js/wall-debug-overlay.js header. -->
-  <script src="src/overlays/wall-debug-overlay.js?v=__VERSION__"></script>
+  <script src="src/overlays/wall-debug-overlay.js?v=__VERSION__" defer></script>
   <!-- Coordinate-grid overlay (off by default; ?grid=1 or 'G'). Isolated
        module -- see js/home3d-grid-overlay.js header. Toggle also in sidebar. -->
-  <script src="src/overlays/home3d-grid-overlay.js?v=__VERSION__"></script>
+  <script src="src/overlays/home3d-grid-overlay.js?v=__VERSION__" defer></script>
   <!-- Door-numbering debug overlay (off by default; ?debugDoors=1 or the
        Settings sidebar "Door numbers" switch). Isolated module -- see
        src/overlays/door-debug-overlay.js header. -->
-  <script src="src/overlays/door-debug-overlay.js?v=__VERSION__"></script>
+  <script src="src/overlays/door-debug-overlay.js?v=__VERSION__" defer></script>
   <script>
+    // This inline script reads globals (HomeConfig, HouseLoader, HAClient,
+    // THREE, home3d-scene) defined by the eight deferred <script src> tags
+    // above. Classic inline scripts execute the instant the parser reaches
+    // them -- the `defer` attribute has no effect without a `src` -- so
+    // without this DOMContentLoaded wrapper this code would run BEFORE the
+    // deferred scripts (which wait for parsing to finish), reversing the
+    // execution order `defer` was added to preserve and crashing on
+    // HomeConfig/HouseLoader/HAClient being undefined. Deferred scripts run
+    // in order and complete before DOMContentLoaded fires, so this ordering
+    // is equivalent to the original document-order guarantee.
+    document.addEventListener('DOMContentLoaded', () => {
     (async function() {
       const params = new URLSearchParams(window.location.search);
       // Preview mode: ?preview=true — slow rotation, no interaction, no UI
@@ -1504,6 +1520,7 @@
         }
       }
     })();
+    });
   </script>
 </body>
 </html>
