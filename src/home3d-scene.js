@@ -2356,6 +2356,18 @@ const Home3DScene = (() => {
     // the ramp only delays rather than avoids.
     const wantShadows = quality.sunShadow || quality.roomShadowLights;
     ren.shadowMap.enabled = wantShadows;
+    // Shadow maps are re-rendered ONLY when something asks for it (see
+    // invalidateShadows() below). Left on, three re-renders every shadow map
+    // on every rendered frame — and 10 of the 11 casters are PointLights, so
+    // that is ~60 shadow renders of unmoved geometry per frame during a drag.
+    // NOTE this is orthogonal to shadowMap.enabled, which must NOT be used as
+    // a quality knob: toggling THAT invalidates the program cache and forces a
+    // full material recompile (see the tombstone above). autoUpdate costs
+    // nothing to change — it only gates when the maps refresh.
+    // The first frame still needs one, and .enabled=true implies an initial
+    // update, but be explicit rather than relying on it.
+    ren.shadowMap.autoUpdate = false;
+    ren.shadowMap.needsUpdate = wantShadows;
     console.info(
       `[Home3DScene] Quality tier=${tier} ` +
       `(MAX_FRAGMENT_UNIFORM_VECTORS=${maxFragU}) shadows=${shadows} maxFps=${maxFps || 'uncapped'}. ` +
@@ -2387,6 +2399,184 @@ const Home3DScene = (() => {
     function requestRender() { needsRender = true; }
     function wake(ms) { wakeUntil = Math.max(wakeUntil, performance.now() + (ms || 0)); needsRender = true; }
 
+    // ── Explicit shadow invalidation ────────────────────────────────────────
+    // shadowMap.autoUpdate is turned off after construction (below), so three
+    // stops re-rendering every shadow map on every rendered frame and only
+    // does it when we say so. This scene has ~11 shadow casters and 10 of them
+    // are PointLights, whose shadow is a SIX-FACE CUBEMAP — so a frame that
+    // redundantly re-renders them is paying for ~60 shadow renders of geometry
+    // that did not move. During a sustained drag that is a real thermal cost
+    // on a phone.
+    //
+    // ⚠️ The bargain: every mutation that changes what a shadow should look
+    // like MUST call this, or the shadow silently goes stale. The sites are
+    // enumerated at the call sites below; the rule is "if it moves geometry,
+    // or changes a light's intensity/colour/visibility, or moves the sun, it
+    // invalidates". Camera movement does NOT — shadow maps are rendered from
+    // the LIGHT's point of view, so orbiting cannot stale them. That exclusion
+    // is the entire point: updCam() fires on every drag frame, and invalidating
+    // there would give back exactly the cost this is meant to save.
+    //
+    // needsUpdate is a ONE-SHOT: three resets it to false after the next
+    // render, so this is "refresh once", not "turn updating back on".
+    function invalidateShadows() {
+      ren.shadowMap.needsUpdate = true;
+      needsRender = true;
+    }
+
+    // ── Adaptive pixel ratio ────────────────────────────────────────────────
+    // setPixelRatio is the ONE meaningful quality knob with no shader
+    // recompile — it reallocates the drawing buffer and nothing else. Every
+    // other knob worth having (shadow-casting light count, shadowMap.enabled,
+    // shadowMap.type, antialias) forces a full material recompile or a new
+    // WebGL context. See the shadow-ramp tombstone above: that is why the
+    // obvious "start low, upgrade later" adaptive-quality design does not
+    // work here, and why THIS is the fragment of it that does.
+    //
+    // TWO independent consumers drive the same knob, so they are deliberately
+    // expressed as ONE resolver rather than two callers racing to write it:
+    //
+    //   basePixelRatio    the ratio this scene was constructed with. A hard
+    //                     upper bound — the preview tile is handed 1 by its
+    //                     embedder and must never be raised above it.
+    //   ceilingRatio      the post-load ramp's current allowance. Starts at
+    //                     RAMP_START on a scene that ramps, and rises toward
+    //                     basePixelRatio once measured frame headroom allows.
+    //   interactionRatio  the cap applied while the user is actively moving
+    //                     the camera (the Blender-viewport technique: noisier
+    //                     while you navigate, settles when you stop).
+    //
+    // The applied value is always min(ceiling, interacting ? cap : ceiling).
+    // Because the ramp only ever moves the CEILING and the drag only ever
+    // moves the CAP, and the applied value is their minimum, an in-flight
+    // ramp-up structurally CANNOT stomp a drag-triggered ramp-down — there is
+    // no ordering in which the two can oscillate against each other.
+    const basePixelRatio = pixelRatio;
+    // Cap while dragging. Held at 1 rather than 0.75: below 1 the softening
+    // reads as a defect on a phone rather than as responsiveness, and the win
+    // from 1 -> 0.75 is a further 44% of a buffer that is already the smaller
+    // cost once shadows dominate the frame.
+    const interactionRatio = Math.min(1, basePixelRatio);
+
+    // ── Post-load resolution ramp ───────────────────────────────────────────
+    // First paint at RAMP_START, then raise toward basePixelRatio once
+    // MEASURED frame time says there is headroom. Frame time is the honest
+    // signal for this workload: navigator.deviceMemory and .connection do not
+    // exist on iOS Safari, and the existing MAX_FRAGMENT_UNIFORM_VECTORS probe
+    // already predicts capability better than either.
+    //
+    // Deliberately NOT the "YouTube adaptive bitrate" design. That analogy
+    // breaks here: ABR works because quality costs BANDWIDTH — continuously
+    // variable, nearly free to switch — whereas the dimensions that actually
+    // drive this app's startup cost (shadow-casting light count,
+    // shadowMap.enabled) cost a discrete, one-time, expensive shader
+    // recompile. Ramping THOSE means paying the cheap compile and then the
+    // expensive one anyway; it was built, measured at ~20s vs ~14.7s, and
+    // removed (tombstone above). Pixel ratio is the exception, so the ramp
+    // runs on pixel ratio ALONE — genuinely useful, honestly modest.
+    //
+    // Only ramps when there is something to ramp TO. A scene already at or
+    // below the start ratio (the preview tile, handed 1) never ramps at all.
+    const RAMP_START = Math.min(1, basePixelRatio);
+    const RAMP_SETTLE_MS = 900;   // ignore the first frames: shader compile/link
+    const RAMP_SAMPLES = 20;      // consecutive good frames required
+    // Budget for the ren.render() CALL, not for a whole frame. CPU-side
+    // submission time, so the bar is well under a 16.7ms frame: a device that
+    // cannot submit this scene in 8ms has no headroom to spend on 4x the
+    // pixels. Deliberately conservative — the cost of not ramping is a
+    // slightly soft image, the cost of ramping a device that cannot take it
+    // is a scene that janks for the whole session.
+    const RAMP_BUDGET_MS = 8;
+    // Hard stop. The ramp drives its own frames while measuring, so without a
+    // deadline a device that never meets the budget would render continuously
+    // forever — turning an idle-at-zero-GPU scene into a permanently busy one,
+    // which is far worse than the soft image the ramp was trying to fix. On
+    // expiry the scene simply stays at the start ratio and goes idle.
+    const RAMP_DEADLINE_MS = 6000;
+    let ceilingRatio = basePixelRatio > RAMP_START ? RAMP_START : basePixelRatio;
+    let rampDone = ceilingRatio >= basePixelRatio;
+    let rampStartedAt = 0;        // set on the first rendered frame
+    let rampGoodFrames = 0;
+    let appliedRatio = ceilingRatio;
+
+    // The renderer was constructed at basePixelRatio (see setPixelRatio above),
+    // so when the ramp starts lower the FIRST PAINT has to be re-asserted here
+    // — otherwise the ramp is a no-op that only ever ramps "up" to a value the
+    // scene was already using, and the cheap first frame never happens.
+    // setSize() is what makes setPixelRatio() take effect, so both are needed.
+    if (ceilingRatio !== basePixelRatio) {
+      ren.setPixelRatio(ceilingRatio);
+      ren.setSize(W, H);
+    }
+
+    // Apply a resolved ratio. setPixelRatio() ALONE DOES NOTHING — it records
+    // the ratio and only takes effect on the next setSize(), so the two must
+    // always travel together. Guarded on a change: setSize reallocates the
+    // drawing buffer, so re-applying the same value every frame would be a
+    // per-frame realloc rather than a no-op.
+    function applyPixelRatio(next) {
+      if (Math.abs(next - appliedRatio) < 0.001) return;
+      const w = container.clientWidth, h = container.clientHeight;
+      if (w === 0 || h === 0) return; // detached/collapsed: leave it for resize
+      appliedRatio = next;
+      ren.setPixelRatio(next);
+      ren.setSize(w, h);
+      needsRender = true;
+    }
+
+    // Resolve the ratio for the current frame. `interacting` is passed in from
+    // the loop, which already computes it.
+    function resolvePixelRatio(interacting) {
+      return interacting ? Math.min(ceilingRatio, interactionRatio) : ceilingRatio;
+    }
+
+    // Sample one rendered frame's cost and raise the ceiling once a run of
+    // frames comes in under budget. Called from the loop with the measured
+    // frame delta.
+    //
+    // Frames spent INTERACTING are skipped, not counted as bad: the whole
+    // point of the drag ramp-down is that those frames are cheap for a
+    // different reason, so letting them satisfy the headroom test would raise
+    // the ceiling on evidence that says nothing about the cost of rendering at
+    // full resolution. A bad frame resets the run rather than aborting the
+    // ramp — a single hitch (a GC pause, the sun update) should not disqualify
+    // a device forever.
+    function sampleRampFrame(frameNow, frameMs, interacting) {
+      if (rampDone) return;
+      if (!rampStartedAt) { rampStartedAt = frameNow; return; }
+      // Let shader compile/link and the first paints get out of the way; those
+      // frames are one-time cost and would fail every device.
+      // Keep the loop alive while measuring. This scene renders ON DEMAND, so
+      // left alone after load it paints its opening frames and then stops —
+      // and a ramp that waits for RAMP_SAMPLES consecutive frames would simply
+      // never complete. MEASURED: untouched for 10s, the scene sat at the
+      // start ratio forever, which would have shipped a PERMANENTLY softer
+      // image than today's for any user who does not immediately drag.
+      // Requesting the next frame is what makes the ramp self-driving; it ends
+      // the moment the ramp resolves, so the idle-at-zero-GPU property is
+      // preserved for the whole life of the scene bar this one short window.
+      if (frameNow - rampStartedAt > RAMP_DEADLINE_MS) {
+        rampDone = true; // give up: stay at RAMP_START and let the scene idle
+        console.info(
+          `[Home3DScene] Resolution ramp: stayed at ${RAMP_START} — no sustained ` +
+          `headroom within ${RAMP_DEADLINE_MS}ms.`
+        );
+        return;
+      }
+      needsRender = true;
+      if (frameNow - rampStartedAt < RAMP_SETTLE_MS) return;
+      if (interacting) return;
+      if (frameMs > RAMP_BUDGET_MS) { rampGoodFrames = 0; return; }
+      if (++rampGoodFrames < RAMP_SAMPLES) return;
+      rampDone = true;
+      ceilingRatio = basePixelRatio;
+      needsRender = true; // repaint at the new resolution
+      console.info(
+        `[Home3DScene] Resolution ramp: ${RAMP_START} -> ${basePixelRatio} ` +
+        `after ${RAMP_SAMPLES} frames under ${RAMP_BUDGET_MS}ms.`
+      );
+    }
+
     // ── Shader precompile, off the critical path ───────────────────────────
     // three.js builds a program the first time a material is drawn, and the
     // driver finishes the link lazily -- the stall surfaces later, when three
@@ -2413,7 +2603,10 @@ const Home3DScene = (() => {
           ren.shadowMap.enabled = shadowWasEnabled;
           // REQUIRED: this scene renders on demand, so without an explicit
           // repaint request nothing draws after the precompile resolves and
-          // the canvas stays blank.
+          // the canvas stays blank. Invalidate too: shadowMap.enabled was
+          // toggled around the precompile, and with autoUpdate off the maps
+          // would otherwise never be built for the first real frame.
+          invalidateShadows();
           requestRender();
         });
     }
@@ -2482,7 +2675,11 @@ const Home3DScene = (() => {
           applyAccent(s[channel], (extraLights[id] || {})[channel], (extraMeshes[id] || {})[channel]);
         });
       });
-      requestRender(); // light state changed → repaint (matters when idle/on-demand)
+      // Light state changed → repaint (matters when idle/on-demand) AND
+      // refresh the shadow maps: this sets intensity/colour/visibility on the
+      // room lights, all of which change what their shadows should look like.
+      invalidateShadows();
+      requestRender();
     }
     syncLights();
 
@@ -2697,6 +2894,12 @@ const Home3DScene = (() => {
     const SUN_MODE_COLORS  = { morning: [1.0, 0.70, 0.38], noon: [1.0, 0.93, 0.85], night: [0.4, 0.45, 0.6] };
 
     function updateSunlight() {
+      // The sun is a shadow-casting directional light, so ANY change here
+      // (intensity, colour, or being switched off entirely) changes its
+      // shadow. Invalidating inside the function rather than at each call site
+      // covers all three callers at once — setSun(), setSunMode(), and the
+      // loop's own 60-second tick — so a future caller cannot forget to.
+      invalidateShadows();
       if (!sunEnabled) {
         sun.intensity = 0;
         ambLight.intensity = 0.12;
@@ -2799,12 +3002,29 @@ const Home3DScene = (() => {
       // popup costs nothing. The preview (autoRotate) always has motion, so it
       // skips this gate and just honours the maxFps cap.
       const interacting = orb.drag || orb.pan || frameNow < wakeUntil;
+
+      // Adaptive pixel ratio: drop while the camera is moving, restore on the
+      // trailing edge of the wake tail (~250ms after the last drag/wheel/pinch).
+      // Resolved BEFORE the frame is drawn so the buffer is already the right
+      // size for this frame rather than the previous one. This is the ONLY
+      // writer of the renderer's pixel ratio after construction.
+      //
+      // ⚠️ ORDER MATTERS: this MUST sit ABOVE the on-demand gate below.
+      // The restore is triggered by `interacting` going false, which is the
+      // very condition that makes the gate return early — resolve it after the
+      // gate and the restoring frame is the one frame that never runs, leaving
+      // the scene stuck at dragging resolution until something else happens to
+      // request a render. applyPixelRatio() sets needsRender when it changes
+      // anything, so the gate below then lets that repaint through.
+      applyPixelRatio(resolvePixelRatio(interacting));
+
       if (!autoRotate && !needsRender && !interacting && !transitionsActive) return;
 
       // Seconds since last rendered frame, clamped so a long idle/pause doesn't jump
       const dt = Math.min((frameNow - lastRender) / 1000, 0.1);
       lastRender = frameNow;
       needsRender = false;
+
 
       if (autoRotate && !orb.drag && !orb.pan) {
         autoAngle += rotateSpeed * dt;
@@ -2849,7 +3069,20 @@ const Home3DScene = (() => {
         });
       }
       transitionsActive = animating;
+      // Time the render itself rather than the gap between frames. The gap is
+      // the wrong signal twice over: with a maxFps cap it is floored at
+      // minFrameMs (a 15fps preview would read ~66ms and never ramp, though
+      // its frames are cheap), and on an on-demand scene an idle gap is
+      // idleness rather than slowness. ren.render() is the work.
+      // NOTE this is CPU-side time. WebGL is asynchronous, so this captures
+      // the driver-facing submission cost, not the GPU's own completion — it
+      // under-reads a GPU-bound frame. That is acceptable here because it is
+      // used only as a permissive "is there obvious headroom" gate, and the
+      // ramp is reversible in the sense that raising the ceiling never blocks
+      // the drag ramp-down from cutting back in.
+      const renderT0 = performance.now();
       ren.render(scene, cam);
+      sampleRampFrame(frameNow, performance.now() - renderT0, interacting);
 
       // Notify onRender subscribers (compass overlay etc.) after the frame is
       // drawn, so screen-space overlays can track the current camera. Guarded
@@ -2904,6 +3137,14 @@ const Home3DScene = (() => {
         container.releasePointerCapture(e.pointerId);
         orb.drag = false;
         orb.pan = false;
+        // Same tail as pointerup. REQUIRED for the adaptive pixel ratio: this
+        // scene renders on demand, so clearing drag without scheduling a frame
+        // leaves the scene stuck at the reduced dragging ratio with nothing
+        // queued to restore it — it would stay soft until the user touched it
+        // again. A cancelled touch (browser gesture takeover, an incoming call,
+        // a stray palm) is common on a phone, which is exactly the device this
+        // change is for.
+        wake(250);
       });
       // Right-drag is repurposed for pan — suppress the browser's native
       // right-click context menu on the canvas so it doesn't pop up mid-drag.
@@ -2963,6 +3204,12 @@ const Home3DScene = (() => {
       if (w === 0 || h === 0) return;
       cam.aspect = w / h;
       cam.updateProjectionMatrix();
+      // Re-assert the CURRENT adaptive ratio before sizing. setSize() alone
+      // reuses whatever ratio the renderer last recorded, so a resize landing
+      // mid-drag (mobile browser chrome collapsing, orientation change) would
+      // otherwise bake the dragging ratio in until the next ratio CHANGE — and
+      // applyPixelRatio's change-guard would then treat it as already applied.
+      ren.setPixelRatio(appliedRatio);
       ren.setSize(w, h);
       requestRender();
     });
@@ -2998,6 +3245,10 @@ const Home3DScene = (() => {
         if (!dr) return;
         dr.openPct = Math.max(0, Math.min(100, +pct || 0));
         dr.pivot.rotation.y = dr.swingSign * (dr.maxDeg * dr.openPct / 100) * Math.PI / 180;
+        // MOVES GEOMETRY — a door is a shadow caster, so without this the door
+        // swings while its shadow stays where the door used to be. The single
+        // most visible way to get this wrong.
+        invalidateShadows();
         requestRender();
       },
       // Embedder pause control: setActive(false) halts the render loop (no GPU
@@ -3006,7 +3257,11 @@ const Home3DScene = (() => {
       setActive(active) { _inactive = !active; applyPause(); },
       setShadows(enabled) {
         ren.shadowMap.enabled = enabled;
-        ren.shadowMap.needsUpdate = true;
+        // Still correct with autoUpdate off: needsUpdate is the one-shot that
+        // refreshes the maps after the toggle. (This setter is the expensive
+        // program-cache path — see the tombstone — and is NOT used as a
+        // quality knob by anything in the render loop.)
+        invalidateShadows();
         // Force all materials to recompile with/without shadow defines
         scene.traverse(obj => { if (obj.material) obj.material.needsUpdate = true; });
         requestRender();
@@ -3018,6 +3273,13 @@ const Home3DScene = (() => {
       // `scene.add`/`.visible = x` from outside is otherwise invisible until
       // the next drag/scroll.
       requestRender() { requestRender(); },
+      // Companion to requestRender() for an external caller that moves real
+      // GEOMETRY or changes a LIGHT, rather than just toggling an overlay's
+      // labels. Shadow maps only refresh on demand (shadowMap.autoUpdate is
+      // off), so a direct scene mutation that casts a shadow needs this or the
+      // shadow keeps describing the old position. The existing debug overlays
+      // do not need it — they toggle label visibility, and labels do not cast.
+      invalidateShadows() { invalidateShadows(); },
       // The live orbit camera — external overlays that project world points into
       // screen space (e.g. the compass rose) read this each frame. Returned by
       // reference; callers must not mutate it.
