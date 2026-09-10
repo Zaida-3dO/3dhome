@@ -2420,8 +2420,57 @@ const Home3DScene = (() => {
     // from 1 -> 0.75 is a further 44% of a buffer that is already the smaller
     // cost once shadows dominate the frame.
     const interactionRatio = Math.min(1, basePixelRatio);
-    let ceilingRatio = basePixelRatio;
-    let appliedRatio = basePixelRatio;
+
+    // ── Post-load resolution ramp ───────────────────────────────────────────
+    // First paint at RAMP_START, then raise toward basePixelRatio once
+    // MEASURED frame time says there is headroom. Frame time is the honest
+    // signal for this workload: navigator.deviceMemory and .connection do not
+    // exist on iOS Safari, and the existing MAX_FRAGMENT_UNIFORM_VECTORS probe
+    // already predicts capability better than either.
+    //
+    // Deliberately NOT the "YouTube adaptive bitrate" design. That analogy
+    // breaks here: ABR works because quality costs BANDWIDTH — continuously
+    // variable, nearly free to switch — whereas the dimensions that actually
+    // drive this app's startup cost (shadow-casting light count,
+    // shadowMap.enabled) cost a discrete, one-time, expensive shader
+    // recompile. Ramping THOSE means paying the cheap compile and then the
+    // expensive one anyway; it was built, measured at ~20s vs ~14.7s, and
+    // removed (tombstone above). Pixel ratio is the exception, so the ramp
+    // runs on pixel ratio ALONE — genuinely useful, honestly modest.
+    //
+    // Only ramps when there is something to ramp TO. A scene already at or
+    // below the start ratio (the preview tile, handed 1) never ramps at all.
+    const RAMP_START = Math.min(1, basePixelRatio);
+    const RAMP_SETTLE_MS = 900;   // ignore the first frames: shader compile/link
+    const RAMP_SAMPLES = 20;      // consecutive good frames required
+    // Budget for the ren.render() CALL, not for a whole frame. CPU-side
+    // submission time, so the bar is well under a 16.7ms frame: a device that
+    // cannot submit this scene in 8ms has no headroom to spend on 4x the
+    // pixels. Deliberately conservative — the cost of not ramping is a
+    // slightly soft image, the cost of ramping a device that cannot take it
+    // is a scene that janks for the whole session.
+    const RAMP_BUDGET_MS = 8;
+    // Hard stop. The ramp drives its own frames while measuring, so without a
+    // deadline a device that never meets the budget would render continuously
+    // forever — turning an idle-at-zero-GPU scene into a permanently busy one,
+    // which is far worse than the soft image the ramp was trying to fix. On
+    // expiry the scene simply stays at the start ratio and goes idle.
+    const RAMP_DEADLINE_MS = 6000;
+    let ceilingRatio = basePixelRatio > RAMP_START ? RAMP_START : basePixelRatio;
+    let rampDone = ceilingRatio >= basePixelRatio;
+    let rampStartedAt = 0;        // set on the first rendered frame
+    let rampGoodFrames = 0;
+    let appliedRatio = ceilingRatio;
+
+    // The renderer was constructed at basePixelRatio (see setPixelRatio above),
+    // so when the ramp starts lower the FIRST PAINT has to be re-asserted here
+    // — otherwise the ramp is a no-op that only ever ramps "up" to a value the
+    // scene was already using, and the cheap first frame never happens.
+    // setSize() is what makes setPixelRatio() take effect, so both are needed.
+    if (ceilingRatio !== basePixelRatio) {
+      ren.setPixelRatio(ceilingRatio);
+      ren.setSize(W, H);
+    }
 
     // Apply a resolved ratio. setPixelRatio() ALONE DOES NOTHING — it records
     // the ratio and only takes effect on the next setSize(), so the two must
@@ -2442,6 +2491,53 @@ const Home3DScene = (() => {
     // the loop, which already computes it.
     function resolvePixelRatio(interacting) {
       return interacting ? Math.min(ceilingRatio, interactionRatio) : ceilingRatio;
+    }
+
+    // Sample one rendered frame's cost and raise the ceiling once a run of
+    // frames comes in under budget. Called from the loop with the measured
+    // frame delta.
+    //
+    // Frames spent INTERACTING are skipped, not counted as bad: the whole
+    // point of the drag ramp-down is that those frames are cheap for a
+    // different reason, so letting them satisfy the headroom test would raise
+    // the ceiling on evidence that says nothing about the cost of rendering at
+    // full resolution. A bad frame resets the run rather than aborting the
+    // ramp — a single hitch (a GC pause, the sun update) should not disqualify
+    // a device forever.
+    function sampleRampFrame(frameNow, frameMs, interacting) {
+      if (rampDone) return;
+      if (!rampStartedAt) { rampStartedAt = frameNow; return; }
+      // Let shader compile/link and the first paints get out of the way; those
+      // frames are one-time cost and would fail every device.
+      // Keep the loop alive while measuring. This scene renders ON DEMAND, so
+      // left alone after load it paints its opening frames and then stops —
+      // and a ramp that waits for RAMP_SAMPLES consecutive frames would simply
+      // never complete. MEASURED: untouched for 10s, the scene sat at the
+      // start ratio forever, which would have shipped a PERMANENTLY softer
+      // image than today's for any user who does not immediately drag.
+      // Requesting the next frame is what makes the ramp self-driving; it ends
+      // the moment the ramp resolves, so the idle-at-zero-GPU property is
+      // preserved for the whole life of the scene bar this one short window.
+      if (frameNow - rampStartedAt > RAMP_DEADLINE_MS) {
+        rampDone = true; // give up: stay at RAMP_START and let the scene idle
+        console.info(
+          `[Home3DScene] Resolution ramp: stayed at ${RAMP_START} — no sustained ` +
+          `headroom within ${RAMP_DEADLINE_MS}ms.`
+        );
+        return;
+      }
+      needsRender = true;
+      if (frameNow - rampStartedAt < RAMP_SETTLE_MS) return;
+      if (interacting) return;
+      if (frameMs > RAMP_BUDGET_MS) { rampGoodFrames = 0; return; }
+      if (++rampGoodFrames < RAMP_SAMPLES) return;
+      rampDone = true;
+      ceilingRatio = basePixelRatio;
+      needsRender = true; // repaint at the new resolution
+      console.info(
+        `[Home3DScene] Resolution ramp: ${RAMP_START} -> ${basePixelRatio} ` +
+        `after ${RAMP_SAMPLES} frames under ${RAMP_BUDGET_MS}ms.`
+      );
     }
 
     // ── Shader precompile, off the critical path ───────────────────────────
@@ -2879,6 +2975,7 @@ const Home3DScene = (() => {
       lastRender = frameNow;
       needsRender = false;
 
+
       if (autoRotate && !orb.drag && !orb.pan) {
         autoAngle += rotateSpeed * dt;
         orb.th = Math.PI * 0.22 + autoAngle;
@@ -2922,7 +3019,20 @@ const Home3DScene = (() => {
         });
       }
       transitionsActive = animating;
+      // Time the render itself rather than the gap between frames. The gap is
+      // the wrong signal twice over: with a maxFps cap it is floored at
+      // minFrameMs (a 15fps preview would read ~66ms and never ramp, though
+      // its frames are cheap), and on an on-demand scene an idle gap is
+      // idleness rather than slowness. ren.render() is the work.
+      // NOTE this is CPU-side time. WebGL is asynchronous, so this captures
+      // the driver-facing submission cost, not the GPU's own completion — it
+      // under-reads a GPU-bound frame. That is acceptable here because it is
+      // used only as a permissive "is there obvious headroom" gate, and the
+      // ramp is reversible in the sense that raising the ceiling never blocks
+      // the drag ramp-down from cutting back in.
+      const renderT0 = performance.now();
       ren.render(scene, cam);
+      sampleRampFrame(frameNow, performance.now() - renderT0, interacting);
 
       // Notify onRender subscribers (compass overlay etc.) after the frame is
       // drawn, so screen-space overlays can track the current camera. Guarded
