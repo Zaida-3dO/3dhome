@@ -1,3 +1,7 @@
+// r160 is the LAST revision of three.js to ship this UMD (build/three.js) bundle.
+// UMD builds are deprecated from r150 and removed entirely from r161 onward -- see
+// the console.warn on the next line, which is three.js's own banner, not ours.
+// Upgrading past r160 REQUIRES migrating to ES modules; see docs/deployment.md.
 console.warn('Scripts "build/three.js" and "build/three.min.js" are deprecated with r150+, and will be removed with r160. Please use ES Modules or alternatives: https://threejs.org/docs/index.html#manual/en/introduction/Installation'),
 /**
  * @license

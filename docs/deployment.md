@@ -279,9 +279,9 @@ version reappears where the placeholder belongs.
 
 ---
 
-## 5. Two traps worth recording
+## 5. Traps worth recording
 
-Both of these cost real time. Neither is guessable from the symptom.
+None of these are guessable from the symptom alone.
 
 ### A proxy config written straight into its database does not take effect
 
@@ -320,6 +320,25 @@ DOCKER_CONFIG="$PWD/.docker" docker compose up -d
 You usually do not need to build at all — `ghcr.io/zaida-3do/3dhome:latest` is
 published, and `docker compose pull` avoids the problem entirely. This applies
 only when building from source on the target host.
+
+### `vendor/three.js` is the last UMD build three.js will ever ship
+
+`vendor/three.js` is r160 — verified minified (669,884 characters across 8
+lines, `const e="160"`), not the ~670 KB unminified file an old comment in
+`deploy/nginx.conf` used to claim. That size is simply what a minified,
+not-tree-shaken r160 UMD bundle weighs; it gzips to ~169 KB on the wire and
+nginx's gzip is already doing that correctly.
+
+The constraint worth recording is different: **r160 is the last revision of
+three.js to ship a UMD (`build/three.js`) bundle at all.** three.js's own
+banner — line 1 of the vendored file — says UMD builds are deprecated from
+r150 and removed entirely from r161 onward. This repo is deliberately
+buildless (see [CONTRIBUTING.md](../CONTRIBUTING.md)), and a classic
+`<script src="vendor/three.js">` tag is exactly the UMD consumption pattern
+that stops being possible past r160. Upgrading the vendored copy beyond r160
+is not a routine `chore(vendor): update three.js` bump — it requires first
+migrating to ES modules (`<script type="module">` or an import map), which is
+a separate, larger piece of work than swapping a file in `vendor/`.
 
 ---
 
