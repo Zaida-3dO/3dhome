@@ -298,6 +298,227 @@
   </style>
 </head>
 <body>
+  <!-- ═══════════════ Cold-start loading overlay ═══════════════════════════
+       DELIBERATELY INLINE, AND DELIBERATELY FIRST IN <body>.
+
+       Everything this overlay needs — markup, style, and its dismiss hook —
+       is inline and above the <script src="vendor/three.js"> tag below. That
+       placement is the whole feature, not a stylistic choice: it means the
+       overlay paints during the initial HTML parse, before three.js has even
+       been requested. Move any part of this into an external stylesheet, a
+       module, or a script tag and it can no longer paint until that resource
+       has loaded — which is exactly the window it exists to cover.
+
+       DO NOT: add an external CSS file, a web font, or a JS module for this.
+       DO NOT: move it below the script tags.
+
+       WHY IT IS INDETERMINATE (this is a correctness point, not a taste one):
+       a real progress bar here would be WORSE than none. Every milestone we
+       can actually measure — config, rooms.json, HA initial state, house
+       profile, scene construction — completes in ~150-200ms combined (see
+       docs/perf-cold-start.md). The part that genuinely takes 9-45s is GPU
+       shader compilation inside compileAsync(), which exposes no progress
+       signal at all: isReady() is a per-program boolean and three.js does not
+       surface the count. A bar wired to the knowable milestones would race to
+       ~95% in a fifth of a second and then sit frozen for ten seconds or more,
+       which reads as *more* broken than no bar at all. So the long tail is an
+       honest indeterminate shimmer, and the only text change is at the one
+       real milestone we have: when shader compilation starts.
+
+       NO backdrop-filter, by design. A blur was requested, but there is
+       nothing to blur — the canvas is empty until the scene first draws — and
+       backdrop-filter is continuous compositor work on the very GPU we are
+       waiting on. The panel is opaque #0f0f1a, matching scene.background in
+       src/home3d-scene.js so the handoff to the rendered scene is seamless. -->
+  <style>
+    #home3d-loading {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      /* Matches scene.background (0x0f0f1a) in src/home3d-scene.js, so the
+         overlay fading out reveals an identically-coloured canvas rather than
+         flashing a different shade. */
+      background: #0f0f1a;
+      /* System stack only — a web font would need a network round-trip before
+         first paint, defeating the point of being inline. */
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   Helvetica, Arial, sans-serif;
+      color: #e8e8f0;
+      opacity: 1;
+      transition: opacity 420ms ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* Dismissal is a class flip, then the element is removed on transitionend
+       (with a timeout fallback). pointer-events goes none immediately so the
+       fading overlay never swallows a click meant for the live scene. */
+    #home3d-loading.home3d-loading-done {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #home3d-loading .home3d-loading-title {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      margin: 0;
+    }
+
+    /* The indeterminate element. A track with a shimmer that sweeps across it
+       forever — it conveys "working", never a false completion fraction. */
+    #home3d-loading .home3d-loading-track {
+      position: relative;
+      width: min(210px, 54vw);
+      height: 3px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.13);
+      overflow: hidden;
+    }
+
+    #home3d-loading .home3d-loading-track::after {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 42%;
+      border-radius: 3px;
+      background: linear-gradient(90deg,
+                  rgba(122, 162, 255, 0) 0%,
+                  rgba(122, 162, 255, 0.95) 50%,
+                  rgba(122, 162, 255, 0) 100%);
+      /* transform-only animation: runs on the compositor without relayout or
+         repaint, so the overlay costs effectively nothing while the main
+         thread is busy building the scene. */
+      animation: home3d-loading-sweep 1250ms ease-in-out infinite;
+    }
+
+    @keyframes home3d-loading-sweep {
+      0%   { transform: translateX(-105%); }
+      100% { transform: translateX(340%); }
+    }
+
+    #home3d-loading .home3d-loading-status {
+      font-size: 12.5px;
+      line-height: 1.4;
+      margin: 0;
+      min-height: 1.4em; /* reserve the line so the text swap never shifts layout */
+      text-align: center;
+      padding: 0 20px;
+      color: rgba(232, 232, 240, 0.62);
+    }
+
+    /* Respect a reduced-motion preference: keep the affordance, drop the
+       sweep, and pulse the whole track gently instead. */
+    @media (prefers-reduced-motion: reduce) {
+      #home3d-loading .home3d-loading-track::after {
+        animation: none;
+        width: 100%;
+        background: rgba(122, 162, 255, 0.6);
+        animation: home3d-loading-pulse 1900ms ease-in-out infinite;
+      }
+      #home3d-loading { transition: none; }
+    }
+
+    @keyframes home3d-loading-pulse {
+      0%, 100% { opacity: 0.28; }
+      50%      { opacity: 0.85; }
+    }
+  </style>
+
+  <div id="home3d-loading" role="status" aria-live="polite">
+    <p class="home3d-loading-title">Loading your home</p>
+    <div class="home3d-loading-track"></div>
+    <p class="home3d-loading-status" id="home3d-loading-status">Starting up&hellip;</p>
+  </div>
+
+  <script>
+    /* The overlay's controller. Inline and synchronous on purpose — see the
+       comment above the <style> block. Exposed as window.__home3dLoading so
+       the boot sequence further down this file can drive it.
+
+       Two invariants this object is responsible for:
+
+       1. DISMISS ONCE, NEVER RE-ARM. `done` latches true on the first
+          dismiss() and every later call is a no-op. This is what makes a warm
+          popup reopen correct: when a Bubble Card popup merely hides and
+          re-shows a live iframe, the scene is never rebuilt, setActive(true)
+          just resumes it, and nothing here runs again. The overlay must not
+          flash back up in that case — and because dismissal is a latch rather
+          than something wired to setActive, we get that for free.
+
+       2. UNDER ?preview=true IT NEVER EXISTS. The preview tile is a small
+          non-interactive thumbnail in a host dashboard that strips all chrome
+          (see the isPreview block further down). A loading card in a 379x163
+          tile would be chrome, and worse, would be most of the tile. We remove
+          the node outright here rather than hiding it, so it can never paint
+          even for one frame. */
+    window.__home3dLoading = (function () {
+      var el = document.getElementById('home3d-loading');
+      var statusEl = document.getElementById('home3d-loading-status');
+      var done = false;
+
+      // Suppress entirely on the preview tile. Read the param directly rather
+      // than waiting for the boot code's isPreview — this runs during parse,
+      // long before that exists, and waiting would let it paint first.
+      var suppressed = false;
+      try {
+        suppressed = new URLSearchParams(window.location.search)
+          .get('preview') === 'true';
+      } catch (e) { /* URLSearchParams is universally available; be safe anyway */ }
+
+      if (suppressed && el && el.parentNode) {
+        el.parentNode.removeChild(el);
+        el = null;
+        statusEl = null;
+        done = true; // latch, so a later dismiss() is a no-op rather than an error
+      }
+
+      return {
+        /* Update the status line. Called at the one milestone that is both
+           real and worth naming: the start of shader compilation, which is
+           where the multi-second wait actually happens. */
+        status: function (text) {
+          if (done || !statusEl) return;
+          statusEl.textContent = text;
+        },
+        /* Idempotent. Safe to call from several completion paths — and it is
+           called from more than one, because compileAsync() is not guaranteed
+           to exist (see src/home3d-scene.js). */
+        dismiss: function () {
+          if (done) return;
+          done = true;
+          if (!el) return;
+          var node = el;
+          el = null;
+          statusEl = null;
+          node.classList.add('home3d-loading-done');
+          // Remove after the fade so the node is not left in the tree eating
+          // hit-testing or compositor layers. transitionend is the normal
+          // path; the timeout covers a browser that never fires it (e.g. the
+          // element was display:none'd, or reduced-motion killed the
+          // transition), so the node is always cleaned up exactly once.
+          var removed = false;
+          var remove = function () {
+            if (removed) return;
+            removed = true;
+            if (node.parentNode) node.parentNode.removeChild(node);
+          };
+          node.addEventListener('transitionend', remove);
+          setTimeout(remove, 700);
+        },
+        /* Exposed for the boot code's failure paths: if the app throws before
+           the scene ever compiles, leaving a "Loading your home" card up
+           forever is the very failure mode this overlay exists to prevent. */
+        isDone: function () { return done; }
+      };
+    })();
+  </script>
+  <!-- ═════════════════ end cold-start loading overlay ═══════════════════ -->
+
   <!-- Title -->
   <div class="title-overlay">
     <h1 id="house-title">My Home</h1>
@@ -711,6 +932,12 @@
         maxFps: maxFps,
         pixelRatio: scenePixelRatio,
         antialias: !isPreview,
+        // Cold-start overlay handoff. onCompileStart names the slow phase;
+        // onReady is the dismiss signal and is guaranteed to fire exactly once
+        // on every path (including precompile failure and renderers with no
+        // compileAsync), so the overlay can never be stranded on screen.
+        onCompileStart: () => window.__home3dLoading.status('Preparing lighting…'),
+        onReady: () => window.__home3dLoading.dismiss(),
         onRoomClick: isPreview ? undefined : (roomId => { selectedRoom = roomId; openPanel(); renderPanel(); })
       });
 
@@ -1519,7 +1746,24 @@
           });
         }
       }
-    })();
+    })().catch((e) => {
+      // Boot failed before the scene ever reached onReady. Without this the
+      // loading overlay would sit on screen saying "Loading your home"
+      // forever, which is precisely the "looks broken" failure it was added to
+      // prevent — and it would be actively misleading, since nothing is
+      // loading any more. Tell the truth and stop the animation.
+      console.error('[home3d] startup failed.', e);
+      try {
+        var loading = window.__home3dLoading;
+        if (loading && !loading.isDone()) {
+          var titleEl = document.querySelector('#home3d-loading .home3d-loading-title');
+          var trackEl = document.querySelector('#home3d-loading .home3d-loading-track');
+          if (titleEl) titleEl.textContent = 'Could not load your home';
+          if (trackEl) trackEl.style.display = 'none';
+          loading.status('Check the browser console for details, then reload.');
+        }
+      } catch (inner) { /* never let the error handler throw */ }
+    });
     });
   </script>
 </body>
