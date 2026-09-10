@@ -2356,6 +2356,18 @@ const Home3DScene = (() => {
     // the ramp only delays rather than avoids.
     const wantShadows = quality.sunShadow || quality.roomShadowLights;
     ren.shadowMap.enabled = wantShadows;
+    // Shadow maps are re-rendered ONLY when something asks for it (see
+    // invalidateShadows() below). Left on, three re-renders every shadow map
+    // on every rendered frame — and 10 of the 11 casters are PointLights, so
+    // that is ~60 shadow renders of unmoved geometry per frame during a drag.
+    // NOTE this is orthogonal to shadowMap.enabled, which must NOT be used as
+    // a quality knob: toggling THAT invalidates the program cache and forces a
+    // full material recompile (see the tombstone above). autoUpdate costs
+    // nothing to change — it only gates when the maps refresh.
+    // The first frame still needs one, and .enabled=true implies an initial
+    // update, but be explicit rather than relying on it.
+    ren.shadowMap.autoUpdate = false;
+    ren.shadowMap.needsUpdate = wantShadows;
     console.info(
       `[Home3DScene] Quality tier=${tier} ` +
       `(MAX_FRAGMENT_UNIFORM_VECTORS=${maxFragU}) shadows=${shadows} maxFps=${maxFps || 'uncapped'}. ` +
@@ -2386,6 +2398,31 @@ const Home3DScene = (() => {
     let transitionsActive = true;  // wall/ceiling opacity still easing toward target
     function requestRender() { needsRender = true; }
     function wake(ms) { wakeUntil = Math.max(wakeUntil, performance.now() + (ms || 0)); needsRender = true; }
+
+    // ── Explicit shadow invalidation ────────────────────────────────────────
+    // shadowMap.autoUpdate is turned off after construction (below), so three
+    // stops re-rendering every shadow map on every rendered frame and only
+    // does it when we say so. This scene has ~11 shadow casters and 10 of them
+    // are PointLights, whose shadow is a SIX-FACE CUBEMAP — so a frame that
+    // redundantly re-renders them is paying for ~60 shadow renders of geometry
+    // that did not move. During a sustained drag that is a real thermal cost
+    // on a phone.
+    //
+    // ⚠️ The bargain: every mutation that changes what a shadow should look
+    // like MUST call this, or the shadow silently goes stale. The sites are
+    // enumerated at the call sites below; the rule is "if it moves geometry,
+    // or changes a light's intensity/colour/visibility, or moves the sun, it
+    // invalidates". Camera movement does NOT — shadow maps are rendered from
+    // the LIGHT's point of view, so orbiting cannot stale them. That exclusion
+    // is the entire point: updCam() fires on every drag frame, and invalidating
+    // there would give back exactly the cost this is meant to save.
+    //
+    // needsUpdate is a ONE-SHOT: three resets it to false after the next
+    // render, so this is "refresh once", not "turn updating back on".
+    function invalidateShadows() {
+      ren.shadowMap.needsUpdate = true;
+      needsRender = true;
+    }
 
     // ── Adaptive pixel ratio ────────────────────────────────────────────────
     // setPixelRatio is the ONE meaningful quality knob with no shader
@@ -2566,7 +2603,10 @@ const Home3DScene = (() => {
           ren.shadowMap.enabled = shadowWasEnabled;
           // REQUIRED: this scene renders on demand, so without an explicit
           // repaint request nothing draws after the precompile resolves and
-          // the canvas stays blank.
+          // the canvas stays blank. Invalidate too: shadowMap.enabled was
+          // toggled around the precompile, and with autoUpdate off the maps
+          // would otherwise never be built for the first real frame.
+          invalidateShadows();
           requestRender();
         });
     }
@@ -2635,7 +2675,11 @@ const Home3DScene = (() => {
           applyAccent(s[channel], (extraLights[id] || {})[channel], (extraMeshes[id] || {})[channel]);
         });
       });
-      requestRender(); // light state changed → repaint (matters when idle/on-demand)
+      // Light state changed → repaint (matters when idle/on-demand) AND
+      // refresh the shadow maps: this sets intensity/colour/visibility on the
+      // room lights, all of which change what their shadows should look like.
+      invalidateShadows();
+      requestRender();
     }
     syncLights();
 
@@ -2850,6 +2894,12 @@ const Home3DScene = (() => {
     const SUN_MODE_COLORS  = { morning: [1.0, 0.70, 0.38], noon: [1.0, 0.93, 0.85], night: [0.4, 0.45, 0.6] };
 
     function updateSunlight() {
+      // The sun is a shadow-casting directional light, so ANY change here
+      // (intensity, colour, or being switched off entirely) changes its
+      // shadow. Invalidating inside the function rather than at each call site
+      // covers all three callers at once — setSun(), setSunMode(), and the
+      // loop's own 60-second tick — so a future caller cannot forget to.
+      invalidateShadows();
       if (!sunEnabled) {
         sun.intensity = 0;
         ambLight.intensity = 0.12;
@@ -3195,6 +3245,10 @@ const Home3DScene = (() => {
         if (!dr) return;
         dr.openPct = Math.max(0, Math.min(100, +pct || 0));
         dr.pivot.rotation.y = dr.swingSign * (dr.maxDeg * dr.openPct / 100) * Math.PI / 180;
+        // MOVES GEOMETRY — a door is a shadow caster, so without this the door
+        // swings while its shadow stays where the door used to be. The single
+        // most visible way to get this wrong.
+        invalidateShadows();
         requestRender();
       },
       // Embedder pause control: setActive(false) halts the render loop (no GPU
@@ -3203,7 +3257,11 @@ const Home3DScene = (() => {
       setActive(active) { _inactive = !active; applyPause(); },
       setShadows(enabled) {
         ren.shadowMap.enabled = enabled;
-        ren.shadowMap.needsUpdate = true;
+        // Still correct with autoUpdate off: needsUpdate is the one-shot that
+        // refreshes the maps after the toggle. (This setter is the expensive
+        // program-cache path — see the tombstone — and is NOT used as a
+        // quality knob by anything in the render loop.)
+        invalidateShadows();
         // Force all materials to recompile with/without shadow defines
         scene.traverse(obj => { if (obj.material) obj.material.needsUpdate = true; });
         requestRender();
@@ -3215,6 +3273,13 @@ const Home3DScene = (() => {
       // `scene.add`/`.visible = x` from outside is otherwise invisible until
       // the next drag/scroll.
       requestRender() { requestRender(); },
+      // Companion to requestRender() for an external caller that moves real
+      // GEOMETRY or changes a LIGHT, rather than just toggling an overlay's
+      // labels. Shadow maps only refresh on demand (shadowMap.autoUpdate is
+      // off), so a direct scene mutation that casts a shadow needs this or the
+      // shadow keeps describing the old position. The existing debug overlays
+      // do not need it — they toggle label visibility, and labels do not cast.
+      invalidateShadows() { invalidateShadows(); },
       // The live orbit camera — external overlays that project world points into
       // screen space (e.g. the compass rose) read this each frame. Returned by
       // reference; callers must not mutate it.
