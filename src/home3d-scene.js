@@ -2387,6 +2387,63 @@ const Home3DScene = (() => {
     function requestRender() { needsRender = true; }
     function wake(ms) { wakeUntil = Math.max(wakeUntil, performance.now() + (ms || 0)); needsRender = true; }
 
+    // ── Adaptive pixel ratio ────────────────────────────────────────────────
+    // setPixelRatio is the ONE meaningful quality knob with no shader
+    // recompile — it reallocates the drawing buffer and nothing else. Every
+    // other knob worth having (shadow-casting light count, shadowMap.enabled,
+    // shadowMap.type, antialias) forces a full material recompile or a new
+    // WebGL context. See the shadow-ramp tombstone above: that is why the
+    // obvious "start low, upgrade later" adaptive-quality design does not
+    // work here, and why THIS is the fragment of it that does.
+    //
+    // TWO independent consumers drive the same knob, so they are deliberately
+    // expressed as ONE resolver rather than two callers racing to write it:
+    //
+    //   basePixelRatio    the ratio this scene was constructed with. A hard
+    //                     upper bound — the preview tile is handed 1 by its
+    //                     embedder and must never be raised above it.
+    //   ceilingRatio      the post-load ramp's current allowance. Starts at
+    //                     RAMP_START on a scene that ramps, and rises toward
+    //                     basePixelRatio once measured frame headroom allows.
+    //   interactionRatio  the cap applied while the user is actively moving
+    //                     the camera (the Blender-viewport technique: noisier
+    //                     while you navigate, settles when you stop).
+    //
+    // The applied value is always min(ceiling, interacting ? cap : ceiling).
+    // Because the ramp only ever moves the CEILING and the drag only ever
+    // moves the CAP, and the applied value is their minimum, an in-flight
+    // ramp-up structurally CANNOT stomp a drag-triggered ramp-down — there is
+    // no ordering in which the two can oscillate against each other.
+    const basePixelRatio = pixelRatio;
+    // Cap while dragging. Held at 1 rather than 0.75: below 1 the softening
+    // reads as a defect on a phone rather than as responsiveness, and the win
+    // from 1 -> 0.75 is a further 44% of a buffer that is already the smaller
+    // cost once shadows dominate the frame.
+    const interactionRatio = Math.min(1, basePixelRatio);
+    let ceilingRatio = basePixelRatio;
+    let appliedRatio = basePixelRatio;
+
+    // Apply a resolved ratio. setPixelRatio() ALONE DOES NOTHING — it records
+    // the ratio and only takes effect on the next setSize(), so the two must
+    // always travel together. Guarded on a change: setSize reallocates the
+    // drawing buffer, so re-applying the same value every frame would be a
+    // per-frame realloc rather than a no-op.
+    function applyPixelRatio(next) {
+      if (Math.abs(next - appliedRatio) < 0.001) return;
+      const w = container.clientWidth, h = container.clientHeight;
+      if (w === 0 || h === 0) return; // detached/collapsed: leave it for resize
+      appliedRatio = next;
+      ren.setPixelRatio(next);
+      ren.setSize(w, h);
+      needsRender = true;
+    }
+
+    // Resolve the ratio for the current frame. `interacting` is passed in from
+    // the loop, which already computes it.
+    function resolvePixelRatio(interacting) {
+      return interacting ? Math.min(ceilingRatio, interactionRatio) : ceilingRatio;
+    }
+
     // ── Shader precompile, off the critical path ───────────────────────────
     // three.js builds a program the first time a material is drawn, and the
     // driver finishes the link lazily -- the stall surfaces later, when three
@@ -2799,6 +2856,22 @@ const Home3DScene = (() => {
       // popup costs nothing. The preview (autoRotate) always has motion, so it
       // skips this gate and just honours the maxFps cap.
       const interacting = orb.drag || orb.pan || frameNow < wakeUntil;
+
+      // Adaptive pixel ratio: drop while the camera is moving, restore on the
+      // trailing edge of the wake tail (~250ms after the last drag/wheel/pinch).
+      // Resolved BEFORE the frame is drawn so the buffer is already the right
+      // size for this frame rather than the previous one. This is the ONLY
+      // writer of the renderer's pixel ratio after construction.
+      //
+      // ⚠️ ORDER MATTERS: this MUST sit ABOVE the on-demand gate below.
+      // The restore is triggered by `interacting` going false, which is the
+      // very condition that makes the gate return early — resolve it after the
+      // gate and the restoring frame is the one frame that never runs, leaving
+      // the scene stuck at dragging resolution until something else happens to
+      // request a render. applyPixelRatio() sets needsRender when it changes
+      // anything, so the gate below then lets that repaint through.
+      applyPixelRatio(resolvePixelRatio(interacting));
+
       if (!autoRotate && !needsRender && !interacting && !transitionsActive) return;
 
       // Seconds since last rendered frame, clamped so a long idle/pause doesn't jump
@@ -2904,6 +2977,14 @@ const Home3DScene = (() => {
         container.releasePointerCapture(e.pointerId);
         orb.drag = false;
         orb.pan = false;
+        // Same tail as pointerup. REQUIRED for the adaptive pixel ratio: this
+        // scene renders on demand, so clearing drag without scheduling a frame
+        // leaves the scene stuck at the reduced dragging ratio with nothing
+        // queued to restore it — it would stay soft until the user touched it
+        // again. A cancelled touch (browser gesture takeover, an incoming call,
+        // a stray palm) is common on a phone, which is exactly the device this
+        // change is for.
+        wake(250);
       });
       // Right-drag is repurposed for pan — suppress the browser's native
       // right-click context menu on the canvas so it doesn't pop up mid-drag.
@@ -2963,6 +3044,12 @@ const Home3DScene = (() => {
       if (w === 0 || h === 0) return;
       cam.aspect = w / h;
       cam.updateProjectionMatrix();
+      // Re-assert the CURRENT adaptive ratio before sizing. setSize() alone
+      // reuses whatever ratio the renderer last recorded, so a resize landing
+      // mid-drag (mobile browser chrome collapsing, orientation change) would
+      // otherwise bake the dragging ratio in until the next ratio CHANGE — and
+      // applyPixelRatio's change-guard would then treat it as already applied.
+      ren.setPixelRatio(appliedRatio);
       ren.setSize(w, h);
       requestRender();
     });
