@@ -2280,6 +2280,17 @@ const Home3DScene = (() => {
       maxFps = 0,
       // antialias: cheap to drop on the preview tile (barely visible at 379x163).
       antialias = true,
+      // ── Cold-start progress reporting (both optional) ─────────────────────
+      // onCompileStart: fired when shader precompilation begins — the start of
+      //   the one genuinely slow, genuinely progress-less phase (9-45s cold on
+      //   the real house). Not fired at all when the renderer has no
+      //   compileAsync, because then there is no such phase.
+      // onReady: fired exactly once when the scene is ready to draw, on EVERY
+      //   path including precompile failure and no-compileAsync. This is the
+      //   signal a caller's loading overlay should dismiss on. Guaranteed
+      //   single-shot, so it is safe to hang a latch off it.
+      onCompileStart = null,
+      onReady = null,
     } = opts;
 
     const W = container.clientWidth, H = container.clientHeight;
@@ -2401,11 +2412,33 @@ const Home3DScene = (() => {
     //
     // Note this is an INSTANCE method in r160; WebGLRenderer.prototype
     // .compileAsync is undefined, so feature-detect on `ren`, not the prototype.
+    //
+    // onReady fires when the scene is genuinely ready to show something, which
+    // is the point the caller's loading affordance should come down. It is
+    // called EXACTLY ONCE on every path below, including the failure and the
+    // no-compileAsync ones — a caller hiding an overlay here must never be
+    // left waiting on a callback that cannot arrive.
+    let readyFired = false;
+    function fireReady() {
+      if (readyFired) return;
+      readyFired = true;
+      if (typeof onReady === 'function') {
+        // Never let a caller's callback break scene construction.
+        try { onReady(); } catch (e) { console.warn('[Home3DScene] onReady threw.', e); }
+      }
+    }
+
     if (typeof ren.compileAsync === 'function') {
       // Shadow programs are a separate set from the beauty-pass ones, so make
       // sure the precompile covers them too when this scene uses shadows.
       const shadowWasEnabled = ren.shadowMap.enabled;
       ren.shadowMap.enabled = wantShadows;
+      // Tell the caller the multi-second, progress-less phase has begun. This
+      // is the ONLY milestone worth naming: everything before it is a couple
+      // of hundred milliseconds, and everything inside it is opaque.
+      if (typeof onCompileStart === 'function') {
+        try { onCompileStart(); } catch (e) { /* advisory only */ }
+      }
       Promise.resolve(ren.compileAsync(scene, cam))
         .catch((e) => console.warn('[Home3DScene] shader precompile failed; ' +
           'falling back to compiling on first render.', e))
@@ -2415,7 +2448,21 @@ const Home3DScene = (() => {
           // repaint request nothing draws after the precompile resolves and
           // the canvas stays blank.
           requestRender();
+          // After requestRender(), not before: the overlay should come down as
+          // the real frame is being asked for, not while the canvas is still
+          // blank. Note the .catch() above means this .then() runs on the
+          // failure path too — a precompile that rejected still leaves a
+          // usable scene (it just compiles on first draw), so the overlay must
+          // come down there as well rather than hanging forever.
+          fireReady();
         });
+    } else {
+      // No compileAsync (older three, or a renderer that lacks it): there is
+      // no precompile phase to wait for, so the scene is as ready as it will
+      // get right now and the first render does the compiling. Firing here is
+      // what stops a caller's overlay staying up forever on this path.
+      requestRender();
+      fireReady();
     }
 
     // Light state — one entry per room, one sub-entry per channel the profile
