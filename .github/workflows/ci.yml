@@ -131,6 +131,14 @@ jobs:
           # catch its removal. See the script's header.
           set -euo pipefail
           node scripts/test-extra-overlay-global.mjs
+      - name: House-loader strictness tests
+        run: |
+          # Asserts that a house which cannot be loaded REJECTS rather than
+          # silently rendering a different house. That substitution is a
+          # regression nobody would see: the app boots, a house draws, and the
+          # container stays healthy while showing the wrong home.
+          set -euo pipefail
+          node scripts/test-house-loader-strict.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

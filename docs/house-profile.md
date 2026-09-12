@@ -616,12 +616,25 @@ remove.
 `config.example.json` — see `src/config-loader.js` for the precedence chain.
 `index.html` reads it from there and calls `HouseLoader.loadWithFallback()`.
 
-### Failure is not a blank screen
+### Failure is not a blank screen — and not a different house either
 
-`loadWithFallback(id, 'demo')` renders the demo house if `id` cannot be loaded —
-a mistyped `HOME3D_HOUSE`, a profile directory that was not mounted, a malformed
-`geometry.json` — and logs what went wrong and how to fix it. It only rejects if
-the fallback itself is unreachable. The same principle runs through the loader:
+`loadWithFallback(id, 'demo')` **never substitutes another house for `id`.** If
+the named profile cannot be loaded — a mistyped `HOME3D_HOUSE`, a profile
+directory that was not mounted, a malformed `geometry.json` — it rejects, and
+`index.html` turns that rejection into an on-screen error card naming the house
+that failed and how to fix it.
+
+It used to render the demo house instead. That was reversed on 2026-09-12: the
+profile is bind-mounted read-only into the container, so a permissions change or
+a mount that does not come back makes every `houses/<id>` request 404 *while the
+container still reports healthy* — and the result was a wall tablet showing a
+fictional flat as if it were the real home, with Home Assistant wiring real
+entities to fake rooms. A visible error beats a plausible wrong answer. An unset
+`HOME3D_HOUSE` still defaults to `demo`, and an explicit `demo` still loads the
+demo house; only substitution for an explicitly-named house is refused.
+
+The blank-screen principle still runs through the rest of the loader, where the
+failure is partial rather than "this is not the house you asked for":
 
 - a **texture that 404s or is empty** leaves the wall painted, rather than
   rendering an unlit black panel that reads as a hole in the building
