@@ -1122,6 +1122,26 @@
       }
       await loadExtraOverlays();
 
+      // ---- Drive overlay teardown from the scene's own dispose() ------------
+      //
+      // Every overlay above is attached HERE, not inside home3d-scene.js, so
+      // each dispose handle is owned by this file and by nothing else. If the
+      // scene is torn down without these being called, the overlays are
+      // orphaned: their groups' GPU resources would be freed by the scene's
+      // traverse (they live in home.scene), but their window-level keydown
+      // listeners and DOM legends would survive, still pointing at a disposed
+      // scene. Registering them makes a single home.dispose() tear down the
+      // whole assembly — which is what makes the scene's disposal complete
+      // rather than partial.
+      //
+      // NOTE: nothing calls home.dispose() automatically today; see the
+      // teardown-trigger discussion on the item. This wiring is what makes an
+      // eventual (or manual/embedder-driven) teardown correct, and it costs
+      // nothing while unused.
+      [wallNums, grid, doorNums, ...extraOverlayHandles].forEach((h) => {
+        if (h && typeof h.dispose === 'function') home.onDispose(() => h.dispose());
+      });
+
       // ---- Settings rows contributed by extra overlays -----------------------
       //
       // An overlay handle MAY expose `settingsToggles`: an array of descriptors

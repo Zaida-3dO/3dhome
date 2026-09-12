@@ -3027,6 +3027,24 @@ const Home3DScene = (() => {
     // behaviour; a throwing subscriber can't break the render loop (guarded).
     const onRenderSubs = [];
 
+    // onDispose subscribers — teardown callbacks registered by whoever OWNS a
+    // resource this module cannot reach. The three debug overlays in
+    // src/overlays/ are attached by the EMBEDDER (index.html), not by this
+    // module, so each one's own dispose() is a handle only the embedder holds.
+    // Without this list those overlays would be orphaned on teardown: their
+    // groups sit in `scene` (so the traverse below would free their GPU
+    // resources) but their window-level keydown listeners and DOM legends would
+    // leak, and the overlay would be left holding a disposed scene. The
+    // embedder registers each handle here so a single home.dispose() tears the
+    // whole assembly down. Subscribers run BEFORE the scene traverse so an
+    // overlay can still remove its own group first (they all do).
+    const onDisposeSubs = [];
+    // Latch so a second dispose() is a no-op rather than a double-free: three.js
+    // dispose() is idempotent per-resource, but forceContextLoss() on an
+    // already-lost context and removeChild on a detached canvas are not worth
+    // re-running, and a second traverse of a torn-down scene is pure noise.
+    let _disposed = false;
+
     // Render loop — frame-rate-capped + pausable. minFrameMs gates the heavy
     // work; dt is measured from the last RENDERED frame so motion stays
     // time-correct regardless of the cap (a 15fps cap rotates at the same speed
@@ -3263,6 +3281,11 @@ const Home3DScene = (() => {
 
     return {
       scene,
+      // The live WebGLRenderer. Exposed so a caller can read `renderer.info`
+      // (memory.geometries / memory.textures / programs) — the only way to
+      // VERIFY that dispose() actually released anything rather than merely
+      // having been called. Returned by reference; callers must not mutate it.
+      renderer: ren,
       lightState,
       updateLights: syncLights,
       ROOMS,
@@ -3350,10 +3373,107 @@ const Home3DScene = (() => {
           if (i >= 0) onRenderSubs.splice(i, 1);
         };
       },
+      // Subscribe a teardown callback, run when dispose() is called. Returns an
+      // unsubscribe fn. This is how an EMBEDDER hands back ownership of things
+      // it attached to our scene (the debug overlays in src/overlays/ are
+      // attached from index.html, so their dispose handles live there, not
+      // here). Registering an overlay handle's dispose is what stops it being
+      // orphaned when the scene goes away. A throwing subscriber must not
+      // abort the rest of the teardown — the renderer MUST still be freed — so
+      // each is guarded, same as onRender.
+      onDispose(fn) {
+        if (typeof fn !== "function") return () => {};
+        onDisposeSubs.push(fn);
+        return () => {
+          const i = onDisposeSubs.indexOf(fn);
+          if (i >= 0) onDisposeSubs.splice(i, 1);
+        };
+      },
+      // Full teardown: stop the loop, detach listeners, hand control back to
+      // any onDispose subscriber, then FREE THE GPU RESOURCES and drop the
+      // WebGL context.
+      //
+      // Why the traverse is necessary: ren.dispose() releases the renderer's
+      // own internal state, NOT the geometries/materials/textures uploaded
+      // through it. This app generates most of its textures procedurally at
+      // runtime (9 CanvasTexture sites), so those uploads have no other owner
+      // and nothing else will ever release them. Before this, a torn-down
+      // scene left every buffer and texture resident until the context was
+      // garbage-collected — which, while the embedder still held the returned
+      // object, was never.
+      //
+      // Materials are deduped through a Set because the house shares materials
+      // heavily across meshes (walls, floors and the light-bulb meshes each
+      // reuse one instance); disposing the same material once per mesh would
+      // be wasted work. This mirrors the established in-repo idiom in
+      // src/overlays/wall-debug-overlay.js.
       dispose() {
+        if (_disposed) return;
+        _disposed = true;
+
         cancelAnimationFrame(animId);
         handlers.forEach(([el, ev, fn, o]) => el.removeEventListener(ev, fn, o));
+        handlers.length = 0;
+        // Drop render subscribers too: they close over `cam` and would keep the
+        // embedder's overlay objects alive through this module.
+        onRenderSubs.length = 0;
+
+        // Embedder-owned teardown first, so an overlay can remove its own group
+        // from the scene before we traverse what remains.
+        onDisposeSubs.forEach((fn) => {
+          try { fn(); } catch (e) { /* one bad subscriber must not leak the GPU */ }
+        });
+        onDisposeSubs.length = 0;
+
+        // Free every GPU resource reachable from the scene graph.
+        const seenMaterials = new Set();
+        const disposeMaterial = (m) => {
+          if (!m || seenMaterials.has(m)) return;
+          seenMaterials.add(m);
+          // Every texture-valued slot a material can carry, not just .map —
+          // this app uses .map plus roughness/normal/emissive/alpha maps, and
+          // a missed slot is a silently retained GPU texture.
+          for (const key in m) {
+            const v = m[key];
+            if (v && v.isTexture) v.dispose();
+          }
+          m.dispose();
+        };
+        scene.traverse((obj) => {
+          if (obj.geometry) obj.geometry.dispose();
+          const mat = obj.material;
+          if (Array.isArray(mat)) mat.forEach(disposeMaterial);
+          else disposeMaterial(mat);
+          // SHADOW MAPS are the single biggest allocation here and they are NOT
+          // reachable from any material: a light's shadow map is a
+          // WebGLRenderTarget hanging off `light.shadow`, owned by the light.
+          // Measured on the demo house: 8 of the 35 lights carry one (7
+          // PointLight cube atlases at 4096x2048 + one 2048x2048 directional,
+          // UnsignedInt depth = 4 bytes/texel), and they account for 8 of the
+          // 17 live textures. That is ~240 MB — against ~0.3 MB of geometry
+          // and ~19 MB of material textures, so the shadow maps ARE the
+          // reclaim, by roughly an order of magnitude. Skipping this line
+          // would leave almost all of the freeable memory resident.
+          if (obj.isLight && obj.shadow && obj.shadow.map) {
+            obj.shadow.map.dispose();
+            obj.shadow.map = null;
+          }
+        });
+        // Background may be a texture in other configurations; today it is a
+        // Color, which has no dispose(). Guarded so it stays correct if that
+        // ever changes.
+        if (scene.background && scene.background.isTexture) scene.background.dispose();
+        if (scene.environment && scene.environment.isTexture) scene.environment.dispose();
+        // Detach children so nothing holds the (now disposed) resources.
+        scene.clear();
+
         ren.dispose();
+        // Actually relinquish the WebGL context. Without this the canvas keeps
+        // a live context (and its driver-side allocations) until GC decides
+        // otherwise; browsers also cap concurrent contexts, so a create/dispose
+        // cycle without this eventually loses the OLDEST context and blanks a
+        // still-live scene.
+        ren.forceContextLoss();
         if (container.contains(ren.domElement)) container.removeChild(ren.domElement);
       }
     };
