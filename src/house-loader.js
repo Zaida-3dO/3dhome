@@ -693,26 +693,70 @@ export const HouseLoader = (() => {
   }
 
   /**
-   * Load `id`, falling back to `fallbackId` when it cannot be loaded.
+   * Load `id`. NEVER substitutes a different house for it.
    *
-   * A missing or broken profile must never be a blank canvas or an uncaught
-   * exception: the app says loudly what went wrong and renders the demo house,
-   * so a stranger who mistypes HOME3D_HOUSE sees a working app and a clear
-   * console message rather than a black screen.
+   * ## This function used to fall back, and deliberately no longer does
+   *
+   * It previously caught any failure loading `id` and rendered the demo house
+   * instead, so that a stranger who mistyped HOME3D_HOUSE got a working app
+   * and a console message rather than a black screen. That trade-off was
+   * reversed on 2026-09-12 because the cost side of it turned out
+   * to be much worse than the benefit:
+   *
+   *   - The profile is bind-mounted read-only into the container at
+   *     houses/<id>/. nginx does not run as the file owner, so a permissions
+   *     change, a NAS reboot or a mount that simply does not come back makes
+   *     every houses/<id> request 404 -- WHILE THE CONTAINER STILL REPORTS
+   *     HEALTHY. Nothing alerts.
+   *   - The substitute then renders on a wall tablet or a phone as a fictional
+   *     flat with no visible sign it is not the real home, and the Home
+   *     Assistant integration wires REAL entities to those FAKE rooms.
+   *   - A console line does not help: nobody reads a console on a wall tablet.
+   *
+   * So a wrong house that looks plausible is a worse outcome than a visible
+   * error, and this function now produces the error. The contract is:
+   *
+   *   - `id` loads              -> resolves with the house. Unchanged.
+   *   - `id` fails, id !== fallback -> REJECTS. No substitution, ever. The
+   *     caller is responsible for putting a readable error ON SCREEN naming
+   *     the house; see the boot sequence in index.html, which turns this
+   *     rejection into the error card rather than a blank canvas.
+   *   - `id` fails, id === fallback -> rejects, exactly as it always did.
+   *
+   * `fallbackId` is therefore no longer a substitute. It names the one id that
+   * is allowed to be a default rather than an explicit choice, and it survives
+   * only so the two call sites keep their existing shape; the parameter is
+   * otherwise inert. An UNSET HOME3D_HOUSE still defaults to 'demo' upstream
+   * in deploy/generate-config.sh -- that default is fine and is untouched.
+   * What is refused is SUBSTITUTING for a house somebody explicitly named.
+   *
+   * The blank-canvas failure the old fallback existed to prevent is still
+   * prevented, just one layer up: the caller must render an explicit error
+   * state. Rejecting here and drawing nothing there would trade one silent
+   * failure for another.
    */
   function loadWithFallback(id, fallbackId) {
     const fallback = fallbackId || 'demo';
     return load(id).catch(err => {
+      // Re-thrown either way. The message differs only so the console says
+      // which of the two cases happened; neither one substitutes a house.
       if (id === fallback) throw err;
-      console.error(
-        '[HouseLoader] Could not load house "' + id + '": ' + err.message + '\n' +
-        '[HouseLoader] Falling back to the "' + fallback + '" house. Check that houses/' + id +
-        '/geometry.json exists and is being served, or set HOME3D_HOUSE / ?house= to a profile that does.'
+      const e = new Error(
+        'Could not load house "' + id + '": ' + err.message + '. ' +
+        'Refusing to render a different house in its place -- "' + id + '" was ' +
+        'named explicitly, so showing the "' + fallback + '" house instead would ' +
+        'look like a working app while displaying the wrong home. Check that ' +
+        'houses/' + id + '/geometry.json exists and is readable by the server ' +
+        '(the container bind-mount needs a+rX), or set HOME3D_HOUSE / ?house= ' +
+        'to a profile that does.'
       );
-      return load(fallback).then(house => {
-        house.fallbackFrom = id;
-        return house;
-      });
+      // Carried so a caller can name the house in an on-screen error without
+      // parsing the message. `houseId` is the id that failed; `cause` keeps the
+      // underlying fetch/compile error for the console.
+      e.houseId = id;
+      e.cause = err;
+      console.error('[HouseLoader] ' + e.message);
+      throw e;
     });
   }
 

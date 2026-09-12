@@ -930,15 +930,20 @@
       // ---- Load the house profile ----
       //
       // The engine renders whatever house it is handed; which house that is
-      // comes from configuration (HOME3D_HOUSE / ?house=). A profile that
-      // cannot be loaded falls back to the demo house with a clear console
-      // message rather than a blank canvas - loadWithFallback() guarantees
-      // that, and only rethrows if the demo house itself is unreachable.
+      // comes from configuration (HOME3D_HOUSE / ?house=).
+      //
+      // THERE IS NO FALLBACK HOUSE. If the configured profile cannot be
+      // loaded this REJECTS, and the boot catch at the bottom of this file
+      // turns the rejection into an on-screen error card naming the house.
+      // See the contract comment on loadWithFallback() in src/house-loader.js
+      // for why substituting the demo house here was removed: a wall tablet
+      // silently showing a fictional flat, with real Home Assistant entities
+      // wired to fake rooms, is worse than a visible error.
+      //
+      // An UNSET HOME3D_HOUSE still defaults to 'demo' (deploy/generate-config.sh),
+      // and an explicit 'demo' still loads the demo house. Only SUBSTITUTION
+      // for an explicitly-named house is refused.
       const house = await HouseLoader.loadWithFallback(cfg.house, 'demo');
-      if (house.fallbackFrom) {
-        console.warn('[home3d] Rendering the demo house because "' +
-          house.fallbackFrom + '" could not be loaded. See the error above.');
-      }
       console.info('[home3d] House "' + house.id + '" (' + house.name + '): ' +
         Object.keys(house.rooms).length + ' rooms, ' + house.walls.length + ' walls, ' +
         house.doors.length + ' doors.');
@@ -1860,13 +1865,72 @@
       // loading any more. Tell the truth and stop the animation.
       console.error('[home3d] startup failed.', e);
       try {
+        // A house that could not be loaded is the one startup failure with a
+        // specific, actionable cause, so it gets a specific message naming the
+        // house. HouseLoader tags the rejection with `houseId` for exactly
+        // this (it no longer substitutes a different house -- see its contract
+        // comment). Everything else keeps the generic wording.
+        var failedHouse = (e && typeof e.houseId === 'string') ? e.houseId : null;
+
         var loading = window.__home3dLoading;
         if (loading && !loading.isDone()) {
+          // The overlay is still up: repurpose it in place. It is already a
+          // full-screen, readable, correctly-coloured card, so reusing it
+          // avoids a second parallel error mechanism -- and crucially avoids
+          // the blank black canvas that the old demo-house fallback existed to
+          // prevent.
           var titleEl = document.querySelector('#home3d-loading .home3d-loading-title');
           var trackEl = document.querySelector('#home3d-loading .home3d-loading-track');
-          if (titleEl) titleEl.textContent = 'Could not load your home';
           if (trackEl) trackEl.style.display = 'none';
-          loading.status('Check the browser console for details, then reload.');
+          if (failedHouse) {
+            if (titleEl) titleEl.textContent = 'Could not load the "' + failedHouse + '" home';
+            loading.status(
+              'The "' + failedHouse + '" house profile could not be loaded, so nothing has been ' +
+              'rendered. No other house is shown in its place, because that would look like a ' +
+              'working home. Check that houses/' + failedHouse + '/geometry.json is present and ' +
+              'readable by the server, then reload.'
+            );
+          } else {
+            if (titleEl) titleEl.textContent = 'Could not load your home';
+            loading.status('Check the browser console for details, then reload.');
+          }
+        } else if (failedHouse) {
+          // The overlay was already dismissed or suppressed (?preview=true
+          // removes the node outright). Without this branch the failure would
+          // be invisible on exactly the surfaces that matter most -- a wall
+          // tablet showing an embedded tile -- so build a minimal card rather
+          // than leaving an empty canvas.
+          var card = document.createElement('div');
+          card.id = 'home3d-house-error';
+          card.setAttribute('role', 'alert');
+          card.style.cssText = [
+            'position:fixed', 'inset:0', 'z-index:10000',
+            'display:flex', 'flex-direction:column',
+            'align-items:center', 'justify-content:center',
+            'gap:14px', 'padding:24px', 'box-sizing:border-box',
+            'background:#0f0f1a', 'color:#e8e8f0', 'text-align:center',
+            'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif'
+          ].join(';');
+
+          var h = document.createElement('p');
+          h.style.cssText = 'margin:0;font-size:17px;font-weight:600;';
+          h.textContent = 'Could not load the "' + failedHouse + '" home';
+
+          var p = document.createElement('p');
+          p.style.cssText =
+            'margin:0;max-width:34em;font-size:12.5px;line-height:1.45;' +
+            'color:rgba(232,232,240,0.62);';
+          p.textContent =
+            'The "' + failedHouse + '" house profile could not be loaded, so nothing has been ' +
+            'rendered. No other house is shown in its place, because that would look like a ' +
+            'working home. Check that houses/' + failedHouse + '/geometry.json is present and ' +
+            'readable by the server, then reload.';
+
+          // textContent throughout, never innerHTML: the house id can come
+          // from ?house=, so it is untrusted input being placed in the DOM.
+          card.appendChild(h);
+          card.appendChild(p);
+          document.body.appendChild(card);
         }
       } catch (inner) { /* never let the error handler throw */ }
     });

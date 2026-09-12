@@ -2293,7 +2293,10 @@ export const Home3DScene = (() => {
    * @param {Object} opts
    * @param {Object}  opts.house       - a compiled house profile (preferred)
    * @param {string}  opts.houseId     - a profile id to load; returns a Promise
-   * @param {string}  opts.fallbackHouseId - used when houseId cannot be loaded
+   * @param {string}  opts.fallbackHouseId - names the id that is allowed to be a
+   *          default rather than an explicit choice. NOT a substitute: a houseId
+   *          that cannot be loaded REJECTS rather than rendering another house
+   *          (see loadWithFallback in src/house-loader.js).
    * @param {boolean} opts.interactive  - enable orbit/click (full page mode)
    * @param {boolean} opts.autoRotate   - slow auto-rotation (preview mode)
    * @param {number}  opts.pixelRatio   - override devicePixelRatio
