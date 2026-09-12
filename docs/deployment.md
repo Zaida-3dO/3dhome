@@ -76,6 +76,7 @@ starts with none of them set.
 | `HOME3D_WS_RECONNECT_MS` | `5000` | Delay before retrying a dropped websocket. |
 | `HOME3D_POLL_INTERVAL_MS` | `5000` | REST poll interval when the websocket is unavailable. |
 | `HOME3D_FRAME_ANCESTORS` | `'self'` | CSP allow-list of origins permitted to embed the app. See §2. |
+| `HOME3D_CORS_ORIGINS` | *(empty)* | Space-separated allow-list of origins permitted to **fetch** the house JSON cross-origin. Needed *in addition to* `HOME3D_FRAME_ANCESTORS` for any cross-origin embed. See §2. |
 | `APP_VERSION` | `dev` | Stamped into the version badge and every `?v=` cache-buster. See §4. |
 | `HOME3D_WEB_ROOT` | `/usr/share/nginx/html` | Where the served files live. Rarely changed. |
 
@@ -172,6 +173,65 @@ If your proxy adds its own CSP, make sure it does not *replace* this one. Two
 `frame-ancestors` directives from different layers do not merge generously —
 the browser enforces the intersection, so a proxy-level
 `frame-ancestors 'self'` overrides your allow-list back to nothing.
+
+### `Access-Control-Allow-Origin` — the other half of embedding
+
+**`frame-ancestors` alone is not enough, and this is the single most confusing
+failure mode in a cross-origin deployment.** They are two separate permissions:
+
+| Header | Answers | Without it you get |
+|---|---|---|
+| `frame-ancestors` | may this origin **embed** us? | a blank/refused frame |
+| `Access-Control-Allow-Origin` | may this origin **fetch** our data? | a frame that loads, then renders **nothing** |
+
+The scene fetches `houses/<id>/geometry.json` with `fetch()`, and a cross-origin
+`fetch()` is refused by the browser unless the response carries
+`Access-Control-Allow-Origin`. So an embed with correct `frame-ancestors` and no
+CORS shows an iframe that boots, fails every scene fetch, and leaves an empty
+tile — while the server logs a perfectly ordinary `200`. Nothing is broken
+server-side, which is what makes it hard to spot.
+
+Set the fetching origins:
+
+```
+HOME3D_CORS_ORIGINS="https://dashboard.example.com https://homeassistant.example.com"
+```
+
+Notes that matter, because getting any of them wrong fails **silently** — the
+browser simply refuses the fetch and the server reports nothing:
+
+- **An origin is `scheme://host[:port]` with NO trailing slash.**
+  `https://dash.example.com/` is a URL, not an origin. (A trailing slash is
+  stripped for you, with a log line, but do not rely on it.)
+- **A non-default port is part of the origin.** `http://host:9317` and
+  `http://host` are different origins.
+- **Scheme matters.** `http://` and `https://` are different origins.
+- **Same-origin needs no entry.** Serving the app and fetching its JSON from
+  the same origin is not a CORS request at all, so the direct
+  `https://home3d.example.com` deployment works with this unset.
+
+The header is emitted **only on `.json` responses**, and only for an
+allow-listed origin — anything else receives no header at all. `/config.js` and
+`/config.json` are deliberately excluded, because they may carry your Home
+Assistant token; they are matched by their own exact-match `location` blocks,
+which beat the regex block in nginx, so they never pick up CORS.
+
+Responses also carry `Vary: Origin`, which is **required** here: the JSON is
+served `Cache-Control: public, max-age=300`, and without `Vary` a shared cache
+could hand one origin's response (and its header) to a different origin.
+
+#### Why not just `*`?
+
+Because `*` lets **any** page on the internet read your house data. The default
+is empty rather than permissive, and an explicit list costs one env var.
+
+**And do not allow-list `null` either.** It is tempting when the embedder is a
+sandboxed iframe, whose origin is the opaque value `null` — but *every*
+sandboxed iframe and *every* `file://` page sends `Origin: null`, so
+allow-listing it is **strictly worse than `*`**: it grants the same universal
+access while looking targeted. The fix for a sandboxed embedder is on the
+embedder's side — give the iframe a real origin with `allow-same-origin` — not
+on the server's.
 
 ### Do **not** set `X-Frame-Options`
 

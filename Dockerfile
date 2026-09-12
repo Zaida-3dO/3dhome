@@ -25,11 +25,17 @@ ENV APP_VERSION=${APP_VERSION}
 
 # Defaults for the rest of the environment surface, so `docker run` with no -e
 # flags produces a working app: the demo house, Home Assistant off.
+# HOME3D_CORS_ORIGINS defaults to EMPTY on purpose: no origin is allow-listed,
+# no Access-Control-Allow-Origin is ever sent, and a standalone deployment
+# (where the fetches are same-origin and CORS does not apply) works unchanged.
+# An operator embedding this app cross-origin must set it - frame-ancestors
+# alone gets the iframe on screen but leaves its data fetches blocked.
 ENV HOME3D_HOUSE=demo \
     HOME3D_WS_RECONNECT_MS=5000 \
     HOME3D_POLL_INTERVAL_MS=5000 \
     HOME3D_WEB_ROOT=/usr/share/nginx/html \
-    HOME3D_FRAME_ANCESTORS="'self'"
+    HOME3D_FRAME_ANCESTORS="'self'" \
+    HOME3D_CORS_ORIGINS=""
 
 # The app itself. .dockerignore keeps .git, .env, config.js, screenshots and
 # any non-demo house profile out of the image - important here because this
