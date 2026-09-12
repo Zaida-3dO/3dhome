@@ -363,11 +363,21 @@ let it be verified as a no-op before any version change was attempted.
 > readable message, which is better, but the 3D home is still gone on that
 > device.
 >
-> Two separate facts to weigh when this is revisited, both verified against npm
-> tarballs rather than release notes: the last revision supporting **WebGL 1**,
-> and the last revision shipping a **minified ESM build** (r186 ships none, so
-> vendoring it costs roughly **+250 KB gzipped**). They are not the same
-> revision.
+> **The two ceilings, both verified against npm tarballs rather than release
+> notes:**
+>
+> | | revision | why |
+> |---|---|---|
+> | Last with **WebGL 1** support | **r162** | r163 replaces the `[ 'webgl2', 'webgl', 'experimental-webgl' ]` fallback list with a hardcoded `const contextName = 'webgl2'`, and deletes the `WebGL1Renderer` class outright. `isWebGL2` occurrences go 85 → 1 in that one revision. |
+> | Last with a **minified ESM build** | **r185** | r186 drops *every* minified artefact at once (`three.module.min.js`, `three.core.min.js`, `three.webgpu.min.js`…). Vendoring r186 therefore costs about **+250 KB gzipped**. |
+>
+> These are 23 revisions apart, so the two questions are independent — and the
+> size penalty only applies from r186. **r162 ships a minified ESM build too**,
+> so staying WebGL1-compatible costs nothing on the wire.
+>
+> In short: decide the WebGL 1 question first. If WebGL 1 must keep working,
+> **r162 is the ceiling** and there is no size cost. If it need not,
+> **r185** is the last revision that avoids the unminified penalty.
 
 > **Verifying vendored files:** use `tar -tzf` on the npm tarball, not a CDN.
 > `https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.min.js` returns
