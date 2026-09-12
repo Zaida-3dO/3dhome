@@ -646,11 +646,15 @@
        sits here, where the three.js script tag used to be.
 
        The ?v= cache-bust rides on the map's VALUE, where there is a real URL —
-       a bare specifier has none. -->
+       a bare specifier has none. r186 splits into three.module.js +
+       three.core.js, and the second is reached by a RELATIVE import from inside
+       the first — a URL this repo cannot stamp without editing vendored code.
+       That is why the revision is in the DIRECTORY NAME: a version bump changes
+       both files' paths, so nginx's immutable caching stays correct. -->
   <script type="importmap">
   {
     "imports": {
-      "three": "./vendor/three-r160/three.module.min.js?v=__VERSION__"
+      "three": "./vendor/three-r186/three.module.js?v=__VERSION__"
     }
   }
   </script>
