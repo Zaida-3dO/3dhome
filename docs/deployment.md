@@ -321,24 +321,47 @@ You usually do not need to build at all — `ghcr.io/zaida-3do/3dhome:latest` is
 published, and `docker compose pull` avoids the problem entirely. This applies
 only when building from source on the target host.
 
-### `vendor/three.js` is the last UMD build three.js will ever ship
+### three.js is loaded as ES modules; `vendor/three.js` survives for the spec pages
 
-`vendor/three.js` is r160 — verified minified (669,884 characters across 8
-lines, `const e="160"`), not the ~670 KB unminified file an old comment in
-`deploy/nginx.conf` used to claim. That size is simply what a minified,
-not-tree-shaken r160 UMD bundle weighs; it gzips to ~169 KB on the wire and
-nginx's gzip is already doing that correctly.
+The app loads **three.js r186 as ES modules** from `vendor/three-r186/`, via an
+import map in `index.html` that maps the bare specifier `three`. Two files are
+vendored because `three.module.js` opens with a **relative** import of
+`./three.core.js`; they must sit in the same directory, and only the bare
+specifier is ever named in the map.
 
-The constraint worth recording is different: **r160 is the last revision of
-three.js to ship a UMD (`build/three.js`) bundle at all.** three.js's own
-banner — line 1 of the vendored file — says UMD builds are deprecated from
-r150 and removed entirely from r161 onward. This repo is deliberately
-buildless (see [CONTRIBUTING.md](../CONTRIBUTING.md)), and a classic
-`<script src="vendor/three.js">` tag is exactly the UMD consumption pattern
-that stops being possible past r160. Upgrading the vendored copy beyond r160
-is not a routine `chore(vendor): update three.js` bump — it requires first
-migrating to ES modules (`<script type="module">` or an import map), which is
-a separate, larger piece of work than swapping a file in `vendor/`.
+**This is still not a build step.** Both files are byte-for-byte copies from
+upstream's published npm tarball — nothing here minifies, transpiles or
+generates anything, and `python -m http.server` on a bare checkout still boots
+the app. See `vendor/three-r186/README.md` for provenance and sha256.
+
+**Why the move happened:** r160 was the last revision to ship a UMD
+(`build/three.js`) bundle at all. three.js's own banner says UMD is deprecated
+from r150 and removed entirely from r161 onward, so a classic
+`<script src="vendor/three.js">` tag pinned the version permanently. The module
+migration is what unfroze it.
+
+**Size, stated plainly:** r186 ships **no minified ESM build** (`build/` has no
+`three.module.min.js`), so the two vendored files are unminified and gzip to
+~407 KB against ~163 KB for the r160 UMD build. That **+250 KB gzipped** is
+accepted deliberately: every resource fetch here completes in under 50 ms and
+the real cold-start bottleneck is GPU shader compilation at 9–45 s. Do not
+"fix" it by adding a minifier — that is a build step, and it would break the
+property this whole deployment model rests on.
+
+> **Verifying the vendored files:** use `tar -tzf` on the npm tarball, not a
+> CDN. `https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.min.js`
+> returns **HTTP 200** with a "Minified by jsDelivr" banner — jsDelivr
+> synthesises that file on the fly and it is not a published artefact.
+
+**`vendor/three.js` (r160 UMD, minified) is deliberately kept.** The five
+`specs/*.html` pages load it alongside React and in-browser Babel, which cannot
+emit ES modules. The two never load on the same page. Migrating those pages is
+a separate piece of work.
+
+A future three.js bump is now a routine directory swap: drop
+`vendor/three-rNNN/` in, update the one import-map value, and delete the old
+directory. The revision lives in the **path** precisely so that a bump changes
+both files' URLs and nginx's `immutable` caching stays correct.
 
 ---
 

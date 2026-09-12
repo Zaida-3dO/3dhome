@@ -63,7 +63,7 @@ So the required check is always reported, and an unchanged path is never punishe
 | `actionlint` | `.github/workflows/**` | `raven-actions/actionlint@v2` — lints workflow syntax, expressions, and (via bundled shellcheck) the `run:` script bodies. |
 | `actionlint-gate` | always | **Required check** for the above. |
 | `pii-guard` | always | Runs `scripts/check-no-pii.sh`. |
-| `js-syntax` | always | `node --check` on every `.js` in `src/` and `scripts/`; `JSON.parse` on every `.json` in `houses/` and the repo root. |
+| `js-syntax` | always | `node --check` on every `.js` in `src/` and `scripts/`; `JSON.parse` on every `.json` in `houses/` and the repo root. Also runs the two behaviour tests: `scripts/test-config-loader.mjs` and `scripts/test-extra-overlay-global.mjs`. |
 | `house-profiles` | always | Runs `scripts/validate-house.py` over every `houses/*/` profile directory. |
 | `docker-dry-run` | Docker-relevant paths | Builds the image with `push: false` (skips if there is no `Dockerfile` yet). |
 | `docker-dry-run-gate` | always | **Required check** for the above. |
@@ -80,6 +80,25 @@ silently passing. Do not "fix" a red build by removing the script.
 deliberately skips `vendor/` — that is third-party code we do not edit, and three.js
 is large enough to dominate the job's runtime for no benefit. Node 24 parses ESM in
 `.js` files transparently, so `import`/`export` at the top level is fine.
+
+**The two behaviour tests inside `js-syntax` guard things a parse cannot see.**
+
+`test-config-loader.mjs` asserts the `?house=` path-traversal rejections and the
+`?haUrl=` semantics the Home Assistant embed depends on. It compiles
+`src/config-loader.js` **as text** with `new Function` rather than importing it —
+that is what lets each case inject its own fake `window`/`document`/`fetch` and
+get a fresh module instance, neither of which `await import()` can do. Since
+`config-loader.js` is an ES module, the test strips the `export` keyword first
+and **asserts that the strip matched**, so the tests cannot quietly start
+exercising a file shape the app no longer loads.
+
+`test-extra-overlay-global.mjs` asserts that `window.THREE = THREE` still runs
+before `loadExtraOverlays()`, plus the import map's shape and ordering. The app
+is an ES module, so that global is no longer a side effect of loading three.js —
+and the house profiles that depend on it are **private**, meaning nothing else
+in this repo can catch its removal. Deleting the assignment leaves the demo
+house rendering perfectly while every private overlay dies with
+`THREE is not defined`; this test is the only thing standing in the way.
 
 **`house-profiles` runs the real validator, not a copy of it.** The job invokes
 `scripts/validate-house.py` — the same script contributors run locally — rather than
