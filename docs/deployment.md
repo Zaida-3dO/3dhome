@@ -321,47 +321,68 @@ You usually do not need to build at all — `ghcr.io/zaida-3do/3dhome:latest` is
 published, and `docker compose pull` avoids the problem entirely. This applies
 only when building from source on the target host.
 
-### three.js is loaded as ES modules; `vendor/three.js` survives for the spec pages
+### three.js is loaded as an ES module; `vendor/three.js` survives for the spec pages
 
-The app loads **three.js r186 as ES modules** from `vendor/three-r186/`, via an
-import map in `index.html` that maps the bare specifier `three`. Two files are
-vendored because `three.module.js` opens with a **relative** import of
-`./three.core.js`; they must sit in the same directory, and only the bare
-specifier is ever named in the map.
+The app loads **three.js r160 as an ES module** from `vendor/three-r160/`, via
+an import map in `index.html` that maps the bare specifier `three`. At r160 the
+ESM build is a single self-contained file, `three.module.min.js`.
 
-**This is still not a build step.** Both files are byte-for-byte copies from
-upstream's published npm tarball — nothing here minifies, transpiles or
-generates anything, and `python -m http.server` on a bare checkout still boots
-the app. See `vendor/three-r186/README.md` for provenance and sha256.
+**This is not a build step.** The file is a byte-for-byte copy from upstream's
+published npm tarball — nothing here minifies, transpiles or generates anything,
+and `python -m http.server` on a bare checkout still boots the app. See
+`vendor/three-r160/README.md` for provenance and sha256.
 
 **Why the move happened:** r160 was the last revision to ship a UMD
 (`build/three.js`) bundle at all. three.js's own banner says UMD is deprecated
 from r150 and removed entirely from r161 onward, so a classic
-`<script src="vendor/three.js">` tag pinned the version permanently. The module
-migration is what unfroze it.
+`<script src="vendor/three.js">` tag pinned the version permanently. Changing
+the module format is what unfreezes it.
 
-**Size, stated plainly:** r186 ships **no minified ESM build** (`build/` has no
-`three.module.min.js`), so the two vendored files are unminified and gzip to
-~407 KB against ~163 KB for the r160 UMD build. That **+250 KB gzipped** is
-accepted deliberately: every resource fetch here completes in under 50 ms and
-the real cold-start bottleneck is GPU shader compilation at 9–45 s. Do not
-"fix" it by adding a minifier — that is a build step, and it would break the
-property this whole deployment model rests on.
+**Size: essentially unchanged.** r160's `three.module.min.js` gzips to
+166,182 B against 166,614 B for the r160 UMD build it replaced — 432 bytes
+*smaller*. The format migration cost nothing on the wire, which is exactly what
+let it be verified as a no-op before any version change was attempted.
 
-> **Verifying the vendored files:** use `tar -tzf` on the npm tarball, not a
-> CDN. `https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.min.js`
-> returns **HTTP 200** with a "Minified by jsDelivr" banner — jsDelivr
-> synthesises that file on the fly and it is not a published artefact.
+> ### ⚠️ The version is still pinned at r160, deliberately — read before bumping
+>
+> The module format no longer blocks an upgrade, but a **device constraint**
+> now does. **r163 removed WebGL 1 support**: from that revision the
+> `WebGLRenderer` constructor asks for `'webgl2'` and nothing else, and throws
+> when it cannot get one.
+>
+> A primary target device for this app — an Android phone — reports
+> `MAX_FRAGMENT_UNIFORM_VECTORS=256` (the WebGL **spec minimum**) and lacks
+> `KHR_parallel_shader_compile`, which together indicate a WebGL1-only device.
+> On r160 it gets a context, degrades to the `low` quality tier and works
+> normally. On r163+ it would get **nothing** — the constructor throws before
+> the tiering can degrade anything.
+>
+> So bumping past r162 trades a working app on that phone for a newer library.
+> Do not treat the guard around `new THREE.WebGLRenderer` in
+> `src/home3d-scene.js` as making this safe: it converts a blank page into a
+> readable message, which is better, but the 3D home is still gone on that
+> device.
+>
+> Two separate facts to weigh when this is revisited, both verified against npm
+> tarballs rather than release notes: the last revision supporting **WebGL 1**,
+> and the last revision shipping a **minified ESM build** (r186 ships none, so
+> vendoring it costs roughly **+250 KB gzipped**). They are not the same
+> revision.
+
+> **Verifying vendored files:** use `tar -tzf` on the npm tarball, not a CDN.
+> `https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.min.js` returns
+> **HTTP 200** with a "Minified by jsDelivr" banner — jsDelivr synthesises that
+> file on the fly and it is not a published artefact.
 
 **`vendor/three.js` (r160 UMD, minified) is deliberately kept.** The five
 `specs/*.html` pages load it alongside React and in-browser Babel, which cannot
 emit ES modules. The two never load on the same page. Migrating those pages is
 a separate piece of work.
 
-A future three.js bump is now a routine directory swap: drop
-`vendor/three-rNNN/` in, update the one import-map value, and delete the old
-directory. The revision lives in the **path** precisely so that a bump changes
-both files' URLs and nginx's `immutable` caching stays correct.
+A three.js bump is now a directory swap: drop `vendor/three-rNNN/` in, update
+the one import-map value, and delete the old directory. The revision lives in
+the **path** so that a bump changes every vendored file's URL, which keeps
+nginx's `immutable` caching correct.
 
 ---
 
