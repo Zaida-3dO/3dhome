@@ -1170,10 +1170,14 @@
         return out;
       }
 
+      // Escapes text that came from a house profile before it goes into
+      // innerHTML. Shared by the overlay rows and the room panel; both render
+      // author-supplied strings (overlay labels, fixture labels).
+      const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
       // One toggle row, matching the markup of the hand-written rows above so a
       // profile's switch is indistinguishable from a built-in one.
       function overlayToggleRow(t, indented) {
-        const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
         return '<div class="panel-toggle-row"' + (indented ? ' style="padding-left:16px;"' : '') + '>' +
           '<span class="panel-toggle-label"' + (indented ? ' style="opacity:0.85;"' : '') + '>' + esc(t.label) +
           (t.hint ? ' <span style="opacity:0.4;font-weight:400;">(' + esc(t.hint) + ')</span>' : '') +
@@ -1464,6 +1468,32 @@
         }
       }
 
+      // Renders the "Strip positions" list for an accent channel group.
+      //
+      // The group shape comes from the house loader, which emits `positions`:
+      // a list of {at, heightCm, label, size} objects. This used to read a
+      // `pos` key holding bare strings — a key NOTHING in the codebase has
+      // ever written — so it threw `Cannot read properties of undefined
+      // (reading 'map')` and broke room selection outright, but only for a
+      // room whose accent channel was switched ON (the only path that reaches
+      // this markup). `label` is optional: it is authored per fixture, and
+      // auto-placed fixtures have no label at all, so fall back to the
+      // position rather than rendering an empty bullet.
+      function stripInfoHtml(group) {
+        const positions = (group && group.positions) || [];
+        if (!positions.length) return '';
+        const rows = positions.map(p => {
+          const label = p.label || (Array.isArray(p.at)
+            ? `position ${Math.round(p.at[0])}, ${Math.round(p.at[1])}`
+            : 'unnamed strip');
+          return `<div>&#8226; ${esc(label)}</div>`;
+        }).join('');
+        return `<div class="strip-info">
+                <div class="strip-info-title">Strip positions:</div>
+                ${rows}
+              </div>`;
+      }
+
       // ---- Panel rendering ----
       // Three panel states:
       //   1. Controls  (panelView==='controls', no room)  — room list + Settings btn
@@ -1672,10 +1702,7 @@
                 </div>
                 <input type="color" class="color-input" value="${s.ambient.color}" data-action="color-input-ambient">
               </div>
-              <div class="strip-info">
-                <div class="strip-info-title">Strip positions:</div>
-                ${lc.ambient.pos.map(p => `<div>&#8226; ${p}</div>`).join('')}
-              </div>`;
+              ${stripInfoHtml(lc.ambient)}`;
             }
             html += '</div>';
           }
