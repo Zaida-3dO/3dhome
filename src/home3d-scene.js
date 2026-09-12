@@ -1111,7 +1111,8 @@ export const Home3DScene = (() => {
             'leaving the wall painted.');
           return;
         }
-        tex.colorSpace = THREE.SRGBColorSpace;
+        if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; // r152+
+        else tex.encoding = THREE.sRGBEncoding; // older three.js fallback
         tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
         // 1) object-fit:cover against the REAL visible rect (lm x WH, metres,
         //    not the padded box height h) — crop the excess dimension evenly so
@@ -1418,7 +1419,8 @@ export const Home3DScene = (() => {
               }
               overlayPanels.forEach(p => {
                 p.tex.image = img;
-                p.tex.colorSpace = THREE.SRGBColorSpace;
+                if ('colorSpace' in p.tex) p.tex.colorSpace = THREE.SRGBColorSpace; // r152+
+                else p.tex.encoding = THREE.sRGBEncoding; // older three.js fallback
                 p.tex.needsUpdate = true;
                 p.mesh.visible = true;
               });
@@ -2213,9 +2215,7 @@ export const Home3DScene = (() => {
    *
    * The caller is a browser on someone's sofa, not a developer with DevTools
    * open. Before this existed the whole failure surfaced as a black rectangle
-   * and a console line, because create() assumed it always got a context --
-   * which was already optimistic on r160 and became load-bearing from r163,
-   * when three.js stopped falling back to WebGL 1.
+   * and a console line.
    *
    * Deliberately built from DOM calls and inline styles rather than a CSS
    * class: this runs precisely when the page is already in trouble, so it must
@@ -2241,7 +2241,7 @@ export const Home3DScene = (() => {
 
         const p = document.createElement('div');
         p.textContent =
-          'The browser could not start WebGL 2, which this view needs to draw ' +
+          'The browser could not start WebGL, which this view needs to draw ' +
           'anything at all. It is usually a graphics driver that is switched ' +
           'off or out of date rather than a fault with the home itself.';
         p.style.cssText = 'max-width:44ch;opacity:0.85';
@@ -2261,11 +2261,8 @@ export const Home3DScene = (() => {
       // A failure to render the failure message must never replace the real
       // error with a less informative one.
     }
-    console.error('[home3d] WebGL 2 is unavailable; cannot create a renderer.', cause);
-    const err = new Error(
-      'Home3DScene: WebGL 2 is unavailable in this browser. three.js has required ' +
-      'it since r163 and no longer falls back to WebGL 1.'
-    );
+    console.error('[home3d] WebGL is unavailable; cannot create a renderer.', cause);
+    const err = new Error('Home3DScene: WebGL is unavailable in this browser.');
     err.cause = cause;
     err.code = 'WEBGL_UNAVAILABLE';
     return err;
@@ -2364,40 +2361,36 @@ export const Home3DScene = (() => {
     scene.background = new THREE.Color(0x0f0f1a);
 
     const cam = new THREE.PerspectiveCamera(50, W / H, 0.1, 200);
-
     // ─── Renderer construction, guarded ─────────────────────────────────────
-    // THE THROW IS INSIDE THE CONSTRUCTOR, which is why this wraps `new
-    // WebGLRenderer` and not the capability probe below it. Since r163 three.js
-    // asks for 'webgl2' and nothing else -- r160 tried
-    // ['webgl2','webgl','experimental-webgl'] in turn -- so on a device without
-    // WebGL2 the constructor itself throws and execution never reaches
-    // ren.getContext(). A try/catch around the probe would catch nothing while
-    // looking like a guard, which is worse than no guard at all.
+    // create() previously assumed it always got a context. That was already
+    // optimistic: WebGLRenderer THROWS FROM ITS CONSTRUCTOR when the browser
+    // will not give it a context, so the failure never reached the capability
+    // probe below and surfaced as a black rectangle plus one console line the
+    // person holding the phone cannot open.
     //
-    // This matters for real hardware, not theory: the tiering below exists
+    // NOTE THE PLACEMENT: this wraps `new THREE.WebGLRenderer(...)`, not the
+    // ren.getContext()/getParameter() probe underneath. A try/catch around the
+    // probe is the obvious-looking spot and would catch nothing, because
+    // execution never gets there.
+    //
+    // This matters for real hardware. The tiering immediately below exists
     // because mobile Adreno parts advertise as few as 256 fragment uniform
-    // vectors. On r160 such a device got a WebGL1 context and degraded to the
-    // 'low' tier; from r163 it gets nothing. Without this, that is a blank
-    // black page with one line in a console the user cannot open.
-    //
-    // WHY THE RETRY IS NOT KEYED ON THE ERROR MESSAGE. three.js distinguishes
-    // two cases -- 'Error creating WebGL context with your selected
-    // attributes.' when a bare webgl2 context would have worked, and 'Error
-    // creating WebGL context.' otherwise -- by calling getContext('webgl2') a
-    // SECOND time with no attributes. But a canvas can only ever produce one
-    // context, so that second call returns the same failure as the first and
-    // the 'selected attributes' branch is effectively unreachable in a real
-    // browser. Measured here, not assumed: stubbing getContext to refuse ONLY
-    // when antialias is requested still produced the plain message.
-    //
-    // So retry on ANY construction failure, once, without antialiasing, and
-    // let the retry itself decide whether the attributes were the problem. An
-    // aliased house beats no house; a device with no webgl2 at all just fails
-    // the retry too and gets the message below.
+    // vectors -- the WebGL spec minimum -- and one such Android device is a
+    // primary target for this app. On the vendored r160 build such a device
+    // still gets a context (r160 tries webgl2, then webgl, then
+    // experimental-webgl) and degrades to the 'low' tier, which is why it
+    // works today. This guard is for the genuinely context-less case.
     let ren;
     try {
       ren = new THREE.WebGLRenderer({ antialias });
     } catch (err) {
+      // Retry once without antialiasing. three.js distinguishes "your selected
+      // attributes were refused" from "no context at all" by asking a second
+      // time with no attributes, but a canvas only ever produces one context,
+      // so that second probe repeats the first failure and the distinction is
+      // unreachable in practice -- measured, not assumed. Retrying and letting
+      // the retry answer the question is what actually degrades. An aliased
+      // house beats no house.
       if (antialias) {
         console.warn(
           '[home3d] WebGL renderer construction failed; retrying without antialiasing.',
