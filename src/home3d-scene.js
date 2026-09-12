@@ -1921,8 +1921,33 @@ const Home3DScene = (() => {
       const FY = 0;
       const roomRange = Math.max(w, d) * 1.2;
       if (quality.roomShadowLights) {
-        const roomShadowLight = new THREE.PointLight(0xfff4cc, 0.4, roomRange, 1.5);
-        roomShadowLight.position.set(cx, FY + WH - 0.15, cz);
+        // A DOWNWARD SPOTLIGHT, NOT A POINT LIGHT. This light is invisible and
+        // exists only to cast wall/floor occlusion from ceiling height, so a
+        // downward cone models it at least as honestly as a sphere does -- and
+        // costs ~6x less, because a PointLight shadow is a SIX-FACE CUBEMAP
+        // while a SpotLight shadow is a single 2D map. That is the dominant
+        // cold-start cost in this app (see docs/perf-cold-start.md).
+        //
+        // The three upward faces of the old cubemap rendered the ceiling slab
+        // from above and contributed nothing a viewer can see; the cone keeps
+        // the hemisphere that does the visible work.
+        const spotY = FY + WH - 0.15;
+        // Cone half-angle: wide enough to cover the room's own floor plan from
+        // ceiling height, with margin, then clamped. Derived from the room's
+        // half-diagonal so a long thin room still gets its corners lit rather
+        // than a circle inscribed in its short side.
+        const halfDiag = Math.sqrt(w * w + d * d) / 2;
+        const angle = Math.min(Math.atan2(halfDiag * 1.15, spotY) , 1.40); // <= ~80deg
+        const roomShadowLight = new THREE.SpotLight(0xfff4cc, 0.4, roomRange, angle, 0.8, 1.5);
+        roomShadowLight.position.set(cx, spotY, cz);
+        // A SpotLight aims at its `target`, whose default is the origin -- so
+        // WITHOUT this every room's cone would point at the middle of the house
+        // instead of at its own floor. The target must also be IN THE SCENE
+        // GRAPH: three reads target.matrixWorld, which is only updated for
+        // objects the renderer walks. This is the single easiest way to get a
+        // SpotLight conversion silently wrong.
+        roomShadowLight.target.position.set(cx, FY, cz);
+        scene.add(roomShadowLight.target);
         roomShadowLight.castShadow = true;
         roomShadowLight.shadow.mapSize.width = Math.round(1024 * smScale);
         roomShadowLight.shadow.mapSize.height = Math.round(1024 * smScale);
