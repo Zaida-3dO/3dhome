@@ -8,9 +8,10 @@
  *   // later: scene.dispose();
  */
 
-/* global THREE */
+import * as THREE from 'three';
+import { HouseLoader } from './house-loader.js';
 
-const Home3DScene = (() => {
+export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------
   //
   // THIS ENGINE RENDERS WHATEVER HOUSE IT IS GIVEN. Everything that used to be
@@ -2209,6 +2210,65 @@ const Home3DScene = (() => {
   }
 
   /**
+   * Turn a failed WebGL context into something the person looking at the
+   * screen can act on, and return the error to throw.
+   *
+   * The caller is a browser on someone's sofa, not a developer with DevTools
+   * open. Before this existed the whole failure surfaced as a black rectangle
+   * and a console line.
+   *
+   * Deliberately built from DOM calls and inline styles rather than a CSS
+   * class: this runs precisely when the page is already in trouble, so it must
+   * not depend on any stylesheet, asset or font having loaded.
+   */
+  function webglUnavailable(container, cause) {
+    try {
+      if (container) {
+        const box = document.createElement('div');
+        box.className = 'home3d-webgl-unavailable';
+        box.setAttribute('role', 'alert');
+        box.style.cssText = [
+          'position:absolute', 'inset:0', 'display:flex', 'flex-direction:column',
+          'align-items:center', 'justify-content:center', 'gap:10px',
+          'padding:24px', 'box-sizing:border-box', 'text-align:center',
+          'background:#0f0f1a', 'color:#e8e8f0',
+          'font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif'
+        ].join(';');
+
+        const h = document.createElement('div');
+        h.textContent = 'This device cannot display the 3D home';
+        h.style.cssText = 'font-size:18px;font-weight:600';
+
+        const p = document.createElement('div');
+        p.textContent =
+          'The browser could not start WebGL, which this view needs to draw ' +
+          'anything at all. It is usually a graphics driver that is switched ' +
+          'off or out of date rather than a fault with the home itself.';
+        p.style.cssText = 'max-width:44ch;opacity:0.85';
+
+        const hint = document.createElement('div');
+        hint.textContent =
+          'Try another browser, or check that hardware acceleration is enabled.';
+        hint.style.cssText = 'max-width:44ch;opacity:0.6;font-size:13px';
+
+        box.appendChild(h); box.appendChild(p); box.appendChild(hint);
+        if (getComputedStyle(container).position === 'static') {
+          container.style.position = 'relative';
+        }
+        container.appendChild(box);
+      }
+    } catch (e) {
+      // A failure to render the failure message must never replace the real
+      // error with a less informative one.
+    }
+    console.error('[home3d] WebGL is unavailable; cannot create a renderer.', cause);
+    const err = new Error('Home3DScene: WebGL is unavailable in this browser.');
+    err.cause = cause;
+    err.code = 'WEBGL_UNAVAILABLE';
+    return err;
+  }
+
+  /**
    * Create a 3D home instance attached to a DOM container.
    *
    * THE HOUSE IS AN ARGUMENT. Pass either a compiled profile (from
@@ -2244,12 +2304,15 @@ const Home3DScene = (() => {
   function create(container, opts = {}) {
     // The id form is asynchronous: fetch, compile, then build synchronously.
     if (!opts.house && opts.houseId) {
-      if (typeof HouseLoader === 'undefined') {
-        throw new Error(
-          'Home3DScene.create({ houseId }) needs src/house-loader.js to be loaded first. ' +
-          'Either include that script, or compile the profile yourself and pass it as opts.house.'
-        );
-      }
+      // Was a `typeof HouseLoader === 'undefined'` check back when both files
+      // were classic scripts and load order was the caller's problem. It is now
+      // a static `import` at the top of this file, so the module graph makes
+      // the dependency unmissable: if house-loader.js cannot be fetched, THIS
+      // module never evaluates and create() is never reachable to begin with.
+      // Keeping the old check would be worse than useless -- `typeof` on an
+      // uninitialised import binding throws a TDZ ReferenceError rather than
+      // returning 'undefined', so it could not fire the friendly error it
+      // promises anyway.
       return HouseLoader.loadWithFallback(opts.houseId, opts.fallbackHouseId)
         .then(loaded => create(container, Object.assign({}, opts, { house: loaded, houseId: null })));
     }
@@ -2298,7 +2361,50 @@ const Home3DScene = (() => {
     scene.background = new THREE.Color(0x0f0f1a);
 
     const cam = new THREE.PerspectiveCamera(50, W / H, 0.1, 200);
-    const ren = new THREE.WebGLRenderer({ antialias });
+    // ─── Renderer construction, guarded ─────────────────────────────────────
+    // create() previously assumed it always got a context. That was already
+    // optimistic: WebGLRenderer THROWS FROM ITS CONSTRUCTOR when the browser
+    // will not give it a context, so the failure never reached the capability
+    // probe below and surfaced as a black rectangle plus one console line the
+    // person holding the phone cannot open.
+    //
+    // NOTE THE PLACEMENT: this wraps `new THREE.WebGLRenderer(...)`, not the
+    // ren.getContext()/getParameter() probe underneath. A try/catch around the
+    // probe is the obvious-looking spot and would catch nothing, because
+    // execution never gets there.
+    //
+    // This matters for real hardware. The tiering immediately below exists
+    // because mobile Adreno parts advertise as few as 256 fragment uniform
+    // vectors -- the WebGL spec minimum -- and one such Android device is a
+    // primary target for this app. On the vendored r160 build such a device
+    // still gets a context (r160 tries webgl2, then webgl, then
+    // experimental-webgl) and degrades to the 'low' tier, which is why it
+    // works today. This guard is for the genuinely context-less case.
+    let ren;
+    try {
+      ren = new THREE.WebGLRenderer({ antialias });
+    } catch (err) {
+      // Retry once without antialiasing. three.js distinguishes "your selected
+      // attributes were refused" from "no context at all" by asking a second
+      // time with no attributes, but a canvas only ever produces one context,
+      // so that second probe repeats the first failure and the distinction is
+      // unreachable in practice -- measured, not assumed. Retrying and letting
+      // the retry answer the question is what actually degrades. An aliased
+      // house beats no house.
+      if (antialias) {
+        console.warn(
+          '[home3d] WebGL renderer construction failed; retrying without antialiasing.',
+          err
+        );
+        try {
+          ren = new THREE.WebGLRenderer({ antialias: false });
+        } catch (err2) {
+          throw webglUnavailable(container, err2);
+        }
+      } else {
+        throw webglUnavailable(container, err);
+      }
+    }
     ren.setSize(W, H);
     ren.setPixelRatio(pixelRatio);
 

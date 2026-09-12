@@ -714,6 +714,13 @@ writes an overlay rather than an integration:
 * It is a classic (non-module) script, loaded *after* `Home3DScene` exports are
   populated, so it can read `COORD_TRANSFORM`, `WALL_SEGMENTS_WORLD`,
   `FOOTPRINT_BOUNDS`, `ROOMS` and the rest directly.
+* **`THREE` is available as a global**, and will stay that way. The page itself
+  is an ES module and loads three.js with `import * as THREE from 'three'`,
+  which does *not* create a global — so `index.html` publishes `window.THREE`
+  deliberately, immediately before loading these scripts, for exactly this
+  contract. A classic script cannot `import`, so this is the only way an
+  overlay can reach three.js, and it is covered by a CI check
+  (`scripts/test-extra-overlay-global.mjs`) rather than left to convention.
 * If it assigns a function to `window.__home3dOverlayRegister`, the page calls
   it once with `(scene, { transform, wallHeight, requestRender })` — the same
   options the built-in overlays in `src/overlays/` receive — and keeps whatever

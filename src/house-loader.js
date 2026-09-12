@@ -27,7 +27,7 @@
  *   HouseLoader.compile(geometryDoc, baseUrl);      // compile an in-memory doc
  */
 
-const HouseLoader = (() => {
+export const HouseLoader = (() => {
   'use strict';
 
   // The schema MAJOR this engine understands. A profile written against a

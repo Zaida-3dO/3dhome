@@ -25,9 +25,9 @@
  * nothing else in the scene reads it).
  */
 
-/* global THREE */
+import * as THREE from 'three';
 
-const DoorDebugOverlay = (() => {
+export const DoorDebugOverlay = (() => {
   // World-space size of each label sprite. Slightly larger than the wall
   // overlay's (0.275) because there is exactly ONE label per door (vs several
   // repeats per wall) so there is no crowding to guard against, and a door is

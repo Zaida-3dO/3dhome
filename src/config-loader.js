@@ -19,8 +19,9 @@
  * single acceptance criterion this module exists to guarantee: a stranger who
  * clones the repo gets a working app.
  *
- * Loaded as a classic (non-module) script, like every other file here. It
- * defines one global, `HomeConfig`.
+ * An ES module, like every other file in src/. It exports one binding,
+ * `HomeConfig`, and also assigns it to `window.HomeConfig` (see the bottom of
+ * this file) so an embedder or a console user can still reach it by name.
  *
  *   await HomeConfig.load();      // resolve once; safe to call repeatedly
  *   const cfg = HomeConfig.get(); // synchronous accessor, after load()
@@ -28,7 +29,7 @@
  * See docs/configuration.md for the operator-facing view.
  */
 
-const HomeConfig = (() => {
+export const HomeConfig = (() => {
   'use strict';
 
   // ---------------------------------------------------------------------
@@ -565,8 +566,12 @@ const HomeConfig = (() => {
   };
 })();
 
-// Expose on window as well as the bare global, so an embedder or a console
-// user can reach it by name without relying on classic-script scoping rules.
+// Expose on window in addition to the ES export. A module's exports are NOT
+// global, so without this an embedder or a console user has no way to reach
+// HomeConfig by name -- `HomeConfig` at a DevTools prompt would be a
+// ReferenceError. scripts/test-config-loader.mjs also reads it back off the
+// fake window it injects, which is why the `typeof window` guard stays: the
+// test evaluates this file outside a browser.
 if (typeof window !== 'undefined') {
   window.HomeConfig = HomeConfig;
 }

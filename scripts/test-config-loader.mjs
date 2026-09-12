@@ -7,13 +7,69 @@
  * asHouseId is a path-traversal guard. A regression there would not look like a
  * bug - it would look like the app quietly loading a different file - so it is
  * asserted here rather than left to review.
+ *
+ * src/config-loader.js is an ES module. See the long comment above `EXPORT_RE`
+ * for why this test still compiles it as text instead of importing it.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const src = fs.readFileSync(path.join(root, 'src/config-loader.js'), 'utf8');
+const rawSrc = fs.readFileSync(path.join(root, 'src/config-loader.js'), 'utf8');
+
+// ---------------------------------------------------------------------------
+// WHY THIS FILE IS COMPILED AS TEXT RATHER THAN `await import()`ed.
+//
+// config-loader.js reads the bare identifiers `window`, `document` and `fetch`.
+// Every case below needs (a) its own fake `window.location.search`, and (b) a
+// FRESH module instance, because HomeConfig memoises its resolution in a
+// closure. `new Function('window','document','fetch', ...)` gives both: the
+// parameters shadow the globals per call, and each call builds a new closure.
+// `await import()` can do neither -- ESM caches a module per URL, and there is
+// no per-import way to inject a fake `window` into it.
+//
+// The cost of that choice is this shim. `new Function` compiles a FUNCTION
+// BODY, and a function body may not contain `export` -- it is a SyntaxError,
+// not a warning. src/config-loader.js is an ES module and does export, so the
+// keyword is stripped before compiling.
+//
+// The strip is ASSERTED rather than assumed. A silent no-op here would be the
+// dangerous failure: if the module's shape changed and the regex stopped
+// matching, `new Function` would throw and this file would fail loudly -- but
+// if it changed such that the export vanished entirely, the tests would still
+// pass while asserting against something other than what the browser loads.
+// So: require exactly one `export const HomeConfig`, and fail the run if the
+// file no longer looks like the module the app imports.
+// ---------------------------------------------------------------------------
+const EXPORT_RE = /^export\s+(const\s+HomeConfig\s*=)/m;
+if (!EXPORT_RE.test(rawSrc)) {
+  console.error(
+    'FATAL  src/config-loader.js no longer matches /^export const HomeConfig =/m.\n' +
+    '       This test compiles that file as a function body and must strip the\n' +
+    '       `export` keyword to do so. If the module\'s export shape changed on\n' +
+    '       purpose, update EXPORT_RE (and check the import in index.html);\n' +
+    '       do NOT delete this check -- it is what stops these tests silently\n' +
+    '       exercising a file the app does not actually load.'
+  );
+  process.exit(1);
+}
+const src = rawSrc.replace(EXPORT_RE, '$1');
+
+// Belt and braces: nothing resembling a top-level ES module statement may
+// survive into the text handed to `new Function`, or the SyntaxError it raises
+// is reported at an unhelpful offset with no explanation.
+{
+  const leftover = src.match(/^\s*(export|import)\s/m);
+  if (leftover) {
+    console.error(
+      `FATAL  src/config-loader.js contains a top-level \`${leftover[1]}\` this test ` +
+      'cannot compile.\n       Add a case to the stripping above, or switch the ' +
+      'test to a different loading strategy.'
+    );
+    process.exit(1);
+  }
+}
 
 /** Load a fresh copy of the module against a fake window with the given query string. */
 async function loadWith(search) {
