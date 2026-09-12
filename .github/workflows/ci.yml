@@ -122,6 +122,15 @@ jobs:
           # the Home Assistant embed depends on. No framework, no install.
           set -euo pipefail
           node scripts/test-config-loader.mjs
+      - name: Extra-overlay compatibility contract
+        run: |
+          # Asserts `window.THREE = THREE` still precedes loadExtraOverlays(),
+          # plus the import map's shape. index.html is an ES module, so that
+          # global is no longer created as a side effect -- and the profiles
+          # that depend on it are PRIVATE, so nothing else in this repo can
+          # catch its removal. See the script's header.
+          set -euo pipefail
+          node scripts/test-extra-overlay-global.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

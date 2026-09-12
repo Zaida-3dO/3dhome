@@ -9,7 +9,7 @@
  *   ha.connect();
  */
 
-const HAClient = (() => {
+export const HAClient = (() => {
 
   function create(opts) {
     const {

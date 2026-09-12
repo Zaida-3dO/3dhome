@@ -8,9 +8,10 @@
  *   // later: scene.dispose();
  */
 
-/* global THREE */
+import * as THREE from 'three';
+import { HouseLoader } from './house-loader.js';
 
-const Home3DScene = (() => {
+export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------
   //
   // THIS ENGINE RENDERS WHATEVER HOUSE IT IS GIVEN. Everything that used to be
@@ -2244,12 +2245,15 @@ const Home3DScene = (() => {
   function create(container, opts = {}) {
     // The id form is asynchronous: fetch, compile, then build synchronously.
     if (!opts.house && opts.houseId) {
-      if (typeof HouseLoader === 'undefined') {
-        throw new Error(
-          'Home3DScene.create({ houseId }) needs src/house-loader.js to be loaded first. ' +
-          'Either include that script, or compile the profile yourself and pass it as opts.house.'
-        );
-      }
+      // Was a `typeof HouseLoader === 'undefined'` check back when both files
+      // were classic scripts and load order was the caller's problem. It is now
+      // a static `import` at the top of this file, so the module graph makes
+      // the dependency unmissable: if house-loader.js cannot be fetched, THIS
+      // module never evaluates and create() is never reachable to begin with.
+      // Keeping the old check would be worse than useless -- `typeof` on an
+      // uninitialised import binding throws a TDZ ReferenceError rather than
+      // returning 'undefined', so it could not fire the friendly error it
+      // promises anyway.
       return HouseLoader.loadWithFallback(opts.houseId, opts.fallbackHouseId)
         .then(loaded => create(container, Object.assign({}, opts, { house: loaded, houseId: null })));
     }

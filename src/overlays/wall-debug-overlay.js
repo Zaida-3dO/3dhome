@@ -22,9 +22,9 @@
  * either way; no other file has an `if (debug)` branch for this.
  */
 
-/* global THREE */
+import * as THREE from 'three';
 
-const WallDebugOverlay = (() => {
+export const WallDebugOverlay = (() => {
   // Fixed repeat positions along a wall's length, as fractions (25%/50%/75%)
   // — not an absolute-distance interval — so every wall shows the same
   // pattern regardless of length. Walls shorter than MIN_LEN_FOR_REPEATS_M

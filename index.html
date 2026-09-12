@@ -302,12 +302,18 @@
        DELIBERATELY INLINE, AND DELIBERATELY FIRST IN <body>.
 
        Everything this overlay needs — markup, style, and its dismiss hook —
-       is inline and above the <script src="vendor/three.js"> tag below. That
+       is inline and above the import map and module scripts below. That
        placement is the whole feature, not a stylistic choice: it means the
        overlay paints during the initial HTML parse, before three.js has even
        been requested. Move any part of this into an external stylesheet, a
        module, or a script tag and it can no longer paint until that resource
        has loaded — which is exactly the window it exists to cover.
+
+       The move to ES modules made this STRONGER, not weaker: module scripts
+       never block the parser (the old tags were deferred, which is nearly as
+       good, but the import map above them is inert JSON that fetches nothing).
+       The ordering requirement is unchanged and unconditional — this markup
+       stays FIRST in <body>, above the import map.
 
        DO NOT: add an external CSS file, a web font, or a JS module for this.
        DO NOT: move it below the script tags.
@@ -621,12 +627,33 @@
       document.head.appendChild(s);
     })();
   </script>
-  <!-- defer (not async) on this block of classic, order-dependent scripts:
-       defer preserves execution order and runs each script only after HTML
-       parsing completes, so parsing is no longer blocked script-by-script on
-       a slow connection. async would NOT preserve order and must not be
-       used here. Measured under throttled network — see docs/perf-cold-start.md. -->
-  <script src="vendor/three.js" defer></script>
+  <!-- ═══════════════ three.js, as an ES module ═══════════════════════════
+       three.js is loaded by the import map below rather than by a script tag.
+       The r160 UMD build this replaced was the LAST revision upstream shipped
+       in that format — UMD was deprecated at r150 and removed entirely from
+       r161 — so the format change is what unfreezes the version.
+
+       STILL NOT A BUILD STEP. There is no bundler, no transpiler, no npm
+       install and no generated output: `vendor/three-r160/three.module.min.js`
+       is the byte-for-byte file from upstream's published npm tarball (see
+       that directory's README.md for the URL and sha256). An import map is
+       inert JSON the browser reads — it fetches nothing and runs nothing.
+
+       WHY A BARE SPECIFIER AND NOT A PATH. `import * as THREE from 'three'`
+       keeps every one of the ~140 THREE.* call sites in src/ unchanged, and
+       puts the vendored path in exactly one place. The map MUST be parsed
+       before the first module script that uses the specifier, which is why it
+       sits here, where the three.js script tag used to be.
+
+       The ?v= cache-bust rides on the map's VALUE, where there is a real URL —
+       a bare specifier has none. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three-r160/three.module.min.js?v=__VERSION__"
+    }
+  }
+  </script>
   <!-- Runtime configuration, highest-priority source first.
 
        config.js is GENERATED at container start by deploy/generate-config.sh
@@ -642,35 +669,41 @@
        a stale one would pin an old token. Both tags must precede the
        application code below, which reads HomeConfig during boot. -->
   <script src="config.js" defer onerror="window.__home3dNoConfigJs = true;"></script>
-  <script src="src/config-loader.js?v=__VERSION__" defer></script>
-  <!-- ?v= values are stamped from APP_VERSION at deploy time; do not hardcode one.
-       deploy/check-version-stamping.sh fails CI if a literal version appears here. -->
-  <script src="src/house-loader.js?v=__VERSION__" defer></script>
-  <script src="src/home3d-scene.js?v=__VERSION__" defer></script>
-  <script src="src/ha-client.js?v=__VERSION__" defer></script>
-  <!-- Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
-       Shift+D, or the Settings sidebar "Wall numbers" switch). Isolated
-       module -- see js/wall-debug-overlay.js header. -->
-  <script src="src/overlays/wall-debug-overlay.js?v=__VERSION__" defer></script>
-  <!-- Coordinate-grid overlay (off by default; ?grid=1 or 'G'). Isolated
-       module -- see js/home3d-grid-overlay.js header. Toggle also in sidebar. -->
-  <script src="src/overlays/home3d-grid-overlay.js?v=__VERSION__" defer></script>
-  <!-- Door-numbering debug overlay (off by default; ?debugDoors=1 or the
-       Settings sidebar "Door numbers" switch). Isolated module -- see
-       src/overlays/door-debug-overlay.js header. -->
-  <script src="src/overlays/door-debug-overlay.js?v=__VERSION__" defer></script>
-  <script>
-    // This inline script reads globals (HomeConfig, HouseLoader, HAClient,
-    // THREE, home3d-scene) defined by the eight deferred <script src> tags
-    // above. Classic inline scripts execute the instant the parser reaches
-    // them -- the `defer` attribute has no effect without a `src` -- so
-    // without this DOMContentLoaded wrapper this code would run BEFORE the
-    // deferred scripts (which wait for parsing to finish), reversing the
-    // execution order `defer` was added to preserve and crashing on
-    // HomeConfig/HouseLoader/HAClient being undefined. Deferred scripts run
-    // in order and complete before DOMContentLoaded fires, so this ordering
-    // is equivalent to the original document-order guarantee.
-    document.addEventListener('DOMContentLoaded', () => {
+  <script type="module">
+    // ?v= values are stamped from APP_VERSION at deploy time; do not hardcode one.
+    // deploy/check-version-stamping.sh fails CI if a literal version appears here.
+    // A relative import specifier is an ordinary URL and takes a query string
+    // normally, so each src/ module stays cache-busted exactly as its script
+    // tag was. (The bare 'three' specifier cannot -- its ?v= is on the import
+    // map's value instead.)
+    import * as THREE         from 'three';
+    import { HomeConfig }     from './src/config-loader.js?v=__VERSION__';
+    import { HouseLoader }    from './src/house-loader.js?v=__VERSION__';
+    import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
+    import { HAClient }       from './src/ha-client.js?v=__VERSION__';
+    // Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
+    // Shift+D, or the Settings sidebar "Wall numbers" switch).
+    import { WallDebugOverlay } from './src/overlays/wall-debug-overlay.js?v=__VERSION__';
+    // Coordinate-grid overlay (off by default; ?grid=1 or 'G'). Toggle also in sidebar.
+    import { HomeGridOverlay }  from './src/overlays/home3d-grid-overlay.js?v=__VERSION__';
+    // Door-numbering debug overlay (off by default; ?debugDoors=1 or the
+    // Settings sidebar "Door numbers" switch).
+    import { DoorDebugOverlay } from './src/overlays/door-debug-overlay.js?v=__VERSION__';
+
+    // ── Why there is no DOMContentLoaded wrapper here ──────────────────────
+    // There used to be one, and for classic scripts it was correct: an inline
+    // classic script runs the instant the parser reaches it (`defer` does
+    // nothing without `src`), so it had to wait for the deferred tags above it.
+    //
+    // A module script defers BY DEFAULT -- `type="module"` is what defers, not
+    // the presence of src -- and runs after parsing completes but before
+    // DOMContentLoaded fires. So the DOM this code touches (#scene-container
+    // and friends) already exists, and the imports above are already evaluated.
+    //
+    // Re-adding the wrapper would be actively harmful, not merely redundant:
+    // this body is async, and any `await` reaching the top level before the
+    // listener was registered would attach it AFTER the event had already
+    // fired -- an app that never boots, with no console error. Leave it off.
     (async function() {
       const params = new URLSearchParams(window.location.search);
       // Preview mode: ?preview=true — slow rotation, no interaction, no UI
@@ -1068,6 +1101,9 @@
       //
       //   * It is a classic script, loaded after the engine and after the house
       //     is bound, so Home3DScene.* exports are already populated.
+      //   * It may read `THREE` as a global. This page is an ES module and so
+      //     no longer creates that global implicitly -- it is published
+      //     deliberately just below, FOR THIS CONTRACT. See that comment.
       //   * If it defines a global with an `attach(scene, opts)` method, it is
       //     called with the same shape the built-in overlays receive:
       //     { transform, wallHeight, requestRender }. Anything else it needs it
@@ -1079,6 +1115,29 @@
       // because a missing decoration must never cost the house its render.
       // Loading is sequential so a profile listing several gets a deterministic
       // order, and each script's attach() runs before the next one loads.
+      // ⚠️ COMPATIBILITY EXPORT -- REQUIRED, NOT DEFENSIVE. DO NOT REMOVE.
+      //
+      // Extra overlays are CLASSIC scripts by the contract above, injected at
+      // runtime from a house profile. A classic script cannot import anything,
+      // so the only way it can reach three.js is off the global -- and when
+      // this page loaded three.js via <script src="vendor/three.js"> that
+      // global existed as a side effect. It is an ES module now, and module
+      // imports are scoped to the module, so nothing publishes `THREE` unless
+      // this line does.
+      //
+      // This is NOT the "expose it just in case" kind of global. It has a
+      // named consumer (loadExtraOverlays, immediately below) and a documented
+      // contract. Deleting it breaks every existing extra overlay with
+      // `THREE is not defined`.
+      //
+      // WHY THIS IS EASY TO SHIP BROKEN: the demo house declares no
+      // extraOverlays, so on a stock checkout the whole path is a no-op and
+      // both CI and a visual review pass green. The overlays that break are in
+      // a PRIVATE profile. scripts/test-extra-overlay-global.mjs asserts this
+      // assignment exists and precedes the call; houses/_smoke/ carries a
+      // profile that exercises it in a browser.
+      window.THREE = THREE;
+
       const extraOverlayHandles = [];
       async function loadExtraOverlays() {
         const list = (Home3DScene.HOUSE && Home3DScene.HOUSE.extraOverlays) || [];
@@ -1763,7 +1822,6 @@
           loading.status('Check the browser console for details, then reload.');
         }
       } catch (inner) { /* never let the error handler throw */ }
-    });
     });
   </script>
 </body>

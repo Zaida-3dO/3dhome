@@ -27,9 +27,9 @@
  * else reads any of it.
  */
 
-/* global THREE */
+import * as THREE from 'three';
 
-const HomeGridOverlay = (() => {
+export const HomeGridOverlay = (() => {
   // ---- Tunables ----
   // Gridline spacing in MODEL centimetres (same units as WALLS/ROOMS coords).
   // 100cm chosen as a readable balance: fine enough to locate a coordinate,
