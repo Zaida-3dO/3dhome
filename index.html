@@ -992,10 +992,10 @@
       // `wallNums` is read by renderPanel() to drive that toggle's on/off state
       // + click. onChange keeps the sidebar switch in sync when the overlay is
       // flipped by the Shift+D shortcut instead of the switch (mirrors Grid's G).
-      // Note: WallDebugOverlay/Home3DScene are top-level `const`s from
-      // classic (non-module) <script> tags -- real global-scope bindings,
-      // but NOT `window.*` properties, so we reference them directly here
-      // (same as every other Home3DScene.* call in this file already does).
+      // Note: WallDebugOverlay/Home3DScene are ES module bindings imported
+      // above, scoped to this module -- not `window.*` properties -- so we
+      // reference them directly here (same as every other Home3DScene.*
+      // call in this file already does).
       const wallNums = WallDebugOverlay.attachWallDebugOverlay(home.scene, Home3DScene.WALL_SEGMENTS_WORLD, {
         wallHeight: Home3DScene.WALL_HEIGHT,
         requestRender: home.requestRender,
