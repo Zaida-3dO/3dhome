@@ -2026,6 +2026,7 @@
             if (action === 'door-use-sensor') el.addEventListener('change', e => {
               const doorId = home.getDoorIdForRoom(rid);
               if (!doorId) return;
+              let restoring = null;
               if (e.target.checked) {
                 // Back under sensor control. Snap to the last reading we have
                 // rather than waiting for the sensor to change again — a door
@@ -2037,12 +2038,19 @@
                 // rely on that coupling holding through a future edit.
                 if (doorSensorOpen.has(doorId)) {
                   home.setDoorOpenById(doorId, doorSensorOpen.get(doorId) ? DOOR_SENSOR_OPEN_PCT : 0);
+                  restoring = doorId;
                 }
               } else {
                 doorManualOverride.add(doorId);
               }
               // Re-render so the slider's disabled state matches the checkbox.
               renderPanel();
+              // setDoorOpenById only STARTS the swing, so the renderPanel()
+              // above paints the pre-swing value and never updates. This was
+              // the only one of the three call sites missing the catch-up the
+              // other two already do. It must run AFTER renderPanel(), which
+              // replaces the very nodes the follow loop writes to.
+              if (restoring) followDoorSwing(restoring);
             });
             if (action === 'bri-galaxy') el.addEventListener('input', e => {
               s.galaxy.bri = +e.target.value; home.updateLights();
