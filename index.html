@@ -887,9 +887,10 @@
       // ---- Door sensor binding state ----
       //
       // doorSensorIds: the set of door ids that rooms.json binds a contact
-      // sensor to. Read from the profile, NOT from whether HA is connected —
-      // a door is "sensor-bound" because the house profile says so, and the
-      // panel offers its "Use real value" checkbox on that basis alone.
+      // sensor to, read from the profile. Binding alone is NOT enough to show
+      // the "Use real value" checkbox -- that also requires a reading to have
+      // arrived (see doorSensorOpen.has() at the render site). A door bound in
+      // the profile but never heard from shows a plain manual slider.
       const doorSensorIds = new Set();
       // Door ids the user has taken manual control of by UNCHECKING that
       // checkbox. Default (absent) means "follow the sensor", so a fresh load
@@ -926,8 +927,9 @@
       // joined to the geometry's lights[].fixtures[].channel, which a presence
       // or door sensor has no part in. Kept OUTSIDE the `cfg.enabled` branch
       // below, because the door panel needs to know which doors have a sensor
-      // bound in order to offer the "Use real value" checkbox -- that is a
-      // property of the house profile, not of whether HA is reachable.
+      // bound at all. Note the checkbox needs MORE than this: a reading must
+      // also have arrived, so a bound-but-never-heard-from door gets a plain
+      // manual slider.
       let sensors = null;
       try {
         const roomsResp = await fetch('houses/' + cfg.house + '/rooms.json', { cache: 'no-store' });
@@ -1050,8 +1052,14 @@
       if (new URLSearchParams(location.search).get('debug') === '1') window.__home3dSensors = {
         presence: (roomId, occupied) => home.setPresence(roomId, occupied),
         door: (doorId, open) => {
+          // Mirrors the live onDoorChange path exactly, including the
+          // first-reading repaint, so testing exercises what ships.
+          const firstReading = !doorSensorOpen.has(doorId);
           doorSensorOpen.set(doorId, open);
-          if (doorManualOverride.has(doorId)) return;
+          if (doorManualOverride.has(doorId)) {
+            if (firstReading) renderPanel();
+            return;
+          }
           home.setDoorOpenById(doorId, open ? DOOR_SENSOR_OPEN_PCT : 0);
           renderPanel();
           followDoorSwing(doorId);
@@ -1592,11 +1600,19 @@
 
         // Door contact -> swing the matching door. Same guarantee.
         ha.onDoorChange((doorId, open) => {
+          const firstReading = !doorSensorOpen.has(doorId);
           doorSensorOpen.set(doorId, open);
           // A door the user has taken manual control of keeps tracking its
           // sensor in doorSensorOpen above, but is not moved by it. Re-checking
           // "Use real value" snaps it back to the reading we kept here.
-          if (doorManualOverride.has(doorId)) return;
+          if (doorManualOverride.has(doorId)) {
+            // The FIRST reading is what makes the checkbox appear at all, so
+            // the panel must repaint even when the door itself does not move --
+            // otherwise an overridden door that has just been heard from keeps
+            // showing a bare slider until something else happens to repaint.
+            if (firstReading) renderPanel();
+            return;
+          }
           home.setDoorOpenById(doorId, open ? DOOR_SENSOR_OPEN_PCT : 0);
           renderPanel();
           followDoorSwing(doorId);
@@ -1912,7 +1928,14 @@
             // A door with NO sensor gets no checkbox and behaves exactly as
             // it always has.
             const doorId = home.getDoorIdForRoom(rid);
-            const hasSensor = doorId !== null && doorSensorIds.has(doorId);
+            // NO checkbox unless the door actually has a Home Assistant value.
+            // Being bound in the profile is not enough -- a checkbox
+            // offering to "use the real value" when no real value has ever
+            // arrived is a control that cannot do what it says, and re-checking
+            // it read `undefined` as "closed" and slammed the door shut.
+            // So gate on a RECEIVED READING, not on the binding.
+            const hasSensor = doorId !== null && doorSensorIds.has(doorId)
+              && doorSensorOpen.has(doorId);
             const following = hasSensor && !doorManualOverride.has(doorId);
             html += `<div class="control-group">
               <div class="control-header">
@@ -2000,7 +2023,12 @@
                 // that stayed put while the user fiddled would otherwise keep
                 // whatever angle they left it at while claiming to be live.
                 doorManualOverride.delete(doorId);
-                home.setDoorOpenById(doorId, doorSensorOpen.get(doorId) ? DOOR_SENSOR_OPEN_PCT : 0);
+                // The checkbox only exists once a reading has arrived, so
+                // `get` is never undefined here -- guard anyway rather than
+                // rely on that coupling holding through a future edit.
+                if (doorSensorOpen.has(doorId)) {
+                  home.setDoorOpenById(doorId, doorSensorOpen.get(doorId) ? DOOR_SENSOR_OPEN_PCT : 0);
+                }
               } else {
                 doorManualOverride.add(doorId);
               }
