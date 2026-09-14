@@ -110,9 +110,11 @@ because only the directory form also validates `rooms.json` and the cross-file
 references.
 
 `jsonschema` is installed explicitly. Without it the validator still runs its
-structural and cross-reference checks and prints a note saying schema validation
-was skipped — useful locally, but a degraded pass in CI is a pass that missed
-things, so CI installs the dependency rather than relying on that fallback.
+structural and cross-reference checks, but reports `PARTIAL` rather than `PASS`
+and prints a note saying schema validation was skipped — useful locally, but a
+degraded pass in CI is a pass that missed things, so CI installs the dependency
+rather than relying on that fallback. (A local run can pass `--strict` to turn
+that degraded `PARTIAL` into a hard failure instead.)
 
 Both `scripts/validate-house.py` and `houses/schema.json` missing is a **hard
 failure**, for the same reason `pii-guard` fails when its script is gone. The only
