@@ -20,6 +20,11 @@
       "minLength": 1,
       "maxLength": 64
     },
+    "entityId": {
+      "type": "string",
+      "description": "A Home Assistant entity id, e.g. \"light.demo_kitchen_ceiling\" or \"binary_sensor.demo_hall_motion\". The domain prefix is what tells the engine how to read the state: a `light.*` is switched and dimmed, while a `binary_sensor.*` is read as on/off only.",
+      "pattern": "^[a-z_]+\\.[a-z0-9_]+$"
+    },
     "hexColor": {
       "type": "string",
       "description": "An sRGB colour as a CSS hex string, e.g. \"#ece9e1\". Authored as a string (not a JS 0x number) so the file stays valid JSON and is greppable/diffable.",
@@ -857,13 +862,46 @@
             "additionalProperties": {
               "type": "array",
               "items": {
-                "type": "string",
-                "description": "A Home Assistant entity id, e.g. \"light.kitchen_ceiling\".",
-                "pattern": "^[a-z_]+\\.[a-z0-9_]+$"
+                "$ref": "#/$defs/entityId"
               },
               "minItems": 1
             }
           }
+        },
+        "sensors": {
+          "type": "object",
+          "description": "Non-light Home Assistant bindings. Kept separate from `rooms` because that map is specifically room -> LIGHT channel -> entities, joined to geometry's lights[].fixtures[].channel; these entities drive scene state that is not a light and are not subject to that join. Every key is optional: a profile binding none of them renders exactly as before.",
+          "properties": {
+            "presence": {
+              "type": "object",
+              "description": "Room id -> the entities whose 'on' state means that room is occupied. Room ids MUST exist in the paired geometry profile's `rooms`. Several entities on one room are OR-ed: any one 'on' means occupied, which is how a room with two motion sensors should behave.",
+              "propertyNames": {
+                "$ref": "#/$defs/roomId"
+              },
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/entityId"
+                },
+                "minItems": 1
+              }
+            },
+            "doors": {
+              "type": "object",
+              "description": "Door id -> the contact sensor entities for that door. Door ids MUST exist in the paired geometry profile's `doors[].id` -- keyed on the door rather than on its room because a room may have several doors, and a door need not name a room at all. Several entities are OR-ed: any one 'on' (the Home Assistant convention for a door/opening binary_sensor is on = open) swings the leaf open.",
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/entityId"
+                },
+                "minItems": 1
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [

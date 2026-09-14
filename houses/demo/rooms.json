@@ -1,6 +1,6 @@
 {
   "kind": "rooms",
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "house": "demo",
   "homeAssistant": {
     "enabled": false,
@@ -32,6 +32,18 @@
     "bedroom": {
       "main": ["light.demo_bedroom_spots"],
       "ambient": ["light.demo_bedroom_bedside"]
+    }
+  },
+  "sensors": {
+    "presence": {
+      "lounge": ["binary_sensor.demo_lounge_occupancy"],
+      "kitchen": ["binary_sensor.demo_kitchen_motion"],
+      "study": ["binary_sensor.demo_study_occupancy"],
+      "hall": ["binary_sensor.demo_hall_motion"]
+    },
+    "doors": {
+      "store_door": ["binary_sensor.demo_store_door_contact"],
+      "bedroom_door": ["binary_sensor.demo_bedroom_door_contact"]
     }
   }
 }

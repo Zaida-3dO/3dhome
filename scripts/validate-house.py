@@ -313,6 +313,53 @@ def check_rooms_binding(rooms_doc, geo, report):
                 "fixtures with no entity binding in rooms.json -- they will render as permanently off",
             )
 
+    check_sensor_binding(rooms_doc, geo, geo_room_ids, report)
+
+
+def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
+    """Join rooms.json's `sensors` block against the paired geometry.
+
+    Presence is keyed by room id and doors by DOOR id -- a door belongs to a
+    wall, not a room, and a room may have several doors -- so the two halves
+    are checked against different id sets. An id that matches nothing in the
+    geometry is an error rather than a warning: unlike a light channel, where
+    a half-wired house is a legitimate work-in-progress state, a sensor bound
+    to a room or door that does not exist can never drive anything at all.
+    """
+    sensors = rooms_doc.get("sensors") or {}
+    if not sensors:
+        return
+
+    # `sensors` is only expressible from schemaVersion 1.1 onward: roomsProfile
+    # is additionalProperties:false, so a 1.0 profile carrying it is rejected by
+    # the schema with a message that names the property but not the reason.
+    version = str(rooms_doc.get("schemaVersion") or "")
+    try:
+        major, minor = (int(part) for part in version.split(".", 1))
+    except ValueError:
+        major = minor = -1
+    if (major, minor) < (1, 1):
+        report.warn(
+            "rooms.json/schemaVersion",
+            f"`sensors` needs schemaVersion 1.1 or newer, but this profile declares '{version}' -- "
+            "bump it, or the schema rejects the file as carrying an unknown property",
+        )
+
+    for rid in (sensors.get("presence") or {}):
+        if rid not in geo_room_ids:
+            report.error(
+                f"rooms.json/sensors/presence/{rid}",
+                f"presence sensor bound to room '{rid}', which has no matching room in geometry.json",
+            )
+
+    geo_door_ids = {d.get("id") for d in geo.get("doors", [])}
+    for did in (sensors.get("doors") or {}):
+        if did not in geo_door_ids:
+            report.error(
+                f"rooms.json/sensors/doors/{did}",
+                f"door sensor bound to door '{did}', which has no matching door in geometry.json",
+            )
+
 
 def validate_target(target, schema):
     target = Path(target)
