@@ -574,9 +574,10 @@ Exit code 0 on success, 1 on any error. Warnings never fail the run.
 
 The validator does two passes. First it checks the documents against
 `houses/schema.json` (this needs `pip install jsonschema`; without it the script
-still runs, says so, and does the second pass anyway rather than passing
-silently). Then it runs the cross-reference and semantic checks that a JSON
-Schema cannot express:
+still runs, reports `PARTIAL` instead of `PASS`, and does the second pass anyway
+rather than passing silently — pass `--strict` to make a missing `jsonschema`
+a hard failure instead). Then it runs the cross-reference and semantic checks
+that a JSON Schema cannot express:
 
 - room ids and wall ids unique; wall ids within `highestIdEverAssigned`
 - doors referencing walls and rooms that exist

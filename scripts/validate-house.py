@@ -13,9 +13,13 @@ is checked.
 Exit status is 0 when everything passes, 1 on any error. Warnings never fail the
 run -- a half-wired house is a legitimate work-in-progress.
 
-Requires `jsonschema` (pip install jsonschema). Without it the script still runs
-the structural and cross-reference checks below and says so, so CI without the
-dependency degrades rather than passing silently.
+Requires `jsonschema` (pip install jsonschema) for full schema validation. Without
+it the script still runs the structural and cross-reference checks below and
+prints PARTIAL rather than PASS, so the word on screen always matches what
+actually ran. PARTIAL still exits 0 by default -- the checks that did run are
+real -- unless --strict is given, which turns a missing jsonschema into a
+failure (exit 1). Pass --strict wherever "green means fully checked" matters,
+e.g. a pre-commit hook on a machine that may not have the dependency.
 """
 
 import sys
@@ -345,7 +349,10 @@ def validate_target(target, schema):
 
 
 def main(argv):
-    if len(argv) < 2:
+    args = [a for a in argv[1:] if a not in ("--strict", "--require-schema")]
+    strict = len(args) != len(argv[1:])
+
+    if len(args) < 1:
         print(__doc__)
         return 2
 
@@ -353,7 +360,7 @@ def main(argv):
         schema = json.load(fh)
 
     targets = []
-    for arg in argv[1:]:
+    for arg in args:
         expanded = glob.glob(arg)
         targets.extend(expanded or [arg])
 
@@ -368,7 +375,10 @@ def main(argv):
             print(f"{RED}ERROR{OFF} {where}: {msg}")
         if report.ok:
             counts = f" ({len(report.warnings)} warning{'s' if len(report.warnings) != 1 else ''})" if report.warnings else ""
-            print(f"{GREEN}PASS {OFF} {report.label}{counts}")
+            if used_schema:
+                print(f"{GREEN}PASS {OFF} {report.label}{counts}")
+            else:
+                print(f"{YELLOW}PARTIAL{OFF} {report.label}{counts}")
         else:
             print(f"{RED}FAIL {OFF} {report.label} -- {len(report.errors)} error(s)")
             failed += 1
@@ -378,6 +388,12 @@ def main(argv):
             f"{YELLOW}note {OFF} jsonschema is not installed, so only the structural and cross-reference "
             f"checks ran. Install it (pip install jsonschema) for full schema validation."
         )
+        if strict:
+            print(
+                f"{RED}ERROR{OFF} --strict was given and jsonschema is not installed, "
+                f"so schema validation could not run. Install it (pip install jsonschema)."
+            )
+            return 1
 
     return 1 if failed else 0
 
