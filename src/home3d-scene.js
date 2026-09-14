@@ -1440,8 +1440,19 @@ export const Home3DScene = (() => {
     // collision-solved (computeDoorAngles) so no two fully-open leaves ever
     // intersect; the rendered rest pose is DOOR_REST of each door's solved max.
     // doorByRoom: ROOMS key → live door record, driving the panel's per-room
-    // openness slider via the getDoorOpen/setDoorOpen API below (UI only — no HA).
+    // openness slider via the getDoorOpen/setDoorOpen API below.
+    //
+    // doorById: DOOR id → the SAME record object, for the HA door-sensor
+    // binding. Two indexes over one set of records rather than two sets, so a
+    // door driven by its sensor and the same door dragged on the panel slider
+    // read and write one `openPct` and cannot disagree.
+    //
+    // Why a second index is needed at all: doorByRoom is keyed by ROOM, so a
+    // room with two doors keeps only the last one and a door with no `room`
+    // is unreachable entirely. A sensor binds to a specific door, so it needs
+    // the door's own id. The room-keyed index and its slider are untouched.
     const doorByRoom = {};
+    const doorById = {};
     {
       // Same paint as the walls (DOOR_SLAB_COLOR/frameMat both derive from
       // WALL_COLOR) — differentiation from the wall's matte-plaster finish is
@@ -1511,7 +1522,18 @@ export const Home3DScene = (() => {
         const swingSign = locZ.dot(normal) > 0 ? -1 : 1;
         pivot.rotation.y = swingSign * restRad;
         mount.userData = { doorId: d.name, maxAngleDeg: maxDeg, swingSign };
-        if (d.room) doorByRoom[d.room] = { name: d.name, pivot, maxDeg, swingSign, openPct: DOOR_REST * 100 };
+        const doorRec = { id: d.id, name: d.name, pivot, maxDeg, swingSign, openPct: DOOR_REST * 100 };
+        if (d.room) doorByRoom[d.room] = doorRec;
+        // Same record, keyed by the door's own id. Unconditional: a door
+        // without a `room` still has an id and is still bindable to a sensor.
+        //
+        // ⚠️ `d.id` and NOT `d.name`: the loader compiles `name` as
+        // `door.label || door.id`, so `name` is the DISPLAY label ("Store
+        // cupboard") and only coincides with the id for a door that has no
+        // label. rooms.json binds sensors by the schema's `doors[].id`, so
+        // keying this index on anything else would silently fail to match for
+        // every labelled door — which is all of them in the demo house.
+        if (d.id) doorById[d.id] = doorRec;
         // A door may name its own leaf colour in the profile; otherwise a front
         // door gets the exterior finish and everything else the house's default
         // internal slab colour. Per-door materials are cached so a house with
@@ -2155,6 +2177,158 @@ export const Home3DScene = (() => {
       });
     });
 
+    // ── Presence footsteps ──────────────────────────────────────────────────
+    //
+    // One flat mesh per room, a trail of footprint quads laid on the floor,
+    // shown while that room's presence sensor reads occupied.
+    //
+    // Built for EVERY room up front and left invisible, rather than created on
+    // the first presence event: building geometry and compiling a shader is
+    // the expensive thing in this scene (GPU program link dominates cold
+    // start), and doing it lazily would pay that cost as a visible stall at
+    // the exact moment someone walks into the room. Built once, the runtime
+    // cost of a presence change is setting `visible` and `opacity`.
+    //
+    // Deliberately cheap, three ways:
+    //   * ONE shared MeshBasicMaterial per room — unlit, so it stays out of
+    //     the expensive lit-shader permutation set and needs no light uniforms.
+    //   * castShadow/receiveShadow both false. Shadow cost is the dominant
+    //     startup expense here and 10 of 11 casters are cubemap PointLights;
+    //     adding a caster for a decal would be the single most costly thing we
+    //     could do. It also means setPresence() must NOT invalidateShadows().
+    //   * ONE merged geometry per room, so a visible trail is 1 draw call.
+    const footstepsByRoom = {};
+    {
+      // A single procedural footprint: a rounded sole plus a separate ball
+      // pad, drawn white on transparent and used as an alpha map so the
+      // material's own colour shows through. Procedural CanvasTexture is the
+      // established convention in this file (9 other sites), so this adds no
+      // asset and no loader.
+      const fpCanvas = document.createElement('canvas');
+      fpCanvas.width = fpCanvas.height = 64;
+      const fpc = fpCanvas.getContext('2d');
+      fpc.clearRect(0, 0, 64, 64);
+      fpc.fillStyle = '#ffffff';
+      // Heel + sole: one tapered blob down the lower two-thirds.
+      fpc.beginPath();
+      fpc.ellipse(32, 42, 13, 19, 0, 0, Math.PI * 2);
+      fpc.fill();
+      // Ball of the foot / toes: a wider pad set slightly forward, with a gap
+      // so the print reads as a foot rather than a pill at a glance.
+      fpc.beginPath();
+      fpc.ellipse(32, 15, 15, 11, 0, 0, Math.PI * 2);
+      fpc.fill();
+      const footprintTex = new THREE.CanvasTexture(fpCanvas);
+
+      // Deterministic pseudo-random, seeded per room id. A trail that moved
+      // every reload would make a visual review impossible to compare against
+      // an earlier capture, and Math.random() would do exactly that.
+      const seededRand = seed => {
+        let s = 0;
+        for (let i = 0; i < seed.length; i++) s = (s * 31 + seed.charCodeAt(i)) >>> 0;
+        return () => {
+          s = (s * 1664525 + 1013904223) >>> 0;
+          return s / 4294967296;
+        };
+      };
+
+      // Is a point inside the room polygon? Ray casting. Used so a trail in an
+      // L-shaped room (the demo's study, for one) stays on that
+      // room's actual floor instead of crossing into the notch, which is the
+      // one way a floor decal betrays that it was placed from a bounding box.
+      const insidePoly = (poly, px, py) => {
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+          const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+          if (((yi > py) !== (yj > py)) &&
+              (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
+        }
+        return inside;
+      };
+
+      Object.entries(ROOMS).forEach(([id, rm]) => {
+        const rand = seededRand(id);
+        const poly = rm.poly;
+        const STEP_CM = 34;        // stride length, centimetres
+        const STRIDE_CM = 17;      // left/right offset from the walking line
+        const PRINT_CM = 26;       // long axis of one print
+        const MAX_PRINTS = 8;
+
+        // Walk a line across the room, alternating feet. The line runs through
+        // the room's centre at a fixed per-room angle, so a trail looks like
+        // someone crossed the room rather than like a decal stamped in place.
+        const cxCm = (rm.x1 + rm.x2) / 2, cyCm = (rm.y1 + rm.y2) / 2;
+        const ang = rand() * Math.PI * 2;
+        const dx = Math.cos(ang), dy = Math.sin(ang);
+        const px = -dy, py = dx;   // perpendicular, for the left/right offset
+
+        const geos = [];
+        for (let i = 0; i < MAX_PRINTS; i++) {
+          // Centred on the room centre so the trail is balanced within it.
+          const t = (i - (MAX_PRINTS - 1) / 2) * STEP_CM;
+          const side = (i % 2 === 0) ? 1 : -1;
+          const fx = cxCm + dx * t + px * side * (STRIDE_CM / 2);
+          const fy = cyCm + dy * t + py * side * (STRIDE_CM / 2);
+          // Skip any print that would land outside the room's own floor.
+          if (poly && !insidePoly(poly, fx, fy)) continue;
+          if (!poly && (fx < rm.x1 || fx > rm.x2 || fy < rm.y1 || fy > rm.y2)) continue;
+
+          const g = new THREE.PlaneGeometry(PRINT_CM * S * 0.62, PRINT_CM * S);
+          // Lay flat, then turn the print to face along the walking line.
+          g.rotateX(-Math.PI / 2);
+          g.rotateY(-ang + Math.PI / 2);
+          g.translate(tx(fx), 0.012, tz(fy));
+          geos.push(g);
+        }
+        if (!geos.length) return;
+
+        // Merge to ONE geometry so the whole trail is a single draw call.
+        // Done by hand rather than via BufferGeometryUtils: every print is the
+        // same PlaneGeometry layout (position/normal/uv, indexed), so
+        // concatenating the arrays and offsetting the indices is exact, and it
+        // avoids adding an addon import to the vendored three build.
+        let vCount = 0, iCount = 0;
+        geos.forEach(g => { vCount += g.attributes.position.count; iCount += g.index.count; });
+        const pos = new Float32Array(vCount * 3);
+        const nor = new Float32Array(vCount * 3);
+        const uv = new Float32Array(vCount * 2);
+        const idx = new Uint16Array(iCount);
+        let vo = 0, io = 0;
+        geos.forEach(g => {
+          pos.set(g.attributes.position.array, vo * 3);
+          nor.set(g.attributes.normal.array, vo * 3);
+          uv.set(g.attributes.uv.array, vo * 2);
+          const gi = g.index.array;
+          for (let k = 0; k < gi.length; k++) idx[io + k] = gi[k] + vo;
+          vo += g.attributes.position.count;
+          io += gi.length;
+          g.dispose();
+        });
+        const merged = new THREE.BufferGeometry();
+        merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+        merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        merged.setIndex(new THREE.BufferAttribute(idx, 1));
+
+        const mat = new THREE.MeshBasicMaterial({
+          color: 0x3c3a36,
+          alphaMap: footprintTex,
+          transparent: true,
+          opacity: 0,            // faded in on arrival; see setPresence()
+          depthWrite: false,     // a flat decal over the floor must not z-fight
+          side: THREE.DoubleSide
+        });
+        const mesh = new THREE.Mesh(merged, mat);
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;
+        // Starts hidden. `visible` is the real on/off; opacity drives the fade.
+        mesh.visible = false;
+        mesh.renderOrder = 2;
+        scene.add(mesh);
+        footstepsByRoom[id] = mesh;
+      });
+    }
+
     // (The single house-wide ceiling slab is built up front with the floor slab
     // — see the floor/ceiling section before the room loop above. It keeps the
     // fade-from-outside behaviour via ceilingMesh.material.opacity in the loop.)
@@ -2231,7 +2405,7 @@ export const Home3DScene = (() => {
       buildAcousticPanelWall25(scene, wallMeshes);
     }
 
-    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom };
+    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom };
   }
 
   /**
@@ -2528,7 +2702,7 @@ export const Home3DScene = (() => {
     ren.domElement.style.touchAction = 'none';
     container.appendChild(ren.domElement);
 
-    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom } = buildScene(scene, quality);
+    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom } = buildScene(scene, quality);
 
     // ── On-demand render requests ──────────────────────────────────────────
     // A NON-auto-rotating scene (the #3d popup) only changes when the user moves
@@ -2541,6 +2715,12 @@ export const Home3DScene = (() => {
     let needsRender = true;        // paint at least the first frame
     let wakeUntil = 0;             // keep rendering until this ts (post-interaction tail)
     let transitionsActive = true;  // wall/ceiling opacity still easing toward target
+    // Total frames actually drawn. Exposed via getFrameCount() so the
+    // on-demand gate can be VERIFIED rather than assumed: sample it, wait,
+    // sample again, and an idle scene must return the same number. That is the
+    // one property most easily lost by accident here, and reasoning about it
+    // is no substitute for counting.
+    let framesRendered = 0;
     function requestRender() { needsRender = true; }
     function wake(ms) { wakeUntil = Math.max(wakeUntil, performance.now() + (ms || 0)); needsRender = true; }
 
@@ -2567,6 +2747,102 @@ export const Home3DScene = (() => {
     function invalidateShadows() {
       ren.shadowMap.needsUpdate = true;
       needsRender = true;
+    }
+
+    // ── Presence footsteps: bounded fade in AND out ─────────────────────────
+    //
+    // ⚠️ THE CONSTRAINT THIS DESIGN EXISTS TO SATISFY: footsteps are STATIC
+    // once shown. They fade in when a room becomes occupied and fade out when
+    // it empties, and in between they are simply drawn while the scene renders
+    // ZERO frames. A continuously animating trail would keep the on-demand
+    // gate open for as long as anyone is home — measured at roughly 45%
+    // sustained main-thread occupancy when embedded in a dashboard sidebar, where
+    // this scene runs in-page and shares the host page's thread. The fade is
+    // bounded precisely so that cost is paid once per arrival, not forever.
+    //
+    // The fade is driven from the render loop's own dt and reports whether it
+    // is still moving, so the existing `transitionsActive` settle logic is
+    // what stops the rendering. There is deliberately NO timer here: a
+    // setInterval re-arming wake() would defeat the gate while looking like it
+    // respected it.
+    const FOOTSTEP_FADE_MS = 500;   // the bounded fade, in each direction
+    const FOOTSTEP_MAX_OPACITY = 0.55;
+    // roomId -> { from, to, startedAt }.
+    //
+    // Interpolated from elapsed wall-clock time for the same reason the door
+    // swing is — see the note there. The loop's dt is clamped to 0.1s, which
+    // is a fifth of this fade in a single frame, so a dt-accumulating fade
+    // would visibly step rather than glide on exactly the frame that matters.
+    const footstepFades = new Map();
+
+    function tickFootstepFades() {
+      if (!footstepFades.size) return false;
+      let moving = false;
+      const now = performance.now();
+      footstepFades.forEach((fd, roomId) => {
+        const mesh = footstepsByRoom[roomId];
+        if (!mesh) { footstepFades.delete(roomId); return; }
+        const t = Math.min(1, (now - fd.startedAt) / FOOTSTEP_FADE_MS);
+        mesh.material.opacity = fd.from + (fd.to - fd.from) * t;
+        if (t >= 1) {
+          // Arrived. Settle exactly on the target and STOP reporting movement,
+          // which is what lets the scene fall back to zero frames.
+          mesh.material.opacity = fd.to;
+          if (fd.to === 0) mesh.visible = false;
+          footstepFades.delete(roomId);
+        } else {
+          moving = true;
+        }
+      });
+      return moving;
+    }
+
+    // ── Sensor-driven door swings: bounded, then still ──────────────────────
+    //
+    // Same shape as the footstep fade and for the same reason: the swing
+    // advances toward a fixed target percentage and reports when it is still
+    // moving, so the loop settles to zero frames the moment the leaf arrives.
+    const DOOR_SWING_MS = 400;
+    // doorId -> { from, to, startedAt }.
+    //
+    // ⚠️ Interpolated from ELAPSED WALL-CLOCK TIME, not by accumulating the
+    // loop's dt. dt is clamped to 0.1s so a long idle cannot make the scene
+    // jump, and the first frame after an idle scene wakes is exactly that
+    // clamped 0.1s — a quarter of this animation's whole duration in one step.
+    // A dt-accumulating version therefore covered the full 20% travel on its
+    // very first frame and the door SNAPPED rather than swinging. Measured in
+    // the browser: openPct read 20 on every one of twelve consecutive
+    // animation frames. Time-based interpolation is immune, because the
+    // fraction is derived from when the swing started rather than from how
+    // coarse the frames happen to be.
+    const doorSwings = new Map();
+
+    function applyDoorPct(dr, pct) {
+      dr.openPct = Math.max(0, Math.min(100, pct));
+      dr.pivot.rotation.y = dr.swingSign * (dr.maxDeg * dr.openPct / 100) * Math.PI / 180;
+    }
+
+    function tickDoorSwings() {
+      if (!doorSwings.size) return false;
+      let moving = false;
+      const now = performance.now();
+      doorSwings.forEach((sw, doorId) => {
+        const dr = doorById[doorId];
+        if (!dr) { doorSwings.delete(doorId); return; }
+        const t = Math.min(1, (now - sw.startedAt) / DOOR_SWING_MS);
+        // Ease in-out, so the leaf starts and stops gently rather than
+        // beginning at full speed.
+        const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        applyDoorPct(dr, sw.from + (sw.to - sw.from) * e);
+        if (t >= 1) doorSwings.delete(doorId);
+        else moving = true;
+        // MOVES GEOMETRY — a door is a shadow caster, so without this the door
+        // swings while its shadow stays where the door used to be. The single
+        // most visible way to get this wrong. Paid per frame only for the
+        // bounded duration of the swing, which is why the swing is bounded.
+        invalidateShadows();
+      });
+      return moving;
     }
 
     // ── Adaptive pixel ratio ────────────────────────────────────────────────
@@ -3275,6 +3551,23 @@ export const Home3DScene = (() => {
           if (cl.position.x > cl.userData.wrapMaxX) cl.position.x = cl.userData.wrapMinX;
         });
       }
+      // ── Presence footstep fades + sensor-driven door swings ────────────────
+      //
+      // Both are BOUNDED: each advances toward a fixed target and reports
+      // whether it is still moving. Folding that into `animating` means the
+      // existing settle logic owns them — the scene keeps rendering exactly
+      // until the last one arrives, then `transitionsActive` goes false and it
+      // returns to ZERO frames. Nothing here re-arms a timer or a wake(), so
+      // an occupied room costs nothing once its fade has finished.
+      // ⚠️ These MUST run before `transitionsActive` is written below, and
+      // each returns "still moving" so the flag keeps the loop alive until it
+      // finishes. Without that the fade advances on the single frame
+      // requestRender() bought and then stalls part-way — observed in the
+      // browser as footsteps frozen at opacity 0.31 with the scene idle,
+      // which looks like a rendering bug and is actually a stopped animation.
+      if (tickFootstepFades()) animating = true;
+      if (tickDoorSwings()) animating = true;
+
       transitionsActive = animating;
       // Time the render itself rather than the gap between frames. The gap is
       // the wrong signal twice over: with a maxFps cap it is floored at
@@ -3289,6 +3582,7 @@ export const Home3DScene = (() => {
       // the drag ramp-down from cutting back in.
       const renderT0 = performance.now();
       ren.render(scene, cam);
+      framesRendered++;
       sampleRampFrame(frameNow, performance.now() - renderT0, interacting);
 
       // Notify onRender subscribers (compass overlay etc.) after the frame is
@@ -3455,6 +3749,10 @@ export const Home3DScene = (() => {
       setDoorOpen(roomId, pct) {
         const dr = doorByRoom[roomId];
         if (!dr) return;
+        // A manual set wins outright over an in-flight sensor swing on the
+        // same door: cancel the animation rather than letting the two fight
+        // over openPct frame by frame.
+        if (dr.id) doorSwings.delete(dr.id);
         dr.openPct = Math.max(0, Math.min(100, +pct || 0));
         dr.pivot.rotation.y = dr.swingSign * (dr.maxDeg * dr.openPct / 100) * Math.PI / 180;
         // MOVES GEOMETRY — a door is a shadow caster, so without this the door
@@ -3462,6 +3760,99 @@ export const Home3DScene = (() => {
         // most visible way to get this wrong.
         invalidateShadows();
         requestRender();
+      },
+      // Which doors the scene knows, by their profile id. Lets the panel ask
+      // "is this room's door the one a sensor is bound to?" without reaching
+      // into the scene's internals.
+      getDoorIdForRoom(roomId) {
+        const dr = doorByRoom[roomId];
+        return dr && dr.id ? dr.id : null;
+      },
+      getDoorOpenById(doorId) {
+        const dr = doorById[doorId];
+        return dr ? dr.openPct : null;
+      },
+      /**
+       * Swing a door by its PROFILE ID, animated over DOOR_SWING_MS.
+       *
+       * pct is a PERCENTAGE of that door's own collision-solved maximum, not
+       * an angle — `maxDeg` is already the solved value, so the demo's store
+       * cupboard (capped at 28 degrees by its return wall) stops at 28 and
+       * never at 90, for free and by construction.
+       *
+       * Bounded: the swing advances from the render loop and stops reporting
+       * movement the moment it arrives, so the scene returns to zero-frame
+       * idle. Nothing is left ticking afterwards.
+       */
+      setDoorOpenById(doorId, pct) {
+        const dr = doorById[doorId];
+        if (!dr) return;
+        const target = Math.max(0, Math.min(100, +pct || 0));
+        const inFlight = doorSwings.get(doorId);
+        if (inFlight && inFlight.to === target) return;   // already on its way
+        if (!inFlight && dr.openPct === target) {
+          // Already there. Requesting a frame here would turn a republished
+          // sensor state into a render tick, which is the thing this feature
+          // must not do.
+          return;
+        }
+        doorSwings.set(doorId, { from: dr.openPct, to: target, startedAt: performance.now() });
+        requestRender();
+      },
+      /**
+       * Show or hide a room's footsteps, with a bounded fade in either
+       * direction. Idempotent: setting the state a room is already in does
+       * nothing at all and requests NO frame, so a sensor republishing its
+       * current value cannot cost a render.
+       */
+      setPresence(roomId, occupied) {
+        const mesh = footstepsByRoom[roomId];
+        if (!mesh) return;
+        const target = occupied ? FOOTSTEP_MAX_OPACITY : 0;
+        const inFlight = footstepFades.get(roomId);
+        if (inFlight && inFlight.to === target) return;   // already fading there
+        if (!inFlight && mesh.material.opacity === target) return;
+        footstepFades.set(roomId, {
+          from: mesh.material.opacity,
+          to: target,
+          startedAt: performance.now()
+        });
+        // Made visible for the whole fade INCLUDING the fade out; the tick
+        // clears `visible` only once it has actually reached zero.
+        if (occupied) mesh.visible = true;
+        // Deliberately NO invalidateShadows(): the footstep mesh has
+        // castShadow/receiveShadow false and moves no geometry that casts, so
+        // invalidating here would pay for ~60 cubemap shadow renders to show a
+        // decal that cannot appear in any of them.
+        requestRender();
+      },
+      // Frames drawn since construction. Monotonic, and flat while idle.
+      getFrameCount() { return framesRendered; },
+      // What a room's footstep mesh actually IS in the scene graph. The
+      // renderer runs with preserveDrawingBuffer:false, so a screenshot cannot
+      // read the canvas back and a pixel diff can neither confirm nor deny
+      // that footsteps are drawn. This reports the state a capture cannot.
+      getFootstepDebug(roomId) {
+        const m = footstepsByRoom[roomId];
+        if (!m) return null;
+        m.geometry.computeBoundingBox();
+        const bb = m.geometry.boundingBox;
+        return {
+          visible: m.visible,
+          opacity: m.material.opacity,
+          prints: m.geometry.index.count / 6,
+          inScene: !!m.parent,
+          castShadow: m.castShadow,
+          receiveShadow: m.receiveShadow,
+          bbox: { min: bb.min.toArray(), max: bb.max.toArray() }
+        };
+      },
+      getPresence(roomId) {
+        const mesh = footstepsByRoom[roomId];
+        if (!mesh) return null;
+        const fd = footstepFades.get(roomId);
+        if (fd) return fd.to > 0;
+        return mesh.material.opacity > 0;
       },
       // Embedder pause control: setActive(false) halts the render loop (no GPU
       // work) without tearing down the scene; setActive(true) resumes. Used by

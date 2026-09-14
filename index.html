@@ -177,6 +177,18 @@
     .slider.temp {
       background: linear-gradient(to right, #ffaa55, #fff, #aaccff);
     }
+    /* A slider whose door is following its Home Assistant sensor. Dimmed and
+       not-allowed so it reads as "disconnected, not broken" — the checkbox
+       above it is the control that hands it back. */
+    .slider:disabled { opacity: 0.35; cursor: not-allowed; }
+    .slider:disabled::-webkit-slider-thumb { cursor: not-allowed; }
+
+    /* "Use real value" — shown only for a door with a sensor bound. */
+    .sensor-toggle-row {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 11px; opacity: 0.75; margin-bottom: 7px; cursor: pointer;
+    }
+    .sensor-toggle-row input { cursor: pointer; margin: 0; accent-color: #4a9eff; }
 
     /* Color swatches */
     .color-swatches { display: flex; gap: 5px; flex-wrap: wrap; }
@@ -872,6 +884,29 @@
       let haToken = null;
       let initialState = null;
 
+      // ---- Door sensor binding state ----
+      //
+      // doorSensorIds: the set of door ids that rooms.json binds a contact
+      // sensor to. Read from the profile, NOT from whether HA is connected —
+      // a door is "sensor-bound" because the house profile says so, and the
+      // panel offers its "Use real value" checkbox on that basis alone.
+      const doorSensorIds = new Set();
+      // Door ids the user has taken manual control of by UNCHECKING that
+      // checkbox. Default (absent) means "follow the sensor", so a fresh load
+      // tracks Home Assistant, which is the useful default.
+      const doorManualOverride = new Set();
+      // Last known sensor reading per door id, kept so re-CHECKING the box can
+      // snap the door straight back to what the sensor currently says instead
+      // of waiting for that sensor to happen to change again.
+      const doorSensorOpen = new Map();
+
+      // How far a door driven by its contact sensor swings. A contact sensor
+      // is binary and tells us only that a door is off the latch — it cannot
+      // say by how much — so opening it to its full collision-solved maximum
+      // would be inventing detail the sensor does not carry. 20% reads
+      // unmistakably as "this door is open" while staying honest about that.
+      const DOOR_SENSOR_OPEN_PCT = 20;
+
       // Resolve the configuration through the precedence chain in
       // src/config-loader.js: ?haUrl= > config.js (env) > config.json >
       // config.example.json > a built-in default. load() never rejects - the
@@ -885,11 +920,22 @@
       // or malformed rooms.json disables HA rather than throwing - the house
       // still renders, just without live light state.
       let rooms = null;
+      // Non-light bindings (presence sensors, door contacts) from the same
+      // file. Read into its own variable rather than folded into `rooms`:
+      // `rooms` is specifically room -> LIGHT channel -> entities and is
+      // joined to the geometry's lights[].fixtures[].channel, which a presence
+      // or door sensor has no part in. Kept OUTSIDE the `cfg.enabled` branch
+      // below, because the door panel needs to know which doors have a sensor
+      // bound in order to offer the "Use real value" checkbox -- that is a
+      // property of the house profile, not of whether HA is reachable.
+      let sensors = null;
       try {
         const roomsResp = await fetch('houses/' + cfg.house + '/rooms.json', { cache: 'no-store' });
         if (roomsResp.ok) {
           const roomsDoc = await roomsResp.json();
           rooms = roomsDoc && roomsDoc.rooms ? roomsDoc.rooms : null;
+          sensors = roomsDoc && roomsDoc.sensors ? roomsDoc.sensors : null;
+          Object.keys((sensors && sensors.doors) || {}).forEach(id => doorSensorIds.add(id));
         } else {
           console.warn('[home3d] houses/' + cfg.house + '/rooms.json returned HTTP ' +
             roomsResp.status + '; Home Assistant integration disabled.');
@@ -909,6 +955,7 @@
           url: cfg.url,
           fallbackUrl: cfg.fallbackUrl || null,
           rooms: rooms,
+          sensors: sensors,
           wsReconnectMs: cfg.wsReconnectMs,
           pollIntervalMs: cfg.pollIntervalMs
         };
@@ -985,6 +1032,35 @@
       if (cameraPreset && !isPreview && typeof home.setView === 'function') {
         home.setView(cameraPreset);
       }
+
+      // Sensor test seam. The presence and door-contact bindings are driven by
+      // a live Home Assistant socket, which a demo profile deliberately does
+      // not have (`homeAssistant.enabled: false`), so without this there is no
+      // way to exercise either feature -- or to confirm the scene still
+      // settles to zero frames afterwards -- short of standing up an HA
+      // instance. Drives the SAME entry points the socket does.
+      //
+      //   __home3dSensors.presence('kitchen', true)
+      //   __home3dSensors.door('store_door', true)
+      //   __home3dSensors.frameCount()   // to prove the idle gate still holds
+      // Gated behind ?debug=1, matching the existing debug-overlay precedent
+      // at the `params.get('debug') !== '1'` guard above: this is a test seam,
+      // not a public API, and a public deployment should not hand every visitor
+      // the ability to drive sensor state.
+      if (new URLSearchParams(location.search).get('debug') === '1') window.__home3dSensors = {
+        presence: (roomId, occupied) => home.setPresence(roomId, occupied),
+        door: (doorId, open) => {
+          doorSensorOpen.set(doorId, open);
+          if (doorManualOverride.has(doorId)) return;
+          home.setDoorOpenById(doorId, open ? DOOR_SENSOR_OPEN_PCT : 0);
+          renderPanel();
+          followDoorSwing(doorId);
+        },
+        getPresence: roomId => home.getPresence(roomId),
+        getDoorOpenById: doorId => home.getDoorOpenById(doorId),
+        frameCount: () => home.getFrameCount(),
+        footstepDebug: roomId => home.getFootstepDebug(roomId)
+      };
 
       // Dev-only wall-numbering debug overlay -- SINGLE call site, fully
       // isolated in js/wall-debug-overlay.js. Off by default; toggled from the
@@ -1467,6 +1543,7 @@
           fallbackUrl: haConfig.fallbackUrl,
           token: haToken,
           rooms: haConfig.rooms,
+          sensors: haConfig.sensors,
           wsReconnectMs: haConfig.wsReconnectMs || 5000,
           pollIntervalMs: haConfig.pollIntervalMs || 5000
         });
@@ -1504,6 +1581,25 @@
           if (state.color !== undefined && group === 'ambient') ls[group].color = state.color;
           home.updateLights();
           renderPanel();
+        });
+
+        // Presence -> footsteps on that room's floor. The client fires this
+        // ONLY when the OR-ed occupancy boolean actually changes, never on an
+        // attribute-only republish, so this cannot become a render tick.
+        ha.onPresenceChange((roomId, occupied) => {
+          home.setPresence(roomId, occupied);
+        });
+
+        // Door contact -> swing the matching door. Same guarantee.
+        ha.onDoorChange((doorId, open) => {
+          doorSensorOpen.set(doorId, open);
+          // A door the user has taken manual control of keeps tracking its
+          // sensor in doorSensorOpen above, but is not moved by it. Re-checking
+          // "Use real value" snaps it back to the reading we kept here.
+          if (doorManualOverride.has(doorId)) return;
+          home.setDoorOpenById(doorId, open ? DOOR_SENSOR_OPEN_PCT : 0);
+          renderPanel();
+          followDoorSwing(doorId);
         });
 
         ha.connect();
@@ -1566,6 +1662,37 @@
       //   3. Room       (selectedRoom set)                 — per-room light controls
       // The old "All On / All Off" footer buttons were removed; the footer now
       // holds the single Settings button (shown only on the Controls page).
+
+      // A sensor-driven swing animates over ~400ms, but renderPanel() reads the
+      // door's CURRENT angle, so calling it once at the start of the swing paints
+      // the pre-swing value and then never updates -- the label and slider freeze
+      // at a stale number while the door visibly moves. Track the swing until the
+      // scene reports it settled, refreshing just the label and slider in place
+      // (same idiom as the manual drag handler) rather than re-rendering the panel.
+      const DOOR_SWING_FOLLOW_MS = 700; // swing is ~400ms; tail covers easing + a slow frame
+      let doorFollowRaf = 0;
+      function followDoorSwing(doorId) {
+        cancelAnimationFrame(doorFollowRaf);
+        // Run for the swing's full duration plus a small tail rather than
+        // stopping on a repeated reading: easing makes the first frames of a
+        // swing round to the same integer, so a repeat-detector exits before
+        // the door has moved at all. Wall-clock bound, so it always terminates.
+        const until = performance.now() + DOOR_SWING_FOLLOW_MS;
+        const step = () => {
+          const pct = home.getDoorOpenById(doorId);
+          if (pct === null || pct === undefined) return;
+          const rounded = Math.round(pct);
+          const el = panelBody.querySelector('[data-action="door-open"]');
+          if (el) {
+            el.value = String(rounded);
+            const label = el.previousElementSibling;
+            if (label) label.textContent = `Open: ${rounded}%`;
+          }
+          if (performance.now() >= until) return;
+          doorFollowRaf = requestAnimationFrame(step);
+        };
+        doorFollowRaf = requestAnimationFrame(step);
+      }
 
       function renderPanel() {
         panelReady = true; // reached here => all panel deps are declared; safe
@@ -1778,13 +1905,28 @@
           const doorPct = home.getDoorOpen(rid);
           if (doorPct !== null) {
             const doorLabel = rid === 'hallway' ? 'FRONT DOOR' : 'DOOR';
+            // A door with a contact sensor bound in rooms.json gets a "Use
+            // real value" checkbox. Checked (the default) it follows Home
+            // Assistant and the slider is disabled; unchecked it hands control
+            // back to the slider so the door can still be swung by hand.
+            // A door with NO sensor gets no checkbox and behaves exactly as
+            // it always has.
+            const doorId = home.getDoorIdForRoom(rid);
+            const hasSensor = doorId !== null && doorSensorIds.has(doorId);
+            const following = hasSensor && !doorManualOverride.has(doorId);
             html += `<div class="control-group">
               <div class="control-header">
                 <span class="control-label">${doorLabel}</span>
-              </div>
-              <div class="slider-row">
+              </div>`;
+            if (hasSensor) {
+              html += `<label class="sensor-toggle-row">
+                <input type="checkbox" data-action="door-use-sensor" ${following ? 'checked' : ''}>
+                <span>Use real value</span>
+              </label>`;
+            }
+            html += `<div class="slider-row">
                 <div class="slider-label">Open: ${Math.round(doorPct)}%</div>
-                <input type="range" class="slider" min="0" max="100" value="${Math.round(doorPct)}" data-action="door-open">
+                <input type="range" class="slider" min="0" max="100" value="${Math.round(doorPct)}" data-action="door-open"${following ? ' disabled' : ''}>
               </div>
             </div>`;
           }
@@ -1848,6 +1990,22 @@
               const pct = +e.target.value;
               home.setDoorOpen(rid, pct);
               el.previousElementSibling.textContent = `Open: ${pct}%`;
+            });
+            if (action === 'door-use-sensor') el.addEventListener('change', e => {
+              const doorId = home.getDoorIdForRoom(rid);
+              if (!doorId) return;
+              if (e.target.checked) {
+                // Back under sensor control. Snap to the last reading we have
+                // rather than waiting for the sensor to change again — a door
+                // that stayed put while the user fiddled would otherwise keep
+                // whatever angle they left it at while claiming to be live.
+                doorManualOverride.delete(doorId);
+                home.setDoorOpenById(doorId, doorSensorOpen.get(doorId) ? DOOR_SENSOR_OPEN_PCT : 0);
+              } else {
+                doorManualOverride.add(doorId);
+              }
+              // Re-render so the slider's disabled state matches the checkbox.
+              renderPanel();
             });
             if (action === 'bri-galaxy') el.addEventListener('input', e => {
               s.galaxy.bri = +e.target.value; home.updateLights();

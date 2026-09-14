@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. Currently `"1.0"`. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. Currently `"1.1"` for `rooms.json` (`1.1` added the optional `sensors` block) and `"1.0"` for `geometry.json`. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -424,13 +424,21 @@ and the whole model then sits slightly off-centre in every view.
 ```json
 {
   "kind": "rooms",
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "house": "myhouse",
   "homeAssistant": { "enabled": true, "wsReconnectMs": 5000, "pollIntervalMs": 5000 },
   "rooms": {
     "kitchen": {
       "main":    ["light.kitchen_ceiling"],
       "ambient": ["light.kitchen_cove"]
+    }
+  },
+  "sensors": {
+    "presence": {
+      "kitchen": ["binary_sensor.example_kitchen_motion"]
+    },
+    "doors": {
+      "store_door": ["binary_sensor.example_store_door_contact"]
     }
   }
 }
@@ -447,6 +455,51 @@ not. Channels *should* match a fixture channel in the geometry — the validator
 warns, rather than errors, in both mismatched directions (entities with no
 fixtures, fixtures with no entities), because a half-wired house is a perfectly
 normal work-in-progress.
+
+### `sensors` — non-light bindings
+
+`rooms` is specifically *room → light channel → entities*, and it is joined to
+the geometry's `lights[].fixtures[].channel`. Entities that are not lights do not
+belong in it: they would be driven as if they were lamps and would trip the
+validator's missing-fixture warning forever. They go in `sensors` instead.
+
+Both keys are optional, and so is the whole block. A profile with no `sensors`
+renders exactly as it did before — both features simply stay dark.
+
+| Key | Keyed by | Meaning |
+|-----|----------|---------|
+| `presence` | **room id**, from the geometry's `rooms` | The room shows footsteps on its floor while occupied |
+| `doors` | **door id**, from the geometry's `doors[].id` | The door swings open while the contact reads open |
+
+Several entities on one target are OR-ed: any one of them reading `on` means
+occupied, or open. `unavailable` and `unknown` count as `off`, so a sensor that
+drops out reads as empty or closed rather than sticking at its last value.
+
+`doors` is keyed by **door id and not by room** because a door belongs to a wall
+rather than to a room: a room may have several doors, and a door need not name a
+room at all. Keying on the room would make every door after the first
+unaddressable.
+
+Presence footsteps **fade in** when a room becomes occupied and **fade out** when
+it empties; in between they are simply drawn, and the scene renders no frames at
+all. A door driven by a contact sensor swings to a modest fraction of its travel
+rather than flying fully open — the sensor reports only that the door is off the
+latch, never how far, so rendering it wide open would be inventing detail the
+sensor does not carry.
+
+A door with a sensor bound gets a **"Use real value"** checkbox in the room
+panel, checked by default. While it is checked the door follows Home Assistant
+and the openness slider is disabled; unchecking it hands the slider back so the
+door can still be swung by hand. A door with no sensor bound shows no checkbox
+and behaves exactly as before.
+
+Presence room ids and door ids are both checked against the paired geometry, and
+a binding that names something the geometry does not have is an **error** — a
+sensor bound to a room or door that does not exist can never drive anything.
+
+`sensors` requires `schemaVersion` `"1.1"` or newer. The bump is additive: the
+engine gates on MAJOR only, so a `1.1` profile loads in an older engine (which
+ignores `sensors`) and a `1.0` profile loads in a newer one.
 
 Leave `url` and `fallbackUrl` out of a committed profile. A hostname in a
 tracked file discloses infrastructure; supply them through runtime config
@@ -588,6 +641,8 @@ that a JSON Schema cannot express:
 - texture files that are actually present on disk
 - `rooms.json` room ids matching the geometry, and channels lining up with
   fixtures in both directions
+- `sensors` presence room ids and door ids resolving against the geometry, and
+  `sensors` appearing only in a profile that declares `schemaVersion` 1.1+
 - a `site.latitude` precise enough to locate a building rather than a city
 
 Run it before you commit a profile, and wire it into CI.
