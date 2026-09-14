@@ -1043,7 +1043,11 @@
       //   __home3dSensors.presence('kitchen', true)
       //   __home3dSensors.door('store_door', true)
       //   __home3dSensors.frameCount()   // to prove the idle gate still holds
-      window.__home3dSensors = {
+      // Gated behind ?debug=1, matching the existing debug-overlay precedent
+      // at the `params.get('debug') !== '1'` guard above: this is a test seam,
+      // not a public API, and a public deployment should not hand every visitor
+      // the ability to drive sensor state.
+      if (new URLSearchParams(location.search).get('debug') === '1') window.__home3dSensors = {
         presence: (roomId, occupied) => home.setPresence(roomId, occupied),
         door: (doorId, open) => {
           doorSensorOpen.set(doorId, open);
