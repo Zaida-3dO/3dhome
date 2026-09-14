@@ -2220,17 +2220,15 @@ export const Home3DScene = (() => {
       fpc.fill();
       const footprintTex = new THREE.CanvasTexture(fpCanvas);
 
-      // Deterministic pseudo-random, seeded per room id. A trail that moved
-      // every reload would make a visual review impossible to compare against
-      // an earlier capture, and Math.random() would do exactly that.
-      const seededRand = seed => {
-        let s = 0;
-        for (let i = 0; i < seed.length; i++) s = (s * 31 + seed.charCodeAt(i)) >>> 0;
-        return () => {
-          s = (s * 1664525 + 1013904223) >>> 0;
-          return s / 4294967296;
-        };
-      };
+      // NOTE: placement used to draw from a pseudo-random generator seeded per
+      // room id, so that a trail at least stayed put between reloads and a
+      // visual review could compare against an earlier capture. It is gone
+      // because placement no longer contains any random quantity at all: every
+      // number below is derived from the room's polygon and its doors. That is
+      // strictly stronger than a seeded rand for the property we needed — the
+      // same house always yields the same trails — and it is also what stops
+      // the direction from looking arbitrary, which was the actual complaint.
+      // If anything here ever needs to vary again, seed it; never Math.random().
 
       // Is a point inside the room polygon? Ray casting. Used so a trail in an
       // L-shaped room (the demo's study, for one) stays on that
@@ -2246,39 +2244,170 @@ export const Home3DScene = (() => {
         return inside;
       };
 
+      // How far you can walk from (x,y) along (dx,dy) before leaving the room,
+      // capped at `limit`. Sampled rather than solved analytically: the polygon
+      // is arbitrary (up to 8 verts here) and this runs a few dozen times at
+      // BUILD time only, so a clean 8cm sample beats an edge-intersection
+      // routine nobody can read.
+      const clearRun = (poly, x, y, dx, dy, limit) => {
+        const STEP = 8;
+        let t = 0;
+        while (t + STEP <= limit) {
+          if (!insidePoly(poly, x + dx * (t + STEP), y + dy * (t + STEP))) return t;
+          t += STEP;
+        }
+        return limit;
+      };
+
+      // Shoelace area in m², for sizing the trail to the room.
+      const polyAreaSqm = poly => {
+        let a = 0;
+        for (let i = 0; i < poly.length; i++) {
+          const p = poly[i], q = poly[(i + 1) % poly.length];
+          a += p[0] * q[1] - q[0] * p[1];
+        }
+        return Math.abs(a) / 2 / 10000;
+      };
+
+      // Every door you could walk through to ENTER this room, with the inward
+      // direction and how much clear floor lies beyond it.
+      //
+      // Deliberately NOT restricted to doors whose `room` is this room. A
+      // hallway is entered mostly through OTHER rooms' doors, and on the real
+      // house the hallway's own door (the front door) offers a shorter run
+      // than the kitchen door does — so considering only the owned door would
+      // walk the trail the wrong way down an L-shaped hall.
+      //
+      // The inward direction is resolved by PROBING both sides of the wall
+      // with insidePoly, not by reading the door's `swing`. Swing says which
+      // way the leaf opens, which is frequently not the way you walk.
+      const doorApproaches = (poly, padCm) => {
+        const PROBE = 26;
+        const out = [];
+        DOORS.forEach(d => {
+          const onX = (d.wall === 'x');
+          const px = onX ? d.c : d.at;
+          const py = onX ? d.at : d.c;
+          const nx = onX ? 0 : 1, ny = onX ? 1 : 0;
+          [1, -1].forEach(s => {
+            const ux = nx * s, uy = ny * s;
+            if (!insidePoly(poly, px + ux * PROBE, py + uy * PROBE)) return;
+            const sx = px + ux * padCm, sy = py + uy * padCm;
+            if (!insidePoly(poly, sx, sy)) return;   // room too shallow to pad into
+            out.push({ id: d.id, room: d.room, ux, uy, sx, sy,
+                       run: clearRun(poly, sx, sy, ux, uy, 1200) });
+          });
+        });
+        return out;
+      };
+
       Object.entries(ROOMS).forEach(([id, rm]) => {
-        const rand = seededRand(id);
         const poly = rm.poly;
         const STEP_CM = 34;        // stride length, centimetres
         const STRIDE_CM = 17;      // left/right offset from the walking line
         const PRINT_CM = 26;       // long axis of one print
-        const MAX_PRINTS = 8;
+        const PAD_CM = 55;         // how far in from the threshold the trail starts
 
-        // Walk a line across the room, alternating feet. The line runs through
-        // the room's centre at a fixed per-room angle, so a trail looks like
-        // someone crossed the room rather than like a decal stamped in place.
-        const cxCm = (rm.x1 + rm.x2) / 2, cyCm = (rm.y1 + rm.y2) / 2;
-        const ang = rand() * Math.PI * 2;
-        const dx = Math.cos(ang), dy = Math.sin(ang);
-        const px = -dy, py = dx;   // perpendicular, for the left/right offset
+        // Someone walks IN THROUGH A DOOR. That one idea fixes all three of the
+        // things that looked wrong before: the direction stops being arbitrary
+        // (it was literally rand() * 2PI, so two identical bathrooms walked
+        // different ways), the trail starts inside the room instead of being
+        // centred on a bounding box, and it can be kept on the room's own floor
+        // because we know where it began.
+        //
+        // The entry chosen is the one with the LONGEST CLEAR RUN inside this
+        // room. For a plain rectangular room that is simply its own door. For
+        // an L-shaped hallway it picks the door that looks down the long leg of
+        // the L, which is what makes the trail read as walking along the hall
+        // rather than heading into whatever sits in the notch.
+        const approaches = poly ? doorApproaches(poly, PAD_CM) : [];
+        // Longest run wins. The run is bucketed to 40cm so two comparable
+        // approaches do not flip on a centimetre, then a door belonging to this
+        // room breaks the tie, then the id — fully deterministic, no rand().
+        approaches.sort((a, b) => {
+          const ra = Math.round(a.run / 40), rb = Math.round(b.run / 40);
+          if (ra !== rb) return rb - ra;
+          const oa = (a.room === id) ? 0 : 1, ob = (b.room === id) ? 0 : 1;
+          if (oa !== ob) return oa - ob;
+          return a.id < b.id ? -1 : 1;
+        });
+
+        let sx, sy, ux, uy, run;
+        if (approaches.length) {
+          const a = approaches[0];
+          sx = a.sx; sy = a.sy; ux = a.ux; uy = a.uy; run = a.run;
+        } else {
+          // No door opens into this room (the real house has one such room), or
+          // the profile carries no polygon at all. Fall back to the long axis
+          // of the bounding box — but seeded from a point PROVEN to be inside
+          // the room. An L-shaped polygon's bbox centre can lie in the notch,
+          // i.e. outside the room entirely, so it is never trusted blind.
+          let cx = (rm.x1 + rm.x2) / 2, cy = (rm.y1 + rm.y2) / 2;
+          if (poly && !insidePoly(poly, cx, cy)) {
+            let found = false;
+            for (let i = 1; i < 24 && !found; i++) {
+              for (let j = 1; j < 24 && !found; j++) {
+                const qx = rm.x1 + (rm.x2 - rm.x1) * i / 24;
+                const qy = rm.y1 + (rm.y2 - rm.y1) * j / 24;
+                if (insidePoly(poly, qx, qy)) { cx = qx; cy = qy; found = true; }
+              }
+            }
+            if (!found) return;   // degenerate polygon: no floor to stand on
+          }
+          const w = rm.x2 - rm.x1, h = rm.y2 - rm.y1;
+          ux = (w >= h) ? 1 : 0; uy = (w >= h) ? 0 : 1;
+          // Back up along the axis so the trail straddles the room rather than
+          // starting at its middle, then measure forward from there.
+          const back = poly ? clearRun(poly, cx, cy, -ux, -uy, 400) : Math.min(w, h) / 2;
+          sx = cx - ux * Math.min(back * 0.5, 60);
+          sy = cy - uy * Math.min(back * 0.5, 60);
+          run = poly ? clearRun(poly, sx, sy, ux, uy, 1200) : Math.max(w, h);
+        }
+
+        // How many prints. Two limits, whichever is tighter: what physically
+        // fits in the clear run ahead, and what suits the room's size. A small
+        // room such as an en suite or a bathroom should read as a few steps in
+        // through the door, not as a march from one wall to the other.
+        const areaSqm = poly ? polyAreaSqm(poly) : Math.abs((rm.x2 - rm.x1) * (rm.y2 - rm.y1)) / 10000;
+        const areaCap = (areaSqm < 5) ? 3 : (areaSqm < 9) ? 4 : 6;
+        const fits = Math.floor((run - 12) / STEP_CM) + 1;
+        const nPrints = Math.max(2, Math.min(areaCap, fits));
 
         const geos = [];
-        for (let i = 0; i < MAX_PRINTS; i++) {
-          // Centred on the room centre so the trail is balanced within it.
-          const t = (i - (MAX_PRINTS - 1) / 2) * STEP_CM;
-          const side = (i % 2 === 0) ? 1 : -1;
-          const fx = cxCm + dx * t + px * side * (STRIDE_CM / 2);
-          const fy = cyCm + dy * t + py * side * (STRIDE_CM / 2);
-          // Skip any print that would land outside the room's own floor.
-          if (poly && !insidePoly(poly, fx, fy)) continue;
-          if (!poly && (fx < rm.x1 || fx > rm.x2 || fy < rm.y1 || fy > rm.y2)) continue;
+        let wx = sx, wy = sy, dirx = ux, diry = uy, turned = false;
+        for (let i = 0; geos.length < nPrints && i < nPrints + 4; i++) {
+          const perpx = -diry, perpy = dirx;
+          const side = (geos.length % 2 === 0) ? 1 : -1;
+          const fx = wx + perpx * side * (STRIDE_CM / 2);
+          const fy = wy + perpy * side * (STRIDE_CM / 2);
+
+          if (poly ? !insidePoly(poly, fx, fy)
+                   : (fx < rm.x1 || fx > rm.x2 || fy < rm.y1 || fy > rm.y2)) {
+            // The leg ran out. Rather than dropping this print and marching on
+            // regardless — which is what used to leave a trail petering out
+            // through a wall — step back and turn ONCE toward whichever side
+            // still has floor. That is what carries a trail around the corner
+            // of an L instead of out of it.
+            if (turned || !poly) break;
+            const bx = wx - dirx * STEP_CM, by = wy - diry * STEP_CM;
+            const lr = clearRun(poly, bx, by, -diry, dirx, 1200);
+            const rr = clearRun(poly, bx, by, diry, -dirx, 1200);
+            if (Math.max(lr, rr) < STEP_CM * 1.5) break;   // a dead end, not a corner
+            wx = bx; wy = by;
+            if (lr >= rr) { const t = dirx; dirx = -diry; diry = t; }
+            else { const t = dirx; dirx = diry; diry = -t; }
+            turned = true;
+            continue;
+          }
 
           const g = new THREE.PlaneGeometry(PRINT_CM * S * 0.62, PRINT_CM * S);
           // Lay flat, then turn the print to face along the walking line.
           g.rotateX(-Math.PI / 2);
-          g.rotateY(-ang + Math.PI / 2);
+          g.rotateY(-Math.atan2(diry, dirx) + Math.PI / 2);
           g.translate(tx(fx), 0.012, tz(fy));
           geos.push(g);
+          wx += dirx * STEP_CM;
+          wy += diry * STEP_CM;
         }
         if (!geos.length) return;
 
