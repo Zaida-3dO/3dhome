@@ -2715,6 +2715,12 @@ export const Home3DScene = (() => {
     let needsRender = true;        // paint at least the first frame
     let wakeUntil = 0;             // keep rendering until this ts (post-interaction tail)
     let transitionsActive = true;  // wall/ceiling opacity still easing toward target
+    // Total frames actually drawn. Exposed via getFrameCount() so the
+    // on-demand gate can be VERIFIED rather than assumed: sample it, wait,
+    // sample again, and an idle scene must return the same number. That is the
+    // one property most easily lost by accident here, and reasoning about it
+    // is no substitute for counting.
+    let framesRendered = 0;
     function requestRender() { needsRender = true; }
     function wake(ms) { wakeUntil = Math.max(wakeUntil, performance.now() + (ms || 0)); needsRender = true; }
 
@@ -2759,28 +2765,32 @@ export const Home3DScene = (() => {
     // what stops the rendering. There is deliberately NO timer here: a
     // setInterval re-arming wake() would defeat the gate while looking like it
     // respected it.
-    const FOOTSTEP_FADE_MS = 500;   // the scout's suggested bounded wake
+    const FOOTSTEP_FADE_MS = 500;   // the bounded fade, in each direction
     const FOOTSTEP_MAX_OPACITY = 0.55;
-    // roomId -> target opacity. A room is absent until its presence is set.
-    const footstepTargets = new Map();
+    // roomId -> { from, to, startedAt }.
+    //
+    // Interpolated from elapsed wall-clock time for the same reason the door
+    // swing is — see the note there. The loop's dt is clamped to 0.1s, which
+    // is a fifth of this fade in a single frame, so a dt-accumulating fade
+    // would visibly step rather than glide on exactly the frame that matters.
+    const footstepFades = new Map();
 
-    function tickFootstepFades(dt) {
-      if (!footstepTargets.size) return false;
+    function tickFootstepFades() {
+      if (!footstepFades.size) return false;
       let moving = false;
-      const step = dt * 1000 / FOOTSTEP_FADE_MS * FOOTSTEP_MAX_OPACITY;
-      footstepTargets.forEach((target, roomId) => {
+      const now = performance.now();
+      footstepFades.forEach((fd, roomId) => {
         const mesh = footstepsByRoom[roomId];
-        if (!mesh) { footstepTargets.delete(roomId); return; }
-        const cur = mesh.material.opacity;
-        const diff = target - cur;
-        if (Math.abs(diff) <= step) {
+        if (!mesh) { footstepFades.delete(roomId); return; }
+        const t = Math.min(1, (now - fd.startedAt) / FOOTSTEP_FADE_MS);
+        mesh.material.opacity = fd.from + (fd.to - fd.from) * t;
+        if (t >= 1) {
           // Arrived. Settle exactly on the target and STOP reporting movement,
           // which is what lets the scene fall back to zero frames.
-          mesh.material.opacity = target;
-          if (target === 0) mesh.visible = false;
-          footstepTargets.delete(roomId);
+          mesh.material.opacity = fd.to;
+          if (fd.to === 0) mesh.visible = false;
+          footstepFades.delete(roomId);
         } else {
-          mesh.material.opacity = cur + Math.sign(diff) * step;
           moving = true;
         }
       });
@@ -2793,29 +2803,39 @@ export const Home3DScene = (() => {
     // advances toward a fixed target percentage and reports when it is still
     // moving, so the loop settles to zero frames the moment the leaf arrives.
     const DOOR_SWING_MS = 400;
-    // doorId -> target openPct.
-    const doorTargets = new Map();
+    // doorId -> { from, to, startedAt }.
+    //
+    // ⚠️ Interpolated from ELAPSED WALL-CLOCK TIME, not by accumulating the
+    // loop's dt. dt is clamped to 0.1s so a long idle cannot make the scene
+    // jump, and the first frame after an idle scene wakes is exactly that
+    // clamped 0.1s — a quarter of this animation's whole duration in one step.
+    // A dt-accumulating version therefore covered the full 20% travel on its
+    // very first frame and the door SNAPPED rather than swinging. Measured in
+    // the browser: openPct read 20 on every one of twelve consecutive
+    // animation frames. Time-based interpolation is immune, because the
+    // fraction is derived from when the swing started rather than from how
+    // coarse the frames happen to be.
+    const doorSwings = new Map();
 
     function applyDoorPct(dr, pct) {
       dr.openPct = Math.max(0, Math.min(100, pct));
       dr.pivot.rotation.y = dr.swingSign * (dr.maxDeg * dr.openPct / 100) * Math.PI / 180;
     }
 
-    function tickDoorSwings(dt) {
-      if (!doorTargets.size) return false;
+    function tickDoorSwings() {
+      if (!doorSwings.size) return false;
       let moving = false;
-      const step = dt * 1000 / DOOR_SWING_MS * 100;
-      doorTargets.forEach((target, doorId) => {
+      const now = performance.now();
+      doorSwings.forEach((sw, doorId) => {
         const dr = doorById[doorId];
-        if (!dr) { doorTargets.delete(doorId); return; }
-        const diff = target - dr.openPct;
-        if (Math.abs(diff) <= step) {
-          applyDoorPct(dr, target);
-          doorTargets.delete(doorId);
-        } else {
-          applyDoorPct(dr, dr.openPct + Math.sign(diff) * step);
-          moving = true;
-        }
+        if (!dr) { doorSwings.delete(doorId); return; }
+        const t = Math.min(1, (now - sw.startedAt) / DOOR_SWING_MS);
+        // Ease in-out, so the leaf starts and stops gently rather than
+        // beginning at full speed.
+        const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        applyDoorPct(dr, sw.from + (sw.to - sw.from) * e);
+        if (t >= 1) doorSwings.delete(doorId);
+        else moving = true;
         // MOVES GEOMETRY — a door is a shadow caster, so without this the door
         // swings while its shadow stays where the door used to be. The single
         // most visible way to get this wrong. Paid per frame only for the
@@ -3531,8 +3551,14 @@ export const Home3DScene = (() => {
       // until the last one arrives, then `transitionsActive` goes false and it
       // returns to ZERO frames. Nothing here re-arms a timer or a wake(), so
       // an occupied room costs nothing once its fade has finished.
-      if (tickFootstepFades(dt)) animating = true;
-      if (tickDoorSwings(dt)) animating = true;
+      // ⚠️ These MUST run before `transitionsActive` is written below, and
+      // each returns "still moving" so the flag keeps the loop alive until it
+      // finishes. Without that the fade advances on the single frame
+      // requestRender() bought and then stalls part-way — observed in the
+      // browser as footsteps frozen at opacity 0.31 with the scene idle,
+      // which looks like a rendering bug and is actually a stopped animation.
+      if (tickFootstepFades()) animating = true;
+      if (tickDoorSwings()) animating = true;
 
       transitionsActive = animating;
       // Time the render itself rather than the gap between frames. The gap is
@@ -3548,6 +3574,7 @@ export const Home3DScene = (() => {
       // the drag ramp-down from cutting back in.
       const renderT0 = performance.now();
       ren.render(scene, cam);
+      framesRendered++;
       sampleRampFrame(frameNow, performance.now() - renderT0, interacting);
 
       // Notify onRender subscribers (compass overlay etc.) after the frame is
@@ -3717,7 +3744,7 @@ export const Home3DScene = (() => {
         // A manual set wins outright over an in-flight sensor swing on the
         // same door: cancel the animation rather than letting the two fight
         // over openPct frame by frame.
-        if (dr.id) doorTargets.delete(dr.id);
+        if (dr.id) doorSwings.delete(dr.id);
         dr.openPct = Math.max(0, Math.min(100, +pct || 0));
         dr.pivot.rotation.y = dr.swingSign * (dr.maxDeg * dr.openPct / 100) * Math.PI / 180;
         // MOVES GEOMETRY — a door is a shadow caster, so without this the door
@@ -3753,14 +3780,15 @@ export const Home3DScene = (() => {
         const dr = doorById[doorId];
         if (!dr) return;
         const target = Math.max(0, Math.min(100, +pct || 0));
-        if (dr.openPct === target) {
+        const inFlight = doorSwings.get(doorId);
+        if (inFlight && inFlight.to === target) return;   // already on its way
+        if (!inFlight && dr.openPct === target) {
           // Already there. Requesting a frame here would turn a republished
           // sensor state into a render tick, which is the thing this feature
           // must not do.
-          doorTargets.delete(doorId);
           return;
         }
-        doorTargets.set(doorId, target);
+        doorSwings.set(doorId, { from: dr.openPct, to: target, startedAt: performance.now() });
         requestRender();
       },
       /**
@@ -3773,10 +3801,14 @@ export const Home3DScene = (() => {
         const mesh = footstepsByRoom[roomId];
         if (!mesh) return;
         const target = occupied ? FOOTSTEP_MAX_OPACITY : 0;
-        // Already at the target and not mid-fade toward something else.
-        if (!footstepTargets.has(roomId) && mesh.material.opacity === target) return;
-        if (footstepTargets.get(roomId) === target) return;
-        footstepTargets.set(roomId, target);
+        const inFlight = footstepFades.get(roomId);
+        if (inFlight && inFlight.to === target) return;   // already fading there
+        if (!inFlight && mesh.material.opacity === target) return;
+        footstepFades.set(roomId, {
+          from: mesh.material.opacity,
+          to: target,
+          startedAt: performance.now()
+        });
         // Made visible for the whole fade INCLUDING the fade out; the tick
         // clears `visible` only once it has actually reached zero.
         if (occupied) mesh.visible = true;
@@ -3786,11 +3818,32 @@ export const Home3DScene = (() => {
         // decal that cannot appear in any of them.
         requestRender();
       },
+      // Frames drawn since construction. Monotonic, and flat while idle.
+      getFrameCount() { return framesRendered; },
+      // What a room's footstep mesh actually IS in the scene graph. The
+      // renderer runs with preserveDrawingBuffer:false, so a screenshot cannot
+      // read the canvas back and a pixel diff can neither confirm nor deny
+      // that footsteps are drawn. This reports the state a capture cannot.
+      getFootstepDebug(roomId) {
+        const m = footstepsByRoom[roomId];
+        if (!m) return null;
+        m.geometry.computeBoundingBox();
+        const bb = m.geometry.boundingBox;
+        return {
+          visible: m.visible,
+          opacity: m.material.opacity,
+          prints: m.geometry.index.count / 6,
+          inScene: !!m.parent,
+          castShadow: m.castShadow,
+          receiveShadow: m.receiveShadow,
+          bbox: { min: bb.min.toArray(), max: bb.max.toArray() }
+        };
+      },
       getPresence(roomId) {
         const mesh = footstepsByRoom[roomId];
         if (!mesh) return null;
-        const target = footstepTargets.get(roomId);
-        if (target !== undefined) return target > 0;
+        const fd = footstepFades.get(roomId);
+        if (fd) return fd.to > 0;
         return mesh.material.opacity > 0;
       },
       // Embedder pause control: setActive(false) halts the render loop (no GPU

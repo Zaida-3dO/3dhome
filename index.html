@@ -1033,6 +1033,30 @@
         home.setView(cameraPreset);
       }
 
+      // Sensor test seam. The presence and door-contact bindings are driven by
+      // a live Home Assistant socket, which a demo profile deliberately does
+      // not have (`homeAssistant.enabled: false`), so without this there is no
+      // way to exercise either feature -- or to confirm the scene still
+      // settles to zero frames afterwards -- short of standing up an HA
+      // instance. Drives the SAME entry points the socket does.
+      //
+      //   __home3dSensors.presence('kitchen', true)
+      //   __home3dSensors.door('store_door', true)
+      //   __home3dSensors.frameCount()   // to prove the idle gate still holds
+      window.__home3dSensors = {
+        presence: (roomId, occupied) => home.setPresence(roomId, occupied),
+        door: (doorId, open) => {
+          doorSensorOpen.set(doorId, open);
+          if (doorManualOverride.has(doorId)) return;
+          home.setDoorOpenById(doorId, open ? DOOR_SENSOR_OPEN_PCT : 0);
+          renderPanel();
+        },
+        getPresence: roomId => home.getPresence(roomId),
+        getDoorOpenById: doorId => home.getDoorOpenById(doorId),
+        frameCount: () => home.getFrameCount(),
+        footstepDebug: roomId => home.getFootstepDebug(roomId)
+      };
+
       // Dev-only wall-numbering debug overlay -- SINGLE call site, fully
       // isolated in js/wall-debug-overlay.js. Off by default; toggled from the
       // Settings sidebar "Wall numbers" switch, ?debugWalls=1, or Shift+D.
