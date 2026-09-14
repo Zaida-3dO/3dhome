@@ -345,7 +345,7 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "How far open this door sits by default, as a fraction of its solved maximum. 0 = closed, 1 = fully open. Defaults to `defaults.doorRestOpenFraction`."
+          "description": "How far open this door sits by default, as a fraction of its solved maximum. 0 = closed, 1 = fully open. Setting this is a deliberate statement about a real door (a permanently-propped archway) and overrides everything: the door rests here whether or not a sensor is bound to it. Omit it and the door rests closed unless a contact sensor is bound in rooms.json, in which case it rests at `defaults.doorRestOpenFraction` until the first reading arrives."
         },
         "color": {
           "$ref": "#/$defs/hexColor",
@@ -580,8 +580,8 @@
               "type": "number",
               "minimum": 0,
               "maximum": 1,
-              "description": "Default at-rest openness as a fraction of each door's solved maximum.",
-              "default": 0.2
+              "description": "House-wide at-rest openness, as a fraction of each door's solved maximum. NOTE this applies only to doors that have a contact sensor bound in rooms.json: the renderer rests a door with NO sensor CLOSED regardless, because nothing reports its state. A per-door `restOpenFraction` overrides both.",
+              "default": 0
             },
             "ceilingHeight": {
               "type": "number",

@@ -46,7 +46,16 @@ export const HouseLoader = (() => {
     doorThickness: 4,
     doorOpeningHeight: 207,
     doorFrameReveal: 8,
-    doorRestOpenFraction: 0.2
+    // 0 = CLOSED. A door with no sensor bound to it has no known state, and a
+    // closed door is the honest depiction of an unknown one -- it is also the
+    // exact pose a bound sensor gives for `open === false`. This was 0.2, which
+    // left EVERY door in EVERY house standing 20% open, including doors nothing
+    // reports on (reported 2026-09-14: a sensorless door's panel read "Open:
+    // 20%"). A SENSOR-BOUND door is unaffected: every sensor path sets the pose
+    // explicitly rather than inheriting this rest value. A profile that wants a
+    // door propped open says so per-door with `restOpenFraction`, which still
+    // wins (see compileDoor).
+    doorRestOpenFraction: 0
   });
 
   const MATERIAL_DEFAULTS = Object.freeze({
@@ -237,6 +246,12 @@ export const HouseLoader = (() => {
       size: (door.kind === 'cupboard') ? 'cup' : 'std',
       room: door.room,
       rest: door.restOpenFraction != null ? door.restOpenFraction : defaults.doorRestOpenFraction,
+      // Did the AUTHOR state this door's rest pose, or is `rest` just inherited
+      // from the house-wide default? The renderer forces an unsensored door
+      // CLOSED, but must not override a pose someone deliberately authored, so
+      // it needs to tell the two apart -- and `rest` alone cannot, because an
+      // authored 0.2 and an inherited 0.2 are the same number.
+      restExplicit: door.restOpenFraction != null,
       color: door.color
     };
   }
