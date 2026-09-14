@@ -1011,6 +1011,12 @@
 
       const home = Home3DScene.create(container, {
         house: house,
+        // Which doors rooms.json binds a contact sensor to. The scene rests
+        // every OTHER door CLOSED: a door nothing reports on has no known
+        // state, so showing it ajar is a claim the house cannot support.
+        // Populated above from sensors.doors, outside the cfg.enabled branch,
+        // so this is correct even when HA is configured off.
+        sensorBoundDoorIds: doorSensorIds,
         interactive: !isPreview,
         autoRotate: isPreview,
         rotateSpeed: rotateSpeed,
@@ -1067,7 +1073,10 @@
         getPresence: roomId => home.getPresence(roomId),
         getDoorOpenById: doorId => home.getDoorOpenById(doorId),
         frameCount: () => home.getFrameCount(),
-        footstepDebug: roomId => home.getFootstepDebug(roomId)
+        footstepDebug: roomId => home.getFootstepDebug(roomId),
+        // Per-outer-wall fade state. The only way to check which walls faded:
+        // the canvas cannot be read back (preserveDrawingBuffer:false).
+        wallFadeDebug: () => home.getWallFadeDebug()
       };
 
       // Dev-only wall-numbering debug overlay -- SINGLE call site, fully

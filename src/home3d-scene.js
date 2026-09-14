@@ -55,7 +55,32 @@ export const Home3DScene = (() => {
   let DOOR_T = 0.04;    // door slab thickness (m)
   let OPEN_H = 2.07;    // wall opening height (m) -- wall stays as a lintel above
   let REVEAL_CM = 8;    // frame reveal each side (cm)
-  let DOOR_REST = 0.2;  // at-rest pose as a fraction of the solved max swing
+  // At-rest pose as a fraction of the solved max swing, from the house's
+  // `defaults.doorRestOpenFraction`. NOTE this is the HOUSE-WIDE default and is
+  // NOT what an unsensored door renders at -- see DOOR_SENSOR_BOUND_IDS and the
+  // rest-pose site in the door builder, which forces CLOSED for a door nothing
+  // reports on. Both demo and real profiles state 0.2 here explicitly.
+  let DOOR_REST = 0;
+
+  // The door ids that the house's rooms.json binds a contact sensor to, handed
+  // in by the page (create({ sensorBoundDoorIds })).
+  //
+  // WHY THE SCENE NEEDS THIS: a door with a sensor has a KNOWN state, so it may
+  // legitimately rest part-open until the first reading arrives. A door with NO
+  // sensor has no known state at all, and standing it 20% open is a claim the
+  // house cannot support -- it read as "Open: 20%" on the panel for doors
+  // nothing reports on (reported 2026-09-14). Closed is the honest depiction,
+  // and it is the same pose a bound sensor gives for `open === false`.
+  //
+  // This lives in the SCENE and not in the profile default because the profile
+  // cannot express it: `defaults.doorRestOpenFraction` is house-wide, and BOTH
+  // shipped profiles set it to 0.2 explicitly, so lowering the loader fallback
+  // alone changes nothing for either house. Which doors have a sensor is known
+  // only here, at the join between geometry and rooms.json.
+  //
+  // Empty set (the default) = nothing is sensor-bound = every door rests
+  // CLOSED, which is the right answer for a profile with no HA wiring at all.
+  let DOOR_SENSOR_BOUND_IDS = new Set();
 
   // Front-door leaf finish. A profile can override the leaf colour per door
   // (door.color); these are the fallbacks for a door of kind 'front'.
@@ -1516,13 +1541,33 @@ export const Home3DScene = (() => {
         const pivot = new THREE.Group();
         mount.add(pivot);
         const maxDeg = Math.max(0, doorAngles[di] ?? d.ang ?? 90);
-        const restRad = maxDeg * DOOR_REST * Math.PI / 180;
+        // REST POSE — closed unless something actually knows better (2026-09-14).
+        // Precedence, highest first:
+        //   1. An explicit per-door `restOpenFraction` in the profile. An author
+        //      saying "this door sits open" is a deliberate statement about a
+        //      real door (a permanently-propped archway), so it wins outright,
+        //      sensor or no sensor.
+        //   2. A door with a contact sensor bound to it: rest at the house
+        //      default. Its state is KNOWN and the first reading will drive it
+        //      explicitly anyway, so this is only the pose before HA answers.
+        //   3. Everything else: CLOSED. Nothing reports on this door, so the
+        //      house cannot claim it is open. Standing every sensorless door
+        //      20% ajar is what made a panel read "Open: 20%" for doors with no
+        //      sensor at all.
+        // `d.rest` is ALWAYS populated (loader falls back to the house default),
+        // so `restExplicit` is what distinguishes an authored pose from an
+        // inherited one -- an authored 0.2 and an inherited 0.2 are both 0.2.
+        const restFraction = d.restExplicit ? d.rest
+          : (d.id && DOOR_SENSOR_BOUND_IDS.has(d.id) ? d.rest : 0);
+        const restRad = maxDeg * restFraction * Math.PI / 180;
         // local +Z maps to this world dir; fixed sign so the leaf only ever swings toward `normal`
         const locZ = new V(Math.sin(theta), 0, Math.cos(theta));
         const swingSign = locZ.dot(normal) > 0 ? -1 : 1;
         pivot.rotation.y = swingSign * restRad;
         mount.userData = { doorId: d.name, maxAngleDeg: maxDeg, swingSign };
-        const doorRec = { id: d.id, name: d.name, pivot, maxDeg, swingSign, openPct: DOOR_REST * 100 };
+        // openPct must agree with the pose actually rendered above, or the
+        // panel's "Open: N%" readout contradicts the door on screen.
+        const doorRec = { id: d.id, name: d.name, pivot, maxDeg, swingSign, openPct: restFraction * 100 };
         if (d.room) doorByRoom[d.room] = doorRec;
         // Same record, keyed by the door's own id. Unconditional: a door
         // without a `room` still has an id and is still bindable to a sensor.
@@ -2405,6 +2450,76 @@ export const Home3DScene = (() => {
       buildAcousticPanelWall25(scene, wallMeshes);
     }
 
+    // ── OUTWARDNESS DERIVATION (2026-09-14) ────────────────────────────────
+    // The exterior-fade loop needs each outer wall's TRUE OUTWARD normal. It
+    // used to assume the registered (nx,nz) was already outward, on the
+    // reasoning that "the shell is a consistently-wound loop". That holds for
+    // the demo house and NOT for real floor plans. Measured on both:
+    //
+    //   demo       4 outer walls  ->  4/4 already OUTWARD  (dots +1.000)
+    //   a real 10-room plan      11 outer walls  -> 11/11 INWARD (-0.585..-1.000)
+    //
+    // A real plan is not authored as one clean loop — adjacent segments run in
+    // opposite directions — so NO FIXED SIGN in the fade test serves both. A
+    // sign flip fixes one house by breaking the other, which is exactly the
+    // regression this block exists to end. Instead DERIVE the sign here, from
+    // geometry, once at build time.
+    //
+    // Method: take the house bounding-box centre and, for each registered
+    // entry, dot its normal against (centre -> that entry's midpoint). Positive
+    // already points away from the centre (outward); negative means the
+    // registered normal is inward, so flip it. The fade loop then reads a
+    // normal that is outward by construction for ANY winding, including mixed.
+    //
+    // ⚠️ Derived PER REGISTRATION ENTRY, never per mesh. The living-room slat
+    // panel registers seg1 and seg2 with the SAME borrowed normal (nx:1,nz:0)
+    // on purpose, so the two segments cross the fade threshold in lockstep
+    // (2026-07-11 review fix). Re-deriving from each MESH's own position would
+    // give seg2 (which physically faces -z) the opposite sign and split that
+    // pair apart again. Grouping by the registered normal keeps them together:
+    // entries sharing a normal get one shared sign, decided by their COMBINED
+    // midpoint, so a borrowed-normal group still fades as one unit.
+    (function deriveOutwardNormals() {
+      const fp = HOUSE && HOUSE.footprint;
+      if (!fp) return;   // no footprint (no house bound) -> leave normals as authored
+      const ccx = tx((fp.minX + fp.maxX) / 2);
+      const ccz = tz((fp.minY + fp.maxY) / 2);
+      // Group outer entries by their registered normal, so borrowed-normal
+      // groups (seg1/seg2) are judged once, together, not mesh by mesh.
+      const groups = new Map();
+      wallMeshes.forEach(entry => {
+        if (!entry.outer) return;
+        const key = entry.nx.toFixed(4) + ',' + entry.nz.toFixed(4);
+        let g = groups.get(key);
+        if (!g) { g = []; groups.set(key, g); }
+        g.push(entry);
+      });
+      groups.forEach(entries => {
+        // Score every entry in the group independently, then let the group
+        // decide ONCE by summed evidence. Summing the per-entry dots (rather
+        // than dotting against an averaged midpoint) matters: two members on
+        // opposite sides of the house would average to a midpoint near the
+        // centre, where the outward direction is meaningless and a rounding
+        // error picks the sign. Summed dots instead weight each member by how
+        // unambiguous it individually is, so confident members outvote
+        // near-edge-on ones and a tie stays a tie.
+        let score = 0;
+        entries.forEach(e => {
+          let ox = e.mesh.position.x - ccx, oz = e.mesh.position.z - ccz;
+          const L = Math.hypot(ox, oz);
+          if (L < 1e-6) return;          // sits on the centre: casts no vote
+          score += (e.nx * ox + e.nz * oz) / L;
+        });
+        // score === 0 means no usable evidence either way (every member
+        // edge-on or centred). Leave the authored normal alone rather than
+        // flipping on noise.
+        if (score < 0) {
+          // Registered normal points INWARD — store the corrected outward one.
+          entries.forEach(e => { e.nx = -e.nx; e.nz = -e.nz; });
+        }
+      });
+    })();
+
     return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom };
   }
 
@@ -2556,7 +2671,16 @@ export const Home3DScene = (() => {
       //   single-shot, so it is safe to hang a latch off it.
       onCompileStart = null,
       onReady = null,
+      // sensorBoundDoorIds: the door ids rooms.json binds a contact sensor to
+      //   (any iterable of ids; the page passes its own Set). Doors NOT in it
+      //   render CLOSED at rest — see DOOR_SENSOR_BOUND_IDS. Omitting it means
+      //   "no door is sensor-bound", so every door rests closed: the correct
+      //   reading for a profile with no HA wiring, and a safe default because
+      //   it never claims a door is open on no evidence.
+      sensorBoundDoorIds = null,
     } = opts;
+    // Bound BEFORE buildScene() below, which is where the rest pose is baked in.
+    DOOR_SENSOR_BOUND_IDS = new Set(sensorBoundDoorIds || []);
 
     const W = container.clientWidth, H = container.clientHeight;
     const scene = new THREE.Scene();
@@ -3518,10 +3642,14 @@ export const Home3DScene = (() => {
         if (!outer) return;
         const dot = nx * camDir.x + nz * camDir.z;
         // `camDir` runs FROM the camera INTO the screen, and (nx,nz) is the wall's
-        // OUTWARD normal (verified: the shell is authored as a consistently-wound
-        // loop, so every outer normal points away from the house centre). A wall
-        // BETWEEN the camera and the interior therefore has its outward normal
-        // pointing back at the camera — ANTI-parallel to camDir — giving dot < 0.
+        // OUTWARD normal — guaranteed outward by the derivation pass at the end of
+        // buildScene(), which tests each registered normal against the house bbox
+        // centre and flips the inward ones. Do NOT re-derive that from the authored
+        // winding: it is NOT consistent across houses (the demo's 4 outer walls are
+        // all authored outward, a real 10-room plan's 11 are all authored INWARD),
+        // which is why the sign is computed rather than assumed. A wall BETWEEN the
+        // camera and the interior has its outward normal pointing back at the
+        // camera — ANTI-parallel to camDir — giving dot < 0.
         // Fade those; leave the far side solid so the house still reads as a
         // building rather than an open shell. Walls seen edge-on sit at dot ~= 0
         // and stay solid, which is what keeps the side walls from popping.
@@ -3828,6 +3956,29 @@ export const Home3DScene = (() => {
       },
       // Frames drawn since construction. Monotonic, and flat while idle.
       getFrameCount() { return framesRendered; },
+      // What the exterior-fade loop is ACTUALLY doing, per outer wall. Same
+      // reasoning as getFootstepDebug below: preserveDrawingBuffer is false, so
+      // a screenshot reads the canvas back as a single flat colour and a pixel
+      // diff can neither confirm nor deny that the right walls faded. This
+      // reports the state a capture cannot.
+      //
+      // `outwardDot` is the wall's DERIVED outward normal dotted with the
+      // camera direction -- the exact quantity the fade test thresholds at
+      // -0.3. Negative = the wall faces back at the camera (it is between you
+      // and the interior) and should be fading; near zero = edge-on, which
+      // deliberately stays solid.
+      getWallFadeDebug() {
+        const camDir = new THREE.Vector3().subVectors(orb.tgt, cam.position).normalize();
+        return wallMeshes.filter(w => w.outer).map(w => ({
+          nx: +w.nx.toFixed(4),
+          nz: +w.nz.toFixed(4),
+          outwardDot: +(w.nx * camDir.x + w.nz * camDir.z).toFixed(4),
+          opacity: +w.mesh.material.opacity.toFixed(4),
+          depthWrite: w.mesh.material.depthWrite,
+          transparent: w.mesh.material.transparent,
+          pos: [+w.mesh.position.x.toFixed(2), +w.mesh.position.z.toFixed(2)]
+        }));
+      },
       // What a room's footstep mesh actually IS in the scene graph. The
       // renderer runs with preserveDrawingBuffer:false, so a screenshot cannot
       // read the canvas back and a pixel diff can neither confirm nor deny
