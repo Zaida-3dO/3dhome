@@ -1054,6 +1054,7 @@
           if (doorManualOverride.has(doorId)) return;
           home.setDoorOpenById(doorId, open ? DOOR_SENSOR_OPEN_PCT : 0);
           renderPanel();
+          followDoorSwing(doorId);
         },
         getPresence: roomId => home.getPresence(roomId),
         getDoorOpenById: doorId => home.getDoorOpenById(doorId),
@@ -1598,6 +1599,7 @@
           if (doorManualOverride.has(doorId)) return;
           home.setDoorOpenById(doorId, open ? DOOR_SENSOR_OPEN_PCT : 0);
           renderPanel();
+          followDoorSwing(doorId);
         });
 
         ha.connect();
@@ -1660,6 +1662,37 @@
       //   3. Room       (selectedRoom set)                 — per-room light controls
       // The old "All On / All Off" footer buttons were removed; the footer now
       // holds the single Settings button (shown only on the Controls page).
+
+      // A sensor-driven swing animates over ~400ms, but renderPanel() reads the
+      // door's CURRENT angle, so calling it once at the start of the swing paints
+      // the pre-swing value and then never updates -- the label and slider freeze
+      // at a stale number while the door visibly moves. Track the swing until the
+      // scene reports it settled, refreshing just the label and slider in place
+      // (same idiom as the manual drag handler) rather than re-rendering the panel.
+      const DOOR_SWING_FOLLOW_MS = 700; // swing is ~400ms; tail covers easing + a slow frame
+      let doorFollowRaf = 0;
+      function followDoorSwing(doorId) {
+        cancelAnimationFrame(doorFollowRaf);
+        // Run for the swing's full duration plus a small tail rather than
+        // stopping on a repeated reading: easing makes the first frames of a
+        // swing round to the same integer, so a repeat-detector exits before
+        // the door has moved at all. Wall-clock bound, so it always terminates.
+        const until = performance.now() + DOOR_SWING_FOLLOW_MS;
+        const step = () => {
+          const pct = home.getDoorOpenById(doorId);
+          if (pct === null || pct === undefined) return;
+          const rounded = Math.round(pct);
+          const el = panelBody.querySelector('[data-action="door-open"]');
+          if (el) {
+            el.value = String(rounded);
+            const label = el.previousElementSibling;
+            if (label) label.textContent = `Open: ${rounded}%`;
+          }
+          if (performance.now() >= until) return;
+          doorFollowRaf = requestAnimationFrame(step);
+        };
+        doorFollowRaf = requestAnimationFrame(step);
+      }
 
       function renderPanel() {
         panelReady = true; // reached here => all panel deps are declared; safe
