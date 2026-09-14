@@ -9,7 +9,7 @@
  */
 
 import * as THREE from 'three';
-import { HouseLoader } from './house-loader.js';
+import { HouseLoader } from './house-loader.js?v=__VERSION__';
 
 export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------

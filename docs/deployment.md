@@ -405,39 +405,27 @@ let it be verified as a no-op before any version change was attempted.
 
 > ### ⚠️ The version is still pinned at r160, deliberately — read before bumping
 >
-> The module format no longer blocks an upgrade, but a **device constraint**
-> now does. **r163 removed WebGL 1 support**: from that revision the
-> `WebGLRenderer` constructor asks for `'webgl2'` and nothing else, and throws
-> when it cannot get one.
+> The module format no longer blocks an upgrade. An earlier revision of this
+> doc inferred, from `MAX_FRAGMENT_UNIFORM_VECTORS=256` (the WebGL **spec
+> minimum**) and a missing `KHR_parallel_shader_compile`, that the primary
+> target device — an Android phone — was WebGL1-only, and treated **r163**
+> (which removed WebGL 1 support entirely) as the ceiling. **That inference
+> was wrong.** The device was measured directly and reports `webgl2: true,
+> webgl1: false, version: "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+> maxFragUniforms: 256` — it has WebGL 2, not WebGL 1, and the low uniform
+> count is just this device's WebGL2 implementation, not a WebGL1 tell.
+> **WebGL 1 support is therefore not a real constraint on this device**, and
+> r163's removal of it is not a reason to stay below r163.
 >
-> A primary target device for this app — an Android phone — reports
-> `MAX_FRAGMENT_UNIFORM_VECTORS=256` (the WebGL **spec minimum**) and lacks
-> `KHR_parallel_shader_compile`, which together indicate a WebGL1-only device.
-> On r160 it gets a context, degrades to the `low` quality tier and works
-> normally. On r163+ it would get **nothing** — the constructor throws before
-> the tiering can degrade anything.
->
-> So bumping past r162 trades a working app on that phone for a newer library.
-> Do not treat the guard around `new THREE.WebGLRenderer` in
-> `src/home3d-scene.js` as making this safe: it converts a blank page into a
-> readable message, which is better, but the 3D home is still gone on that
-> device.
->
-> **The two ceilings, both verified against npm tarballs rather than release
-> notes:**
+> **The one ceiling that still matters, verified against npm tarballs rather
+> than release notes:**
 >
 > | | revision | why |
 > |---|---|---|
-> | Last with **WebGL 1** support | **r162** | r163 replaces the `[ 'webgl2', 'webgl', 'experimental-webgl' ]` fallback list with a hardcoded `const contextName = 'webgl2'`, and deletes the `WebGL1Renderer` class outright. `isWebGL2` occurrences go 85 → 1 in that one revision. |
 > | Last with a **minified ESM build** | **r185** | r186 drops *every* minified artefact at once (`three.module.min.js`, `three.core.min.js`, `three.webgpu.min.js`…). Vendoring r186 therefore costs about **+250 KB gzipped**. |
 >
-> These are 23 revisions apart, so the two questions are independent — and the
-> size penalty only applies from r186. **r162 ships a minified ESM build too**,
-> so staying WebGL1-compatible costs nothing on the wire.
->
-> In short: decide the WebGL 1 question first. If WebGL 1 must keep working,
-> **r162 is the ceiling** and there is no size cost. If it need not,
-> **r185** is the last revision that avoids the unminified penalty.
+> **r185 is the meaningful ceiling**: the last revision that avoids the
+> unminified size penalty, with no WebGL1 tradeoff in play.
 
 > **Verifying vendored files:** use `tar -tzf` on the npm tarball, not a CDN.
 > `https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.min.js` returns
