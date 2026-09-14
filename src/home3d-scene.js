@@ -3241,7 +3241,15 @@ export const Home3DScene = (() => {
       wallMeshes.forEach(({ mesh, nx, nz, outer }) => {
         if (!outer) return;
         const dot = nx * camDir.x + nz * camDir.z;
-        const targetOpacity = dot > 0.3 ? 0.05 : 1.0; // more see-through shell (was 0.12) — design intent: exterior walls fainter when facing camera
+        // `camDir` runs FROM the camera INTO the screen, and (nx,nz) is the wall's
+        // OUTWARD normal (verified: the shell is authored as a consistently-wound
+        // loop, so every outer normal points away from the house centre). A wall
+        // BETWEEN the camera and the interior therefore has its outward normal
+        // pointing back at the camera — ANTI-parallel to camDir — giving dot < 0.
+        // Fade those; leave the far side solid so the house still reads as a
+        // building rather than an open shell. Walls seen edge-on sit at dot ~= 0
+        // and stay solid, which is what keeps the side walls from popping.
+        const targetOpacity = dot < -0.3 ? 0.05 : 1.0; // more see-through shell (was 0.12) — design intent: exterior walls fainter when facing camera
         mesh.material.opacity += (targetOpacity - mesh.material.opacity) * 0.12;
         // BLACK-HALF FIX (scout-blackhalf): the living-room acoustic slat panel
         // meshes are a stack of coplanar transparent boxes registered here —
