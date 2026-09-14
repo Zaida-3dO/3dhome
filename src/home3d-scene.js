@@ -295,6 +295,14 @@ export const Home3DScene = (() => {
   function makeAshyOakTexture(widthM, depthM) {
     const PLANK_W_CM = 18.5;   // plank width  (E-W / U)
     const PLANK_L_CM = 121.5;  // plank length (N-S / V, the long axis)
+    // Knot/mineral-streak radius, in cm like every other dimension here (gibbs-knots
+    // fix, 2026-09-14): previously authored in raw canvas px, so the same knot covered
+    // MORE real-world area as the slab grew and pxPerCm shrank under the CAP below —
+    // a ~10cm blob in a big room instead of a subtle character mark. The drawn radius
+    // is kr * 2.2 (soft falloff), so kr = 0.23-0.46cm gives a ~1.0-2.0cm knot DIAMETER
+    // in every room regardless of slab size (target: ~1-2cm everywhere).
+    const KNOT_R_CM = 0.23;
+    const KNOT_R_CM_RAND = 0.23;
     const wCm = widthM * 100, dCm = depthM * 100;
 
     // ⚠️ SCALE — the canvas must map 1:1 to the SLAB extent (widthM x depthM), because
@@ -504,10 +512,12 @@ export const Home3DScene = (() => {
       }
 
       // Rare small knot / mineral streak (weathered-oak character) — low freq.
+      // Radius authored in CM (KNOT_R_CM above) and converted via pxPerCm, same as
+      // every other dimension in this texture — NOT raw px (gibbs-knots, 2026-09-14).
       if (rnd() < 0.12) {
         const kx = px + gap + rnd() * (pw - gap);
         const ky = py + rnd() * ph;
-        const kr = 1.4 + rnd() * 2.2;
+        const kr = (KNOT_R_CM + rnd() * KNOT_R_CM_RAND) * pxPerCm;
         const kg = g.createRadialGradient(kx, ky, 0, kx, ky, kr * 2.2);
         kg.addColorStop(0, `rgba(${clamp(GRAIN_DARK[0] - 30)},${clamp(GRAIN_DARK[1] - 30)},${clamp(GRAIN_DARK[2] - 28)},0.4)`);
         kg.addColorStop(1, "rgba(0,0,0,0)");
