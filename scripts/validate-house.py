@@ -330,9 +330,11 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
     if not sensors:
         return
 
-    # `sensors` is only expressible from schemaVersion 1.1 onward: roomsProfile
-    # is additionalProperties:false, so a 1.0 profile carrying it is rejected by
-    # the schema with a message that names the property but not the reason.
+    # The schema does NOT couple schemaVersion to `sensors` at all -- `sensors`
+    # is a declared property of roomsProfile, so a 1.0 profile carrying it
+    # passes schema validation cleanly. This check is the ONLY signal that a
+    # profile is declaring a version older than the feature it actually uses;
+    # deleting it would remove that signal entirely, not just make it redundant.
     version = str(rooms_doc.get("schemaVersion") or "")
     try:
         major, minor = (int(part) for part in version.split(".", 1))
@@ -342,7 +344,7 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
         report.warn(
             "rooms.json/schemaVersion",
             f"`sensors` needs schemaVersion 1.1 or newer, but this profile declares '{version}' -- "
-            "bump it, or the schema rejects the file as carrying an unknown property",
+            "bump it; the schema does not enforce this coupling, so this warning is the only check",
         )
 
     for rid in (sensors.get("presence") or {}):
@@ -396,7 +398,7 @@ def validate_target(target, schema):
 
 
 def main(argv):
-    args = [a for a in argv[1:] if a not in ("--strict", "--require-schema")]
+    args = [a for a in argv[1:] if a != "--strict"]
     strict = len(args) != len(argv[1:])
 
     if len(args) < 1:
