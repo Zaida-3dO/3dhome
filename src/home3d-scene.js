@@ -10,6 +10,9 @@
 
 import * as THREE from 'three';
 import { HouseLoader } from './house-loader.js';
+import {
+  insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, WALK_DEFAULTS
+} from './footstep-walk.js';
 
 export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------
@@ -2285,44 +2288,14 @@ export const Home3DScene = (() => {
       // the direction from looking arbitrary, which was the actual complaint.
       // If anything here ever needs to vary again, seed it; never Math.random().
 
-      // Is a point inside the room polygon? Ray casting. Used so a trail in an
-      // L-shaped room (the demo's study, for one) stays on that
-      // room's actual floor instead of crossing into the notch, which is the
-      // one way a floor decal betrays that it was placed from a bounding box.
-      const insidePoly = (poly, px, py) => {
-        let inside = false;
-        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-          const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
-          if (((yi > py) !== (yj > py)) &&
-              (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
-        }
-        return inside;
-      };
-
-      // How far you can walk from (x,y) along (dx,dy) before leaving the room,
-      // capped at `limit`. Sampled rather than solved analytically: the polygon
-      // is arbitrary (up to 8 verts here) and this runs a few dozen times at
-      // BUILD time only, so a clean 8cm sample beats an edge-intersection
-      // routine nobody can read.
-      const clearRun = (poly, x, y, dx, dy, limit) => {
-        const STEP = 8;
-        let t = 0;
-        while (t + STEP <= limit) {
-          if (!insidePoly(poly, x + dx * (t + STEP), y + dy * (t + STEP))) return t;
-          t += STEP;
-        }
-        return limit;
-      };
-
-      // Shoelace area in m², for sizing the trail to the room.
-      const polyAreaSqm = poly => {
-        let a = 0;
-        for (let i = 0; i < poly.length; i++) {
-          const p = poly[i], q = poly[(i + 1) % poly.length];
-          a += p[0] * q[1] - q[0] * p[1];
-        }
-        return Math.abs(a) / 2 / 10000;
-      };
+      // insidePoly / clearRun / polyAreaSqm / printCount / walkFootsteps all
+      // live in src/footstep-walk.js now (imported at the top of this file).
+      // They are pure arithmetic over a polygon with no THREE or DOM in them,
+      // and they were moved out so they could be tested: the step-back-and-
+      // turn-once branch inside walkFootsteps never runs on the houses that
+      // ship today (the count caps below always stop the walk first), so it
+      // needed a synthetic fixture to exercise it. See that module's header and
+      // scripts/test-footstep-turn.mjs. Rendering all stays here.
 
       // Every door you could walk through to ENTER this room, with the inward
       // direction and how much clear floor lies beyond it.
@@ -2358,10 +2331,9 @@ export const Home3DScene = (() => {
 
       Object.entries(ROOMS).forEach(([id, rm]) => {
         const poly = rm.poly;
-        const STEP_CM = 34;        // stride length, centimetres
-        const STRIDE_CM = 17;      // left/right offset from the walking line
-        const PRINT_CM = 26;       // long axis of one print
-        const PAD_CM = 55;         // how far in from the threshold the trail starts
+        // Stride constants live with the walk itself, so this file and the
+        // test cannot drift to two different ideas of a stride.
+        const { STEP_CM, STRIDE_CM, PRINT_CM, PAD_CM } = WALK_DEFAULTS;
 
         // Someone walks IN THROUGH A DOOR. That one idea fixes all three of the
         // things that looked wrong before: the direction stops being arbitrary
@@ -2424,47 +2396,27 @@ export const Home3DScene = (() => {
         // room such as an en suite or a bathroom should read as a few steps in
         // through the door, not as a march from one wall to the other.
         const areaSqm = poly ? polyAreaSqm(poly) : Math.abs((rm.x2 - rm.x1) * (rm.y2 - rm.y1)) / 10000;
-        const areaCap = (areaSqm < 5) ? 3 : (areaSqm < 9) ? 4 : 6;
-        const fits = Math.floor((run - 12) / STEP_CM) + 1;
-        const nPrints = Math.max(2, Math.min(areaCap, fits));
+        const nPrints = printCount(areaSqm, run, STEP_CM);
 
-        const geos = [];
-        let wx = sx, wy = sy, dirx = ux, diry = uy, turned = false;
-        for (let i = 0; geos.length < nPrints && i < nPrints + 4; i++) {
-          const perpx = -diry, perpy = dirx;
-          const side = (geos.length % 2 === 0) ? 1 : -1;
-          const fx = wx + perpx * side * (STRIDE_CM / 2);
-          const fy = wy + perpy * side * (STRIDE_CM / 2);
+        // WHERE the prints go — pure arithmetic, no geometry. See
+        // src/footstep-walk.js, including the turn-at-the-corner rule.
+        const { prints } = walkFootsteps({
+          poly,
+          bounds: { x1: rm.x1, y1: rm.y1, x2: rm.x2, y2: rm.y2 },
+          sx, sy, ux, uy, nPrints,
+          stepCm: STEP_CM, strideCm: STRIDE_CM,
+        });
+        if (!prints.length) return;
 
-          if (poly ? !insidePoly(poly, fx, fy)
-                   : (fx < rm.x1 || fx > rm.x2 || fy < rm.y1 || fy > rm.y2)) {
-            // The leg ran out. Rather than dropping this print and marching on
-            // regardless — which is what used to leave a trail petering out
-            // through a wall — step back and turn ONCE toward whichever side
-            // still has floor. That is what carries a trail around the corner
-            // of an L instead of out of it.
-            if (turned || !poly) break;
-            const bx = wx - dirx * STEP_CM, by = wy - diry * STEP_CM;
-            const lr = clearRun(poly, bx, by, -diry, dirx, 1200);
-            const rr = clearRun(poly, bx, by, diry, -dirx, 1200);
-            if (Math.max(lr, rr) < STEP_CM * 1.5) break;   // a dead end, not a corner
-            wx = bx; wy = by;
-            if (lr >= rr) { const t = dirx; dirx = -diry; diry = t; }
-            else { const t = dirx; dirx = diry; diry = -t; }
-            turned = true;
-            continue;
-          }
-
+        // ...and what they LOOK like. One flat quad per print.
+        const geos = prints.map(p => {
           const g = new THREE.PlaneGeometry(PRINT_CM * S * 0.62, PRINT_CM * S);
           // Lay flat, then turn the print to face along the walking line.
           g.rotateX(-Math.PI / 2);
-          g.rotateY(-Math.atan2(diry, dirx) + Math.PI / 2);
-          g.translate(tx(fx), 0.012, tz(fy));
-          geos.push(g);
-          wx += dirx * STEP_CM;
-          wy += diry * STEP_CM;
-        }
-        if (!geos.length) return;
+          g.rotateY(-Math.atan2(p.diry, p.dirx) + Math.PI / 2);
+          g.translate(tx(p.x), 0.012, tz(p.y));
+          return g;
+        });
 
         // Merge to ONE geometry so the whole trail is a single draw call.
         // Done by hand rather than via BufferGeometryUtils: every print is the

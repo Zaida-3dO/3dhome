@@ -139,6 +139,20 @@ jobs:
           # container stays healthy while showing the wrong home.
           set -euo pipefail
           node scripts/test-house-loader-strict.mjs
+      - name: Footstep turn-at-the-corner regression
+        run: |
+          # Asserts the step-back-and-turn-once rule in the footstep walk: in an
+          # L-shaped room the trail must round the corner rather than walk out
+          # through the wall. That branch CANNOT run on either house that ships
+          # today -- the trail length is pre-capped by room area, so every room
+          # stops on the count cap long before a print could land outside -- so
+          # it is correct code that nothing exercises, and a change to the caps,
+          # to STEP_CM, or a profile with one long thin room would be the first
+          # thing ever to run it, in front of a user. The test walks a synthetic
+          # L with the caps lifted and checks zero prints escape AND the
+          # direction actually changes. See the script's header.
+          set -euo pipefail
+          node scripts/test-footstep-turn.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail
