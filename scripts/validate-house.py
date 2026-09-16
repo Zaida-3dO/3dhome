@@ -398,7 +398,7 @@ def validate_target(target, schema):
 
 
 def main(argv):
-    args = [a for a in argv[1:] if a not in ("--strict", "--require-schema")]
+    args = [a for a in argv[1:] if a != "--strict"]
     strict = len(args) != len(argv[1:])
 
     if len(args) < 1:
