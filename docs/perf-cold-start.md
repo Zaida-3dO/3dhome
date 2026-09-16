@@ -7,10 +7,20 @@ Measured on a Radeon 780M (ANGLE/D3D11, `MAX_FRAGMENT_UNIFORM_VECTORS` 1024),
 the 10-room house, a **fresh browser per run** — reusing one browser warms the
 GPU shader cache and hides the entire effect.
 
+> ⚠️ **Every draw-call figure below the "shape of a cold start" section is a
+> PRE-CHANGE baseline, recorded 2026-09-01.** They are kept because they are the
+> measurements that justified the shadow-caster work, and because the *shape* of
+> the problem they describe is still correct. They are **not** current: room
+> lights became `SpotLight`s with a single 2D shadow map in `1f6b993`, so the
+> cubemap arithmetic they rest on no longer applies. See
+> [After the shadow-caster change](#after-the-shadow-caster-change-2026-09-16).
+
 ## The shape of a cold start
 
 Two blocking frames, not slow loading. Every resource fetch completes in under
 50 ms; `DOMContentLoaded` is ~150 ms.
+
+**Pre-change (2026-09-01), when each room light cast a cubemap:**
 
 | frame | draw calls | first time | every later time |
 |---|---:|---:|---:|
@@ -22,8 +32,43 @@ per-frame rendering and not JavaScript: 0% of the block is inside any GL call,
 and a CPU profile attributes it to the point where three.js first reads a
 program back from the driver.
 
-10 of the 11 shadow casters are `PointLight`s, and a PointLight shadow is a
-**6-face cubemap** — so the shadow frame builds ~60 shadow renders at once.
+At the time of that measurement, 10 of the 11 shadow casters were `PointLight`s,
+and a PointLight shadow is a **6-face cubemap** — so the shadow frame built ~60
+shadow renders at once. **This is the thing `1f6b993` changed**; see below.
+
+## After the shadow-caster change (2026-09-16)
+
+`1f6b993` converted the room casters to `SpotLight`s with a single 2D shadow
+map. Re-measured against the **real 10-room house** on the live deployment
+(v0.8.0, `houses/ope`), two independent cache-busted loads:
+
+| pass | render target | draw calls |
+|---|---|---:|
+| sun shadow | FBO 2048² | 240 |
+| room shadows (10 passes, one per room) | FBO 1024² | 633 |
+| beauty | screen | 408 |
+| **first frame total** | | **1,281** |
+
+**~4,491 → ~1,281 draw calls, roughly −71%** — exceeding the −62% measured on
+the 7-room demo house, which is the direction predicted (the real house has more
+casters, so the demo was a conservative floor).
+
+Two things make this trustworthy rather than merely encouraging:
+
+- **The instrument agrees with the old one where both measured.** The beauty
+  pass came out at 408–412 draws against this doc's ~410 — so the counter is
+  calibrated against the very figure it is being compared to.
+- **The conversion is proven by render-target geometry, not inferred.** Room
+  shadow maps render into a **1024×1024 square** framebuffer, ten times. A
+  three.js PointLight cubemap renders into a `w*4 × h*2` atlas — 4096×2048 for a
+  1024 map. A square target cannot be a cubemap.
+
+⚠️ **The cold-start *timing* half is still unverified.** Those draw counts are
+cache-independent and stand on their own, but the first-frame times behind them
+came from a warm shared browser. As this doc says at the top, a reused browser
+hides the entire effect — so the old ~30–45 s figure has **not** been re-measured
+and must not be treated as refuted. Closing that gap needs a fresh browser
+process per run.
 
 ## What actually helps
 
@@ -54,8 +99,8 @@ Two things it is easy to get wrong:
 
 ### Number of shadow-casting lights — the real lever
 
-Cost is linear in the number of room lights that cast, because each one is a
-separate cubemap:
+Cost is linear in the number of room lights that cast. **Pre-change (2026-09-01)**,
+when each caster was a separate cubemap:
 
 | casting | draws/frame | worst block |
 |---:|---:|---:|
@@ -63,6 +108,16 @@ separate cubemap:
 | 5 | 2,447 | ~6–7 s |
 | 2 | 1,410 | ~3–4 s |
 | 0 | 649 | ~2–3 s |
+
+The linear relationship still holds after `1f6b993`, but the **per-caster
+constant is now far smaller** — a 2D map instead of six cube faces. Stock 10
+casters measured 1,281 draws on the real house rather than 4,491, so treat the
+absolute numbers in that table as historical and the *shape* as current.
+
+This also matters when reading a measurement: a room that is **off** zeroes its
+caster's intensity, and three.js then skips that shadow render entirely. A dark
+house measures the bottom rung of this table no matter what else is true — which
+is why a "fast" measurement of an unlit house proves nothing.
 
 ## What does NOT help
 
