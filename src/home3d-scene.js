@@ -3177,8 +3177,17 @@ export const Home3DScene = (() => {
     // which is far worse than the soft image the ramp was trying to fix. On
     // expiry the scene simply stays at the start ratio and goes idle.
     const RAMP_DEADLINE_MS = 6000;
+    // Ratios below this apart are the same ratio. Without it, a
+    // basePixelRatio fractionally above 1 (some browsers report
+    // 1.0000000149011612) makes RAMP_START collapse to exactly 1 via
+    // Math.min(1, basePixelRatio), so ceilingRatio === basePixelRatio never
+    // holds and a full self-driven ramp runs for a ~1.5e-8 resolution gain —
+    // pure wasted draw calls, no visible change. Shared with applyPixelRatio
+    // below so "done ramping" and "no-op re-apply" agree on what "the same
+    // ratio" means.
+    const RATIO_EPSILON = 0.001;
     let ceilingRatio = basePixelRatio > RAMP_START ? RAMP_START : basePixelRatio;
-    let rampDone = ceilingRatio >= basePixelRatio;
+    let rampDone = ceilingRatio >= basePixelRatio - RATIO_EPSILON;
     let rampStartedAt = 0;        // set on the first rendered frame
     let rampGoodFrames = 0;
     let appliedRatio = ceilingRatio;
@@ -3199,7 +3208,7 @@ export const Home3DScene = (() => {
     // drawing buffer, so re-applying the same value every frame would be a
     // per-frame realloc rather than a no-op.
     function applyPixelRatio(next) {
-      if (Math.abs(next - appliedRatio) < 0.001) return;
+      if (Math.abs(next - appliedRatio) < RATIO_EPSILON) return;
       const w = container.clientWidth, h = container.clientHeight;
       if (w === 0 || h === 0) return; // detached/collapsed: leave it for resize
       appliedRatio = next;
