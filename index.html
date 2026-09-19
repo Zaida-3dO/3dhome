@@ -2076,6 +2076,23 @@
         var failedHouse = (e && typeof e.houseId === 'string') ? e.houseId : null;
 
         var loading = window.__home3dLoading;
+
+        // A WebGL failure has ALREADY drawn its own message into the scene
+        // container, and that message is strictly better than anything this
+        // handler can say: it names which of the two WebGL failures happened
+        // and what to do about it. Our job is therefore to GET OUT OF ITS WAY.
+        //
+        // This is the bug a real user hit. The loading card is position:fixed
+        // at z-index 9999 and was still up, so it covered the good message
+        // completely and then repurposed itself into "Could not load your
+        // home / Check the browser console for details" -- sending someone on
+        // a phone to a console that had the real answer in it. Dismissing the
+        // card reveals the message underneath rather than replacing it.
+        if (e && e.code === 'WEBGL_UNAVAILABLE') {
+          if (loading && !loading.isDone()) loading.dismiss();
+          return;
+        }
+
         if (loading && !loading.isDone()) {
           // The overlay is still up: repurpose it in place. It is already a
           // full-screen, readable, correctly-coloured card, so reusing it
