@@ -153,6 +153,19 @@ jobs:
           # direction actually changes. See the script's header.
           set -euo pipefail
           node scripts/test-footstep-turn.mjs
+      - name: WebGL failure is classified correctly
+        run: |
+          # Asserts which of the two WebGL failures we tell the user about. Out
+          # of graphics memory (usually a lot of open tabs) is fixed by closing
+          # some; no usable GPU is not, and closing tabs does nothing. The
+          # dangerous direction is the FALSE POSITIVE: telling someone with a
+          # broken GPU to close tabs is confident, actionable and wrong. The
+          # string three.js actually throws once it has dropped the reason --
+          # "Error creating WebGL context." -- reaches the matcher as a fallback
+          # on every failure of either kind, so if it ever starts matching, every
+          # broken-GPU user gets the tabs advice. That case is pinned here.
+          set -euo pipefail
+          node scripts/test-webgl-reason.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

@@ -2869,6 +2869,12 @@ export const Home3DScene = (() => {
     // either. Passing our own canvas is the only place we can attach a
     // listener and keep the reason.
     const glCanvas = document.createElement('canvas');
+    // three.js's own createCanvasElement sets this, and supplying a canvas
+    // replaces that default -- so without it the canvas is display:inline and
+    // carries a baseline descender, measured at 4px of extra scrollHeight
+    // (904 against a clientHeight of 900). Harmless here only because body
+    // sets overflow:hidden; an embedded host without it would see the gap.
+    glCanvas.style.display = 'block';
     let contextErrorReason = '';
     glCanvas.addEventListener('webglcontextcreationerror', (ev) => {
       // Both attempts below share this canvas, so the last reason wins --
