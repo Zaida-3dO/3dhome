@@ -2626,14 +2626,43 @@ export const Home3DScene = (() => {
    * class: this runs precisely when the page is already in trouble, so it must
    * not depend on any stylesheet, asset or font having loaded.
    */
-  function webglUnavailable(container, cause) {
+  function webglUnavailable(container, cause, reason) {
+    // Which of the two genuinely different failures is this?
+    //
+    // Chrome tells us, and the difference decides whether our advice is
+    // useful or actively wrong. "Web page caused context loss and was
+    // blocked" means the browser ran out of graphics memory -- typically a
+    // pile of open tabs each holding contexts -- and closing some fixes it
+    // within seconds. The driver/hardware-acceleration advice is useless
+    // there, and was what a real user was shown while the actual cause sat in
+    // the console.
+    //
+    // Matching is on the reason string the browser supplied, never on a
+    // guess: with no reason string we fall through to the general wording,
+    // which is the honest answer when we were not told.
+    // Each alternative is a phrase that only appears when the cause is
+    // exhaustion. A bare "contexts" was deliberately NOT used: it matches
+    // plenty of messages that mean something else entirely, and a wrong
+    // "close some tabs" is worse than the general wording.
+    const reasonText = String(reason || (cause && cause.message) || '');
+    const outOfMemory =
+      /context loss|too many (?:active )?(?:webgl )?contexts|out of memory|memory exhaust/i
+        .test(reasonText);
+
     try {
       if (container) {
         const box = document.createElement('div');
         box.className = 'home3d-webgl-unavailable';
         box.setAttribute('role', 'alert');
         box.style.cssText = [
-          'position:absolute', 'inset:0', 'display:flex', 'flex-direction:column',
+          // z-index matters: the page's cold-start loading card is
+          // position:fixed with z-index 9999 and is STILL UP at this point
+          // (the scene never reached onReady, so nothing dismissed it).
+          // Without a higher stacking order this message paints correctly and
+          // is covered completely -- which is exactly what happened in the
+          // field.
+          'position:absolute', 'inset:0', 'z-index:10001',
+          'display:flex', 'flex-direction:column',
           'align-items:center', 'justify-content:center', 'gap:10px',
           'padding:24px', 'box-sizing:border-box', 'text-align:center',
           'background:#0f0f1a', 'color:#e8e8f0',
@@ -2641,22 +2670,44 @@ export const Home3DScene = (() => {
         ].join(';');
 
         const h = document.createElement('div');
-        h.textContent = 'This device cannot display the 3D home';
+        h.textContent = outOfMemory
+          ? 'The browser ran out of graphics memory'
+          : 'This device cannot display the 3D home';
         h.style.cssText = 'font-size:18px;font-weight:600';
 
         const p = document.createElement('div');
-        p.textContent =
-          'The browser could not start WebGL, which this view needs to draw ' +
-          'anything at all. It is usually a graphics driver that is switched ' +
-          'off or out of date rather than a fault with the home itself.';
+        p.textContent = outOfMemory
+          // "Usually" is doing honest work here. Closing tabs is a reliable
+          // fix; the number needed is not predictable, because anything else
+          // holding a graphics context counts too. Naming a number would be
+          // inventing precision we do not have.
+          ? 'The browser refused to give this view the graphics context it ' +
+            'needs to draw, because too much is already in use. That is ' +
+            'usually a lot of open tabs rather than a fault with your device ' +
+            'or with the home itself.'
+          : 'The browser could not start WebGL, which this view needs to draw ' +
+            'anything at all. It is usually a graphics driver that is switched ' +
+            'off or out of date rather than a fault with the home itself.';
         p.style.cssText = 'max-width:44ch;opacity:0.85';
 
+        const action = document.createElement('div');
+        if (outOfMemory) {
+          action.textContent = 'Close some tabs or other apps, then reload.';
+          action.style.cssText = 'max-width:44ch;font-weight:600';
+        }
+
         const hint = document.createElement('div');
-        hint.textContent =
-          'Try another browser, or check that hardware acceleration is enabled.';
+        hint.textContent = outOfMemory
+          // Kept, but demoted: if closing tabs did not do it, this is the next
+          // thing worth trying.
+          ? 'If that does not help, try another browser, or check that ' +
+            'hardware acceleration is enabled.'
+          : 'Try another browser, or check that hardware acceleration is enabled.';
         hint.style.cssText = 'max-width:44ch;opacity:0.6;font-size:13px';
 
-        box.appendChild(h); box.appendChild(p); box.appendChild(hint);
+        box.appendChild(h); box.appendChild(p);
+        if (outOfMemory) box.appendChild(action);
+        box.appendChild(hint);
         if (getComputedStyle(container).position === 'static') {
           container.style.position = 'relative';
         }
@@ -2666,9 +2717,19 @@ export const Home3DScene = (() => {
       // A failure to render the failure message must never replace the real
       // error with a less informative one.
     }
-    console.error('[home3d] WebGL is unavailable; cannot create a renderer.', cause);
+    console.error(
+      '[home3d] WebGL is unavailable; cannot create a renderer.',
+      reasonText ? '(reason: ' + reasonText + ')' : '(no reason given)',
+      cause
+    );
     const err = new Error('Home3DScene: WebGL is unavailable in this browser.');
     err.cause = cause;
+    // Carried for the page's startup-failure handler: it must know this
+    // message is already on screen so it does not cover it with the generic
+    // one. `webglReason` is preserved for diagnostics, since the browser only
+    // ever says it once.
+    err.webglReason = reasonText;
+    err.webglOutOfMemory = outOfMemory;
     err.code = 'WEBGL_UNAVAILABLE';
     return err;
   }
@@ -2797,9 +2858,27 @@ export const Home3DScene = (() => {
     // still gets a context (r160 tries webgl2, then webgl, then
     // experimental-webgl) and degrades to the 'low' tier, which is why it
     // works today. This guard is for the genuinely context-less case.
+    // WHY WE SUPPLY THE CANVAS: the browser explains *why* it refused a
+    // context exactly once, in the `statusMessage` of a
+    // `webglcontextcreationerror` event fired at the canvas. three.js listens
+    // for that event, console.errors the reason, and then throws an Error
+    // whose message has dropped it ("Error creating WebGL context."). So the
+    // one fact that decides which advice is useful -- out of graphics memory
+    // vs. no GPU at all -- is visible in the console and unreachable from the
+    // throw. The event does not bubble, so it cannot be caught on document
+    // either. Passing our own canvas is the only place we can attach a
+    // listener and keep the reason.
+    const glCanvas = document.createElement('canvas');
+    let contextErrorReason = '';
+    glCanvas.addEventListener('webglcontextcreationerror', (ev) => {
+      // Both attempts below share this canvas, so the last reason wins --
+      // which is the one belonging to the failure we ultimately report.
+      if (ev && ev.statusMessage) contextErrorReason = String(ev.statusMessage);
+    }, false);
+
     let ren;
     try {
-      ren = new THREE.WebGLRenderer({ antialias });
+      ren = new THREE.WebGLRenderer({ antialias, canvas: glCanvas });
     } catch (err) {
       // Retry once without antialiasing. three.js distinguishes "your selected
       // attributes were refused" from "no context at all" by asking a second
@@ -2814,12 +2893,12 @@ export const Home3DScene = (() => {
           err
         );
         try {
-          ren = new THREE.WebGLRenderer({ antialias: false });
+          ren = new THREE.WebGLRenderer({ antialias: false, canvas: glCanvas });
         } catch (err2) {
-          throw webglUnavailable(container, err2);
+          throw webglUnavailable(container, err2, contextErrorReason);
         }
       } else {
-        throw webglUnavailable(container, err);
+        throw webglUnavailable(container, err, contextErrorReason);
       }
     }
     ren.setSize(W, H);
