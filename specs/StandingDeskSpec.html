@@ -69,8 +69,12 @@
    from a flat foot bar that runs the full depth front-to-back, a
    horizontal crossbar under the top between the two legs, and a small
    control panel on the front edge. Illustrative default size 120 x 80 cm.
-   The height slider is constrained to [minHeight, maxHeight] and the
-   column visibly telescopes as it moves.
+   The height slider drives `topHeight` (floor to the underside of the
+   desk top), constrained to [minHeight, maxHeight]; the builder's
+   DEFAULTS.width/depth/height instead describe the OVERALL ENVELOPE at
+   the default pose (height = topHeight + topThickness), per the
+   furniture contract's bbox-vs-DEFAULTS check. The column visibly
+   telescopes as topHeight moves.
 
    The geometry itself is NOT built here -- it lives in
    src/furniture/standing-desk.js (build / TYPE / DEFAULTS), loaded above as
@@ -85,7 +89,7 @@
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "width": 120,
   "depth": 80,
-  "height": 96,
+  "topHeight": 96,
   "minHeight": 72,
   "maxHeight": 120,
   "topThickness": 2.5,
@@ -97,12 +101,16 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // The builder's own frame already matches the furniture contract (metres,
 // back at z=0, bottom at y=0), so the params object IS the "differs from
 // DEFAULTS" params a house's furniture[].params would carry -- deskParams()
-// below is reused by both buildDesk and the Copy-JSON button.
+// below is reused by both buildDesk and the Copy-JSON button. `width`/`depth`
+// are passed through even though the builder's own DEFAULTS treat them as
+// the built envelope, not an input it reads back -- they still work as
+// overrides for a wider/narrower/deeper desk, unrelated to the sit-stand
+// `topHeight` axis.
 function deskParams(t) {
   return {
     width: t.width,
     depth: t.depth,
-    height: t.height,
+    topHeight: t.topHeight,
     minHeight: t.minHeight,
     maxHeight: t.maxHeight,
     topThickness: t.topThickness,
@@ -139,7 +147,7 @@ function diffFromDefaults(params) {
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const { clampHeight } = window.FurnitureStandingDesk;
-  const clamped = clampHeight(t.height, t.minHeight, t.maxHeight);
+  const clamped = clampHeight(t.topHeight, t.minHeight, t.maxHeight);
   const [copied, setCopied] = React.useState(false);
   const copyAsJSON = () => {
     const json = JSON.stringify({ type: window.FurnitureStandingDesk.TYPE, params: diffFromDefaults(deskParams(t)) }, null, 2);
@@ -162,17 +170,20 @@ function App() {
               <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
               <tr><td>Width</td><td className="num">{t.width.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Depth</td><td className="num">{t.depth.toFixed(0)}</td><td><b>Variable</b></td></tr>
-              <tr><td>Height (requested)</td><td className="num">{t.height.toFixed(0)}</td><td><b>Variable</b> — sit/stand slider</td></tr>
-              <tr><td>Height (clamped)</td><td className="num">{clamped.toFixed(0)}</td><td>Clamped to [min, max]</td></tr>
+              <tr><td>Top height (requested)</td><td className="num">{t.topHeight.toFixed(0)}</td><td><b>Variable</b> — sit/stand slider</td></tr>
+              <tr><td>Top height (clamped)</td><td className="num">{clamped.toFixed(0)}</td><td>Clamped to [min, max]</td></tr>
               <tr><td>Min height (sit)</td><td className="num">{t.minHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Max height (stand)</td><td className="num">{t.maxHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Top thickness</td><td className="num">{t.topThickness.toFixed(1)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Overall envelope height <span style={{opacity:0.6}}>(DEFAULTS.height)</span></td><td className="num">{(clamped + t.topThickness).toFixed(1)}</td><td>Derived: topHeight + topThickness</td></tr>
             </tbody>
           </table>
           <div className="legend">
-            The height requested from the slider is clamped into [minHeight, maxHeight] before it reaches the geometry
+            The top height requested from the slider is clamped into [minHeight, maxHeight] before it reaches the geometry
             (build / clampHeight in src/furniture/standing-desk.js) — the same clamp a Home Assistant height entity would be
-            subject to once the desk is placed in a room and bound (out of scope for this spec — see item 78f2b614).
+            subject to once the desk is placed in a room and bound (out of scope for this spec — see item 78f2b614). The
+            builder's own DEFAULTS.height is the overall envelope at the default pose (topHeight + topThickness), which is
+            what the furniture contract's bbox check measures — not topHeight alone.
           </div>
         </div>
 
@@ -199,7 +210,7 @@ function App() {
           <ThreeView
             t={t}
             buildModel={buildDesk}
-            heightOf={tt => clampHeight(tt.height, tt.minHeight, tt.maxHeight) * 0.01 + tt.topThickness * 0.01}
+            heightOf={tt => clampHeight(tt.topHeight, tt.minHeight, tt.maxHeight) * 0.01 + tt.topThickness * 0.01}
           />
         </div>
       </div>
@@ -214,8 +225,8 @@ function App() {
           onChange={v => setTweak('topThickness', v)} />
 
         <TweakSection label="Sit ↔ Stand" />
-        <TweakSlider label="Height" value={t.height} min={t.minHeight} max={t.maxHeight} step={1} unit="cm"
-          onChange={v => setTweak('height', v)} />
+        <TweakSlider label="Top height" value={t.topHeight} min={t.minHeight} max={t.maxHeight} step={1} unit="cm"
+          onChange={v => setTweak('topHeight', v)} />
         <TweakSlider label="Min height (sit)" value={t.minHeight} min={55} max={95} step={1} unit="cm"
           onChange={v => setTweak('minHeight', v)} />
         <TweakSlider label="Max height (stand)" value={t.maxHeight} min={100} max={140} step={1} unit="cm"
