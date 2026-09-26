@@ -3698,7 +3698,7 @@ export const Home3DScene = (() => {
     // builds nothing at all until setFurnitureVisible(true) asks for it.
     let furnitureResult = null;
     let furnitureStarted = false;
-    const furnitureTimeline = { start: null, attachedAt: null, stats: null };
+    const furnitureTimeline = { start: null, buildStart: null, buildEnd: null, attachedAt: null, stats: null };
     function attachFurniture(result) {
       furnitureResult = result;
       result.root.visible = furnitureVisible;
@@ -3726,9 +3726,14 @@ export const Home3DScene = (() => {
         precompileDone,
         modulesLoaded: furnitureModules,
         isDisposed: () => _disposed,
-        build: builders => buildFurnitureSync(THREE, furnitureItems, builders, {
-          tx, tz, quality, walls: WALLS
-        }),
+        build: builders => {
+          furnitureTimeline.buildStart = performance.now();
+          const result = buildFurnitureSync(THREE, furnitureItems, builders, {
+            tx, tz, quality, walls: WALLS
+          });
+          furnitureTimeline.buildEnd = performance.now();
+          return result;
+        },
         renderer: ren,
         camera: cam,
         scene,
@@ -4690,8 +4695,11 @@ export const Home3DScene = (() => {
           attached: !!furnitureResult,
           visible: furnitureVisible,
           startedAt: furnitureTimeline.start,
+          buildStart: furnitureTimeline.buildStart,
+          buildEnd: furnitureTimeline.buildEnd,
           attachedAt: furnitureTimeline.attachedAt,
           stats: furnitureTimeline.stats,
+          programs: ren.info && ren.info.programs ? ren.info.programs.length : null,
           warnings: furnitureResult ? furnitureResult.warnings.slice() : []
         };
       },

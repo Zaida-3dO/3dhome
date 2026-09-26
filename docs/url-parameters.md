@@ -26,6 +26,7 @@ except where noted. Unknown parameters are ignored.
 | [`camera`](#camera) | preset name | unset | Initial camera pose |
 | [`shadows`](#shadows) | `auto` \| `low` \| `off` | mode-dependent | Shadow quality |
 | [`fps`](#fps) | integer | `15` preview / `60` else | Frame-rate cap |
+| [`furniture`](#furniture) | `0` \| `false` \| `off` | shown | Start with the house's furniture hidden and unbuilt |
 | [`debug`](#debug) | `1` | off | Eruda mobile DevTools + error banner |
 | [`debugWalls`](#debugwalls) | `1` \| `true` | off | Wall-number overlay |
 | [`grid`](#grid) | `1` \| `true` | off | Coordinate grid overlay |
@@ -273,6 +274,17 @@ An explicit `?shadows=` value overrides the mode default in every mode.
 Defaults to `15` in preview mode and `60` otherwise. A non-integer value falls
 back to that default. Combined with `?shadows=`, this is the A/B knob for power
 and quality tuning.
+
+### `furniture`
+
+`?furniture=0` (also `false` or `off`) starts the scene with the profile's
+`furniture[]` hidden. Nothing is built or compiled either, so it is also the
+A/B knob for what the furniture costs. Any other value, or none, shows it.
+
+The Settings panel's **Show furniture** switch toggles the same thing at
+runtime: it hides every furniture mesh and its shadow, and turning it on in a
+`?furniture=0` session builds the furniture then. The switch only appears for
+a house that has furniture.
 
 ### `_` (cache bust)
 

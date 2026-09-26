@@ -1246,7 +1246,15 @@
         // the canvas cannot be read back (preserveDrawingBuffer:false).
         wallFadeDebug: () => home.getWallFadeDebug(),
         // What the furniture built and when it attached (see getFurnitureInfo).
-        furniture: () => home.getFurnitureInfo()
+        furniture: () => home.getFurnitureInfo(),
+        // Every room's lights on or off, for measuring: a room whose lights
+        // are off zeroes its shadow caster and three skips that shadow pass,
+        // so a dark house measures the cheapest frame there is
+        // (docs/perf-cold-start.md).
+        allLights: on => {
+          home.roomIds.forEach(id => { home.lightState[id].main.on = !!on; });
+          home.updateLights();
+        }
       };
 
       // Dev-only wall-numbering debug overlay -- SINGLE call site, fully

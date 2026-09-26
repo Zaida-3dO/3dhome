@@ -489,6 +489,46 @@ same forward-compatibility rule `decor` follows.
 **Rugs and fitted carpet are not furniture.** Use the room's `rug` (with
 `inset: 0` for a fitted carpet).
 
+#### How furniture renders
+
+`src/furniture.js` builds each item with its builder and places it: the group
+sits at the item's back-centre, `elevation` cm up, turned by `-rotation` about
+the vertical (plan rotation is clockwise, three.js's is anticlockwise).
+`src/furniture/merge.js` then folds every room's parts into a few **buckets**:
+
+- **Opaque parts** (`matte`, `gloss`, `metal`) become one vertex-coloured mesh
+  per room, finish and fade wall. All the matte furniture in a room is one draw
+  whatever its colours.
+- **Kept parts** (`glass`, `mirror`, `emissive`, or anything marked `keep`)
+  become one mesh per room, finish, colour and fade wall, with a real
+  material. All of a room's glass of one colour is one draw, and so are all its
+  screens of one colour.
+
+**Shadows.** Furniture meshes receive shadows but never cast them directly.
+Each furnished room instead gets one **shadow proxy**: a copy of the
+geometry of that room's casters, drawn with a material that writes neither
+colour nor depth, so it is invisible in the picture and casts in every shadow
+pass. An item casts when it stands low (`elevation` under 30 cm) and is at
+least 40 cm tall; wall-hung things and glass do not. A proxy over 15,000
+triangles, or a house over 60,000 in all (largest rooms first), is built from
+the builders' `detail: 'low'` output instead. No proxies are built on the low
+GPU tier, or when the scene has no shadows at all.
+
+**Fade.** An item fades with **one** wall, chosen by `fade` (above). It fades
+exactly as the wall does. Glass never fades: the wall fade drives opacity back
+to fully opaque, which would turn glass solid, so glass keeps its own opacity,
+as window glass does.
+
+**The low GPU tier** asks every builder for `detail: 'low'` and drops
+`priority: "minor"` items.
+
+**Timing.** Furniture is attached after the house's own shader precompile has
+finished, already compiled. It appears one frame later and never delays the
+first picture. `?furniture=0` hides it (see `docs/url-parameters.md`).
+
+**Clicks.** Furniture is not clickable. A click on a piece of furniture selects
+the room it stands in, as a click on the floor there would.
+
 #### Types, builders and the registry
 
 A type is drawn by a builder module, `src/furniture/<module>.js`.
@@ -1038,7 +1078,8 @@ says minors are additive.
 ### What the engine exports about the loaded house
 
 `Home3DScene.ROOMS`, `.LIGHTS`, `.WALL_SEGMENTS_WORLD`, `.DOOR_LABELS_WORLD`,
-`.FOOTPRINT_BOUNDS`, `.COORD_TRANSFORM`, `.WALL_HEIGHT` and `.HOUSE` describe
+`.FOOTPRINT_BOUNDS`, `.COORD_TRANSFORM`, `.WALL_HEIGHT`, `.FURNITURE` (the
+compiled placements) and `.HOUSE` describe
 **the house currently loaded**. They are consumed by the debug overlays in
 `src/overlays/` and by embedders. The object identity is stable, so a reference
 captured at load time stays valid — but they are empty until a house is bound,
