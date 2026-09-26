@@ -265,6 +265,46 @@ jobs:
           # back-to-wall (z=0) with a distinct anatomy from the corn plant.
           set -euo pipefail
           node scripts/test-plant-builder.mjs
+      - name: Bed builder (channel-tufted headboard)
+        run: |
+          # Asserts src/furniture/bed.js against the generic furniture
+          # contract (bbox vs DEFAULTS within 0.5cm, x centred, bottom y=0,
+          # back z=0, finish/keep tags, low <= full triangles -- already
+          # covered for every registered type by test-furniture-core.mjs
+          # below) plus the bed-specific behaviour a screenshot cannot pin:
+          # the headboard's vertical padded channels are evenly spaced,
+          # flush with the panel edges and butted together with only a small
+          # crease between neighbours (not thin poles with wide gaps), each
+          # standing proud of the flat backing; `height` is honoured directly
+          # as the headboard height, never shrinking the envelope below the
+          # base+mattress stack; duvet:false removes the duvet mesh; low
+          # detail drops the pillows; the pillows sit at the HEADBOARD end,
+          # not poking out of the duvet at the foot; a non-default size still
+          # builds coherently with the back at z=0; and headboard/base/
+          # mattress colours land on distinct parts.
+          set -euo pipefail
+          node scripts/test-bed.mjs
+      - name: Digital piano builder (piano, bench, ottoman -- every preset)
+        run: |
+          # Asserts src/furniture/digital-piano.js (multi-type: digital-piano,
+          # piano-bench, ottoman) against the generic furniture contract for
+          # all three (already covered for every registered type by
+          # test-furniture-core.mjs below) plus the type-specific behaviour a
+          # screenshot cannot pin: the piano's white/black key strips (black
+          # dropped at low detail) sit in the front half of the item, the
+          # overall height stays pinned to DEFAULTS.height across a range of
+          # music-rest heights, the stand is not the metal finish (which reads
+          # dark grey with no environment map) and the music rest leans AWAY
+          # from the player rather than into their space; BOTH piano-bench
+          # baseStyle presets ('x' and 'column') build to the same bbox using
+          # genuinely different geometry and a non-metal base; and the
+          # ottoman's channel-tufted lid is evenly spaced, flush with the lid
+          # edges, and STANDS PROUD of the flat lid top (round face up) on
+          # exactly 4 legs, with the low-detail build under 200 triangles.
+          # Builds every preset this module exports, real three.js geometry
+          # from the vendored module.
+          set -euo pipefail
+          node scripts/test-digital-piano.mjs
       - name: WebGL failure is classified correctly
         run: |
           # Asserts which of the two WebGL failures we tell the user about. Out

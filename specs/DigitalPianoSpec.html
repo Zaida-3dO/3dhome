@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digital Piano Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  pre.json { font-size:10px; background:#f7f5f0; border:1px solid #ece8e0; border-radius:4px; padding:8px; margin-top:10px; white-space:pre-wrap; word-break:break-all; }
+  .note { font-size:11px; opacity:0.7; margin-top:10px; }
+  @media (max-width: 760px) {
+    body { padding:12px; }
+    .grid { grid-template-columns:1fr; }
+    #c3d { height:420px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- The actual builder module (src/furniture/digital-piano.js) is loaded as a
+     real ES module, dynamically, from the classic/Babel script below -- this
+     page is a spec for the REAL furniture builders, not a reimplementation of
+     their geometry. `window.THREE` (the UMD build the scripts above already
+     share) is the injected THREE the builder contract requires; both this
+     build and the one behind the `three` import map are r160. -->
+<script type="module">
+  import * as M from '../src/furniture/digital-piano.js';
+  window.__digitalPianoModule = M;
+  window.dispatchEvent(new Event('__digital_piano_module_ready'));
+</script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   DIGITAL PIANO SPEC   ·   stage piano + bench + ottoman
+
+   Plan of record: plan-furniture-system-r2.md (PR8). Builder module:
+   src/furniture/digital-piano.js, multi-type (`digital-piano`, `piano-bench`,
+   `ottoman`).
+
+   Three independent types, switched with a segmented control:
+
+     DIGITAL PIANO — a generic white 88-key stage piano on a white stand,
+     with a music rest. Default ~138 x 46 x 97.
+
+     PIANO BENCH — a white padded bench on an adjustable-height base, either
+     an X-frame or a column. Default ~76 x 34 x 50.
+
+     OTTOMAN — a simple channel-tufted-lid ottoman on four short legs,
+     included alongside the other two as a cheap third type. Default
+     ~92 x 46 x 40, teal velvet.
+
+   All three are built by calling the REAL builder
+   (window.__digitalPianoModule.TYPES[type].build), not a page-local copy --
+   so this page can never drift from what the house loader actually draws.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "itemType": "digital-piano",
+
+  "pianoWidth": 138,
+  "pianoDepth": 46,
+  "pianoHeight": 97,
+  "keybedHeight": 82,
+  "restHeight": 15,
+  "bodyColor": "#f5f5f2",
+  "standColor": "#f0f0ec",
+
+  "benchWidth": 76,
+  "benchDepth": 34,
+  "benchHeight": 50,
+  "baseStyle": "x",
+  "seatColor": "#f7f6f2",
+  "baseColor": "#e9e8e3",
+
+  "ottomanWidth": 92,
+  "ottomanDepth": 46,
+  "ottomanHeight": 40,
+  "channelCount": 5,
+  "ottomanColor": "#2e6e6b",
+  "legColor": "#3a2f28",
+
+  "detail": "full"
+}/*EDITMODE-END*/;
+
+// Set by App below, right after mount -- see the note beside its use in
+// buildItemModel for why a plain window global would go stale here.
+let reportTriangles = null;
+
+// ============== Model: calls the REAL builder module ==============
+function buildItemModel(t, group, THREE, ctx) {
+  const mod = window.__digitalPianoModule;
+  if (!mod) return; // module still loading; the effect below re-fires once it's ready
+
+  let built, heightM;
+  if (t.itemType === 'digital-piano') {
+    const impl = mod.TYPES['digital-piano'];
+    const params = Object.assign({}, impl.DEFAULTS, {
+      width: t.pianoWidth, depth: t.pianoDepth, height: t.pianoHeight,
+      keybedHeight: t.keybedHeight, restHeight: t.restHeight,
+      bodyColor: t.bodyColor, standColor: t.standColor
+    });
+    built = impl.build(THREE, params, { detail: t.detail });
+    heightM = t.pianoHeight * 0.01;
+  } else if (t.itemType === 'piano-bench') {
+    const impl = mod.TYPES['piano-bench'];
+    const params = Object.assign({}, impl.DEFAULTS, {
+      width: t.benchWidth, depth: t.benchDepth, height: t.benchHeight,
+      baseStyle: t.baseStyle, seatColor: t.seatColor, baseColor: t.baseColor
+    });
+    built = impl.build(THREE, params, { detail: t.detail });
+    heightM = t.benchHeight * 0.01;
+  } else {
+    const impl = mod.TYPES['ottoman'];
+    const params = Object.assign({}, impl.DEFAULTS, {
+      width: t.ottomanWidth, depth: t.ottomanDepth, height: t.ottomanHeight,
+      channelCount: t.channelCount, color: t.ottomanColor, legColor: t.legColor
+    });
+    built = impl.build(THREE, params, { detail: t.detail });
+    heightM = t.ottomanHeight * 0.01;
+  }
+  // Every type's frame has its back at z=0; centre it on the view target the
+  // same way every other free-standing spec page does.
+  const b = new THREE.Box3().setFromObject(built);
+  built.position.z = -(b.min.z + b.max.z) / 2;
+  group.add(built);
+  ctx.heightM = heightM;
+
+  let tris = 0;
+  built.traverse(o => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  // buildItemModel runs inside ThreeView's OWN useEffect (spec-three.jsx),
+  // which fires after App has already committed -- writing a plain window
+  // global here and reading it from App's JSX (as the first cut of this page
+  // did) is stale, since nothing then tells App to re-render. Calling this
+  // setter (wired up in App below) is what actually gets the number on
+  // screen.
+  if (reportTriangles) reportTriangles(tris);
+
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(1.2, 32), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  floor.name = 'floor';
+  group.add(floor);
+}
+
+// ============== App ==============
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [moduleReady, setModuleReady] = React.useState(!!window.__digitalPianoModule);
+  const [triangles, setTriangles] = React.useState(null);
+  // Set DURING RENDER, not in a useEffect: ThreeView is a CHILD of App, and
+  // React fires child effects before parent effects, so ThreeView's own
+  // build-on-mount effect (which calls buildItemModel, which calls
+  // reportTriangles) would otherwise run before an effect here ever got the
+  // chance to set it -- silently dropping the very first triangle count
+  // (the one that matters on a page nobody has tweaked yet) with nothing
+  // left to trigger a second build. Setting the module-level binding inline
+  // during render has no such ordering hazard.
+  reportTriangles = setTriangles;
+
+  React.useEffect(() => {
+    if (moduleReady) return;
+    const onReady = () => setModuleReady(true);
+    window.addEventListener('__digital_piano_module_ready', onReady);
+    return () => window.removeEventListener('__digital_piano_module_ready', onReady);
+  }, [moduleReady]);
+
+  const isPiano = t.itemType === 'digital-piano';
+  const isBench = t.itemType === 'piano-bench';
+  const isOttoman = t.itemType === 'ottoman';
+
+  function paramsOf() {
+    const mod = window.__digitalPianoModule;
+    if (!mod) return {};
+    if (isPiano) {
+      const impl = mod.TYPES['digital-piano'];
+      const p = {
+        width: t.pianoWidth, depth: t.pianoDepth, height: t.pianoHeight,
+        keybedHeight: t.keybedHeight, restHeight: t.restHeight,
+        bodyColor: t.bodyColor, standColor: t.standColor
+      };
+      const out = {}; for (const k of Object.keys(p)) if (p[k] !== impl.DEFAULTS[k]) out[k] = p[k];
+      return { type: 'digital-piano', params: out };
+    }
+    if (isBench) {
+      const impl = mod.TYPES['piano-bench'];
+      const p = { width: t.benchWidth, depth: t.benchDepth, height: t.benchHeight, baseStyle: t.baseStyle, seatColor: t.seatColor, baseColor: t.baseColor };
+      const out = {}; for (const k of Object.keys(p)) if (p[k] !== impl.DEFAULTS[k]) out[k] = p[k];
+      return { type: 'piano-bench', params: out };
+    }
+    const impl = mod.TYPES['ottoman'];
+    const p = { width: t.ottomanWidth, depth: t.ottomanDepth, height: t.ottomanHeight, channelCount: t.channelCount, color: t.ottomanColor, legColor: t.legColor };
+    const out = {}; for (const k of Object.keys(p)) if (p[k] !== impl.DEFAULTS[k]) out[k] = p[k];
+    return { type: 'ottoman', params: out };
+  }
+
+  const [copied, setCopied] = React.useState('');
+  const json = moduleReady ? JSON.stringify(paramsOf(), null, 2) : '';
+  const copy = () => {
+    const done = () => { setCopied('copied'); setTimeout(() => setCopied(''), 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
+    else setCopied('clipboard unavailable — select the JSON below');
+  };
+
+  return (
+    <>
+      <h1>Digital Piano Spec</h1>
+      <div className="sub">All units cm. Three independent types built by the real furniture module (src/furniture/digital-piano.js) — not a page-local reimplementation. Use the Tweaks panel to switch type.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Item type</h2>
+          <div className="row" style={{ marginTop: 0 }}>
+            <button className={isPiano ? 'btn active' : 'btn'} onClick={() => setTweak('itemType', 'digital-piano')}>Digital piano</button>
+            <button className={isBench ? 'btn active' : 'btn'} onClick={() => setTweak('itemType', 'piano-bench')}>Piano bench</button>
+            <button className={isOttoman ? 'btn active' : 'btn'} onClick={() => setTweak('itemType', 'ottoman')}>Ottoman</button>
+          </div>
+          {isPiano && <div className="note">A generic white 88-key stage piano on a white stand, with a music rest above the keybed.</div>}
+          {isBench && <div className="note">A white padded bench on an adjustable-height base — an X-frame or a column. Both build to the same envelope.</div>}
+          {isOttoman && <div className="note">A teal velvet ottoman with a channel-tufted lid, on four short legs.</div>}
+          {!moduleReady && <div className="note">Loading src/furniture/digital-piano.js…</div>}
+        </div>
+
+        <div className="card">
+          <h2>Numbers</h2>
+          {isPiano && (
+            <table>
+              <tbody>
+                <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+                <tr><td>Width</td><td className="num">{t.pianoWidth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Depth</td><td className="num">{t.pianoDepth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Height</td><td className="num">{t.pianoHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Keybed height</td><td className="num">{t.keybedHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Music rest height</td><td className="num">{t.restHeight.toFixed(0)}</td><td><b>Variable</b> — shares a fixed budget with the body above the keybed</td></tr>
+                <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
+              </tbody>
+            </table>
+          )}
+          {isBench && (
+            <table>
+              <tbody>
+                <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+                <tr><td>Width</td><td className="num">{t.benchWidth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Depth</td><td className="num">{t.benchDepth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Height</td><td className="num">{t.benchHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Base style</td><td className="num">{t.baseStyle}</td><td><b>Variable</b> — x-frame or column</td></tr>
+                <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
+              </tbody>
+            </table>
+          )}
+          {isOttoman && (
+            <table>
+              <tbody>
+                <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+                <tr><td>Width</td><td className="num">{t.ottomanWidth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Depth</td><td className="num">{t.ottomanDepth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Height</td><td className="num">{t.ottomanHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Channel count</td><td className="num">{t.channelCount.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
+              </tbody>
+            </table>
+          )}
+          <div className="row">
+            <button className="btn" onClick={copy}>Copy as furniture JSON</button>
+            {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
+          </div>
+          <pre className="json">{json}</pre>
+        </div>
+
+        <div className="card full">
+          <h2>3D — {isPiano ? 'Digital piano' : isBench ? 'Piano bench' : 'Ottoman'}</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildItemModel}
+            heightOf={tt => (tt.itemType === 'digital-piano' ? tt.pianoHeight : tt.itemType === 'piano-bench' ? tt.benchHeight : tt.ottomanHeight) * 0.01}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Item type" />
+        <TweakRadio label="Type" value={t.itemType}
+          options={[{ value: 'digital-piano', label: 'Piano' }, { value: 'piano-bench', label: 'Bench' }, { value: 'ottoman', label: 'Ottoman' }]}
+          onChange={v => setTweak('itemType', v)} />
+
+        {isPiano && (
+          <>
+            <TweakSection label="Piano size" />
+            <TweakSlider label="Width" value={t.pianoWidth} min={100} max={160} step={1} unit="cm"
+              onChange={v => setTweak('pianoWidth', v)} />
+            <TweakSlider label="Depth" value={t.pianoDepth} min={30} max={60} step={1} unit="cm"
+              onChange={v => setTweak('pianoDepth', v)} />
+            <TweakSlider label="Height" value={t.pianoHeight} min={80} max={110} step={1} unit="cm"
+              onChange={v => setTweak('pianoHeight', v)} />
+            <TweakSlider label="Keybed height" value={t.keybedHeight} min={70} max={90} step={1} unit="cm"
+              onChange={v => setTweak('keybedHeight', v)} />
+            <TweakSlider label="Music rest height" value={t.restHeight} min={5} max={25} step={1} unit="cm"
+              onChange={v => setTweak('restHeight', v)} />
+            <TweakSection label="Piano colours" />
+            <TweakColor label="Body" value={t.bodyColor}
+              onChange={v => setTweak('bodyColor', v)} />
+            <TweakColor label="Stand" value={t.standColor}
+              onChange={v => setTweak('standColor', v)} />
+          </>
+        )}
+
+        {isBench && (
+          <>
+            <TweakSection label="Bench size" />
+            <TweakSlider label="Width" value={t.benchWidth} min={50} max={110} step={1} unit="cm"
+              onChange={v => setTweak('benchWidth', v)} />
+            <TweakSlider label="Depth" value={t.benchDepth} min={25} max={45} step={1} unit="cm"
+              onChange={v => setTweak('benchDepth', v)} />
+            <TweakSlider label="Height" value={t.benchHeight} min={40} max={65} step={1} unit="cm"
+              onChange={v => setTweak('benchHeight', v)} />
+            <TweakRadio label="Base style" value={t.baseStyle} options={['x', 'column']}
+              onChange={v => setTweak('baseStyle', v)} />
+            <TweakSection label="Bench colours" />
+            <TweakColor label="Seat" value={t.seatColor}
+              onChange={v => setTweak('seatColor', v)} />
+            <TweakColor label="Base" value={t.baseColor}
+              onChange={v => setTweak('baseColor', v)} />
+          </>
+        )}
+
+        {isOttoman && (
+          <>
+            <TweakSection label="Ottoman size" />
+            <TweakSlider label="Width" value={t.ottomanWidth} min={60} max={130} step={1} unit="cm"
+              onChange={v => setTweak('ottomanWidth', v)} />
+            <TweakSlider label="Depth" value={t.ottomanDepth} min={30} max={65} step={1} unit="cm"
+              onChange={v => setTweak('ottomanDepth', v)} />
+            <TweakSlider label="Height" value={t.ottomanHeight} min={30} max={50} step={1} unit="cm"
+              onChange={v => setTweak('ottomanHeight', v)} />
+            <TweakSlider label="Channel count" value={t.channelCount} min={3} max={9} step={1} unit=""
+              onChange={v => setTweak('channelCount', v)} />
+            <TweakSection label="Ottoman colours" />
+            <TweakColor label="Body (velvet)" value={t.ottomanColor}
+              onChange={v => setTweak('ottomanColor', v)} />
+            <TweakColor label="Legs" value={t.legColor}
+              onChange={v => setTweak('legColor', v)} />
+          </>
+        )}
+
+        <TweakSection label="Render" />
+        <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
+          onChange={v => setTweak('detail', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// Self-post it so the panel is visible when there's no host driving it.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>
