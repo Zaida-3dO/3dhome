@@ -175,7 +175,7 @@ function checkEnvelope(tag, impl, params) {
 function placeL(ex) {
   const poses = K.exampleLPoses(ex);
   const out = {};
-  [['a', BASE], ['b', BASE], ['wall', WALL], ['fridge', FRIDGE]].forEach(([k, impl]) => {
+  [['a', BASE], ['b', BASE], ['wall', WALL], ['wallB', WALL], ['fridge', FRIDGE]].forEach(([k, impl]) => {
     const g = impl.build(THREE, Object.assign({}, impl.DEFAULTS, ex[k]), { detail: 'full' });
     g.position.set(poses[k].x / 100, poses[k].y / 100, poses[k].z / 100);
     g.rotation.y = poses[k].rotY;
@@ -316,6 +316,83 @@ function draws(groups) {
   check('blind corner, right: the blind panel is at the right end', near(boxCm(meshes(gR, m => m.name === 'blind-panel')[0]).x1, 50, 0.2));
   const small = build(BASE, { width: 64, corner: 'left', modules: [{ kind: 'corner', width: 64 }] });
   check('a 64 cm corner is all blind panel (no sliver door)', meshes(small, m => m.name === 'door').length === 0);
+}
+
+// ---- 8b. a run-level sink spanning two modules --------------------------------------
+{
+  const p = { width: 154, modules: [{ kind: 'cabinet', width: 60 }, { kind: 'dishwasher', width: 60 }, { kind: 'cabinet', width: 34 }],
+    sink: { at: 60, width: 95, depth: 50, bowl: 'inset', drainer: 'right' } };
+  const env = checkEnvelope('base with a run-level 95 cm sink', BASE, p);
+  const g = env.g;
+  const out = unionBox(meshes(g, m => m.name === 'sink' || m.name === 'sink-rim'));
+  check('run-level sink: 95 cm wide, centred `at` 60 cm from the left end', near(out.x1 - out.x0, 95, 0.05) && near((out.x0 + out.x1) / 2, -77 + 60, 0.05), out);
+  check('run-level sink: spans the module boundary at 60 cm', out.x0 < -17 && out.x1 > -17, out);
+  check('run-level sink: 50 cm deep', near(out.z1 - out.z0, 50, 0.05), out);
+  check('run-level sink: its plate is flush with the worktop', near(out.y1, BASE.DEFAULTS.height, 0.01), out);
+  check('run-level sink: has a tap', env.above.some(m => m.name === 'tap'));
+  const covering = meshes(g, m => m.name === 'worktop').map(boxCm)
+    .filter(b => b.x0 < out.x1 - 0.01 && b.x1 > out.x0 + 0.01 && b.z0 < out.z1 - 0.01 && b.z1 > out.z0 + 0.01);
+  check('run-level sink: the worktop is cut for it', covering.length === 0, covering);
+  // The bowl is beside the drainer, not across it.
+  const bowl = unionBox(meshes(g, m => m.name === 'sink'));
+  check('drainer right: the bowl is in the left part of the sink', bowl.x1 < (out.x0 + out.x1) / 2 + 5, { bowl, out });
+
+  warnings.length = 0;
+  const off = build(BASE, { sink: { at: 5, width: 95 } });
+  const o2 = unionBox(meshes(off, m => m.name === 'sink' || m.name === 'sink-rim'));
+  check('a sink placed past the end is moved inside the run, with a warning',
+    o2.x0 >= -90 - 0.01 && warnings.some(w => /does not fit/.test(w)), { o2, warnings });
+  check('no sink by default', meshes(build(BASE, {}), m => m.name === 'sink').length === 0);
+}
+
+// ---- 8c. wall LEDs, tops, and the fridge on the top line ---------------------------
+{
+  const ex = JSON.parse(JSON.stringify(K.EXAMPLE_L));
+  const L = placeL(ex);
+  const tops = ['wall', 'wallB'].map(k => boxCm(L[k]).y1);
+  check('L: both wall runs top out on the top line', tops.every(t => near(t, ex.wallTop, 0.05)), tops);
+  const short = meshes(L.wall, m => m.name === 'carcass').map(boxCm).filter(b => b.y1 - b.y0 < 60);
+  check('L: a 56 cm wall unit hangs 65 cm over the worktop (its LED recess 1 cm up)', short.length > 0 && short.every(b => near(b.y0, 88.5 + 65 + 1, 0.05)), short);
+  const tall = meshes(L.wall, m => m.name === 'carcass').map(boxCm).filter(b => b.y1 - b.y0 > 60);
+  check('L: a 72 cm wall unit hangs 49 cm over the worktop (its LED recess 1 cm up)', tall.length > 0 && tall.every(b => near(b.y0, 88.5 + 49 + 1, 0.05)), tall);
+  check('L: the fridge-freezer meets the top line', near(boxCm(L.fridge).y1, ex.wallTop, 0.05), boxCm(L.fridge));
+  check('elevationForTop: 209.5 top, 72 run -> 137.5', near(K.elevationForTop(209.5, { height: 72 }), 137.5, 1e-9));
+
+  ['under-led', 'top-led'].forEach(name => {
+    const leds = [...meshes(L.wall, m => m.name === name), ...meshes(L.wallB, m => m.name === name)];
+    check('L: ' + name + ' strips exist, emissive and kept', leds.length >= 3 &&
+      leds.every(m => Fin.partFinish(m).finish === 'emissive' && Fin.partKeep(m).keep === true), leds.length);
+    const ret = meshes(L.wall, m => m.name === name).map(boxCm).find(b => b.z1 - b.z0 > b.x1 - b.x0);
+    const bS = meshes(L.wallB, m => m.name === name).map(boxCm).filter(b => b.z1 - b.z0 > b.x1 - b.x0)
+      .sort((p, q) => p.z0 - q.z0)[0];
+    check('L: ' + name + ' turns the wall corner and meets the other run\'s strip', !!ret && !!bS &&
+      near(ret.z1, bS.z0, 0.05) && near(ret.x0, bS.x0, 0.05) && near(ret.y0, bS.y0, 0.05), { ret, bS });
+  });
+  const under = meshes(L.wall, m => m.name === 'under-led').map(boxCm);
+  check('L: under-cabinet strips follow each module\'s own bottom (72 and 56 differ)',
+    new Set(under.map(b => Math.round(b.y0))).size === 2, under.map(b => b.y0));
+  check('L: no LED under the hood', under.every(b => b.x1 <= 125 + 0.05 || b.x0 >= 185 - 0.05), under);
+
+  // Probe: the continuity check fails when the wall owner is told the wrong depth.
+  const wrong = JSON.parse(JSON.stringify(ex));
+  wrong.wall.cornerDepth = 40;
+  const Lw = placeL(wrong);
+  const r = meshes(Lw.wall, m => m.name === 'top-led').map(boxCm).find(b => b.z1 - b.z0 > b.x1 - b.x0);
+  const q = meshes(Lw.wallB, m => m.name === 'top-led').map(boxCm).filter(b => b.z1 - b.z0 > b.x1 - b.x0).sort((p, q2) => p.z0 - q2.z0)[0];
+  check('probe: a wrong wall cornerDepth breaks the top strip', !!r && !!q && !near(r.x0, q.x0, 0.05), { r, q });
+
+  // One LED colour everywhere: four draws. A second colour is the fifth.
+  check('L with plinth, under and top strips in one colour: four draws or fewer', draws(Object.values(L)).size <= 4, [...draws(Object.values(L))]);
+  const two = JSON.parse(JSON.stringify(ex));
+  two.wall.underLedColor = two.wallB.underLedColor = '#4060ff';
+  check('probe: a second LED colour costs the fifth draw', draws(Object.values(placeL(two))).size === 5, [...draws(Object.values(placeL(two)))]);
+
+  const f = build(FRIDGE, {});
+  const ds = meshes(f, m => m.name === 'door').map(boxCm).sort((p, q2) => p.y0 - q2.y0);
+  check('fridge: freezer door is freezerHeight (93) over the plinth (13)', near(ds[0].y0, 13, 0.2) && near(ds[0].y1, 13 + 93, 0.2), ds[0]);
+  check('fridge: stands on a recessed plinth', meshes(f, m => m.name === 'plinth').length === 1 &&
+    boxCm(meshes(f, m => m.name === 'plinth')[0]).z1 <= FRIDGE.DEFAULTS.depth - 7.9);
+  check('fridge: plinthLed draws a strip', meshes(build(FRIDGE, { plinthLed: true }), m => m.name === 'plinth-led').length === 1);
 }
 
 // ---- 9. Copy JSON ------------------------------------------------------------------

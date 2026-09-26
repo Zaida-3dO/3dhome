@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitchen Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; max-width:900px; line-height:1.5; }
+  .grid { display:grid; grid-template-columns:minmax(0,3fr) minmax(0,2fr); gap:24px; align-items:start; }
+  @media (max-width: 900px) { .grid { grid-template-columns:1fr; } body { padding:12px; } .card { padding:12px; } }
+  .tw { overflow-x:auto; max-width:100%; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; min-width:0; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; touch-action:none; }
+  @media (max-width: 900px) { #c3d { height:380px; } }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; align-items:center; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .btn.ghost { background:#ece8e0; color:#1a1a1a; }
+  .btn.ghost:hover { background:#ddd6c9; }
+  .btn:disabled { opacity:0.35; cursor:default; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:5px 4px; border-bottom:1px solid #ece8e0; vertical-align:middle; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  input[type=number] { width:58px; font:inherit; font-size:11px; padding:3px 4px; border:1px solid #d8d3c8; border-radius:3px; }
+  select { font:inherit; font-size:11px; padding:2px; border:1px solid #d8d3c8; border-radius:3px; background:#fff; }
+  input[type=color] { width:34px; height:22px; border:1px solid #d8d3c8; border-radius:3px; padding:0; background:none; }
+  label.f { display:flex; gap:6px; align-items:center; font-size:11px; }
+  .warn { color:#9a4a12; font-size:11px; margin-top:8px; }
+  .ok { color:#2f6b3a; font-size:11px; margin-top:8px; }
+  pre { background:#1a1a1c; color:#e8e4dc; font-size:10px; padding:12px; border-radius:4px; overflow:auto; max-height:320px; margin-top:10px; }
+  .opts { display:flex; gap:6px; flex-wrap:wrap; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:6px 12px; align-items:center; font-size:11px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- The REAL builder, the same module the live scene loads. Module scripts run
+     before Babel's DOMContentLoaded pass, so it is on window by the time the
+     page's JSX runs. Both three builds are r160. -->
+<script type="module">
+  import * as K from '../src/furniture/kitchen.js';
+  window.FurnitureKitchen = K;
+</script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   KITCHEN SPEC  ·  kitchen-base-run, kitchen-wall-run, fridge-freezer
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every number here is a generic default in standard fitted-kitchen
+   sizes (60 and 34 cm base modules, an 88.5 cm worktop, 72 cm wall
+   units hung 49 cm above it). This is a component reference, not a
+   record of any particular kitchen: build your own run from the
+   module list and copy the JSON.
+   ─────────────────────────────────────────────────────────────────────
+
+   The 3D view builds the pieces with src/furniture/kitchen.js itself --
+   nothing on this page draws geometry of its own -- and places them as a
+   generic L (kitchen.js exampleLPoses): the corner-owning run A on the
+   back wall, run B on the left wall stopping at A's front face, a wall
+   run over A and a fridge-freezer at A's far end.
+
+   Copy JSON emits each piece's params that differ from its DEFAULTS
+   (kitchen.js paramsDiff), ready for furniture[].params.
+   ===================================================================== */
+
+const K = window.FurnitureKitchen;
+const CM = 0.01;
+const clone = o => JSON.parse(JSON.stringify(o));
+
+const ITEMS = [
+  { key: 'a',      type: 'kitchen-base-run', label: 'Base run A (owns the corner)' },
+  { key: 'b',      type: 'kitchen-base-run', label: 'Base run B' },
+  { key: 'wall',   type: 'kitchen-wall-run', label: 'Wall run A' },
+  { key: 'wallB',  type: 'kitchen-wall-run', label: 'Wall run B' },
+  { key: 'fridge', type: 'fridge-freezer',   label: 'Fridge-freezer' },
+];
+
+function initialState() {
+  const s = {};
+  ITEMS.forEach(it => { s[it.key] = Object.assign(clone(K.TYPES[it.type].DEFAULTS), clone(K.EXAMPLE_L[it.key] || {})); });
+  s.wallTop = K.EXAMPLE_L.wallTop;
+  return s;
+}
+
+const sumWidths = mods => mods.reduce((n, m) => n + (Number(m.width) || 0), 0);
+
+// ---------------------------------------------------------------- 3D
+function buildKitchen(t, group, THREE) {
+  const poses = K.exampleLPoses(t);
+  const root = new THREE.Group();
+  ITEMS.forEach(it => {
+    const g = K.TYPES[it.type].build(THREE, t[it.key], { detail: t.lowDetail ? 'low' : 'full' });
+    const p = poses[it.key];
+    g.position.set(p.x * CM, p.y * CM, p.z * CM);
+    g.rotation.y = p.rotY;
+    g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    root.add(g);
+  });
+  // Reference walls and floor (not part of any item): the two walls of the L.
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0xe9e5dd, roughness: 0.95 });
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0x9c8f7c, roughness: 0.9 });
+  const lenX = (t.a.width + 1 + t.fridge.width + 20) * CM, lenZ = (t.a.depth + t.b.width + 20) * CM, h = 2.5;
+  const back = new THREE.Mesh(new THREE.BoxGeometry(lenX, h, 0.04), wallMat);
+  back.position.set(lenX / 2, h / 2, -0.02);
+  const left = new THREE.Mesh(new THREE.BoxGeometry(0.04, h, lenZ), wallMat);
+  left.position.set(-0.02, h / 2, lenZ / 2);
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(lenX, 0.02, lenZ), floorMat);
+  floor.position.set(lenX / 2, -0.01, lenZ / 2);
+  floor.receiveShadow = true;
+  root.add(back, left, floor);
+  // Centre the L on the view's origin.
+  root.position.set(-lenX / 2, 0, -lenZ / 2);
+  group.add(root);
+}
+
+// ---------------------------------------------------------------- module editor
+function ModuleRow({ m, i, n, isWall, onChange, onMove, onRemove }) {
+  const kinds = isWall ? K.WALL_MODULE_KINDS : K.BASE_MODULE_KINDS;
+  const set = (k, v) => {
+    const next = Object.assign({}, m);
+    if (v === undefined || v === '' || v === false) delete next[k]; else next[k] = v;
+    onChange(next);
+  };
+  const hingeable = ['cabinet', 'sink', 'corner'].includes(m.kind);
+  return (
+    <tr>
+      <td>{i + 1}</td>
+      <td>
+        <select value={m.kind} onChange={e => onChange({ kind: e.target.value, width: m.width })}>
+          {kinds.map(k => <option key={k} value={k}>{k}</option>)}
+        </select>
+      </td>
+      <td><input type="number" min="5" step="1" value={m.width} onChange={e => set('width', Number(e.target.value))} /></td>
+      <td>
+        <div className="opts">
+          {hingeable &&
+            <select title="hinge" value={m.hinge || 'left'} onChange={e => set('hinge', e.target.value)}>
+              <option value="left">hinge L</option><option value="right">hinge R</option>
+            </select>}
+          {!isWall && m.kind === 'oven' &&
+            <label className="f"><input type="checkbox" checked={!!m.hob} onChange={e => set('hob', e.target.checked)} />hob</label>}
+          {!isWall && (m.kind === 'hob' || (m.kind === 'oven' && m.hob)) &&
+            <label className="f" title="splashback height, cm (0 = none)">splash
+              <input type="number" min="0" step="5" value={m.splashback || 0} onChange={e => set('splashback', Number(e.target.value) || undefined)} /></label>}
+          {!isWall && m.kind === 'sink' &&
+            <select value={m.bowl || 'inset'} onChange={e => set('bowl', e.target.value)}>
+              <option value="inset">inset</option><option value="undermount">undermount</option>
+            </select>}
+          {!isWall && m.kind === 'sink' &&
+            <label className="f"><input type="checkbox" checked={m.tap !== false} onChange={e => set('tap', e.target.checked ? undefined : false)} />tap</label>}
+          {!isWall &&
+            <label className="f" title="plinth LED strip under this module"><input type="checkbox" checked={!!m.plinthLed} onChange={e => set('plinthLed', e.target.checked)} />LED</label>}
+          {isWall && ['cabinet', 'corner', 'filler'].includes(m.kind) &&
+            <label className="f" title="LED strip under this unit, lighting the worktop"><input type="checkbox" checked={!!m.underLed} onChange={e => set('underLed', e.target.checked)} />under LED</label>}
+          {isWall && ['cabinet', 'corner', 'filler'].includes(m.kind) &&
+            <label className="f" title="LED strip on top of this unit"><input type="checkbox" checked={!!m.topLed} onChange={e => set('topLed', e.target.checked)} />top LED</label>}
+          {isWall &&
+            <label className="f" title="module height, cm (blank = the run's height)">h
+              <input type="number" min="10" step="1" value={m.height || ''} placeholder="run" onChange={e => set('height', Number(e.target.value) || undefined)} /></label>}
+          {isWall && m.kind === 'hood' &&
+            <select value={m.style || 'chimney'} onChange={e => set('style', e.target.value)}>
+              <option value="chimney">chimney</option><option value="canopy">canopy</option>
+            </select>}
+          {isWall && m.kind === 'hood' && (m.style || 'chimney') === 'chimney' &&
+            <select title="visor" value={m.visor || 'smoked'} onChange={e => set('visor', e.target.value)}>
+              <option value="smoked">smoked</option><option value="glass">glass (+1 draw)</option><option value="metal">metal</option>
+            </select>}
+        </div>
+      </td>
+      <td style={{ whiteSpace: 'nowrap' }}>
+        <button className="btn ghost" title="move left" disabled={i === 0} onClick={() => onMove(i, -1)}>&lt;</button>{' '}
+        <button className="btn ghost" title="move right" disabled={i === n - 1} onClick={() => onMove(i, 1)}>&gt;</button>{' '}
+        <button className="btn ghost" title="remove" disabled={n === 1} onClick={() => onRemove(i)}>×</button>
+      </td>
+    </tr>
+  );
+}
+
+function RunEditor({ run, isWall, onChange }) {
+  const mods = run.modules;
+  const setMods = next => onChange(Object.assign({}, run, { modules: next }));
+  const sum = sumWidths(mods);
+  const move = (i, d) => { const next = mods.slice(); const [x] = next.splice(i, 1); next.splice(i + d, 0, x); setMods(next); };
+  const num = (k, v) => onChange(Object.assign({}, run, { [k]: Number(v) }));
+  return (
+    <div>
+      <div className="kv">
+        <span>width</span><span><input type="number" step="1" value={run.width} onChange={e => num('width', e.target.value)} /> cm
+          {' '}<button className="btn ghost" onClick={() => num('width', sum)} disabled={Math.abs(sum - run.width) < 0.05}>fit to modules ({sum})</button></span>
+        <span>depth</span><span><input type="number" step="1" value={run.depth} onChange={e => num('depth', e.target.value)} /> cm</span>
+        <span>height</span><span><input type="number" step="0.5" value={run.height} onChange={e => num('height', e.target.value)} /> cm{isWall ? ' (tallest module)' : ' (worktop top)'}</span>
+        <span>corner</span><span>
+          <select value={run.corner} onChange={e => onChange(Object.assign({}, run, { corner: e.target.value }))}>
+            <option value="none">none</option><option value="left">left</option><option value="right">right</option>
+          </select>
+          {run.corner !== 'none' && <> other run's depth <input type="number" step="1" value={run.cornerDepth} onChange={e => num('cornerDepth', e.target.value)} /> cm</>}
+        </span>
+      </div>
+      <div className="tw"><table style={{ marginTop: 12 }}>
+        <thead><tr><th>#</th><th>kind</th><th>width</th><th>options</th><th>order</th></tr></thead>
+        <tbody>
+          {mods.map((m, i) => (
+            <ModuleRow key={i} m={m} i={i} n={mods.length} isWall={isWall}
+              onChange={nm => { const next = mods.slice(); next[i] = nm; setMods(next); }}
+              onMove={move}
+              onRemove={j => setMods(mods.filter((_, k) => k !== j))} />
+          ))}
+        </tbody>
+      </table></div>
+      <div className="row">
+        <span style={{ fontSize: 11 }}>add:</span>
+        {(isWall ? ['cabinet', 'hood', 'open'] : ['cabinet', 'drawers', 'oven', 'sink', 'dishwasher']).map(k => (
+          <button key={k} className="btn ghost" onClick={() => setMods(mods.concat([{ kind: k, width: k === 'cabinet' && !isWall ? 34 : 60 }]))}>+ {k}</button>
+        ))}
+      </div>
+      {!isWall && <SinkEditor run={run} onChange={onChange} />}
+      {Math.abs(sum - run.width) >= 0.05
+        ? <div className="warn">Modules add up to {sum} cm but the run is {run.width} cm — the builder {sum < run.width ? 'fills the gap with a filler' : 'scales every module down to fit'}. Use "fit to modules" to match.</div>
+        : <div className="ok">Modules add up to the run's width ({sum} cm).</div>}
+    </div>
+  );
+}
+
+// The run-level sink: placed along the run, so it can span two modules.
+function SinkEditor({ run, onChange }) {
+  const sk = run.sink;
+  const set = (k, v) => onChange(Object.assign({}, run, { sink: Object.assign({}, sk, { [k]: v }) }));
+  return (
+    <div style={{ marginTop: 12 }}>
+      <label className="f"><input type="checkbox" checked={!!sk}
+        onChange={e => onChange(Object.assign({}, run, { sink: e.target.checked ? { at: Math.round(run.width / 2), width: 95, depth: 50, bowl: 'inset', drainer: 'right' } : null }))} />
+        sink along the run (may span modules)</label>
+      {sk && <div className="row">
+        <label className="f">centre at <input type="number" step="1" value={sk.at} onChange={e => set('at', Number(e.target.value))} /> cm from left</label>
+        <label className="f">w <input type="number" step="1" value={sk.width} onChange={e => set('width', Number(e.target.value))} /></label>
+        <label className="f">d <input type="number" step="1" value={sk.depth} onChange={e => set('depth', Number(e.target.value))} /></label>
+        <select value={sk.bowl || 'inset'} onChange={e => set('bowl', e.target.value)}><option value="inset">inset</option><option value="undermount">undermount</option></select>
+        <select title="drainer" value={sk.drainer || 'right'} onChange={e => set('drainer', e.target.value)}><option value="right">drainer R</option><option value="left">drainer L</option><option value="none">no drainer</option></select>
+        <label className="f"><input type="checkbox" checked={sk.tap !== false} onChange={e => set('tap', e.target.checked)} />tap</label>
+      </div>}
+    </div>
+  );
+}
+
+function FridgeEditor({ f, onChange }) {
+  const set = (k, v) => onChange(Object.assign({}, f, { [k]: v }));
+  return (
+    <div className="kv">
+      <span>width</span><span><input type="number" value={f.width} onChange={e => set('width', Number(e.target.value))} /> cm</span>
+      <span>depth</span><span><input type="number" value={f.depth} onChange={e => set('depth', Number(e.target.value))} /> cm</span>
+      <span>height</span><span><input type="number" step="0.5" value={f.height} onChange={e => set('height', Number(e.target.value))} /> cm (the wall top line)</span>
+      <span>freezer</span><span><select value={f.freezer} onChange={e => set('freezer', e.target.value)}><option value="bottom">bottom</option><option value="top">top</option></select></span>
+      <span>freezer door</span><span><input type="number" step="1" value={f.freezerHeight} onChange={e => set('freezerHeight', Number(e.target.value))} /> cm</span>
+      <span>plinth</span><span><input type="number" step="1" value={f.plinthHeight} onChange={e => set('plinthHeight', Number(e.target.value))} /> cm
+        {' '}<label className="f" style={{ display: 'inline-flex' }}><input type="checkbox" checked={!!f.plinthLed} onChange={e => set('plinthLed', e.target.checked)} />LED</label></span>
+      <span>hinge</span><span><select value={f.hinge} onChange={e => set('hinge', e.target.value)}><option value="right">right</option><option value="left">left</option></select></span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- page
+function copyText(text) {
+  // The legacy path works on a plain-HTTP LAN origin, where the async
+  // clipboard API does not exist, and when the API refuses (no focus).
+  const legacy = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok ? Promise.resolve() : Promise.reject(new Error('the browser refused the copy'));
+  };
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text).catch(legacy);
+  return legacy();
+}
+
+function exportJson(t) {
+  return JSON.stringify(ITEMS.map(it => ({
+    type: it.type,
+    label: it.label,
+    params: K.paramsDiff(it.type, t[it.key]),
+  })), null, 2);
+}
+
+function App() {
+  const [t, setT] = React.useState(initialState);
+  const [tab, setTab] = React.useState('a');
+  const [copied, setCopied] = React.useState('');
+  const setItem = (key, v) => setT(prev => Object.assign({}, prev, { [key]: v }));
+  // Look-and-feel params are shared by every piece so the L stays one kitchen.
+  const setAll = (k, v) => setT(prev => {
+    const next = Object.assign({}, prev);
+    ITEMS.forEach(it => { if (k in K.TYPES[it.type].DEFAULTS) next[it.key] = Object.assign({}, prev[it.key], { [k]: v }); });
+    return next;
+  });
+  const json = exportJson(t);
+  const doCopy = () => copyText(json).then(() => setCopied('Copied ' + json.length + ' characters.'), e => setCopied('Copy failed (' + e.message + ') — select the JSON below.'));
+
+  return (
+    <>
+      <h1>Kitchen Spec</h1>
+      <div className="sub">
+        Fitted kitchen components: a <b>base run</b> of modules under one continuous worktop, a <b>wall run</b> of
+        mixed-height units with an extractor hood, and a <b>fridge-freezer</b>. Shown as a generic L. Every size is an
+        illustrative default. Build a run by adding, removing, reordering and resizing its modules (left to right as you
+        face the run), then use Copy JSON.
+      </div>
+      <div className="grid">
+        <div className="card">
+          <h2>3D — generic L</h2>
+          <ThreeView t={t} buildModel={buildKitchen} heightOf={() => 1.4} />
+          <div className="row">
+            <label className="f"><input type="checkbox" checked={!!t.lowDetail} onChange={e => setT(p => Object.assign({}, p, { lowDetail: e.target.checked }))} />low detail (the low GPU tier)</label>
+            <label className="f" title="every wall unit's top, and the fridge-freezer's, meet this line">wall top line <input type="number" step="0.5" value={t.wallTop} onChange={e => setT(p => Object.assign({}, p, { wallTop: Number(e.target.value) }))} /> cm</label>
+          </div>
+          <div className="legend">
+            Run A owns the corner (blind corner unit at its left end; its worktop runs to the side wall). Run B stops at A's
+            front face; the two may differ in depth, and A's <i>other run's depth</i> must match B's so its plinth return and
+            LED turn at B's plinth; the same goes for wall run A and B. Wall units hang from one top line, so a 56 cm unit
+            sits higher than a 72. The tap and splashback are the only parts that rise above a base run's height. One LED
+            colour everywhere keeps the kitchen at four draws; each further colour costs one.
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Edit</h2>
+          <div className="row" style={{ marginTop: 0, marginBottom: 12 }}>
+            {ITEMS.map(it => <button key={it.key} className={'btn' + (tab === it.key ? ' active' : '')} onClick={() => setTab(it.key)}>{it.label}</button>)}
+          </div>
+          {tab === 'fridge'
+            ? <FridgeEditor f={t.fridge} onChange={v => setItem('fridge', v)} />
+            : <RunEditor run={t[tab]} isWall={tab === 'wall'} onChange={v => setItem(tab, v)} />}
+
+          <h2 style={{ marginTop: 20 }}>Finish (every piece)</h2>
+          <div className="kv">
+            <span>fronts</span><span><input type="color" value={t.a.frontColor} onChange={e => setAll('frontColor', e.target.value)} />{' '}
+              <select value={t.a.frontFinish} onChange={e => setAll('frontFinish', e.target.value)}><option>gloss</option><option>matte</option><option>metal</option></select></span>
+            <span>worktop</span><span><input type="color" value={t.a.worktopColor} onChange={e => setAll('worktopColor', e.target.value)} /></span>
+            <span>handles</span><span><input type="color" value={t.a.handleColor} onChange={e => setAll('handleColor', e.target.value)} />{' '}
+              <select value={t.a.handleStyle} onChange={e => setAll('handleStyle', e.target.value)}><option>bar</option><option>knob</option><option>rail</option><option>none</option></select></span>
+            <span>LED strips</span><span>plinth <input type="color" value={t.a.ledColor} onChange={e => setAll('ledColor', e.target.value)} />{' '}
+              under <input type="color" value={t.wall.underLedColor} onChange={e => setAll('underLedColor', e.target.value)} />{' '}
+              top <input type="color" value={t.wall.topLedColor} onChange={e => setAll('topLedColor', e.target.value)} /></span>
+          </div>
+        </div>
+
+        <div className="card full">
+          <h2>Copy JSON — params that differ from DEFAULTS</h2>
+          <div className="row" style={{ marginTop: 0 }}>
+            <button className="btn" onClick={doCopy}>Copy JSON</button>
+            <button className="btn ghost" onClick={() => { setT(initialState()); setCopied(''); }}>Reset to the example L</button>
+            <span style={{ fontSize: 11 }}>{copied}</span>
+          </div>
+          <pre id="json-out">{json}</pre>
+          <div className="legend">Placement (wall anchors, offsets, elevation) is the house profile's job, not this page's; paste each <code>params</code> into a <code>furniture[]</code> entry of the matching <code>type</code>.</div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

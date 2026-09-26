@@ -1099,7 +1099,7 @@
 
     "furnitureParams_fridge-freezer": {
       "type": "object",
-      "description": "Params for `fridge-freezer` (src/furniture/kitchen.js): a full-height two-door unit. Each `default` equals kitchen.js DEFAULTS.",
+      "description": "Params for `fridge-freezer` (src/furniture/kitchen.js): a full-height two-door housing on the base runs' recessed plinth. Its default height is the wall units' top line (88.5 + 49 + 72 = 209.5); for another line set `height` to it. Each `default` equals kitchen.js DEFAULTS.",
       "properties": {
         "width": {
           "type": "number",
@@ -1110,14 +1110,14 @@
         "depth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 65,
+          "default": 60,
           "description": "cm, back to front."
         },
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 185,
-          "description": "cm, floor to top."
+          "default": 209.5,
+          "description": "cm, floor to top -- the wall units' top line to line up with them."
         },
         "frontColor": {
           "$ref": "#/$defs/hexColor",
@@ -1159,12 +1159,18 @@
           "default": "bottom",
           "description": "Where the freezer door is."
         },
-        "freezerRatio": {
+        "freezerHeight": {
           "type": "number",
-          "minimum": 0.15,
-          "maximum": 0.7,
-          "default": 0.38,
-          "description": "The freezer door's share of the height."
+          "exclusiveMinimum": 0,
+          "default": 93,
+          "description": "cm, the freezer door; the fridge door takes the rest."
+        },
+        "plinthHeight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30,
+          "default": 13,
+          "description": "cm, the same kickboard as the base runs."
         },
         "hinge": {
           "type": "string",
@@ -1174,6 +1180,16 @@
           ],
           "default": "right",
           "description": "The doors hang from this edge; the handles go on the other."
+        },
+        "plinthLed": {
+          "type": "boolean",
+          "default": false,
+          "description": "An LED strip on its plinth, to carry a run's plinth strip past it."
+        },
+        "ledColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#ffb45a",
+          "description": "Colour of the plinth strip."
         }
       },
       "additionalProperties": false
@@ -1392,7 +1408,8 @@
                   "washer",
                   "filler",
                   "corner"
-                ]
+                ],
+                "description": "`sink` is a sink centred on this one module; for one spanning modules use the run-level `sink`."
               },
               "width": {
                 "type": "number",
@@ -1430,7 +1447,16 @@
               },
               "plinthLed": {
                 "type": "boolean",
-                "description": "A warm LED strip on the plinth under this module. Adjacent flagged modules share one strip; on the owner's flagged corner module it turns the corner to meet the other run's strip."
+                "description": "An LED strip on the plinth under this module. Adjacent flagged modules share one strip; on the owner's flagged corner module it turns the corner to meet the other run's strip."
+              },
+              "drainer": {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right",
+                  "none"
+                ],
+                "description": "sink: which side the drainer is, when the module is wide enough for one."
               }
             },
             "required": [
@@ -1527,6 +1553,57 @@
           "$ref": "#/$defs/hexColor",
           "default": "#ffb45a",
           "description": "Colour of the plinth LED strip under modules flagged `plinthLed`."
+        },
+        "sink": {
+          "default": null,
+          "description": "A sink placed along the RUN rather than inside one module, so a 95 cm inset sink can span a cabinet and the dishwasher beside it. null = none (a `sink` module is the one-module shorthand).",
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "cm from the run's LEFT end to the sink's centre. Moved inside the run, with a warning, if it does not fit."
+                },
+                "width": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "cm, the whole sink including any drainer (default 95)."
+                },
+                "depth": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "cm, front to back (default 50)."
+                },
+                "bowl": {
+                  "type": "string",
+                  "enum": [
+                    "inset",
+                    "undermount"
+                  ],
+                  "description": "inset (default): a metal plate flush with the worktop. undermount: the bowl alone under the worktop's cut edge."
+                },
+                "drainer": {
+                  "type": "string",
+                  "enum": [
+                    "left",
+                    "right",
+                    "none"
+                  ],
+                  "description": "inset only: which side of the bowl the drainer is (default right; none under 70 cm)."
+                },
+                "tap": {
+                  "type": "boolean",
+                  "description": "draw the tap (default true)."
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -1545,14 +1622,14 @@
         "depth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 35,
+          "default": 30,
           "description": "cm, back to front."
         },
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 72,
-          "description": "cm, the tallest module. Shorter modules hang with their tops aligned to it."
+          "description": "cm, the tallest module. Every module hangs from the run's top, so a shorter one's bottom is higher; the placer's `elevation` is the tallest module's bottom (elevationForTop() in kitchen.js turns a shared top line, e.g. 209.5, into it)."
         },
         "modules": {
           "type": "array",
@@ -1605,6 +1682,14 @@
                   "metal"
                 ],
                 "description": "chimney hood visor. `glass` is a real transparent part and costs a draw of its own; `smoked` merges."
+              },
+              "underLed": {
+                "type": "boolean",
+                "description": "cabinet / corner / filler: an LED strip under it, lighting the worktop. Continues round the corner like `plinthLed`."
+              },
+              "topLed": {
+                "type": "boolean",
+                "description": "cabinet / corner / filler: an LED strip on top of it."
               }
             },
             "required": [
@@ -1646,7 +1731,7 @@
         "cornerDepth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 35,
+          "default": 30,
           "description": "cm, the depth of the other wall run at this run's corner: how much of the blind corner unit it hides."
         },
         "frontColor": {
@@ -1679,6 +1764,16 @@
           "$ref": "#/$defs/hexColor",
           "default": "#c9cccf",
           "description": "Handles are always `metal`."
+        },
+        "underLedColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#ffb45a",
+          "description": "Colour of the under-cabinet strips. Each LED colour in a kitchen is a draw of its own."
+        },
+        "topLedColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#ffb45a",
+          "description": "Colour of the strips on top of the cabinets."
         }
       },
       "additionalProperties": false
