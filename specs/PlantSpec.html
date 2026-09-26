@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Plant Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  /* A 1fr grid track still respects its content's min-content width unless
+     told otherwise, so a wide table cell (e.g. "final bbox width" in the
+     Numbers card) can force the whole grid past a narrow (390px) viewport --
+     visual review ba80c1c1. min-width:0 lets the track shrink below its
+     content's natural width, and the table's own overflow-x scrolls
+     internally instead of blowing out the page. Local to this page rather
+     than the shared spec-page CSS every other spec page copies verbatim
+     (WindowSpec/CurtainSpec/etc. have the same base .grid/.card rules) --
+     that shared drift is the "leave it to a follow-up" part of the finding. */
+  .grid > * { min-width: 0; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; overflow-x:auto; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  pre.json { font-size:10px; line-height:1.5; background:#f7f5f0; border:1px solid #ece8e0; border-radius:4px;
+    padding:10px; white-space:pre-wrap; word-break:break-all; margin-top:10px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<!-- The plant geometry itself lives in src/furniture/plant.js -- the SAME
+     pure builder module a house scene would call once plants are placed
+     (item 78f2b614 for the corn plant, the bedroom wall-planter follow-up
+     for the wall planters; both out of scope here). Loaded as a real ES
+     module (genuine ESM, exported for a plain Node unit test too) and
+     stashed on window so the Babel-transpiled app below -- which targets the
+     global `THREE` from ../vendor/three.js, matching every other spec page
+     -- can call it. Two different THREE builds never meet: this module
+     never touches THREE itself, it only receives whichever build its
+     caller passes in. -->
+<script type="module">
+  import * as M from '../src/furniture/plant.js';
+  window.FurniturePlant = M;
+</script>
+
+<script type="text/babel">
+/* =====================================================================
+   PLANT SPEC   ·   procedural potted + wall-mounted plants
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Preset numbers come from real measured items; every OTHER dimension is
+   a DEFAULT, not a survey. This is a design reference for modelling a
+   fixture, not a record of any particular building.
+   ─────────────────────────────────────────────────────────────────────
+
+   Two kinds, picked from the Tweaks panel:
+     corn-plant    a potted Dracaena fragrans: woven/ribbed tapered pot,
+                   several staggered-height canes, each topped with a
+                   strap-leaf rosette. Free-standing.
+     wall-planter  a hanging faceted white ceramic diamond with a thin
+                   gold/brass wire frame, holding spiky sansevieria-style
+                   leaves. Wall-mounted (back at z=0).
+
+   The geometry itself is NOT built here -- it lives in
+   src/furniture/plant.js (build / buildPlant), loaded above as a real ES
+   module and unit-tested by scripts/test-plant-builder.mjs. This page is a
+   thin harness: tweaks in, THREE.Group out, via the same reusable
+   ThreeView every other spec page uses. Leaves are procedural and seeded
+   (deterministic) -- the same seed always lays out the same leaves.
+   ===================================================================== */
+const { DEFAULTS, PRESETS } = window.FurniturePlant;
+
+// Mirrors src/furniture/plant.js's DEFAULTS exactly (including leafCount:5)
+// so "Copy as furniture JSON" only ever emits a key that GENUINELY differs
+// from DEFAULTS -- a TWEAK_DEFAULTS/DEFAULTS mismatch here previously made
+// leafCount always show up in the corn-plant preset's JSON (it isn't even a
+// corn-plant param), which visual review flagged as an INFO finding.
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "preset": "corn-plant-tall",
+  "kind": "corn-plant",
+  "width": 40,
+  "depth": 40,
+  "height": 166,
+  "potHeight": 56,
+  "potTopDiameter": 30,
+  "potColor": "#9c7c4a",
+  "plantHeight": 110,
+  "stemCount": 3,
+  "spread": 40,
+  "leafColor": "#33502a",
+  "leafCount": 5,
+  "frameColor": "#b8945a",
+  "seed": 7,
+  "detail": "full"
+}/*EDITMODE-END*/;
+
+// Params object the builder actually wants, derived from tweak state. Colours
+// are plain '#rrggbb' strings straight through -- makeFinish() (finishes.js)
+// and the schema's hexColor $def both take that form natively, so there is
+// no number<->string conversion left to keep in sync.
+function paramsFromTweaks(t) {
+  return {
+    kind: t.kind,
+    width: t.width,
+    depth: t.depth,
+    height: t.height,
+    potHeight: t.potHeight,
+    potTopDiameter: t.potTopDiameter,
+    potColor: t.potColor,
+    plantHeight: t.plantHeight,
+    stemCount: t.stemCount,
+    spread: t.spread,
+    leafColor: t.leafColor,
+    leafCount: t.leafCount,
+    frameColor: t.frameColor,
+    seed: t.seed,
+  };
+}
+
+// Only the keys that differ from DEFAULTS -- what "Copy as furniture JSON"
+// emits, so a placed instance doesn't carry a redundant full parameter set.
+function diffFromDefaults(params) {
+  const out = {};
+  for (const [k, v] of Object.entries(params)) {
+    const d = DEFAULTS[k];
+    if (v !== d) out[k] = v;
+  }
+  return out;
+}
+
+// ============== Plant model (delegates to the shared builder) ==============
+// opts.detail is threaded through from the tweak state -- previously this
+// page never passed opts at all, so 'low' detail was unreachable from the
+// spec page even though the builder supports it (visual review bc1cf6ac).
+function buildPlantModel(t, group, THREE, ctx) {
+  const { build } = window.FurniturePlant;
+  const params = paramsFromTweaks(t);
+  const plantGroup = build(THREE, params, { detail: t.detail === 'low' ? 'low' : 'full' });
+  group.add(plantGroup);
+  ctx.topY = plantGroup.userData.topY;
+}
+
+// ============== App ==============
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [copied, setCopied] = React.useState(false);
+  const params = paramsFromTweaks(t);
+  const json = JSON.stringify({ type: 'plant', params: diffFromDefaults(params) }, null, 2);
+
+  const applyPreset = (name) => {
+    const preset = PRESETS[name];
+    if (!preset) return;
+    setTweak(Object.assign({ preset: name }, preset));
+  };
+
+  const copyJson = () => {
+    navigator.clipboard?.writeText(json).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+
+  const isWallPlanter = t.kind === 'wall-planter';
+
+  return (
+    <>
+      <h1>Plant Spec</h1>
+      <div className="sub">All units cm. Procedural potted + wall-mounted plants, seeded (deterministic) leaves. Use the Tweaks panel to switch kind/preset.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Presets</h2>
+          <div className="row">
+            {Object.keys(PRESETS).map(name => (
+              <button key={name} className={t.preset === name ? 'btn active' : 'btn'}
+                onClick={() => applyPreset(name)}>{name}</button>
+            ))}
+          </div>
+          <div className="legend">
+            corn-plant-tall is the plant between the two home-office desks (item 889bf6ce): 3 canes,
+            56cm woven pot, 110cm plant height, ~40cm widest leaf spread. wall-planter-large/-small are
+            the bedroom wall planters: white faceted ceramic diamonds with a thin gold wire frame,
+            holding snake-plant (large) or succulent (small) leaves, mounted back-to-wall.
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Kind</td><td className="num">{t.kind}</td><td><b>Variable</b></td></tr>
+              <tr><td>Width (envelope)</td><td className="num">{t.width}</td><td><b>Variable</b> — final bbox width</td></tr>
+              <tr><td>Depth (envelope)</td><td className="num">{t.depth}</td><td><b>Variable</b> — final bbox depth, back at z=0</td></tr>
+              <tr><td>Height (envelope)</td><td className="num">{t.height}</td><td><b>Variable</b> — final bbox height, bottom at y=0</td></tr>
+              {!isWallPlanter && <>
+                <tr><td>Pot height</td><td className="num">{t.potHeight}</td><td>Proportioning</td></tr>
+                <tr><td>Pot opening diameter</td><td className="num">{t.potTopDiameter}</td><td>Proportioning</td></tr>
+                <tr><td>Plant height (above pot)</td><td className="num">{t.plantHeight}</td><td>Proportioning</td></tr>
+                <tr><td>Stem/cane count</td><td className="num">{t.stemCount}</td><td>Proportioning</td></tr>
+                <tr><td>Widest leaf spread</td><td className="num">{t.spread}</td><td>Proportioning</td></tr>
+              </>}
+              {isWallPlanter && <>
+                <tr><td>Leaf height</td><td className="num">{t.plantHeight}</td><td>Proportioning</td></tr>
+                <tr><td>Leaf count</td><td className="num">{t.leafCount}</td><td>Proportioning</td></tr>
+              </>}
+              <tr><td>Seed</td><td className="num">{t.seed}</td><td><b>Variable</b> — reshuffles leaf layout deterministically</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            width/depth/height are the AUTHORITATIVE final bounding box -- the builder proportions its
+            procedural geometry (pot/canes/leaves or planter/leaves) internally, then a measure-and-fit
+            pass (fitToEnvelope in src/furniture/plant.js) rescales the whole result to land on exactly
+            this envelope: x centred on 0, bottom at y=0, back at z=0. See scripts/test-plant-builder.mjs
+            and scripts/test-furniture-core.mjs.
+          </div>
+        </div>
+
+        <div className="card full">
+          <h2>3D — {t.kind}</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildPlantModel}
+            heightOf={tt => tt.height * 0.01}
+          />
+          <div className="legend">Drag to orbit, scroll to zoom. Change the seed to reshuffle the leaf layout without changing any size.</div>
+        </div>
+
+        <div className="card full">
+          <h2>Copy as furniture JSON</h2>
+          <div className="row">
+            <TweakButton label={copied ? 'Copied!' : 'Copy as furniture JSON'} onClick={copyJson} />
+          </div>
+          <pre className="json">{json}</pre>
+          <div className="legend">Only the keys that differ from DEFAULTS are emitted, matching every other furniture spec's placement contract.</div>
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Kind" />
+        <TweakSelect label="Kind" value={t.kind}
+          options={['corn-plant', 'wall-planter']}
+          onChange={v => setTweak('kind', v)} />
+
+        <TweakSection label="Envelope (final bounding box)" />
+        <TweakSlider label="Width" value={t.width} min={8} max={80} step={1} unit="cm"
+          onChange={v => setTweak('width', v)} />
+        <TweakSlider label="Depth" value={t.depth} min={8} max={80} step={1} unit="cm"
+          onChange={v => setTweak('depth', v)} />
+        <TweakSlider label="Height" value={t.height} min={15} max={220} step={1} unit="cm"
+          onChange={v => setTweak('height', v)} />
+
+        {!isWallPlanter && <>
+          <TweakSection label="Corn plant — proportioning" />
+          <TweakSlider label="Pot height" value={t.potHeight} min={20} max={100} step={1} unit="cm"
+            onChange={v => setTweak('potHeight', v)} />
+          <TweakSlider label="Pot opening diameter" value={t.potTopDiameter} min={10} max={50} step={1} unit="cm"
+            onChange={v => setTweak('potTopDiameter', v)} />
+          <TweakSlider label="Plant height" value={t.plantHeight} min={40} max={200} step={1} unit="cm"
+            onChange={v => setTweak('plantHeight', v)} />
+          <TweakSlider label="Stem/cane count" value={t.stemCount} min={1} max={5} step={1}
+            onChange={v => setTweak('stemCount', v)} />
+          <TweakSlider label="Widest leaf spread" value={t.spread} min={15} max={80} step={1} unit="cm"
+            onChange={v => setTweak('spread', v)} />
+          <TweakSection label="Corn plant — colours" />
+          <TweakColor label="Pot colour" value={t.potColor}
+            onChange={v => setTweak('potColor', v)} />
+          <TweakColor label="Leaf colour" value={t.leafColor}
+            onChange={v => setTweak('leafColor', v)} />
+        </>}
+
+        {isWallPlanter && <>
+          <TweakSection label="Wall planter — proportioning" />
+          <TweakSlider label="Leaf height" value={t.plantHeight} min={10} max={60} step={1} unit="cm"
+            onChange={v => setTweak('plantHeight', v)} />
+          <TweakSlider label="Leaf count" value={t.leafCount} min={2} max={10} step={1}
+            onChange={v => setTweak('leafCount', v)} />
+          <TweakSection label="Wall planter — colours" />
+          <TweakColor label="Ceramic colour" value={t.potColor}
+            onChange={v => setTweak('potColor', v)} />
+          <TweakColor label="Wire frame colour" value={t.frameColor}
+            onChange={v => setTweak('frameColor', v)} />
+          <TweakColor label="Leaf colour" value={t.leafColor}
+            onChange={v => setTweak('leafColor', v)} />
+        </>}
+
+        <TweakSection label="Leaf layout" />
+        <TweakSlider label="Seed" value={t.seed} min={1} max={999} step={1}
+          onChange={v => setTweak('seed', v)} />
+
+        <TweakSection label="Detail (mobile budget)" />
+        <TweakRadio label="Detail" value={t.detail}
+          options={[{ value: 'full', label: 'Full' }, { value: 'low', label: 'Low' }]}
+          onChange={v => setTweak('detail', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// Self-post it so the panel is visible when there's no host driving it.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>
