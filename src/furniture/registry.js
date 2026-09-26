@@ -37,6 +37,10 @@ export const REGISTRY = Object.freeze({
 
   'digital-piano': { path: 'digital-piano.js', key: null, spec: 'DigitalPianoSpec' },
 
+  'dining-chair': { path: 'dining.js', key: 'dining-chair', spec: 'DiningSpec' },
+
+  'dining-table': { path: 'dining.js', key: 'dining-table', spec: 'DiningSpec' },
+
   'fridge-freezer': { path: 'kitchen.js', key: 'fridge-freezer', spec: 'KitchenSpec' },
 
   'gaming-chair': { path: 'gaming-chair.js', key: null, spec: 'GamingChairSpec' },
@@ -70,6 +74,8 @@ export const REGISTRY = Object.freeze({
   'tv': { path: 'small-items.js', key: 'tv', spec: 'SmallItemsSpec' },
 
   'wall-art': { path: 'small-items.js', key: 'wall-art', spec: 'SmallItemsSpec' },
+
+  'wall-clock': { path: 'dining.js', key: 'wall-clock', spec: 'DiningSpec' },
 
   'wall-sconce': { path: 'wall-sconce.js', key: null, spec: 'WallDecorSpec' },
 

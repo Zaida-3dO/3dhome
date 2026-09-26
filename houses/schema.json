@@ -732,6 +732,10 @@
 
         { "if": { "properties": { "type": { "const": "digital-piano" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_digital-piano" } } } },
 
+        { "if": { "properties": { "type": { "const": "dining-chair" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_dining-chair" } } } },
+
+        { "if": { "properties": { "type": { "const": "dining-table" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_dining-table" } } } },
+
         { "if": { "properties": { "type": { "const": "fridge-freezer" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_fridge-freezer" } } } },
 
         { "if": { "properties": { "type": { "const": "gaming-chair" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_gaming-chair" } } } },
@@ -765,6 +769,8 @@
         { "if": { "properties": { "type": { "const": "tv" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_tv" } } } },
 
         { "if": { "properties": { "type": { "const": "wall-art" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-art" } } } },
+
+        { "if": { "properties": { "type": { "const": "wall-clock" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-clock" } } } },
 
         { "if": { "properties": { "type": { "const": "wall-sconce" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-sconce" } } } },
 
@@ -866,6 +872,96 @@
       "type": "object",
       "x-placeholder": true,
       "description": "PLACEHOLDER for `digital-piano`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_dining-chair": {
+      "type": "object",
+      "description": "Params for `dining-chair` (src/furniture/dining.js, TYPES['dining-chair']): a low-back chair with four straight legs, modelled from a kitchen photo of a space-saving round-table set. Each `default` equals dining.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 45,
+          "description": "cm, along the item's local x."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 50,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 75,
+          "description": "cm, floor to the top of the low back."
+        },
+        "seatHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 45,
+          "description": "cm, floor to the top of the seat. Clamped below `height`."
+        },
+        "seatColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1a1a1a"
+        },
+        "seatFinish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "matte"
+        },
+        "legColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1a1a1a"
+        },
+        "legFinish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "matte"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_dining-table": {
+      "type": "object",
+      "description": "Params for `dining-table` (src/furniture/dining.js, TYPES['dining-table']): a round table on a slim pedestal base, modelled from a kitchen photo. `width` and `depth` both carry the diameter -- a round footprint only has one horizontal size, but the builder contract's bbox check needs both keys present and equal. Each `default` equals dining.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 100,
+          "description": "cm, the round top's diameter (kept equal to `depth`)."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 100,
+          "description": "cm, the round top's diameter (kept equal to `width`)."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 75,
+          "description": "cm, floor to the top of the tabletop."
+        },
+        "topColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f2f0eb"
+        },
+        "topFinish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "gloss"
+        },
+        "baseColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1c1c1c"
+        },
+        "baseFinish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "matte"
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_fridge-freezer": {
@@ -1236,6 +1332,66 @@
       "type": "object",
       "x-placeholder": true,
       "description": "PLACEHOLDER for `wall-art`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_wall-clock": {
+      "type": "object",
+      "description": "Params for `wall-clock` (src/furniture/dining.js, TYPES['wall-clock']): a working wall clock in two styles -- `framed` (a round face + rim + hands) or `diy-numerals` (numerals/dots stuck straight on the wall around a plain hands unit, matching a photo of a real DIY wall clock). `time` only sets the hands' pose at BUILD time; a live scene re-poses them continuously via dining.js's exported setClockTime(group, date) helper. Each `default` equals dining.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 30,
+          "description": "cm, kept equal to `diameter`."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 4,
+          "description": "cm, how far the clock protrudes from the wall."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 30,
+          "description": "cm, kept equal to `diameter`."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["framed", "diy-numerals"],
+          "default": "diy-numerals",
+          "description": "`framed`: a conventional round face, rim and hands. `diy-numerals`: numerals/dots stuck directly on the wall around a plain hands unit, no face disc -- the style the reference photo shows."
+        },
+        "diameter": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 30,
+          "description": "cm, kept equal to `width`/`height`."
+        },
+        "faceColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f5f2ea"
+        },
+        "rimColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1a1a1a"
+        },
+        "numeralColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1a1a1a"
+        },
+        "handColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1a1a1a"
+        },
+        "time": {
+          "type": "string",
+          "pattern": "^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$",
+          "default": "10:10",
+          "description": "\"HH:MM\", 24-hour. Sets the hour/minute hands' pose at build time ONLY (seconds default to 0) -- see the block description for how a live scene keeps the clock running."
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_wall-sconce": {
