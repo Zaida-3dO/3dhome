@@ -609,10 +609,10 @@
     }
   ],
   "furniture": [
-    { "id": "study_desk", "room": "study", "type": "box", "wall": 1, "centre": 760, "offset": 0,
-      "params": { "width": 140, "depth": 70, "height": 74, "color": "#8a6a4a" },
-      "label": "Desk", "notes": "A plain box standing in for a desk until a desk type is placed." },
-    { "id": "study_screen", "room": "study", "type": "box", "wall": 1, "centre": 760, "offset": 20, "elevation": 74,
+    { "id": "study_desk", "room": "study", "type": "standing-desk", "wall": 1, "centre": 760, "offset": 0,
+      "params": { "width": 140, "depth": 70, "topHeight": 74, "height": 76.5 },
+      "label": "Desk", "notes": "Sit-stand desk at sitting height." },
+    { "id": "study_screen", "room": "study", "type": "box", "wall": 1, "centre": 760, "offset": 20, "elevation": 76.5,
       "fade": "never", "params": { "width": 60, "depth": 4, "height": 36, "color": "#3a6e9e", "finish": "emissive" },
       "label": "Screen", "notes": "Emissive finish: kept as its own draw. fade never: it stays lit when the north wall fades." },
     { "id": "study_chair", "room": "study", "type": "gaming-chair", "at": [760, 125], "rotation": 180,
