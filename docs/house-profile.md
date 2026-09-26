@@ -402,7 +402,8 @@ pinch-pleat, under a white cornice with a glowing strip light.
 {
   "id": "bedroom_curtain", "room": "bedroom", "wall": 3,
   "centre": 620, "width": 288, "openPct": 60,
-  "outerColor": "#d98aa8", "innerColor": "#5f86c4"
+  "outerColor": "#d98aa8", "innerColor": "#5f86c4",
+  "stackWidth": 34
 }
 ```
 
@@ -414,6 +415,13 @@ pinch-pleat, under a white cornice with a glowing strip light.
   gathered into a stack at each end, each half toward its own wall end. Bind a
   Home Assistant `cover.*` to the curtain's `id` in `rooms.json`
   (`sensors.curtains`) and the curtain follows it, animated.
+- **How wide the open stack is** depends on how much fabric is in it, not on
+  the curtain's width: by default **4.7 cm per pleat per side** (a 5 + 2 pleat
+  half stacks to 32.9 cm). Two optional overrides, in this order of precedence:
+  `stackWidth` — the measured stack per side in cm, which wins outright — and
+  `stackPerPleat` — cm per pleat, for a fabric that bunches thicker or thinner.
+  A stack is never wider than a closed half. The daylight uses the same width,
+  so a wide stack keeps shading the edge of the glass when fully open.
 - **Daylight comes in through the window** and a curtain in front of it gates
   that light: fully open lets it all in, a closed blackout lets almost none
   through, and a closed sheer lets in a dim share tinted toward its own colour.
@@ -428,10 +436,17 @@ pinch-pleat, under a white cornice with a glowing strip light.
   through a curtain hung behind it.
 - `cornice.sideFaces: false` gives a wall-to-wall cornice spanning the whole
   room along that wall instead of a box just wider than the curtain.
-- The strip light glows (emissive) and, on the mid and ultra tiers, adds ONE
-  unshadowed point light per cornice — the same cost as one ambient strip. The
-  spec page's three shadow-casting point lights per cornice would overrun the
-  mobile GPU budget the quality tiers protect. Bind its own light entity in
+- Every cornice has a **lid**: a top panel inside the box just under the
+  ceiling, so looking down with the ceiling hidden shows a closed pelmet, not
+  the fabric heading and the LED strip.
+- The strip light glows (emissive) and, on the mid and ultra tiers, throws
+  light through a row of **unshadowed downlights** — 3 on a cornice under
+  250 cm wide, 5 on one 250 cm or wider — spaced along the strip. They are
+  aimed down and back out of the cornice's open bottom onto the curtain
+  heading and the wall, with a cone that clears the front face, the lid and
+  the side faces, so the cornice itself never glows from the room. The low
+  tier (256 fragment uniforms) keeps the glowing strip but adds no light.
+  Bind its own light entity in
   `rooms.json` (`sensors.corniceLights`). **Do not also list the cornice as a
   strip under the room's `ambient` channel**: the cornice is already drawn by
   the curtain, so that would draw and drive it twice (the validator warns).

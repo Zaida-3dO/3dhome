@@ -620,6 +620,10 @@ export const HouseLoader = (() => {
       roomSpan: roomSpan,
       c: cur.centre,
       w: cur.width,
+      // The fully-open stack per side (wall-fittings curtainStackWidth): an
+      // absolute width in cm, else cm per pleat x pleats; null = the default.
+      stackWidth: cur.stackWidth != null && cur.stackWidth > 0 ? cur.stackWidth : null,
+      stackPerPleat: cur.stackPerPleat != null && cur.stackPerPleat > 0 ? cur.stackPerPleat : null,
       top: top,
       drop: cur.height != null ? cur.height : top,
       openPct: cur.openPct != null ? cur.openPct : CURTAIN_DEFAULTS.openPct,

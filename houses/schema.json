@@ -525,6 +525,17 @@
           "default": 100,
           "description": "How open it hangs: 0 = drawn closed across the window, 100 = gathered into a stack at each end."
         },
+        "stackWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Width of the gathered stack at EACH end when fully open (100%), in centimetres per side. Measure it on the real curtain: how much wall one half still covers when drawn right back. Overrides `stackPerPleat`. Omit both and the stack is 4.7 cm per pleat (outerPleats + innerPleats per half). Never wider than a closed half. The same value drives the fabric and how much daylight the open curtain still blocks."
+        },
+        "stackPerPleat": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 4.7,
+          "description": "Centimetres of fully-open stack per pleat, per side: the stack is this x (outerPleats + innerPleats). For a fabric that bunches thicker or thinner than the 4.7 cm default. Ignored when `stackWidth` is given."
+        },
         "opacity": {
           "type": "number",
           "exclusiveMinimum": 0,
@@ -576,7 +587,7 @@
             "color": { "$ref": "#/$defs/hexColor" },
             "depth": { "type": "number", "exclusiveMinimum": 0, "default": 18, "description": "Projection from the wall, cm." },
             "height": { "type": "number", "exclusiveMinimum": 0, "default": 24, "description": "Front-face height, cm, hanging down from `top`." },
-            "light": { "type": "boolean", "default": true, "description": "Draw the glowing strip light inside the front face. It is emissive only: it adds no light source to the scene." },
+            "light": { "type": "boolean", "default": true, "description": "Draw the glowing strip light inside the front face. On the mid and ultra quality tiers it also throws light: a row of downlights (3, or 5 on a cornice 250 cm or wider) shining out of the cornice's open bottom onto the curtain heading and the wall." },
             "lightColor": { "$ref": "#/$defs/hexColor" }
           },
           "additionalProperties": false
