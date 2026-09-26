@@ -1184,7 +1184,7 @@
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 63.6,
+          "default": 60.2,
           "description": "cm, DERIVED from radius/backSweep: 2*radius*sin(backSweep/2). Carried as a schema default (rather than computed) because the validator does not run JS."
         },
         "depth": {
@@ -1209,13 +1209,13 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "maximum": 180,
-          "default": 90,
-          "description": "degrees, the arc's angular span, centred on straight back. 90 (a quarter circle) is the nesting default -- 4 chairs exactly ring a full 360 degrees with no gap or overlap."
+          "default": 84,
+          "description": "degrees, the arc's angular span, centred on straight back. 84 (not a full quarter circle) leaves a 6-degree gap centred on each of the 4 seams between chairs tucked at 0/90/180/270 degrees -- room for the companion dining-table's own legs, which assume this value (see dining.js's leg-placement comment). A caller who changes this away from 84 without also adjusting the table's leg geometry can reopen the collision the gap exists to avoid."
         },
         "seatHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 52,
+          "default": 46,
           "description": "cm, floor to the top of the seat. Clamped below `height`."
         },
         "seatColor": {

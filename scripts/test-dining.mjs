@@ -212,7 +212,8 @@ check('TYPES has no wall-clock (moved to wall-clock.js)', !Dining.TYPES['wall-cl
     ['width', 'depth', 'height'].every(k => typeof Chair.DEFAULTS[k] === 'number'), Chair.DEFAULTS);
   check('dining-chair: DEFAULTS has radius and backSweep',
     typeof Chair.DEFAULTS.radius === 'number' && typeof Chair.DEFAULTS.backSweep === 'number', Chair.DEFAULTS);
-  check('dining-chair: DEFAULTS backSweep is 90 (a quarter circle)', Chair.DEFAULTS.backSweep === 90, Chair.DEFAULTS);
+  check('dining-chair: DEFAULTS backSweep is 84 (opens a seam gap for the table legs)',
+    Chair.DEFAULTS.backSweep === 84, Chair.DEFAULTS);
   check('dining-chair: DEFAULTS depth equals radius', Chair.DEFAULTS.depth === Chair.DEFAULTS.radius, Chair.DEFAULTS);
   // width should equal 2*radius*sin(backSweep/2) within schema-default rounding.
   const expectedWidth = 2 * Chair.DEFAULTS.radius * Math.sin((Chair.DEFAULTS.backSweep * Math.PI) / 180 / 2);
@@ -295,6 +296,50 @@ check('TYPES has no wall-clock (moved to wall-clock.js)', !Dining.TYPES['wall-cl
       !anyOutward);
   }
 
+  // THICKNESS (round-2 code review LOW #1, item 89769f2b: claimed fixed
+  // after round 1 but was not -- backShell centred both rings on their OWN
+  // radius, coincident at the back centre, 0.7cm apart at the edges,
+  // instead of a uniform ~2.5cm). Measured directly from the built
+  // geometry's own outer/inner shell vertices, sampled at several angles
+  // across the sweep, not asserted from the source code.
+  {
+    const backThicknessExpected = 0.025; // metres, the module's own constant
+    const outerPos = meshes.backOuter.geometry.attributes.position;
+    const innerPos = meshes.backInner.geometry.attributes.position;
+    // Sample bottom-ring vertices only (every other vertex is bottom/top per
+    // backShell's own construction: position pairs are [bottom, top] per
+    // column) at a few columns across the sweep, and measure each outer
+    // vertex's distance to the nearest inner vertex at the same column.
+    const columns = Math.floor(outerPos.count / 2 / 5); // ~5 sample columns
+    let minThickness = Infinity, maxThickness = -Infinity;
+    for (let col = 0; col <= 4; col++) {
+      const i = Math.min(col * columns, outerPos.count / 2 - 1) * 2; // bottom vertex index for this column
+      const ov = new THREE.Vector3().fromBufferAttribute(outerPos, i);
+      const iv = new THREE.Vector3().fromBufferAttribute(innerPos, i);
+      const thickness = ov.distanceTo(iv);
+      minThickness = Math.min(minThickness, thickness);
+      maxThickness = Math.max(maxThickness, thickness);
+    }
+    check('dining-chair: back shell thickness is uniform (~2.5cm) across the sweep, not zero at the centre',
+      near(minThickness, backThicknessExpected, 0.003) && near(maxThickness, backThicknessExpected, 0.003),
+      { minThickness, maxThickness, expected: backThicknessExpected });
+  }
+
+  // Mutation-probe: the PRE-FIX centring (z = rad - rad*cos(theta), each
+  // shell centred on its OWN radius) DOES give zero thickness at the back
+  // centre -- proving the thickness check above is not hollow.
+  {
+    const chairSweepForThickness = (Chair.DEFAULTS.backSweep * Math.PI) / 180;
+    const backThickness = 0.025;
+    const innerRBad = chairApexZ - backThickness;
+    const thetaCentre = 0;
+    const outerZ = chairApexZ - chairApexZ * Math.cos(thetaCentre); // = 0
+    const innerZBad = innerRBad - innerRBad * Math.cos(thetaCentre); // pre-fix formula: also 0
+    const thicknessAtCentreBad = Math.abs(outerZ - innerZBad);
+    check('dining-chair mutation-probe: the PRE-FIX shell centring gives ~zero thickness at the back centre (proves the thickness check is not hollow)',
+      thicknessAtCentreBad < 0.001, { thicknessAtCentreBad, chairSweepForThickness });
+  }
+
   // seatHeight is a param and is clamped below height, never allowed to exceed it.
   const gClamped = Chair.build(THREE, { height: 60, seatHeight: 95 }, { detail: 'full' });
   const bClamped = bboxCm(gClamped);
@@ -373,8 +418,8 @@ check('TYPES has no wall-clock (moved to wall-clock.js)', !Dining.TYPES['wall-cl
   const sweep = (Chair.DEFAULTS.backSweep * Math.PI) / 180;
   const tableR = Table.DEFAULTS.width / 2 / 100;
 
-  check('nesting: 4 * DEFAULTS.backSweep == 360 (chairs exactly ring the centre)',
-    near(Chair.DEFAULTS.backSweep * 4, 360), Chair.DEFAULTS.backSweep);
+  check('nesting: 4 * DEFAULTS.backSweep < 360 (a seam gap is open for the table legs)',
+    Chair.DEFAULTS.backSweep * 4 < 360, Chair.DEFAULTS.backSweep);
   check('nesting: chair arc radius <= table top radius', radius <= tableR + 1e-9, { radius, tableR });
 
   // Tucked placement: chair i's own origin (its back-arc centre, local
@@ -426,149 +471,230 @@ check('TYPES has no wall-clock (moved to wall-clock.js)', !Dining.TYPES['wall-cl
   }
 
   /**
-   * Points sampled along `mesh`'s own EDGES (each triangle's 3 edges,
-   * subdivided into `stepsPerEdge` segments), in world space -- not just its
-   * raw vertices. A leg is a box with vertices only at its two end-rings, so
-   * vertex-only sampling can miss its SURFACE crossing a thin band (like the
-   * chair seat's 4cm slab) between those rings entirely -- which is exactly
-   * how an earlier version of this file's mutation-probe found a real
-   * collision reported zero. Edge sampling catches that: the leg's own long
-   * edges get subdivided finely enough to cross any band this thin.
+   * TRIANGLE-TRIANGLE intersection (Moller-Trumbore-based), not analytic
+   * bands or vertex/edge sampling -- round-2 code review (item 89769f2b)
+   * found the previous edge-sampling approach still had a ~1cm blind band
+   * (it tested the SOURCE object's own edges against the chair's ANALYTIC
+   * seat/shell bands, which can miss a a real collision the chair's actual
+   * mesh triangles would catch). This tests real triangle pairs from BOTH
+   * meshes' actual built geometry, in world space.
    */
-  function sampleMeshSurfacePoints(mesh, stepsPerEdge) {
-    const posAttr = mesh.geometry.attributes.position;
-    const idx = mesh.geometry.index;
-    const points = [];
-    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
-    const triCount = idx ? idx.count / 3 : posAttr.count / 3;
-    for (let t = 0; t < triCount; t++) {
-      const ia = idx ? idx.getX(t * 3) : t * 3, ib = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, ic = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
-      a.fromBufferAttribute(posAttr, ia).applyMatrix4(mesh.matrixWorld);
-      b.fromBufferAttribute(posAttr, ib).applyMatrix4(mesh.matrixWorld);
-      c.fromBufferAttribute(posAttr, ic).applyMatrix4(mesh.matrixWorld);
-      [[a, b], [b, c], [c, a]].forEach(([p, q]) => {
-        for (let s = 0; s <= stepsPerEdge; s++) {
-          points.push(new THREE.Vector3().lerpVectors(p, q, s / stepsPerEdge));
-        }
-      });
+  function triIntersectsTri(a0, a1, a2, b0, b1, b2) {
+    // Separating-axis test. The textbook 11-axis basis for two triangles
+    // (2 face normals + 9 edge-cross-pairs) is INCOMPLETE for two COPLANAR
+    // triangles: every edge-cross-pair of two in-plane edges points along
+    // the shared normal too, so all 11 axes collapse onto the SAME line and
+    // the test can never find a separating axis that exists only WITHIN
+    // that shared plane (found live: two chair seats meeting edge-to-edge
+    // at a seam are coplanar and this basis alone reported every separated
+    // pair as intersecting). Each triangle's own in-plane edge normals
+    // (edge direction crossed with the triangle's own face normal) supply
+    // exactly those missing axes, and are valid SAT candidates in the
+    // general 3D case too, so adding them costs nothing when the triangles
+    // are NOT coplanar.
+    const edgesA = [new THREE.Vector3().subVectors(a1, a0), new THREE.Vector3().subVectors(a2, a1), new THREE.Vector3().subVectors(a0, a2)];
+    const edgesB = [new THREE.Vector3().subVectors(b1, b0), new THREE.Vector3().subVectors(b2, b1), new THREE.Vector3().subVectors(b0, b2)];
+    const normalA = new THREE.Vector3().crossVectors(edgesA[0], edgesA[1]);
+    const normalB = new THREE.Vector3().crossVectors(edgesB[0], edgesB[1]);
+    const axes = [normalA, normalB];
+    for (const ea of edgesA) for (const eb of edgesB) {
+      const cross = new THREE.Vector3().crossVectors(ea, eb);
+      if (cross.lengthSq() > 1e-14) axes.push(cross);
     }
-    return points;
+    if (normalA.lengthSq() > 1e-14) edgesA.forEach(e => axes.push(new THREE.Vector3().crossVectors(e, normalA)));
+    if (normalB.lengthSq() > 1e-14) edgesB.forEach(e => axes.push(new THREE.Vector3().crossVectors(e, normalB)));
+    // TOUCH_MARGIN_M: two tucked chairs' apexes meet EXACTLY at the shared
+    // table centre by construction (both wedges' front points converge on
+    // one point -- see the NESTING MATH note), which is a single shared
+    // vertex, not material overlap; round-2 visual review found the same
+    // thing directly ("coincident faces... not visible when tucked, and
+    // clear at pulledOut=0.05" -- graded INFO, not a defect). A raw SAT with
+    // zero tolerance calls point/edge CONTACT "intersecting" (mathematically
+    // correct, since they do share a point), which would fail this test on
+    // an accepted, harmless design property rather than a real collision.
+    // 1mm of real separation margin (normalised per-axis, since the SAT
+    // axes here are not unit vectors) distinguishes "touching only" from
+    // genuine overlap -- round-1's real collisions were centimetres deep.
+    const TOUCH_MARGIN_M = 0.001;
+    for (const axis of axes) {
+      const axisLen = axis.length();
+      if (axisLen < 1e-7) continue;
+      const projA = [a0, a1, a2].map(p => p.dot(axis) / axisLen);
+      const projB = [b0, b1, b2].map(p => p.dot(axis) / axisLen);
+      const minA = Math.min(...projA), maxA = Math.max(...projA);
+      const minB = Math.min(...projB), maxB = Math.max(...projB);
+      if (maxA < minB - TOUCH_MARGIN_M || maxB < minA - TOUCH_MARGIN_M) return false; // separated (beyond touching) on this axis
+    }
+    return true; // no separating axis found -- the triangles intersect (or merely touch)
+  }
+
+  /** Every world-space triangle of every mesh in `group` matching `namePattern`. */
+  function trianglesOf(group, namePattern) {
+    const tris = [];
+    group.traverse(o => {
+      if (!o.isMesh || (namePattern && !namePattern.test(o.name))) return;
+      const posAttr = o.geometry.attributes.position;
+      const idx = o.geometry.index;
+      const triCount = idx ? idx.count / 3 : posAttr.count / 3;
+      for (let t = 0; t < triCount; t++) {
+        const ia = idx ? idx.getX(t * 3) : t * 3, ib = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, ic = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+        const a = new THREE.Vector3().fromBufferAttribute(posAttr, ia).applyMatrix4(o.matrixWorld);
+        const b = new THREE.Vector3().fromBufferAttribute(posAttr, ib).applyMatrix4(o.matrixWorld);
+        const c = new THREE.Vector3().fromBufferAttribute(posAttr, ic).applyMatrix4(o.matrixWorld);
+        tris.push({ name: o.name, a, b, c });
+      }
+    });
+    return tris;
   }
 
   /**
-   * Every point sampled along `sourceGroup`'s own mesh SURFACES (edges,
-   * finely subdivided -- see sampleMeshSurfacePoints, not just raw
-   * vertices) is tested against every chair in `chairGroups`: does it fall
-   * inside that chair's SEAT slab (a thin band at y in [seatH-thickness,
-   * seatH], within the wedge's angular sweep and radius) or inside its BACK
-   * SHELL's radius band (between innerR and radius, within the sweep, at a
-   * y the shell actually spans)? Returns the list of collisions found (name
-   * + chair index + local coords), so a failure is diagnosable, not just a
-   * count.
+   * Every triangle of every mesh in `groupA` (optionally name-filtered)
+   * against every triangle of every mesh in `groupB` -- real geometry on
+   * BOTH sides, closing the blind band an analytic-band or one-sided
+   * edge-sampling approach can miss. A coarse AABB-vs-AABB pre-check per
+   * mesh pair keeps this from being O(triA * triB) across the WHOLE scene.
    */
-  function findCollisions(sourceGroup, sourceNamePattern, chairGroups) {
+  function trianglesOfMesh(mesh) {
+    // Single-mesh wrapper for trianglesOf: a fake "group" whose traverse()
+    // calls back with exactly this one mesh, which already carries its own
+    // real matrixWorld (no cloning, so no matrix is lost).
+    return trianglesOf({ traverse: cb => cb(mesh) }, null);
+  }
+
+  function findMeshCollisions(groupA, patternA, groupB, patternB) {
     const collisions = [];
-    const seatH = Chair.DEFAULTS.seatHeight / 100;
-    const seatThickness = 0.04;
-    const backThickness = 0.025;
-    const innerR = radius - backThickness;
-    const peakHeight = Math.max(0.01, Chair.DEFAULTS.height / 100 - seatH);
-    const sideHeight = peakHeight * 0.65;
-    function backHeightAt(theta) {
-      const frac = Math.cos((theta / (sweep / 2)) * (Math.PI / 2));
-      return sideHeight + (peakHeight - sideHeight) * frac;
-    }
-    sourceGroup.traverse(o => {
-      if (!o.isMesh || !sourceNamePattern.test(o.name)) return;
-      const points = sampleMeshSurfacePoints(o, 24);
-      points.forEach(v => {
-        chairGroups.forEach((chair, ci) => {
-          const local = v.clone().applyMatrix4(chair.matrixWorld.clone().invert());
-          if (local.z < -0.005 || local.z > radius + 0.005) return; // outside the wedge's own z-span
-          const ddx = local.x, ddz = radius - local.z;
-          const distFromApex = Math.hypot(ddx, ddz);
-          const angleFromBack = Math.atan2(ddx, ddz);
-          if (Math.abs(angleFromBack) > sweep / 2 + 0.005) return; // outside the wedge's angular sweep
-          // Seat slab: a thin band at y in [seatH-thickness, seatH], filled
-          // out to `radius` in the wedge (the seat's own footprint).
-          const inSeatBand = local.y >= seatH - seatThickness - 0.002 && local.y <= seatH + 0.002 && distFromApex <= radius;
-          // Back shell: a thin radius band, only where the shell's own
-          // (angle-dependent) height profile actually reaches this y.
-          const shellTopY = seatH + backHeightAt(angleFromBack);
-          const inBackShellBand = distFromApex >= innerR - 0.003 && distFromApex <= radius + 0.001 &&
-            local.y >= seatH - 0.002 && local.y <= shellTopY + 0.002;
-          if (inSeatBand || inBackShellBand) {
-            collisions.push({ name: o.name, chair: ci, local: { x: +local.x.toFixed(3), y: +local.y.toFixed(3), z: +local.z.toFixed(3) }, distFromApex: +distFromApex.toFixed(3), inSeatBand, inBackShellBand });
+    const meshesA = [], meshesB = [];
+    groupA.traverse(o => { if (o.isMesh && (!patternA || patternA.test(o.name))) meshesA.push(o); });
+    groupB.traverse(o => { if (o.isMesh && (!patternB || patternB.test(o.name))) meshesB.push(o); });
+    meshesA.forEach(ma => {
+      const boxA = new THREE.Box3().setFromObject(ma);
+      const trisA = trianglesOfMesh(ma);
+      meshesB.forEach(mb => {
+        if (ma === mb) return;
+        const boxB = new THREE.Box3().setFromObject(mb);
+        if (!boxA.intersectsBox(boxB)) return; // cheap reject before any triangle work
+        const trisB = trianglesOfMesh(mb);
+        for (const ta of trisA) {
+          for (const tb of trisB) {
+            if (triIntersectsTri(ta.a, ta.b, ta.c, tb.a, tb.b, tb.c)) {
+              collisions.push({ a: ma.name, b: mb.name });
+              return;
+            }
           }
-        });
+        }
       });
     });
     return collisions;
   }
 
-  // ---- The real fix: table legs/crossbars vs the 4 tucked chairs. ----
+  // ---- The real fix: table legs/crossbars/top vs every tucked chair's
+  // seat, back shells, legs and stretchers -- full triangle geometry on
+  // both sides (chair legs/stretchers vs the table crossbar, and chair vs
+  // chair, per the round-2 directive). ----
   {
     const table = centredTable();
     const chairs = tuckedChair();
-    const collisions = findCollisions(table, /^(leg\d+|crossbar)/, chairs);
-    check('nesting: table legs/crossbars do not intersect any tucked chair\'s seat or back shell',
-      collisions.length === 0, collisions.slice(0, 5));
+    const tableParts = /^(leg\d+|crossbar|tabletop)/;
+    let allCollisions = [];
+    chairs.forEach((chair, ci) => {
+      const hits = findMeshCollisions(table, tableParts, chair, null);
+      allCollisions = allCollisions.concat(hits.map(h => Object.assign(h, { chair: ci })));
+    });
+    check('nesting: table (legs/crossbars/top) has zero real triangle intersections with any tucked chair',
+      allCollisions.length === 0, allCollisions.slice(0, 6));
   }
 
-  // ---- Mutation-probe: a leg inset back to 0.55 (down from the shipped
-  // 0.70) puts its seat-height crossing point at ~0.42m from the wedge
-  // apex -- inside the chair's own 0.45m seat radius -- and MUST fail this
-  // test, otherwise it cannot actually distinguish a colliding layout from
-  // a clear one (the same hollowness round 1 found: the original arithmetic
-  // check passed 90/90 even though the shipped legTopInset of 0.62
-  // interpenetrated both neighbouring chairs' seat and back shell). 0.55
-  // targets the SEAT specifically (independent of the back shell's own
-  // angle-dependent, now-tapered height profile, which shrinks the back's
-  // reach at exactly the angle a seam leg sits at). ----
+  // ---- Chair vs chair, adjacent pairs only (opposite pairs are far apart).
+  // At EXACT tuck (pulledOut=0) all 4 chairs' apexes converge on the same
+  // single point by construction (see the apex-convergence check above),
+  // so their seats' cap triangles share that one vertex -- correctly "not
+  // separated" under a strict SAT, but this is contact at a point, not
+  // material overlap (round-2 visual review found and accepted exactly
+  // this: "coincident faces... not visible when tucked, and clear at
+  // pulledOut=0.05" -- INFO, not a defect). Checked here at a hair's-breadth
+  // pull-out (5mm) instead of the exact singular point, which is enough to
+  // separate that shared vertex while still being indistinguishable from
+  // "tucked" visually and numerically -- and IS enough to catch a real
+  // volume overlap, which would still overlap at 5mm out. ----
   {
-    const legSize = 0.032, splayAngle = 0.16, topThickness = 0.028;
+    const chairs = tuckedChair(radius + 0.005);
+    let allCollisions = [];
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      const hits = findMeshCollisions(chairs[i], null, chairs[j], null);
+      allCollisions = allCollisions.concat(hits.map(h => Object.assign(h, { pair: [i, j] })));
+    }
+    check('nesting: every chair-vs-chair pair has zero real triangle intersections (checked 5mm off exact tuck, see note)',
+      allCollisions.length === 0, allCollisions.slice(0, 6));
+  }
+
+  // ---- Mutation-probe: a single leg built with the SAME seam-based
+  // construction as buildDiningTable, but shifted 4 degrees OFF the seam
+  // bisector (still well inside the DEFAULTS chair radius) so it sits
+  // squarely inside chair1's own territory instead of the gap between
+  // chairs -- MUST be caught, proving this triangle-level test can actually
+  // fail, closing the ~1cm blind band round 2 found in the previous
+  // (edge-sampling) version. A too-wide or too-deep leg placed EXACTLY on
+  // the seam bisector is not a reliable mutation here: the seam widens with
+  // radius, so a leg can still fit even well inside the chair's own radius
+  // (found live -- a first attempt at 0.85/1.05 radius fractions, still
+  // centred on the seam, did not collide). Moving off-centre is the
+  // reliable way to land inside a chair's wedge. ----
+  {
     const h = Table.DEFAULTS.height / 100;
-    const legTopInsetBad = tableR * 0.55; // deliberately deep -- inside the seat slab
-    const vertSpan = h - topThickness - (legSize / 2) * Math.sin(splayAngle);
-    const legLen = vertSpan / Math.cos(splayAngle);
-    const legGeo = new THREE.BoxGeometry(legSize, legLen, legSize);
-    legGeo.translate(0, -legLen / 2, 0);
-    const corners = [{ sx: -1, sz: -1 }, { sx: 1, sz: -1 }, { sx: -1, sz: 1 }, { sx: 1, sz: 1 }];
+    const topThickness = 0.028;
+    const legTopRadiusBad = radius * 0.78;
+    const legFootRadiusBad = radius * 0.97;
+    const splayAngleBad = Math.atan2(legFootRadiusBad - legTopRadiusBad, h - topThickness);
+    const legLenBad = Math.hypot(legFootRadiusBad - legTopRadiusBad, h - topThickness);
+    const legGeoBad = new THREE.BoxGeometry(0.032, legLenBad, 0.032);
+    legGeoBad.translate(0, -legLenBad / 2, 0);
+    const thetaBad = Math.PI / 4 + (4 * Math.PI) / 180; // 4 degrees off the 45-degree seam bisector
+    const leg = new THREE.Mesh(legGeoBad);
+    leg.name = 'leg0';
+    const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), thetaBad);
+    const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -splayAngleBad);
+    leg.quaternion.copy(yaw).multiply(tilt);
+    const radialDir = new THREE.Vector2(Math.sin(thetaBad), Math.cos(thetaBad));
+    leg.position.set(radialDir.x * legTopRadiusBad, h - topThickness, radialDir.y * legTopRadiusBad + tableR);
     const badLegsGroup = new THREE.Group();
-    corners.forEach((c, i) => {
-      const leg = new THREE.Mesh(legGeo.clone());
-      leg.name = 'leg' + i;
-      const diag = new THREE.Vector2(c.sx, c.sz).normalize();
-      const tiltAxis = new THREE.Vector3(-diag.y, 0, diag.x);
-      leg.setRotationFromAxisAngle(tiltAxis, splayAngle);
-      leg.position.set(c.sx * legTopInsetBad, h - topThickness, c.sz * legTopInsetBad + tableR);
-      badLegsGroup.add(leg);
-    });
+    badLegsGroup.add(leg);
     badLegsGroup.position.z = -tableR; // same centring the real fix uses
     badLegsGroup.updateMatrixWorld(true);
     const chairs = tuckedChair();
-    const collisions = findCollisions(badLegsGroup, /^leg\d+/, chairs);
-    check('nesting mutation-probe: a leg inset deep inside the chair seat radius (0.55) DOES collide (proves this test is not hollow)',
-      collisions.length > 0, { collisionCount: collisions.length });
+    let anyCollision = false;
+    chairs.forEach(chair => {
+      const hits = findMeshCollisions(badLegsGroup, /^leg0$/, chair, null);
+      if (hits.length > 0) anyCollision = true;
+    });
+    check('nesting mutation-probe: a leg 4 degrees off the seam bisector DOES collide at the triangle level (closes the blind band)',
+      anyCollision);
   }
 
   // ---- The chair back's highest point stays under the table's underside,
-  // with the ~1cm clearance the round-1 fix targeted. ----
+  // with the ~1cm clearance the round-1 fix targeted -- measured from the
+  // REAL BUILT GEOMETRY (round-2 code review, item 89769f2b: the previous
+  // version computed this arithmetically from DEFAULTS rather than reading
+  // the actual meshes). ----
   {
-    const tableUndersideY = Table.DEFAULTS.height / 100 - 0.028;
-    const chairBackTopY = Chair.DEFAULTS.seatHeight / 100 + Math.max(0.01, Chair.DEFAULTS.height / 100 - Chair.DEFAULTS.seatHeight / 100);
+    const table = Table.build(THREE, {}, { detail: 'full' });
+    const tableUndersideY = new THREE.Box3().setFromObject(table).max.y - 0.028; // top face minus its own thickness
+    const chair = Chair.build(THREE, {}, { detail: 'full' });
+    const chairBackTopY = new THREE.Box3().setFromObject(chair).max.y;
     const clearance = tableUndersideY - chairBackTopY;
-    check('nesting: chair back top clears the table underside by roughly 1cm',
+    check('nesting: chair back top (real geometry) clears the table underside (real geometry) by roughly 1cm',
       clearance >= 0.005 && clearance <= 0.03, { tableUndersideY, chairBackTopY, clearanceCm: (clearance * 100).toFixed(2) });
   }
 
-  // ---- Mutation-probe: raising chair height back to the table's own
-  // height (the pre-fix value) DOES violate the clearance check. ----
+  // ---- Mutation-probe: raising chair height back to the pre-fix value (75)
+  // DOES violate the clearance check, measured the same way. ----
   {
-    const tableUndersideY = Table.DEFAULTS.height / 100 - 0.028;
-    const badChairBackTopY = Chair.DEFAULTS.seatHeight / 100 + Math.max(0.01, 0.75 - Chair.DEFAULTS.seatHeight / 100); // pre-fix height=75
+    const table = Table.build(THREE, {}, { detail: 'full' });
+    const tableUndersideY = new THREE.Box3().setFromObject(table).max.y - 0.028;
+    const badChair = Chair.build(THREE, { height: 75 }, { detail: 'full' });
+    const badChairBackTopY = new THREE.Box3().setFromObject(badChair).max.y;
     const badClearance = tableUndersideY - badChairBackTopY;
-    check('nesting mutation-probe: the PRE-FIX chair height (75) DOES violate the table clearance',
+    check('nesting mutation-probe: the PRE-FIX chair height (75) DOES violate the table clearance (real geometry)',
       badClearance < 0, { badClearance });
   }
 }

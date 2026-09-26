@@ -154,55 +154,87 @@ function buildDiningTable(THREE, params, opts) {
   if (isKeptFinish(top.material.userData.finish)) top.userData.keep = true;
   group.add(top);
 
-  // Four slim square legs, splayed outward: each leg's TOP attaches inset
-  // under the rim and its FOOT lands further out and exactly at the floor
-  // (y=0) -- the outward lean the photo shows. Each leg is tilted about a
-  // single horizontal axis PERPENDICULAR to its own outward diagonal (so the
-  // tilt is purely radial, away from centre, not skewed), and its length is
-  // scaled by 1/cos(splayAngle) so its VERTICAL projection still spans
-  // exactly h - topThickness -- the foot lands at y=0 by construction,
-  // independent of splayAngle.
-  const legSize = 0.032;               // square cross-section, metres
-  // How far in from the rim the leg attaches. At 0.62 (the original value)
-  // the leg's TOP corner sits at radius r*0.62*sqrt(2) =~ 0.31m from the
-  // table's own centre for a 100cm table -- inside the nested chairs' own
-  // 0.45m arc radius, so it passed straight through both neighbouring
-  // chairs' seat and back shell (found by code review round 1, item
-  // 89769f2b). 0.70 is the largest fraction that still keeps the leg's top
-  // corner (radius r*0.70*sqrt(2)) under the table's own rim, and clears the
-  // DEFAULTS chair radius (45cm) by >2cm, verified against the real built
-  // chair geometry in the "legs clear the nested chairs" test below.
-  const legTopInset = r * 0.70;
-  const splayAngle = 0.16;             // radians outward tilt, from vertical
-  // The centreline compensation below (1/cos(splayAngle)) is exact for a
-  // ROUND leg; a SQUARE leg's tilted corners drop a little further still.
-  // Rather than solve the exact trig for an arbitrary diagonal tilt axis,
-  // shrink the target span by the same order-of-magnitude correction
-  // (half the cross-section times sin(splayAngle)) so the corner-accurate
-  // fix-up below (measured from the real geometry) only has a sub-millimetre
-  // residual to correct, keeping both y=0 AND y=h accurate to the contract's
-  // 0.5 cm tolerance.
-  const vertSpan = h - topThickness - (legSize / 2) * Math.sin(splayAngle);
-  const legLen = vertSpan / Math.cos(splayAngle);
+  // Four slim square legs, ONE PER SEAM between the nested chairs, splayed
+  // OUTWARD ALONG THE SEAM'S OWN RADIAL LINE (not diagonally past the rim --
+  // round-2 visual review, item 89769f2b: legTopInset=0.70 pushed the legs
+  // OUTSIDE the chair cylinder, tops at radius 0.517 (1.7cm past the 0.5m
+  // rim) and feet 9-13cm beyond it, which does not match the reference
+  // photos or the "legs run in the seams" directive).
+  //
+  // THE SEAM. A nested dining-chair's DEFAULTS backSweep is 90 deg, so 4
+  // chairs ring the full 360 deg with NO gap (this is why round 1's legs had
+  // nowhere to go but through a chair or past the rim). This table assumes
+  // its companion chairs are built with backSweep TRIMMED to
+  // SEAM_ASSUMED_BACK_SWEEP (84 deg -- inside the review's 84-86 deg
+  // range), which opens a 6-degree gap centred on each of the 45/135/225/
+  // 315-degree seam lines (by symmetry the seam is ALWAYS centred there,
+  // independent of the exact backSweep -- see the geometry note below). A
+  // leg placed exactly ON that bisector, oriented so its 3.2cm width lies
+  // TANGENTIALLY (across the seam) rather than diagonally, fits the gap
+  // with room either side, verified against the real built chair geometry
+  // in the "legs clear the nested chairs" test below. This is a documented
+  // coupling assumption, not a hidden one: a caller who changes the
+  // companion chair's backSweep or radius can reopen a collision, which is
+  // exactly what the round-2 slider-guard fix (LOW) checks for on the spec
+  // page.
+  // A 6-degree seam (SEAM_ASSUMED_BACK_SWEEP=84) subtends only about 2 cm at
+  // a 0.4 m radius, so a fully SQUARE 3.2cm leg leaves almost no angular
+  // margin once its own corners are accounted for (round-2 code review found
+  // it still clips chair1 by ~0.3deg at backSweep=84's exact 3deg half-gap).
+  // The cross-section is therefore NARROWER across the seam (tangential,
+  // `legWidthTangential`) than along it (radial, `legDepthRadial`) -- still
+  // reads as a slim square leg from the front/side (the dominant viewing
+  // angles), and gives a real angular margin verified in the "legs clear the
+  // nested chairs" test below.
+  const legWidthTangential = 0.020;
+  const legDepthRadial = 0.032;
+  // Leg TOP radius (under the tabletop) and FOOT radius (near the floor):
+  // the top sits well inside the chairs' own arc radius (assumed 0.45m, the
+  // DEFAULTS dining-chair radius) so it is genuinely "attached under the
+  // top", and the foot lands close to the table's own rim -- "about the rim
+  // line, not far past it" -- per the review's wording, both expressed as
+  // fractions of THIS table's own radius `r` so a resized table scales
+  // sensibly.
+  const legTopRadius = r * 0.78;
+  const legFootRadius = r * 0.97;
+  const splayAngle = Math.atan2(legFootRadius - legTopRadius, h - topThickness); // radians, purely radial
+  const legLen = Math.hypot(legFootRadius - legTopRadius, h - topThickness);
 
-  const legGeo = openBoxGeometry(THREE, legSize, legLen, legSize, 'y');
+  // Local x = tangential (across the seam), local z = radial (along the
+  // seam) -- matches the tiltAxis/radialDir frame each leg is placed in
+  // below, so the NARROW dimension is always the one facing a neighbouring
+  // chair.
+  const legGeo = openBoxGeometry(THREE, legWidthTangential, legLen, legDepthRadial, 'y');
   legGeo.translate(0, -legLen / 2, 0); // pivot (0,0,0) is the TOP end of the leg
-  const legCorners = [
-    { sx: -1, sz: -1 }, { sx: 1, sz: -1 }, { sx: -1, sz: 1 }, { sx: 1, sz: 1 }
-  ];
+  // The 4 seam bisectors, in the table's OWN local frame (already offset by
+  // +r in z per this module's convention -- see topGeo above): 45/135/225/
+  // 315 degrees from the table's front (+z, i.e. the direction opposite the
+  // dining.js back-at-z=0 convention), which is exactly where a seam
+  // between chairs tucked at 0/90/180/270 sits, for ANY backSweep (each
+  // chair's own sweep is centred on its own slot angle, so the midpoint
+  // between two adjacent slots -- the seam -- never moves).
+  const seamAngles = [Math.PI / 4, (3 * Math.PI) / 4, (5 * Math.PI) / 4, (7 * Math.PI) / 4];
   const legFeet = [];
   const legTops = [];
-  legCorners.forEach((c, i) => {
+  seamAngles.forEach((theta, i) => {
     const leg = new THREE.Mesh(legGeo.clone(), legMat.clone());
     leg.name = 'leg' + i;
-    // The outward diagonal in the xz-plane, from centre through this
-    // corner: (c.sx, c.sz) normalised. Tilting about the axis perpendicular
-    // to that diagonal (in the horizontal plane) swings the foot straight
-    // out along the diagonal, away from centre -- true radial splay.
-    const diag = new THREE.Vector2(c.sx, c.sz).normalize();
-    const tiltAxis = new THREE.Vector3(-diag.y, 0, diag.x); // perpendicular, horizontal
-    leg.setRotationFromAxisAngle(tiltAxis, splayAngle);
-    const top3 = new THREE.Vector3(c.sx * legTopInset, h - topThickness, c.sz * legTopInset + r);
+    // Orient the leg in two steps, composed as a single quaternion:
+    //  1. Yaw about Y by `theta` so the leg's own local x (its NARROW,
+    //     tangential dimension) points along the seam's tangent direction,
+    //     and local z (its radial dimension) points along the seam's
+    //     outward radial direction -- this is what actually makes the
+    //     narrow face the one across the seam, rather than assuming a tilt
+    //     about a world-space axis happens to line up with it.
+    //  2. THEN tilt by `splayAngle` about the leg's OWN (now-yawed) local x
+    //     axis, which is the seam's tangent direction -- so the splay
+    //     swings the foot further out ALONG the radial line, never
+    //     sideways into a neighbouring chair's territory.
+    const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), theta);
+    const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -splayAngle);
+    leg.quaternion.copy(yaw).multiply(tilt);
+    const radialDir = new THREE.Vector2(Math.sin(theta), Math.cos(theta));
+    const top3 = new THREE.Vector3(radialDir.x * legTopRadius, h - topThickness, radialDir.y * legTopRadius + r);
     leg.position.copy(top3);
     group.add(leg);
     legTops.push(top3);
@@ -218,6 +250,7 @@ function buildDiningTable(THREE, params, opts) {
   // floor shadow" from the photo. Two thin bars, one per diagonal, crossing
   // at the centre at a fixed height, each running leg-centreline to
   // leg-centreline at that height.
+  const vertSpan = h - topThickness;
   const frameY = Math.max(0.01, Math.min(p.frameHeight / 100, vertSpan - 0.02));
   const barThickness = 0.02;
   function crossbar(a, b, name) {
@@ -238,13 +271,15 @@ function buildDiningTable(THREE, params, opts) {
     const t = (top3.y - frameY) / (top3.y - foot.y);
     return new THREE.Vector3().lerpVectors(top3, foot, Math.min(1, Math.max(0, t)));
   });
-  crossbar(framePoints[0], framePoints[3], 'crossbarA'); // (-,-) to (+,+)
-  crossbar(framePoints[1], framePoints[2], 'crossbarB'); // (+,-) to (-,+)
+  // seamAngles = [45, 135, 225, 315] degrees -- index 0 and 2 are the true
+  // diagonal opposite pair (45/225), as are 1 and 3 (135/315).
+  crossbar(framePoints[0], framePoints[2], 'crossbarA'); // 45deg to 225deg
+  crossbar(framePoints[1], framePoints[3], 'crossbarB'); // 135deg to 315deg
 
-  // The splayed legs are SQUARE in cross-section, so their tilted corners
-  // (not just the centreline the trig above targets) drop a fraction of a
-  // centimetre past y=0 -- solving that in closed form for an arbitrary
-  // diagonal tilt axis is not worth it when a single measured correction
+  // The splayed legs have a RECTANGULAR cross-section, so their tilted
+  // corners (not just the centreline the trig above targets) drop a
+  // fraction of a centimetre past y=0 -- solving that in closed form for an
+  // arbitrary tilt axis is not worth it when a single measured correction
   // is exact and cheap: nudge the whole assembly up so its true minimum Y
   // (from the real geometry, corners included) lands at exactly 0, per the
   // builder contract.
@@ -266,7 +301,9 @@ const CHAIR_DEFAULTS = Object.freeze({
   // in DEFAULTS anyway because the builder contract requires numeric
   // width/depth/height, and the furniture-defaults drift test computes
   // footprints from these without running any JS.
-  width: 63.6,     // 2 * radius * sin(backSweep/2) at the DEFAULTS below
+  // width/depth/height below are for backSweep=84 (see backSweep's own
+  // comment) -- width = 2*radius*sin(84/2deg).
+  width: 60.2,     // 2 * radius * sin(backSweep/2) at the DEFAULTS below
   depth: 45,       // == radius
   // Capped below the dining-table's own underside (its DEFAULTS.height 75
   // minus its 2.8cm top slab, with a 1cm clearance margin) -- when 4 of
@@ -276,8 +313,24 @@ const CHAIR_DEFAULTS = Object.freeze({
   // used to sit AT y=75, 2.8cm inside the table's underside at y=72.2).
   height: 71,
   radius: 45,          // cm, the arc's radius -- also this wedge's depth
-  backSweep: 90,       // degrees, the arc's angular span, centred on straight back
-  seatHeight: 52,      // cm, floor to the top of the seat (photo reads 50-55cm)
+  // 84 (not 90): a full 90-degree sweep rings the table with NO gap between
+  // chairs, which leaves the table's own legs nowhere to go but through a
+  // chair or past the rim (round-2 visual review, item 89769f2b). Trimming
+  // to 84 opens a 6-degree gap centred on each of the 4 seams between
+  // tucked chairs (the seam is ALWAYS centred there, at 45/135/225/315
+  // degrees, independent of the exact backSweep -- see dining-table's own
+  // leg-placement comment) -- wide enough for that table's legs to run
+  // through, verified in the "legs clear the nested chairs" test.
+  backSweep: 84,
+  // Photo proportions (round-2 visual review, LOW): the black band (seat
+  // underside to back peak) should read as roughly a third of the table
+  // height, not a fifth. 46cm (down from 52) moves toward that -- lowering
+  // it further to hit the full ~35cm band would need seatHeight ~40cm,
+  // outside the 50-55cm the reference photos read, so 46 is the balance
+  // point: as close to the ~35cm band as the table-clearance ceiling and
+  // the photos' own seat-height range both allow at once. See the
+  // perf-audit/likeness note in the back-shell build for the exact numbers.
+  seatHeight: 46,
   seatColor: '#1a1a1a',
   seatFinish: 'matte',
   legColor: '#1a1a1a',
@@ -382,7 +435,16 @@ function buildDiningChair(THREE, params, opts) {
     for (let i = 0; i <= segs; i++) {
       const theta = -sweep / 2 + (i / segs) * sweep;
       const x = rad * Math.sin(theta);
-      const z = rad - rad * Math.cos(theta); // matches the seat shape's convention
+      // z is measured from the APEX (0, *, radius) using the TRUE radius,
+      // not this shell's own `rad` -- round-2 code review, item 89769f2b:
+      // using `rad` here (the shell's own radius) put both shells' rings on
+      // circles centred on their OWN radius, which coincide at theta=0 (zero
+      // thickness at the back centre) and diverge only through the sin/cos
+      // curvature, not by a uniform inset. Using `radius` for every shell's
+      // z-offset makes both rings concentric circles of radius `rad` CENTRED
+      // ON THE SAME APEX POINT, which is what gives a uniform backThickness
+      // gap between them at every angle (verified in the thickness test).
+      const z = radius - rad * Math.cos(theta);
       const bottomY = seatH;
       const topY = seatH + heightAt(theta);
       positions.push(x, bottomY, z, x, topY, z); // 2 verts per column: bottom, top

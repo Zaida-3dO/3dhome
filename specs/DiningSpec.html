@@ -90,9 +90,9 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "tableFrameHeight": 22,
   "legColor": "#1a1a1a",
   "chairRadius": 45,
-  "chairBackSweep": 90,
+  "chairBackSweep": 84,
   "chairHeight": 71,
-  "chairSeatHeight": 52,
+  "chairSeatHeight": 46,
   "chairColor": "#1a1a1a",
   "pulledOut": 0,
   "chairAlone": false,
@@ -112,19 +112,19 @@ const PULL_OUT_MAX_M = 0.45; // 45 cm, per the "pulled out" acceptance criterion
 const PRESETS = {
   'nested-set': {
     tableDiameter: 100, tableHeight: 75, tableTopColor: '#f5f5f2', tableFrameHeight: 22, legColor: '#1a1a1a',
-    chairRadius: 45, chairBackSweep: 90, chairHeight: 71, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: false
+    chairRadius: 45, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: false
   },
   'pulled-out': {
     tableDiameter: 100, tableHeight: 75, tableTopColor: '#f5f5f2', tableFrameHeight: 22, legColor: '#1a1a1a',
-    chairRadius: 45, chairBackSweep: 90, chairHeight: 71, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 1, chairAlone: false
+    chairRadius: 45, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 1, chairAlone: false
   },
   'larger-table': {
     tableDiameter: 120, tableHeight: 76, tableTopColor: '#f5f5f2', tableFrameHeight: 24, legColor: '#1a1a1a',
-    chairRadius: 45, chairBackSweep: 90, chairHeight: 71, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: false
+    chairRadius: 45, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: false
   },
   'chair-alone': {
     tableDiameter: 100, tableHeight: 75, tableTopColor: '#f5f5f2', tableFrameHeight: 22, legColor: '#1a1a1a',
-    chairRadius: 45, chairBackSweep: 90, chairHeight: 71, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: true
+    chairRadius: 45, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: true
   }
 };
 
@@ -138,6 +138,38 @@ function useDiningModule() {
     return () => window.removeEventListener('__dining_ready', onReady);
   }, [mod]);
   return mod;
+}
+
+// ============== Slider guard: warn when sizes can recreate a collision ==============
+// dining.js's table leg placement (legTopRadius = tableRadius*0.78,
+// legFootRadius = tableRadius*0.97) and its seam gap (backSweep=84 assumed)
+// are constants inside buildDiningTable, independent of whatever chair
+// radius/backSweep/height a caller passes here -- so an unusual COMBINATION
+// (a small table with large chairs, or a tall chair under a short table)
+// can reopen the exact collisions round 1/2 fixed, even though each slider
+// alone stays in its declared range (round-2 code review LOW, item
+// 89769f2b, fix #4a). This mirrors dining.js's own leg-placement and
+// CHAIR_DEFAULTS.height comments so the two never silently disagree.
+function collisionRisk(t) {
+  const warnings = [];
+  const tableR = t.tableDiameter / 2;
+  const chairR = t.chairRadius;
+  const legTopRadius = tableR * 0.78;
+  const legFootRadius = tableR * 0.97;
+  if (legTopRadius < chairR + 2) {
+    warnings.push('Table legs (top radius ~' + legTopRadius.toFixed(0) + 'cm) may sit inside the chairs’ own arc (radius ' + chairR + 'cm) — try a larger table diameter or a smaller chair radius.');
+  }
+  if (legFootRadius > tableR + 1) {
+    warnings.push('Table leg feet (~' + legFootRadius.toFixed(0) + 'cm) land past the table’s own rim (' + tableR.toFixed(0) + 'cm).');
+  }
+  const tableUndersideCm = t.tableHeight - 2.8;
+  if (t.chairHeight > tableUndersideCm - 1) {
+    warnings.push('Chair height (' + t.chairHeight + 'cm) leaves under 1cm clearance below the table underside (~' + tableUndersideCm.toFixed(1) + 'cm) — lower the chair height or raise the table.');
+  }
+  if (t.chairBackSweep * 4 >= 360) {
+    warnings.push('Chair backSweep (' + t.chairBackSweep + '°) leaves no seam gap for the table legs (4×' + t.chairBackSweep + ' ≥ 360°).');
+  }
+  return warnings;
 }
 
 // ============== Build the nested table + 4 chairs into one scene ==============
@@ -249,6 +281,7 @@ function App() {
     if (!p) return;
     setTweak(Object.assign({ preset: name }, p));
   };
+  const warnings = t.chairAlone ? [] : collisionRisk(t);
 
   return (
     <>
@@ -268,6 +301,14 @@ function App() {
           <b>Chair-alone view</b> -- one dining-chair, no table, no other chairs. Turn off "Chair alone" in the Tweaks panel to see the nested set.
         </div>}
 
+      {warnings.length > 0 &&
+        <div className="legend" style={{ marginBottom: 16, color: '#a1441a' }}>
+          <b>This size combination may recreate a collision:</b>
+          <ul style={{ marginLeft: 16, marginTop: 4 }}>
+            {warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        </div>}
+
       <div className="grid">
         <div className="card">
           <h2>Numbers</h2>
@@ -278,7 +319,7 @@ function App() {
               <tr><td>Table height</td><td className="num">{t.tableHeight}</td><td>Floor to tabletop</td></tr>
               <tr><td>Table frame height</td><td className="num">{t.tableFrameHeight}</td><td>Floor to the crossbar frame</td></tr>
               <tr><td>Chair radius</td><td className="num">{t.chairRadius}</td><td>Arc radius == depth; drives the nested cylinder's size</td></tr>
-              <tr><td>Chair backSweep</td><td className="num">{t.chairBackSweep}&deg;</td><td><b>90 nests exactly</b> (4 &times; 90 = 360)</td></tr>
+              <tr><td>Chair backSweep</td><td className="num">{t.chairBackSweep}&deg;</td><td><b>84 leaves seam gaps</b> for the table legs (4 &times; 84 = 336, a 6&deg; gap per seam)</td></tr>
               <tr><td>Chair seat height</td><td className="num">{t.chairSeatHeight}</td><td>Clamped below chair height</td></tr>
               <tr><td>Pulled out</td><td className="num">{(t.pulledOut * 45).toFixed(0)} cm</td><td>0 = tucked, 1 = +45cm radially</td></tr>
               <tr><td>Detail</td><td className="num">{t.detail}</td><td>Full or low triangle budget</td></tr>
