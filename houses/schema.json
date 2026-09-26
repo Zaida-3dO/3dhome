@@ -750,9 +750,13 @@
 
         { "if": { "properties": { "type": { "const": "monitor" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_monitor" } } } },
 
+        { "if": { "properties": { "type": { "const": "ottoman" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_ottoman" } } } },
+
         { "if": { "properties": { "type": { "const": "pc-tower" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_pc-tower" } } } },
 
         { "if": { "properties": { "type": { "const": "photo-frame" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_photo-frame" } } } },
+
+        { "if": { "properties": { "type": { "const": "piano-bench" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_piano-bench" } } } },
 
         { "if": { "properties": { "type": { "const": "plant" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_plant" } } } },
 
@@ -825,8 +829,88 @@
 
     "furnitureParams_bed": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `bed`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `bed` (src/furniture/bed.js): an upholstered bed with a tall channel-tufted (vertical fluted) headboard, a base, a mattress, pillows and an optional duvet. Each `default` equals bed.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). `height` is the overall envelope, driven by `headboardHeight` at the default pose.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 161,
+          "description": "cm, the base/mattress footprint width."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 220,
+          "description": "cm, the base/mattress footprint depth."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 120,
+          "description": "cm, the overall envelope height -- equals headboardHeight at the default pose."
+        },
+        "headboardHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 120,
+          "description": "cm, floor to the top of the headboard."
+        },
+        "baseHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 32,
+          "description": "cm, floor to the top of the base (divan/box base)."
+        },
+        "mattressHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 28,
+          "description": "cm, mattress thickness."
+        },
+        "channelCount": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 7,
+          "description": "Vertical channel-tufted flutes across the headboard width."
+        },
+        "channelDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 3.5,
+          "description": "cm, how far each flute stands proud of the headboard backing."
+        },
+        "headboardColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#8d8f92",
+          "description": "Grey velvet headboard."
+        },
+        "baseColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#3a3a3d"
+        },
+        "mattressColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f2efe8"
+        },
+        "pillowColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f7f5f0"
+        },
+        "duvet": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether a folded duvet is drawn at the foot of the bed."
+        },
+        "duvetColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#e7e3da"
+        },
+        "finish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "matte"
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_box": {
@@ -1023,8 +1107,69 @@
 
     "furnitureParams_digital-piano": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `digital-piano`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `digital-piano` (src/furniture/digital-piano.js): a generic white 88-key stage piano on a white stand, with a music rest. Each `default` equals digital-piano.js's PIANO_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 138
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 46
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 97
+        },
+        "keybedHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 82,
+          "description": "cm, floor to the top of the white keys."
+        },
+        "keybedDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 30,
+          "description": "cm, front-to-back depth of the keybed/body."
+        },
+        "legInset": {
+          "type": "number",
+          "minimum": 0,
+          "default": 8,
+          "description": "cm, how far the stand legs sit in from each end."
+        },
+        "restHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 15,
+          "description": "cm, music rest height above the keybed top."
+        },
+        "bodyColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f5f5f2"
+        },
+        "keyWhiteColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#fdfdfb"
+        },
+        "keyBlackColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#161616"
+        },
+        "standColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f0f0ec"
+        },
+        "finish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "matte"
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_dining-chair": {
@@ -1849,6 +1994,54 @@
       "additionalProperties": false
     },
 
+    "furnitureParams_ottoman": {
+      "type": "object",
+      "description": "Params for `ottoman` (src/furniture/digital-piano.js, TYPES['ottoman']): a simple velvet ottoman with a channel-tufted lid, on four short legs. Each `default` equals the module's OTTOMAN_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 92
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 46
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 40
+        },
+        "channelCount": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 5,
+          "description": "Channel-tufted ridges across the lid, front-to-back."
+        },
+        "channelDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1.5,
+          "description": "cm, how far each ridge stands proud of the flat lid."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#2e6e6b",
+          "description": "Teal velvet body and lid."
+        },
+        "legColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#3a2f28"
+        },
+        "finish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "matte"
+        }
+      },
+      "additionalProperties": false
+    },
+
     "furnitureParams_pc-tower": {
       "type": "object",
       "description": "Params for `pc-tower` (src/furniture/small-items.js, TYPES['pc-tower']): a box-ish tower with an optional glass side panel. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
@@ -1880,6 +2073,51 @@
           "anyOf": [{ "type": "string" }, { "type": "null" }],
           "default": null,
           "description": "A URL relative to the HOUSE dir. No leading slash, no `..`, no absolute URL -- the same rule as textures and overlays."
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_piano-bench": {
+      "type": "object",
+      "description": "Params for `piano-bench` (src/furniture/digital-piano.js, TYPES['piano-bench']): a white padded bench on an adjustable-height X-frame or column base. Each `default` equals the module's BENCH_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 76
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 34
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 50
+        },
+        "seatThickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 8
+        },
+        "baseStyle": {
+          "type": "string",
+          "enum": ["x", "column"],
+          "default": "x"
+        },
+        "seatColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f7f6f2"
+        },
+        "baseColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#e9e8e3"
+        },
+        "finish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "matte"
         }
       },
       "additionalProperties": false

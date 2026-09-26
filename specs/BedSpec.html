@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bed Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  pre.json { font-size:10px; background:#f7f5f0; border:1px solid #ece8e0; border-radius:4px; padding:8px; margin-top:10px; white-space:pre-wrap; word-break:break-all; }
+  @media (max-width: 760px) {
+    body { padding:12px; }
+    .grid { grid-template-columns:1fr; }
+    #c3d { height:420px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- The bed itself lives in src/furniture/bed.js -- the SAME pure builder
+     module the house scene will call once a bed is placed, following the
+     furniture-system builder contract (ESM, THREE injected, TYPE/DEFAULTS/
+     build, metres, back face at z=0, bottom at y=0). Loaded as a real ES
+     module and stashed on window so the Babel-transpiled app below (which
+     targets the global THREE from ../vendor/three.js, matching every other
+     spec page) can call it. -->
+<script type="module">
+  import * as M from '../src/furniture/bed.js';
+  window.FurnitureBed = M;
+  window.dispatchEvent(new Event('furniture-bed-ready'));
+</script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   BED SPEC   ·   upholstered bed, tall channel-tufted headboard
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT, not a survey. This is a design
+   reference for modelling a fixture, not a record of any particular
+   building: measure your own bed and drive the geometry from the Tweaks
+   panel.
+   ─────────────────────────────────────────────────────────────────────
+
+   Look: a base, a mattress, two pillows and an upholstered headboard with
+   tall vertical channel tufting in grey velvet. Default envelope ~161 x 220,
+   headboard ~120 tall. An optional folded duvet sits at the foot of the bed.
+
+   The geometry itself is NOT built here -- it lives in
+   src/furniture/bed.js (build / TYPE / DEFAULTS), loaded above as a real
+   ES module and unit-tested by scripts/test-bed.mjs. This page is a thin
+   harness: tweaks in, THREE.Group out, via the same reusable ThreeView
+   every other spec page uses.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "width": 161,
+  "depth": 220,
+  "headboardHeight": 120,
+  "baseHeight": 32,
+  "mattressHeight": 28,
+  "channelCount": 7,
+  "channelDepth": 3.5,
+  "headboardColor": "#8d8f92",
+  "baseColor": "#3a3a3d",
+  "mattressColor": "#f2efe8",
+  "pillowColor": "#f7f5f0",
+  "duvet": true,
+  "duvetColor": "#e7e3da",
+  "detail": "full"
+}/*EDITMODE-END*/;
+
+// params for the builder = tweaks minus the page-only "detail" key
+function paramsOf(t) {
+  const { detail, ...p } = t;
+  return p;
+}
+
+function buildBedModel(t, group, THREE) {
+  const M = window.FurnitureBed;
+  const bed = M.build(THREE, paramsOf(t), { detail: t.detail });
+  // the builder's frame puts the bed's back at z=0; centre it on the view target
+  const b = new THREE.Box3().setFromObject(bed);
+  bed.position.z = -(b.min.z + b.max.z) / 2;
+  group.add(bed);
+  let tris = 0;
+  bed.traverse(o => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  window.__bedTriangles = tris;
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(1.6, 32), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  floor.name = 'floor';
+  group.add(floor);
+}
+
+// ============== App ==============
+function App() {
+  const M = window.FurnitureBed;
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [copied, setCopied] = React.useState('');
+  const json = M ? JSON.stringify(M.toFurnitureJSON(paramsOf(t)), null, 2) : '';
+  const copy = () => {
+    const done = () => { setCopied('copied'); setTimeout(() => setCopied(''), 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
+    else setCopied('clipboard unavailable — select the JSON below');
+  };
+  const overallHeight = Math.max(t.headboardHeight, t.baseHeight + t.mattressHeight);
+  return (
+    <>
+      <h1>Bed Spec</h1>
+      <div className="sub">All units cm. Upholstered bed: base, mattress, pillows, tall channel-tufted velvet headboard, optional duvet. Use the Tweaks panel to change size, headboard height and colours.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Width</td><td className="num">{t.width.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Depth</td><td className="num">{t.depth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Headboard height</td><td className="num">{t.headboardHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Base height</td><td className="num">{t.baseHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Mattress height</td><td className="num">{t.mattressHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Overall envelope height <span style={{opacity:0.6}}>(DEFAULTS.height)</span></td><td className="num">{overallHeight.toFixed(0)}</td><td>Derived: max(headboardHeight, base+mattress)</td></tr>
+              <tr><td>Channel count</td><td className="num">{t.channelCount.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Channel depth</td><td className="num">{t.channelDepth.toFixed(1)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Triangles</td><td className="num">{window.__bedTriangles || '—'}</td><td>{t.detail} detail</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            The headboard's tall vertical channel tufting is evenly spaced across the width, flush with both edges
+            (build() in src/furniture/bed.js). The overall envelope height is whichever is taller: the headboard, or the
+            base+mattress stack -- matching the furniture contract's bbox check.
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Look</h2>
+          <div className="legend">
+            A divan-style base with a mattress on top and two pillows at the head. Behind it, a tall
+            upholstered headboard in grey velvet with evenly spaced vertical channel tufting (flutes standing
+            proud of a flat backing panel). An optional folded duvet sits across the foot of the bed.
+            Pillows are dropped at low detail.
+          </div>
+          <div className="row">
+            <button className="btn" onClick={() => setTweak('duvet', !t.duvet)}>{t.duvet ? 'Remove duvet' : 'Add duvet'}</button>
+            <button className="btn" onClick={copy}>Copy as furniture JSON</button>
+            {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
+          </div>
+          <pre className="json">{json}</pre>
+        </div>
+
+        <div className="card full">
+          <h2>3D — bed</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildBedModel}
+            heightOf={tt => Math.max(tt.headboardHeight, tt.baseHeight + tt.mattressHeight) * 0.01}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Size" />
+        <TweakSlider label="Width" value={t.width} min={90} max={200} step={1} unit="cm"
+          onChange={v => setTweak('width', v)} />
+        <TweakSlider label="Depth" value={t.depth} min={180} max={230} step={1} unit="cm"
+          onChange={v => setTweak('depth', v)} />
+        <TweakSlider label="Headboard height" value={t.headboardHeight} min={80} max={160} step={1} unit="cm"
+          onChange={v => setTweak('headboardHeight', v)} />
+        <TweakSlider label="Base height" value={t.baseHeight} min={15} max={45} step={1} unit="cm"
+          onChange={v => setTweak('baseHeight', v)} />
+        <TweakSlider label="Mattress height" value={t.mattressHeight} min={15} max={35} step={1} unit="cm"
+          onChange={v => setTweak('mattressHeight', v)} />
+
+        <TweakSection label="Headboard channels" />
+        <TweakSlider label="Channel count" value={t.channelCount} min={3} max={12} step={1} unit=""
+          onChange={v => setTweak('channelCount', v)} />
+        <TweakSlider label="Channel depth" value={t.channelDepth} min={1} max={6} step={0.1} unit="cm"
+          onChange={v => setTweak('channelDepth', v)} />
+
+        <TweakSection label="Colours" />
+        <TweakColor label="Headboard (velvet)" value={t.headboardColor}
+          onChange={v => setTweak('headboardColor', v)} />
+        <TweakColor label="Base" value={t.baseColor}
+          onChange={v => setTweak('baseColor', v)} />
+        <TweakColor label="Mattress" value={t.mattressColor}
+          onChange={v => setTweak('mattressColor', v)} />
+        <TweakColor label="Pillows" value={t.pillowColor}
+          onChange={v => setTweak('pillowColor', v)} />
+        <TweakColor label="Duvet" value={t.duvetColor}
+          onChange={v => setTweak('duvetColor', v)} />
+
+        <TweakSection label="Render" />
+        <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
+          onChange={v => setTweak('detail', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+// The builder module is an ES module script; wait for it if Babel got here first.
+function mount() { ReactDOM.createRoot(document.getElementById('root')).render(<App />); }
+if (window.FurnitureBed) mount();
+else window.addEventListener('furniture-bed-ready', mount, { once: true });
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// Self-post it so the panel is visible when there's no host driving it.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>
