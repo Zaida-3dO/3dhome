@@ -152,8 +152,11 @@ function buildCornPlant(THREE, p, detail) {
 
   const potMat = new THREE.MeshStandardMaterial({ color: p.potColor, roughness: 0.85 });
   const caneMat = new THREE.MeshStandardMaterial({ color: 0x8a7a52, roughness: 0.8 });
+  // vertexColors multiplies against material.color -- leave color WHITE so
+  // the per-leaf vertex tint (built from p.leafColor + jitter) is the only
+  // thing that reaches the screen, not p.leafColor squared into near-black.
   const leafMat = new THREE.MeshStandardMaterial({
-    color: p.leafColor, roughness: 0.55, side: THREE.DoubleSide, vertexColors: true,
+    color: 0xffffff, roughness: 0.55, side: THREE.DoubleSide, vertexColors: true,
   });
   const soilMat = new THREE.MeshStandardMaterial({ color: 0x3a2c1e, roughness: 1 });
 
@@ -229,10 +232,12 @@ function buildCornPlant(THREE, p, detail) {
     const heightFrac = s === 0 ? 1 : 0.55 + rand() * 0.35;
     const caneH = plantHeight * heightFrac;
 
-    // Small deterministic offset from pot-centre so multiple canes don't
-    // occupy the same point (still visually "close together").
-    const offR = potTopR * 0.32 * (s === 0 ? 0 : rand());
-    const offA = rand() * Math.PI * 2;
+    // Deterministic offset from pot-centre so multiple canes read as
+    // visibly separate stems (the photos show 3 distinct canes, not one
+    // trunk) while staying inside the pot's opening. 0.55*potTopR keeps
+    // every cane comfortably within the rim even at the widest offset.
+    const offR = potTopR * 0.55 * (s === 0 ? 0 : (0.5 + rand() * 0.5));
+    const offA = s === 0 ? 0 : (s / stemCount) * Math.PI * 2 + rand() * 0.6;
     const cx = Math.cos(offA) * offR;
     const cz = potCenterZ + Math.sin(offA) * offR;
 
@@ -347,8 +352,11 @@ function buildWallPlanter(THREE, p, detail) {
 
   const ceramicMat = new THREE.MeshStandardMaterial({ color: potColor, roughness: 0.35 });
   const frameMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.3, metalness: 0.85 });
+  // Same reasoning as buildCornPlant's leafMat: vertexColors multiplies
+  // against material.color, so this stays white and the vertex tint alone
+  // carries leafColor -- otherwise the colour would be squared into near-black.
   const leafMat = new THREE.MeshStandardMaterial({
-    color: leafColor, roughness: 0.5, side: THREE.DoubleSide, vertexColors: true,
+    color: 0xffffff, roughness: 0.5, side: THREE.DoubleSide, vertexColors: true,
   });
 
   const group = new THREE.Group();
