@@ -70,8 +70,10 @@ const onReading = (over = {}) => HAClient.parseClimate({
   const r1 = onReading({ target_temp_step: 1 });
   check('climate: step 1 (21.6 -> 22)', HAClient.climateTargetCommand(21.6, TRV, r1).data.temperature === 22);
   const r01 = onReading({ target_temp_step: 0.1 });
-  const t01 = HAClient.climateTargetCommand(21.34, TRV, r01).data.temperature;
-  check('climate: step 0.1 has no float noise (21.34 -> 21.3)', t01 === 21.3, t01);
+  // 217 * 0.1 is 21.700000000000003 in floating point: this fails if the
+  // toFixed() clean-up is removed.
+  const t01 = HAClient.climateTargetCommand(21.7, TRV, r01).data.temperature;
+  check('climate: step 0.1 has no float noise (21.7 -> 21.7)', t01 === 21.7, t01);
   const noStep = HAClient.parseClimate({ state: 'heat', attributes: { temperature: 20, min_temp: 10, max_temp: 32 } });
   check('climate: missing step -> default 0.5 rounding (20.3 -> 20.5)',
     HAClient.climateTargetCommand(20.3, TRV, noStep).data.temperature === 20.5);
@@ -369,8 +371,140 @@ const onReading = (over = {}) => HAClient.parseClimate({
   check('index: no door slider anywhere', !/data-action="door-open"/.test(html) && !/door-use-sensor/.test(html));
   check('index: full re-render clears both drag locks',
     /curtainSender\.clear\(\);\s*climateSender\.clear\(\);\s*panelBody\.innerHTML = html;/.test(html));
+  check('index: climate going off/unavailable cancels its pending send',
+    /if \(!climateCanTakeTarget\(roomId\)\) climateSender\.cancel\(roomId\);/.test(html));
+  check('index: cover going unavailable cancels its pending send',
+    /if \(!available\) curtainSender\.cancel\(curtainId\);/.test(html));
+  check('index: both debounced sends carry a fire-time guard',
+    /'curtain-' \+ curtainId, delayMs,\s*\(\) => curtainIsAvailable\(curtainId\)\)/.test(html) &&
+    /'climate-' \+ roomId, delayMs,\s*\(\) => climateCanTakeTarget\(roomId\)\)/.test(html));
+  check('index: curtain slider build checks availability',
+    /curtainSliderCommand\(HAClient\.coverPositionCommand, pct,\s*curtainEntities\.get\(curtainId\), curtainIsAvailable\(curtainId\)\)/.test(html));
+  check('index: a reading held by the lock marks the row dirty (both kinds)',
+    /climateSender\.markDirty\(roomId\)/.test(html) && (html.match(/curtainSender\.markDirty\(curtainId\)/g) || []).length === 2);
+  check('index: curtain row paints the reported position, not the animated one',
+    /const pct = curtainShownPct\(cu\.id\);/.test(html));
   check('index: no callService outside the senders and sendToHA',
     (html.match(/ha\.callService(Debounced)?\(/g) || []).length === 4);
+}
+
+// ---------------------------------------------------------------------------
+// 8. Review round 1 (follow-up 2b96f055): nothing queued reaches a device
+//    that went off / unavailable, and a row held by the drag lock is
+//    repainted when the lock releases.
+// ---------------------------------------------------------------------------
+{
+  const calls = [];
+  const realFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    calls.push({ service: url.split('/api/services/')[1], body: JSON.parse(opts.body) });
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 'x', rooms: {}, sensors: {} });
+    const hasApi = typeof ha.cancelDebounced === 'function';
+    check('HAClient exposes cancelDebounced', hasApi);
+
+    // (a) guard re-checked when the debounced timer FIRES.
+    let live = true;
+    ha.callServiceDebounced('climate', 'set_temperature', { temperature: 22 }, { entity_id: TRV },
+      'climate-g', 200, () => live);
+    live = false; // thermostat went off inside the window
+    await sleep(260);
+    check('debounced send re-checks its guard at fire time and drops', calls.length === 0, calls);
+
+    // The index.html wiring: sender with cancel + guard, exactly as shipped.
+    let reading = onReading();
+    const canTake = () => !!(reading && reading.available && !reading.off);
+    const mk = () => RP.createDragSender({
+      build: (room, v) => HAClient.climateTargetCommand(v, TRV, reading),
+      dispatch: (cmd, room, delay) => ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target,
+        'climate-' + room, delay, canTake),
+      cancel: room => { if (hasApi) ha.cancelDebounced('climate-' + room); }
+    });
+
+    // (b) thermostat goes off inside the debounce window -> applyClimate
+    //     cancels the pending send.
+    calls.length = 0;
+    let cs = mk();
+    cs.input('bedroom', 22);
+    reading = HAClient.parseClimate({ state: 'off', attributes: { temperature: null } });
+    if (typeof cs.cancel === 'function') cs.cancel('bedroom');
+    await sleep(260);
+    check('climate: pending set_temperature cancelled when the thermostat goes off', calls.length === 0, calls);
+
+    // (c) release refused by build() cancels the input already queued --
+    //     with NO guard, so it is the commit path itself that must cancel.
+    calls.length = 0;
+    reading = onReading();
+    cs = RP.createDragSender({
+      build: (room, v) => HAClient.climateTargetCommand(v, TRV, reading),
+      dispatch: (cmd, room, delay) => ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target,
+        'climate-' + room, delay),
+      cancel: room => { if (hasApi) ha.cancelDebounced('climate-' + room); }
+    });
+    cs.input('bedroom', 23);
+    reading = HAClient.parseClimate({ state: 'unavailable', attributes: {} });
+    cs.commit('bedroom', 23);
+    await sleep(260);
+    check('climate: a refused release cancels the queued input send', calls.length === 0, calls);
+
+    // (d) curtains: cover goes unavailable -> pending position send cancelled.
+    calls.length = 0;
+    let avail = true;
+    const motors = ['cover.demo_bedroom_curtain'];
+    const curtain = RP.createDragSender({
+      build: (id, pct) => (typeof RP.curtainSliderCommand === 'function'
+        ? RP.curtainSliderCommand(HAClient.coverPositionCommand, pct, motors, avail)
+        : HAClient.coverPositionCommand(pct, motors)),
+      dispatch: (cmd, id, delay) => ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target,
+        'curtain-' + id, delay),
+      cancel: id => { if (hasApi) ha.cancelDebounced('curtain-' + id); }
+    });
+    curtain.input('c', 30);
+    avail = false;
+    if (typeof curtain.cancel === 'function') curtain.cancel('c');
+    await sleep(260);
+    check('curtain: pending position send cancelled when the cover goes unavailable', calls.length === 0, calls);
+
+    // (e) the curtain SLIDER itself refuses while unavailable, like the buttons.
+    calls.length = 0;
+    curtain.end('c');
+    curtain.input('c', 45); curtain.commit('c', 45);
+    await sleep(260);
+    check('curtain: slider sends nothing while the cover is unavailable', calls.length === 0, calls);
+    check('curtainSliderCommand: unavailable / unknown -> null',
+      typeof RP.curtainSliderCommand === 'function' &&
+      RP.curtainSliderCommand(HAClient.coverPositionCommand, 50, motors, false) === null &&
+      RP.curtainSliderCommand(HAClient.coverPositionCommand, 50, motors, null) === null);
+    check('curtainSliderCommand: available -> the position command',
+      typeof RP.curtainSliderCommand === 'function' &&
+      RP.curtainSliderCommand(HAClient.coverPositionCommand, 50, motors, true).data.position === 50);
+  } finally {
+    global.fetch = realFetch;
+  }
+
+  // (f) a reading held back by the lock is repainted on release.
+  const released = [];
+  const s = RP.createDragSender({
+    build: (id, v) => ({ domain: 'x', service: 'y', data: { v }, target: { entity_id: 'x' } }),
+    dispatch: () => {},
+    onRelease: (id, wasDirty) => released.push(id + ':' + wasDirty)
+  });
+  s.input('r', 1);
+  if (typeof s.markDirty === 'function') s.markDirty('r');
+  s.end('r');
+  check('dirty lock -> onRelease(id, true) on pointerup', released.join() === 'r:true', released);
+  s.input('r', 2);
+  s.commit('r', 2);
+  check('clean lock -> onRelease(id, false) on change', released.join() === 'r:true,r:false', released);
+  s.end('r');
+  check('releasing an unheld lock does not call onRelease again', released.length === 2, released);
+  s.input('r', 3);
+  if (typeof s.markDirty === 'function') s.markDirty('r');
+  s.forget && s.forget('r');
+  s.input('r', 4); s.end('r');
+  check('forget() (row replaced) drops the dirty flag without a repaint', released[2] === 'r:false', released);
 }
 
 if (failures) {

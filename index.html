@@ -725,7 +725,7 @@
     import { HouseLoader }    from './src/house-loader.js?v=__VERSION__';
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
-    import { createDragSender, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml }
+    import { createDragSender, curtainSliderCommand, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml }
                               from './src/room-panel.js?v=__VERSION__';
     // Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
     // Shift+D, or the Settings sidebar "Wall numbers" switch).
@@ -1127,13 +1127,36 @@
       // of them inline here. Keyed by curtain id; dispatched through
       // ha.callServiceDebounced under 'curtain-<id>', so a button press on
       // the same curtain cancels a slider send still pending.
+      //
+      // Availability is checked THREE times, each covering a different gap:
+      // build() refuses while the curtain is not confirmed available (as the
+      // Open / Close buttons do); the guard re-checks when a debounced send
+      // actually fires; and applyCurtainAvailable cancels a pending send the
+      // moment the cover drops off.
       const curtainSender = createDragSender({
-        build: (curtainId, pct) => HAClient.coverPositionCommand(pct, curtainEntities.get(curtainId)),
+        build: (curtainId, pct) => curtainSliderCommand(HAClient.coverPositionCommand, pct,
+          curtainEntities.get(curtainId), curtainIsAvailable(curtainId)),
         dispatch: (cmd, curtainId, delayMs) => {
           if (!ha) return;
-          ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target, 'curtain-' + curtainId, delayMs);
+          ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target, 'curtain-' + curtainId, delayMs,
+            () => curtainIsAvailable(curtainId));
+        },
+        cancel: curtainId => { if (ha) ha.cancelDebounced('curtain-' + curtainId); },
+        // A reading held back by the drag lock is painted once it releases.
+        // Deferred a tick: pointerup precedes the range input's 'change', and
+        // replacing the element first could cost that event.
+        onRelease: (curtainId, wasDirty) => {
+          if (wasDirty) setTimeout(() => refreshRoomRow('curtain:' + curtainId), 0);
         }
       });
+      // Last position HA REPORTED (or the user dragged to) per curtain. The
+      // row paints this, not home.getCurtainOpen(), which is the animated
+      // value and still reads the pre-move position when the row repaints
+      // at the START of a move.
+      const curtainTarget = new Map();
+      function curtainShownPct(curtainId) {
+        return curtainTarget.has(curtainId) ? curtainTarget.get(curtainId) : home.getCurtainOpen(curtainId);
+      }
       // Last resolved availability per curtain id, mirrored from
       // ha.onCurtainAvailabilityChange (or the __home3dSensors.curtainAvailable
       // test seam, which drives this exact map). Available only once a reading has actually
@@ -1176,12 +1199,24 @@
       // curtains. build() refuses (returns null) unless the room's CURRENT
       // reading is available with a real target -- the disabled slider is
       // not the only guard between a stray event and a thermostat.
+      const climateCanTakeTarget = roomId => {
+        const r = climateReading.get(roomId);
+        return !!(r && r.available && !r.off);
+      };
       const climateSender = createDragSender({
         build: (roomId, value) => HAClient.climateTargetCommand(
           value, climateEntityForRoom(roomId), climateReading.get(roomId)),
+        // The guard re-reads the LIVE reading when a debounced send fires:
+        // a target queued before the thermostat went off is dropped (some
+        // integrations turn heating back on for a set_temperature while off).
         dispatch: (cmd, roomId, delayMs) => {
           if (!ha) return;
-          ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target, 'climate-' + roomId, delayMs);
+          ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target, 'climate-' + roomId, delayMs,
+            () => climateCanTakeTarget(roomId));
+        },
+        cancel: roomId => { if (ha) ha.cancelDebounced('climate-' + roomId); },
+        onRelease: (roomId, wasDirty) => {
+          if (wasDirty && selectedRoom === roomId) setTimeout(() => refreshRoomRow('climate'), 0);
         }
       });
 
@@ -1269,10 +1304,7 @@
         //   __home3dSensors.curtain('lounge_curtain', 40, 'opening')
         //   __home3dSensors.cornice('lounge_curtain', false)
         //   __home3dSensors.daylight()   // per-window transmission + light
-        curtain: (curtainId, pct, moving) => {
-          home.setCurtainOpen(curtainId, pct, moving || null);
-          if (!curtainSender.isDragging(curtainId)) refreshRoomRow('curtain:' + curtainId);
-        },
+        curtain: (curtainId, pct, moving) => applyCurtainReading(curtainId, pct, moving || null),
         cornice: (curtainId, on, bri, color) =>
           home.setCorniceLight(curtainId, { on: !!on, bri: bri != null ? bri : 100, color: color || null }),
         getCurtainOpen: curtainId => home.getCurtainOpen(curtainId),
@@ -1281,10 +1313,7 @@
         // not scene state, since "can this slider send a command" depends on
         // whether ha exists and has a reading, not on the 3D curtain itself.
         //   __home3dSensors.curtainAvailable('lounge_curtain', true)
-        curtainAvailable: (curtainId, available) => {
-          curtainAvailableState.set(curtainId, !!available);
-          refreshRoomRow('curtain:' + curtainId);
-        },
+        curtainAvailable: (curtainId, available) => applyCurtainAvailable(curtainId, !!available),
         getCurtainSliderAvailable: curtainId => curtainIsAvailable(curtainId),
         corniceGlows: curtainId => home.getCorniceGlowDebug(curtainId),
         orbit: (th, ph, r, target) => home.setOrbit(th, ph, r, target),
@@ -1856,20 +1885,11 @@
         // Cover -> animate that curtain (and, through it, the room's
         // daylight). Cornice light -> that curtain's cornice strip. Both fire
         // only on a real change, like the sensor callbacks above.
-        ha.onCurtainChange((curtainId, st) => {
-          home.setCurtainOpen(curtainId, st.pct, st.moving);
-          // Don't fight the user mid-drag: a live reading still updates the
-          // 3D curtain above, but repainting the row here would yank the
-          // slider to the last-reported position out from under the pointer.
-          if (!curtainSender.isDragging(curtainId)) refreshRoomRow('curtain:' + curtainId);
-        });
+        ha.onCurtainChange((curtainId, st) => applyCurtainReading(curtainId, st.pct, st.moving));
         ha.onCorniceChange((curtainId, st) => {
           home.setCorniceLight(curtainId, st);
         });
-        ha.onCurtainAvailabilityChange((curtainId, available) => {
-          curtainAvailableState.set(curtainId, available);
-          if (!curtainSender.isDragging(curtainId)) refreshRoomRow('curtain:' + curtainId);
-        });
+        ha.onCurtainAvailabilityChange((curtainId, available) => applyCurtainAvailable(curtainId, available));
 
         ha.connect();
       }
@@ -1910,10 +1930,28 @@
       }
       function applyClimate(roomId, reading) {
         climateReading.set(roomId, reading);
+        // Off / null target / unavailable: drop any target still queued.
+        if (!climateCanTakeTarget(roomId)) climateSender.cancel(roomId);
         // Same drag lock as the curtains: a reading arriving mid-drag (HA
         // echoing the debounced target, a current-temp tick) must not
-        // replace the slider under the pointer.
-        if (selectedRoom === roomId && !climateSender.isDragging(roomId)) refreshRoomRow('climate');
+        // replace the slider under the pointer -- it is painted on release.
+        if (climateSender.isDragging(roomId)) climateSender.markDirty(roomId);
+        else if (selectedRoom === roomId) refreshRoomRow('climate');
+      }
+      // Cover position (HA or the debug seam) -> 3D curtain + its row.
+      function applyCurtainReading(curtainId, pct, moving) {
+        home.setCurtainOpen(curtainId, pct, moving);
+        curtainTarget.set(curtainId, pct);
+        // Mid-drag the 3D curtain still follows; the row is repainted when
+        // the drag releases, never under the pointer.
+        if (curtainSender.isDragging(curtainId)) curtainSender.markDirty(curtainId);
+        else refreshRoomRow('curtain:' + curtainId);
+      }
+      function applyCurtainAvailable(curtainId, available) {
+        curtainAvailableState.set(curtainId, available);
+        if (!available) curtainSender.cancel(curtainId);
+        if (curtainSender.isDragging(curtainId)) curtainSender.markDirty(curtainId);
+        else refreshRoomRow('curtain:' + curtainId);
       }
 
       // Renders the "Strip positions" list for an accent channel group.
@@ -2255,8 +2293,8 @@
         if (key.startsWith('curtain:')) {
           const cu = (roomCurtains[rid] || []).find(c => 'curtain:' + c.id === key);
           if (!cu) return '';
-          const pct = home.getCurtainOpen(cu.id);
-          if (pct === null) return '';
+          const pct = curtainShownPct(cu.id);
+          if (pct === null || pct === undefined) return '';
           return curtainRowHtml(cu, pct, curtainIsAvailable(cu.id));
         }
         if (key === 'climate') return climateRowHtml(climateReading.get(rid) || null);
@@ -2271,8 +2309,8 @@
         const old = panelBody.querySelector('[data-row="' + esc(key) + '"]');
         if (!old) return;
         // The element any drag lock on this row refers to is being replaced.
-        if (key.startsWith('curtain:')) curtainSender.end(key.slice(8));
-        if (key === 'climate') climateSender.end(selectedRoom);
+        if (key.startsWith('curtain:')) curtainSender.forget(key.slice(8));
+        if (key === 'climate') climateSender.forget(selectedRoom);
         const tmp = document.createElement('div');
         tmp.innerHTML = roomRowHtml(key, selectedRoom).trim();
         const fresh = tmp.firstElementChild;
@@ -2335,6 +2373,7 @@
             el.addEventListener('input', e => {
               const pct = +e.target.value;
               home.setCurtainOpen(curtainId, pct, null);
+              curtainTarget.set(curtainId, pct);
               el.previousElementSibling.textContent = `Open: ${pct}%`;
               curtainSender.input(curtainId, pct);
             });

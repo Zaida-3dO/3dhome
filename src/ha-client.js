@@ -759,7 +759,20 @@ export const HAClient = (() => {
       }
     }
 
-    function callServiceDebounced(domain, service, data, target, debounceKey, delayMs) {
+    /**
+     * `guard` (optional): re-checked at the moment the command would
+     * actually go out -- on the immediate path and, crucially, when a
+     * debounced timer fires. A slider value queued 200ms ago must not reach
+     * a thermostat that has since gone off (some integrations turn heating
+     * back ON when sent a temperature while off) or a cover that has since
+     * gone unavailable. Returning false drops the send.
+     */
+    function callServiceDebounced(domain, service, data, target, debounceKey, delayMs, guard) {
+      const fire = () => {
+        delete debounceTimers[debounceKey];
+        if (typeof guard === 'function' && !guard()) return;
+        callService(domain, service, data, target);
+      };
       // ALWAYS clear first, even on the immediate (delayMs<=0) path: a caller
       // that debounces on 'input' and then sends immediately on 'change' (the
       // curtain slider does exactly this, to guarantee the final value on a
@@ -767,8 +780,17 @@ export const HAClient = (() => {
       // its own pending timer firing ~delayMs later and re-sending the same
       // command a second time. One user action, one command.
       clearTimeout(debounceTimers[debounceKey]);
-      if (delayMs <= 0) { callService(domain, service, data, target); return; }
-      debounceTimers[debounceKey] = setTimeout(() => callService(domain, service, data, target), delayMs);
+      if (delayMs <= 0) { fire(); return; }
+      debounceTimers[debounceKey] = setTimeout(fire, delayMs);
+    }
+
+    /** Drop a debounced send still pending under `debounceKey`, if any.
+     *  Returns true if one was pending. */
+    function cancelDebounced(debounceKey) {
+      const pending = debounceKey in debounceTimers;
+      clearTimeout(debounceTimers[debounceKey]);
+      delete debounceTimers[debounceKey];
+      return pending;
     }
 
     return {
@@ -838,6 +860,7 @@ export const HAClient = (() => {
       },
       callService,
       callServiceDebounced,
+      cancelDebounced,
       get status() { return status; },
       get activeUrl() { return url; }
     };

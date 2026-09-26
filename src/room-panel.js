@@ -141,10 +141,43 @@ export function climateRowHtml(reading) {
  *     ends on its start value fires no 'change'), pointercancel, blur, and
  *     whenever the row is re-rendered (the element it locked is gone).
  *   - Nothing here runs except from a user event handler.
+ *   - cancel(id) drops a send still pending for this id -- called when the
+ *     device goes off / unavailable inside the debounce window, and on a
+ *     release whose build() refuses (the device changed under the drag).
+ *   - A live reading that arrives while the row is locked marks it dirty
+ *     (markDirty); releasing the lock then calls onRelease(id, true) so the
+ *     row is repainted from the latest state instead of staying stale.
+ *
+ *   cancel(id)              (optional) ha.cancelDebounced for this id's key
+ *   onRelease(id, wasDirty) (optional) called whenever a held lock releases
  */
-export function createDragSender({ build, dispatch, debounceMs = 200 }) {
+/**
+ * Curtain SLIDER value -> command, refusing while the curtain is not
+ * confirmed available -- the same rule the Open / Close buttons follow.
+ * `coverPositionCommand` is HAClient.coverPositionCommand, injected so this
+ * module stays free of the client.
+ */
+export function curtainSliderCommand(coverPositionCommand, pct, entities, available) {
+  if (available !== true) return null;
+  return coverPositionCommand(pct, entities);
+}
+
+export function createDragSender({ build, dispatch, cancel, onRelease, debounceMs = 200 }) {
   const dragging = new Set();
+  const dirty = new Set();
   const lastSent = new Map();
+
+  function release(id) {
+    if (!dragging.has(id)) return;
+    dragging.delete(id);
+    const wasDirty = dirty.delete(id);
+    if (typeof onRelease === 'function') onRelease(id, wasDirty);
+  }
+
+  function dropPending(id) {
+    lastSent.delete(id);
+    if (typeof cancel === 'function') cancel(id);
+  }
 
   function send(id, raw, delayMs) {
     const cmd = build(id, raw);
@@ -165,17 +198,28 @@ export function createDragSender({ build, dispatch, debounceMs = 200 }) {
       }
       return send(id, raw, debounceMs);
     },
-    /** Slider 'change' (release / key commit): immediate send, then unlock. */
+    /** Slider 'change' (release / key commit): immediate send, then unlock.
+     *  If build() now refuses (device went off/unavailable mid-drag), the
+     *  earlier input's queued send is cancelled rather than left to fire. */
     commit(id, raw) {
-      const cmd = send(id, raw, 0);
-      dragging.delete(id);
+      let cmd = null;
+      if (build(id, raw)) cmd = send(id, raw, 0);
+      else dropPending(id);
+      release(id);
       return cmd;
     },
-    /** pointerup / pointercancel / blur / row re-render: unlock only. */
-    end(id) { dragging.delete(id); },
-    /** Full panel re-render: every locked element is about to be destroyed. */
-    clear() { dragging.clear(); },
+    /** pointerup / pointercancel / blur: unlock (and repaint if dirty). */
+    end(id) { release(id); },
+    /** Full panel re-render: every locked element is about to be destroyed,
+     *  and the render itself paints fresh state, so no onRelease. */
+    clear() { dragging.clear(); dirty.clear(); },
+    /** The row is being replaced: drop its lock silently. */
+    forget(id) { dragging.delete(id); dirty.delete(id); },
     isDragging(id) { return dragging.has(id); },
+    /** A reading arrived while locked: repaint on release. */
+    markDirty(id) { if (dragging.has(id)) dirty.add(id); },
+    /** Device went off / unavailable: drop any send still pending. */
+    cancel(id) { dropPending(id); },
     /**
      * A one-shot button (curtain Open / Close). Always sends -- a button
      * press is its own user action -- through the SAME dispatch key, so it
