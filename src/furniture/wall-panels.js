@@ -212,14 +212,22 @@ const HEX_CLUSTER_DEFAULTS = Object.freeze({
   // (review round 3, 2026-09-26). Judged empirically on the spec page
   // under its own lights (sampled actual rendered pixels, not raw swatches):
   // the requested #14201a-#18251e range renders to ~rgb(50,62,52) -- almost
-  // unchanged from round 2 -- because the scene's ambient light (intensity
-  // 0.45, spec-three.jsx) adds a large near-flat floor to every channel
-  // regardless of the base colour; a near-black base like #050a07 crushes
-  // to ~rgb(38,38,35), which reads as plain black/neutral with no green at
-  // all. #0a2515 (outside the literal suggested range, deliberately: R
-  // pushed lower and G kept relatively high to fight the ambient floor's
-  // greying effect) renders to ~rgb(41,53,42) -- meaningfully darker than
-  // round 2 AND still clearly green (G noticeably above both R and B).
+  // unchanged from round 2 -- because of the spec page's ENVIRONMENT MAP
+  // (round-4 correction: not the ambient light as first assumed here).
+  // specs/spec-three.jsx installs a CubeCamera + WebGLCubeRenderTarget and
+  // sets scene.environment to it, giving EVERY MeshStandardMaterial
+  // image-based lighting from the room's own (pale) background -- that IBL
+  // term adds a large near-flat floor to every channel regardless of the
+  // base colour. The live APP HAS NO ENVIRONMENT MAP, so this floor is a
+  // spec-page-only artefact; a near-black base like #050a07 crushes to
+  // ~rgb(38,38,35) on the spec page (plain black/neutral, no green left),
+  // but the same base may read differently -- possibly much closer to true
+  // black -- in the app, where nothing is adding this IBL floor. #0a2515
+  // (outside the literal suggested range, deliberately: R pushed lower and
+  // G kept relatively high to fight the spec page's IBL floor) renders to
+  // ~rgb(41,53,42) THERE -- meaningfully darker than round 2 AND still
+  // clearly green (G noticeably above both R and B). See the round-4 note
+  // on this item for how it actually reads in the app.
   color: '#0a2515',
   finish: 'matte',
   // Chamfered edge (review round 3, 2026-09-26): each real panel is
@@ -277,7 +285,7 @@ function hexPoints(s) {
  * Built as a custom BufferGeometry rather than THREE.ExtrudeGeometry's own
  * bevelEnabled: that bevel grows the shape's footprint outward from the
  * base outline by `bevelSize` on every side (verified empirically), which
- * would silently widen the honeycomb's pitch. Four rings of vertices:
+ * would silently widen the honeycomb's pitch. Four rings of faces:
  *   1. back face (outer hex, z=0, facing -z)
  *   2. side wall: outer hex from z=0 to z=(thickness-bevelDepth), straight
  *      (this is the "full thickness in the centre" region)
@@ -285,6 +293,21 @@ function hexPoints(s) {
  *      inner hex (radius reduced so its flat-to-flat apothem is inset by
  *      bevelWidth) at z=thickness -- the visible chamfer
  *   4. front (plateau) face: inner hex, z=thickness, facing +z
+ *
+ * FLAT-SHADED, non-indexed (round 4 fix, code review): each of the 6 back
+ * fan triangles, 6 side-wall quads, 6 bevel-ring quads and 6 front fan
+ * triangles gets its OWN, unshared vertices, so computeVertexNormals()
+ * cannot blend a facet's normal with its neighbour's across a shared
+ * corner. The earlier version shared ring vertices between adjacent facets
+ * (indexed geometry, one vertex per ring position), which smoothed the
+ * chamfer's normals up to ~41 degrees off their true facet -- the groove
+ * between hexes read as only ~5 RGB levels of shading difference head-on,
+ * effectively invisible. This costs more vertices (108, non-indexed --
+ * three.js has no per-triangle-normal indexed mode, so every triangle needs
+ * its own 3) but the TRIANGLE count is unchanged from the shared-vertex
+ * version (36: 6 back + 12 side wall + 12 bevel ring + 6 front) and stays
+ * modest for a 29-hex cluster; the old flat ExtrudeGeometry this replaced
+ * was 60 vertices / 58 triangles per hex (curveSegments padding).
  *
  * A flat-top hex's apothem (centre-to-edge-midpoint distance) is
  * `side*sqrt(3)/2`, so insetting the apothem by `bevelWidth` shrinks `side`
@@ -300,60 +323,84 @@ function hexPoints(s) {
  * @returns {THREE.BufferGeometry}
  */
 function buildBeveledHexGeometry(THREE, side, thickness, bevelWidth, bevelDepth) {
-  const apothem = (SQRT3 / 2) * side;
   const innerSide = Math.max(side - bevelWidth / (SQRT3 / 2), side * 0.05);
   const outerPts = hexPoints(side);
   const innerPts = hexPoints(innerSide);
   const zBack = 0;
   const zPlateauFront = Math.max(0, thickness - bevelDepth);
   const zFront = thickness;
+  const n = outerPts.length; // 6
 
+  // Non-indexed: every triangle gets 3 fresh vertices, pushed straight into
+  // `positions` in draw order. computeVertexNormals() on a non-indexed
+  // geometry computes one normal per TRIANGLE and assigns it to that
+  // triangle's own 3 (unshared) vertices -- true flat shading, no blending
+  // with any neighbouring triangle, indexed or not.
   const positions = [];
-  const indices = [];
-  let vi = 0;
 
-  function pushRingStrip(ringA, ringB, zA, zB) {
-    const n = ringA.length;
-    const base = vi;
-    for (let i = 0; i < n; i++) {
-      positions.push(ringA[i][0], ringA[i][1], zA);
-      positions.push(ringB[i][0], ringB[i][1], zB);
-    }
-    vi += n * 2;
-    for (let i = 0; i < n; i++) {
-      const i2 = (i + 1) % n;
-      const a0 = base + i * 2, a1 = base + i * 2 + 1;
-      const b0 = base + i2 * 2, b1 = base + i2 * 2 + 1;
-      indices.push(a0, b0, a1);
-      indices.push(a1, b0, b1);
-    }
+  function pushTri(a, b, c) {
+    positions.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
   }
 
-  function pushFan(ring, z, flip) {
-    const n = ring.length;
-    const centreIdx = vi;
-    positions.push(0, 0, z);
-    vi++;
-    const startIdx = vi;
-    for (let i = 0; i < n; i++) positions.push(ring[i][0], ring[i][1], z);
-    vi += n;
-    for (let i = 0; i < n; i++) {
-      const i2 = (i + 1) % n;
-      if (flip) indices.push(centreIdx, startIdx + i2, startIdx + i);
-      else indices.push(centreIdx, startIdx + i, startIdx + i2);
-    }
+  // 1. Back face (outer hex, facing -z): a fan of 6 triangles, each with
+  // its own copy of the centre vertex so it does not get blended with the
+  // OTHER fan (the front plateau) or with the side wall below.
+  for (let i = 0; i < n; i++) {
+    const i2 = (i + 1) % n;
+    const p0 = [0, 0, zBack];
+    const p1 = [outerPts[i2][0], outerPts[i2][1], zBack];
+    const p2 = [outerPts[i][0], outerPts[i][1], zBack];
+    pushTri(p0, p1, p2); // wound for a -z-facing normal (flip vs. the front fan)
   }
 
-  pushFan(outerPts, zBack, true);                            // back face
-  pushRingStrip(outerPts, outerPts, zBack, zPlateauFront);    // straight side wall
-  pushRingStrip(outerPts, innerPts, zPlateauFront, zFront);   // sloped bevel ring
-  pushFan(innerPts, zFront, false);                           // front plateau face
+  // 2. Side wall: outer hex from back to plateau-front, straight (full
+  // outer radius) -- one quad (2 triangles) per hex edge, 6 edges total.
+  // Wound so the face normal points radially OUTWARD (away from the hex's
+  // own centre axis) -- verified with a cross-product probe; the naive
+  // a0,b0,a1 / a1,b0,b1 order wound every one of these INWARD instead.
+  for (let i = 0; i < n; i++) {
+    const i2 = (i + 1) % n;
+    const a0 = [outerPts[i][0], outerPts[i][1], zBack];
+    const a1 = [outerPts[i2][0], outerPts[i2][1], zBack];
+    const b0 = [outerPts[i][0], outerPts[i][1], zPlateauFront];
+    const b1 = [outerPts[i2][0], outerPts[i2][1], zPlateauFront];
+    pushTri(a0, a1, b0);
+    pushTri(a1, b1, b0);
+  }
+
+  // 3. Bevel ring: outer hex (at plateau-front z) sloping in to the inner
+  // hex (at front z) -- one quad (2 triangles) per hex edge, 6 edges total.
+  // THIS is the chamfer the review flagged: each of these 6 facets must
+  // keep its own normal, not blend with its neighbour around the corner,
+  // AND must face outward/forward (not into the hex), same fix as the side
+  // wall above.
+  for (let i = 0; i < n; i++) {
+    const i2 = (i + 1) % n;
+    const a0 = [outerPts[i][0], outerPts[i][1], zPlateauFront];
+    const a1 = [outerPts[i2][0], outerPts[i2][1], zPlateauFront];
+    const b0 = [innerPts[i][0], innerPts[i][1], zFront];
+    const b1 = [innerPts[i2][0], innerPts[i2][1], zFront];
+    pushTri(a0, a1, b0);
+    pushTri(a1, b1, b0);
+  }
+
+  // 4. Front plateau face (inner hex, facing +z): a fan of 6 triangles,
+  // each with its own centre-vertex copy.
+  for (let i = 0; i < n; i++) {
+    const i2 = (i + 1) % n;
+    const p0 = [0, 0, zFront];
+    const p1 = [innerPts[i][0], innerPts[i][1], zFront];
+    const p2 = [innerPts[i2][0], innerPts[i2][1], zFront];
+    pushTri(p0, p1, p2);
+  }
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setIndex(indices);
+  // computeVertexNormals() on non-indexed geometry gives one flat normal
+  // per triangle (three.js computes it from the triangle's own 3 vertices
+  // and does not average across triangles when there is no shared index) --
+  // exactly the flat-shaded chamfer this fix requires.
   geo.computeVertexNormals();
-  void apothem; // kept for documentation of the inset maths above
   return geo;
 }
 

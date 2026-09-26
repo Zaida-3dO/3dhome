@@ -264,9 +264,60 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
       near(maxZAtOuterRadius, thicknessM - bevelDepthM, 1e-6) && maxZAtOuterRadius < thicknessM - 1e-6,
       { maxZAtOuterRadius, thicknessM, bevelDepthM });
 
-    // Vertex/triangle count stays modest for a 29-hex cluster.
-    check('hex-panel-cluster: beveled hex geometry has a modest vertex count (<= 40)',
-      pos.count <= 40, pos.count);
+    // Vertex/triangle count stays modest for a 29-hex cluster. The geometry
+    // is non-indexed (flat-shading fix, round 4 review: chamfer facets must
+    // not share vertices/normals with their neighbours), so vertex count is
+    // 3x triangle count by construction -- the triangle count is the number
+    // that actually matters for "modest", and stays exactly what it was
+    // with the old shared-vertex version (36: 6 back + 12 side + 12 bevel +
+    // 6 front), well under the old flat ExtrudeGeometry's 58.
+    check('hex-panel-cluster: beveled hex geometry has a modest triangle count (<= 40)',
+      pos.count / 3 <= 40, pos.count / 3);
+    check('hex-panel-cluster: beveled hex geometry is non-indexed (flat-shaded, no shared vertices)',
+      hexGeo.index === null, hexGeo.index);
+
+    // Winding: every triangle's face normal (from its own 3 vertex
+    // positions via cross product, independent of whatever
+    // computeVertexNormals() stored) must point OUTWARD/FORWARD, never
+    // into the panel. Two families, checked differently since "outward"
+    // means something different for each:
+    //   - fan triangles (back face, all-z-equal at 0; front plateau, all-z-
+    //     equal at thickness): normal.z must be negative (back) or positive
+    //     (front).
+    //   - ring triangles (side wall + bevel, z varies across the 3 verts):
+    //     the normal's xy component must point away from the hex's own
+    //     centre axis (dot product with the facet's own centroid-xy > 0).
+    // This is a REAL round-4 regression check: the geometry shipped in this
+    // review round had every one of its 24 ring triangles wound inward
+    // (caught and fixed only by writing this exact probe) while its 12 fan
+    // triangles were already correct -- so a test that only checked ONE
+    // family would have missed exactly the bug that shipped. Mutation-tested
+    // by hand: reverting the ring-facet winding fix trips the ring check
+    // (24 bad); separately flipping the back-fan's winding trips the fan
+    // check (6 bad) -- both confirmed failing, then restored.
+    {
+      const geoPos = hexGeo.attributes.position;
+      const triCount = geoPos.count / 3;
+      const vAt = i => new THREE.Vector3(geoPos.getX(i), geoPos.getY(i), geoPos.getZ(i));
+      let fanBad = 0, ringBad = 0;
+      for (let t = 0; t < triCount; t++) {
+        const i0 = t * 3, i1 = t * 3 + 1, i2 = t * 3 + 2;
+        const p0 = vAt(i0), p1 = vAt(i1), p2 = vAt(i2);
+        const faceNormal = p1.clone().sub(p0).cross(p2.clone().sub(p0)).normalize();
+        const zs = [p0.z, p1.z, p2.z];
+        const isFan = near(zs[0], zs[1], 1e-6) && near(zs[1], zs[2], 1e-6);
+        if (isFan) {
+          const expectSign = near(zs[0], 0, 1e-6) ? -1 : 1;
+          if (Math.sign(faceNormal.z) !== expectSign) fanBad++;
+        } else {
+          const cx = (p0.x + p1.x + p2.x) / 3, cy = (p0.y + p1.y + p2.y) / 3;
+          const radialDotNormal = cx * faceNormal.x + cy * faceNormal.y;
+          if (radialDotNormal <= 0) ringBad++;
+        }
+      }
+      check('hex-panel-cluster: fan triangles (back/front faces) wind outward', fanBad === 0, fanBad);
+      check('hex-panel-cluster: ring triangles (side wall + bevel chamfer) wind outward', ringBad === 0, ringBad);
+    }
 
     // 'low' detail drops the bevel entirely: its geometry is the plain flat
     // extrusion (60 vertices at curveSegments:1, no separate front-plateau
