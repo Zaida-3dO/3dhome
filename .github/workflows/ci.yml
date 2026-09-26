@@ -173,6 +173,16 @@ jobs:
           # Builds real three.js geometry from the vendored module.
           set -euo pipefail
           node scripts/test-wall-fittings.mjs
+      - name: Curtains follow Home Assistant and gate the daylight
+        run: |
+          # Asserts the cover -> curtain and cornice-light -> cornice bindings
+          # fire only on a real change (an attribute republish must not become
+          # a render tick) and never leak into the room-light path; that
+          # re-posing a curtain lands on the same vertices as a fresh build at
+          # that openness, each half anchored at its own wall end; and that a
+          # closed blackout shuts the daylight out while a sheer dims and warms it.
+          set -euo pipefail
+          node scripts/test-curtain-binding.mjs
       - name: WebGL failure is classified correctly
         run: |
           # Asserts which of the two WebGL failures we tell the user about. Out

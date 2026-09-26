@@ -1132,6 +1132,21 @@
         },
         getPresence: roomId => home.getPresence(roomId),
         getDoorOpenById: doorId => home.getDoorOpenById(doorId),
+        // Curtains + cornice lights, through the same scene entry points the
+        // live onCurtainChange / onCorniceChange handlers call:
+        //   __home3dSensors.curtain('lounge_curtain', 0)            // closed
+        //   __home3dSensors.curtain('lounge_curtain', 40, 'opening')
+        //   __home3dSensors.cornice('lounge_curtain', false)
+        //   __home3dSensors.daylight()   // per-window transmission + light
+        curtain: (curtainId, pct, moving) => home.setCurtainOpen(curtainId, pct, moving || null),
+        cornice: (curtainId, on, bri, color) =>
+          home.setCorniceLight(curtainId, { on: !!on, bri: bri != null ? bri : 100, color: color || null }),
+        getCurtainOpen: curtainId => home.getCurtainOpen(curtainId),
+        getCornice: curtainId => home.getCorniceLight(curtainId),
+        daylight: () => home.getDaylightDebug(),
+        // Pin the sun ('morning'|'noon'|'night'|'auto') so daylight can be
+        // checked at any wall-clock time -- same as the Settings sun buttons.
+        sunMode: mode => home.setSunMode(mode),
         frameCount: () => home.getFrameCount(),
         footstepDebug: roomId => home.getFootstepDebug(roomId),
         // Per-outer-wall fade state. The only way to check which walls faded:
@@ -1685,6 +1700,16 @@
           home.setDoorOpenById(doorId, open ? DOOR_SENSOR_OPEN_PCT : 0);
           renderPanel();
           followDoorSwing(doorId);
+        });
+
+        // Cover -> animate that curtain (and, through it, the room's
+        // daylight). Cornice light -> that curtain's cornice strip. Both fire
+        // only on a real change, like the sensor callbacks above.
+        ha.onCurtainChange((curtainId, st) => {
+          home.setCurtainOpen(curtainId, st.pct, st.moving);
+        });
+        ha.onCorniceChange((curtainId, st) => {
+          home.setCorniceLight(curtainId, st);
         });
 
         ha.connect();

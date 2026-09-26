@@ -7,6 +7,8 @@
  *   ha.onStateChange((roomId, group, state) => { ... });
  *   ha.onPresenceChange((roomId, occupied) => { ... });
  *   ha.onDoorChange((doorId, open) => { ... });
+ *   ha.onCurtainChange((curtainId, { pct, moving }) => { ... });
+ *   ha.onCorniceChange((curtainId, { on, bri, color }) => { ... });
  *   ha.onStatusChange(status => { ... });
  *   ha.connect();
  */
@@ -38,6 +40,8 @@ export const HAClient = (() => {
     const statusCallbacks = [];
     const presenceCallbacks = [];
     const doorCallbacks = [];
+    const curtainCallbacks = [];
+    const corniceCallbacks = [];
 
     // Reverse index: entityId -> { roomId, group }
     const entityIndex = new Map();
@@ -83,6 +87,114 @@ export const HAClient = (() => {
       };
       indexKind('presence', sensors.presence);
       indexKind('door', sensors.doors);
+    }
+
+    // ---- Curtains (cover entities) and their cornice lights ----
+    //
+    // A THIRD index, because neither of the others fits: a cover's reading is
+    // a position (0..100) plus a motion, not a boolean, and a cornice light is
+    // keyed by CURTAIN id rather than by room/channel. Keeping the cornice
+    // light out of `rooms` is also what stops it being double-driven: in a
+    // real house the cornice entity is usually a member of the room's
+    // ambience group, which the room's 'ambient' channel already follows.
+    //
+    // fittingIndex: entityId -> { kind: 'curtain'|'cornice', targetId }
+    // fittingGroups[kind][targetId] -> [entityId]
+    // fittingEntity: entityId -> last parsed reading (per entity)
+    // fittingResolved[kind]: targetId -> last dispatched value, as a JSON key
+    const fittingIndex = new Map();
+    const fittingGroups = { curtain: {}, cornice: {} };
+    const fittingEntity = new Map();
+    const fittingResolved = { curtain: new Map(), cornice: new Map() };
+    if (sensors) {
+      const indexFitting = (kind, map) => {
+        Object.entries(map || {}).forEach(([targetId, entities]) => {
+          if (!Array.isArray(entities) || !entities.length) return;
+          fittingGroups[kind][targetId] = entities.slice();
+          entities.forEach(eid => fittingIndex.set(eid, { kind, targetId }));
+        });
+      };
+      indexFitting('curtain', sensors.curtains);
+      indexFitting('cornice', sensors.corniceLights);
+    }
+
+    /**
+     * One cover entity's state -> { pct, moving } or null when it has no
+     * usable reading ('unavailable'/'unknown'), in which case the curtain
+     * keeps whatever it last showed rather than snapping somewhere invented.
+     * `current_position` is the Home Assistant convention: 0 closed, 100 open.
+     * A cover with no position support reports only 'open'/'closed'.
+     */
+    function parseCover(haState) {
+      const st = haState.state;
+      const attrs = haState.attributes || {};
+      let pct = attrs.current_position;
+      if (typeof pct !== 'number' || !isFinite(pct)) {
+        if (st === 'open') pct = 100;
+        else if (st === 'closed') pct = 0;
+        else if (st === 'opening' || st === 'closing') pct = null;
+        else return null;
+      }
+      const moving = (st === 'opening' || st === 'closing') ? st : null;
+      if (pct == null) pct = moving === 'opening' ? 0 : 100;   // start of travel
+      return { pct: Math.max(0, Math.min(100, Math.round(pct))), moving };
+    }
+
+    /** One light entity's state -> { on, bri, color|null }. */
+    function parseCorniceLight(haState) {
+      const on = haState.state === 'on';
+      const attrs = haState.attributes || {};
+      const bri = on ? (attrs.brightness != null ? Math.round(attrs.brightness / 2.55) : 100) : 0;
+      let color = null;
+      if (Array.isArray(attrs.rgb_color)) {
+        color = '#' + attrs.rgb_color.map(c => (c | 0).toString(16).padStart(2, '0')).join('');
+      }
+      return { on, bri, color };
+    }
+
+    function resolveFitting(kind, targetId) {
+      const readings = (fittingGroups[kind][targetId] || [])
+        .map(eid => fittingEntity.get(eid)).filter(Boolean);
+      if (!readings.length) return null;
+      if (kind === 'curtain') {
+        // Several motors on one curtain: average their positions; any one
+        // moving means the curtain is moving (opening wins a tie).
+        const pct = Math.round(readings.reduce((a, r) => a + r.pct, 0) / readings.length);
+        const moving = readings.some(r => r.moving === 'opening') ? 'opening'
+          : readings.some(r => r.moving === 'closing') ? 'closing' : null;
+        return { pct, moving };
+      }
+      // Cornice: OR the on state; brightness is the brightest; colour from the
+      // first entity that is on and reports one.
+      const lit = readings.filter(r => r.on);
+      return {
+        on: lit.length > 0,
+        bri: lit.length ? Math.max(...lit.map(r => r.bri)) : 0,
+        color: (lit.find(r => r.color) || {}).color || null
+      };
+    }
+
+    /**
+     * Fold one cover/cornice entity into its curtain's resolved value and
+     * notify ONLY when that value actually changed -- same reasoning as the
+     * sensor path: an attribute-only republish must not become a render.
+     */
+    function processFittingUpdate(entityId, haState) {
+      const mapping = fittingIndex.get(entityId);
+      if (!mapping) return false;
+      const { kind, targetId } = mapping;
+      const reading = kind === 'curtain' ? parseCover(haState) : parseCorniceLight(haState);
+      if (!reading) return false;
+      fittingEntity.set(entityId, reading);
+      const resolved = resolveFitting(kind, targetId);
+      if (!resolved) return false;
+      const key = JSON.stringify(resolved);
+      if (fittingResolved[kind].get(targetId) === key) return false;
+      fittingResolved[kind].set(targetId, key);
+      (kind === 'curtain' ? curtainCallbacks : corniceCallbacks).forEach(cb => {
+        try { cb(targetId, resolved); } catch (e) { console.warn('HAClient fittingCb:', e); }
+      });
+      return true;
     }
 
     function sensorCallbacksFor(kind) {
@@ -266,6 +378,7 @@ export const HAClient = (() => {
               // correct on first paint rather than only after the sensor
               // happens to change.
               else if (sensorIndex.has(state.entity_id)) processSensorUpdate(state.entity_id, state);
+              if (fittingIndex.has(state.entity_id)) processFittingUpdate(state.entity_id, state);
             });
             setStatus('connected');
           } else {
@@ -277,6 +390,7 @@ export const HAClient = (() => {
           if (!new_state) return;
           if (entityIndex.has(entity_id)) processStateUpdate(entity_id, new_state, false);
           else if (sensorIndex.has(entity_id)) processSensorUpdate(entity_id, new_state);
+          if (fittingIndex.has(entity_id)) processFittingUpdate(entity_id, new_state);
         }
       };
       ws.onclose = () => {
@@ -342,6 +456,7 @@ export const HAClient = (() => {
             // sensor costs a Map lookup and nothing else -- no render request.
             processSensorUpdate(state.entity_id, state);
           }
+          if (fittingIndex.has(state.entity_id)) processFittingUpdate(state.entity_id, state);
         });
       } catch (e) {
         console.warn('HAClient: Poll failed:', e.message);
@@ -387,11 +502,20 @@ export const HAClient = (() => {
       // republish -- the consumer may safely request a render on every call.
       onPresenceChange(cb) { presenceCallbacks.push(cb); },
       onDoorChange(cb) { doorCallbacks.push(cb); },
+      // cb(curtainId, { pct, moving }) where moving is 'opening'|'closing'|null
+      // and cb(curtainId, { on, bri, color }). Fired only on a real change.
+      onCurtainChange(cb) { curtainCallbacks.push(cb); },
+      onCorniceChange(cb) { corniceCallbacks.push(cb); },
       onStatusChange(cb) { statusCallbacks.push(cb); },
       // Test/diagnostic seam: drive a sensor without a live HA socket. Returns
       // true if the resolved boolean changed (and callbacks fired).
       _injectSensorState(entityId, state) {
         return processSensorUpdate(entityId, { state });
+      },
+      // Same seam for a cover or cornice light: pass the full HA state object
+      // ({ state, attributes }). Returns true if a callback fired.
+      _injectFittingState(entityId, haState) {
+        return processFittingUpdate(entityId, haState);
       },
       callService,
       callServiceDebounced,

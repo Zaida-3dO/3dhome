@@ -1,6 +1,6 @@
 {
   "kind": "rooms",
-  "schemaVersion": "1.1",
+  "schemaVersion": "1.2",
   "house": "demo",
   "homeAssistant": {
     "enabled": false,
@@ -44,6 +44,15 @@
     "doors": {
       "store_door": ["binary_sensor.demo_store_door_contact"],
       "bedroom_door": ["binary_sensor.demo_bedroom_door_contact"]
+    },
+    "curtains": {
+      "lounge_curtain": ["cover.demo_lounge_curtain"],
+      "lounge_sheer": ["cover.demo_lounge_sheer"],
+      "bedroom_curtain": ["cover.demo_bedroom_curtain"]
+    },
+    "corniceLights": {
+      "lounge_curtain": ["light.demo_lounge_cornice"],
+      "bedroom_curtain": ["light.demo_bedroom_cornice"]
     }
   }
 }
