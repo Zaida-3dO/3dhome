@@ -93,12 +93,13 @@ every item it touches, so it is required on every run rather than assumed.
   each face of the wall at the item's own position, rather than comparing
   against the room's overall bounding-box midpoint. The old bbox-midpoint
   approach picks the wrong side for a wall that only borders part of an
-  L-shaped room. **As of this PR, the schema/loader work that lands this fix
-  in `src/house-loader.js` and `scripts/validate-house.py` (plan PR1a) has
-  not merged yet**, so this probe is implemented directly in this script
-  rather than shared with them. Once PR1a lands the same probe in
-  `validate-house.py`, the duplication should be resolved by importing or
-  porting from there instead of maintaining two copies.
+  L-shaped room. **PR1a (item 10b5faa1) has since merged** and now carries
+  its own copy of this probe in both `src/house-loader.js` and
+  `scripts/validate-house.py`. This script's copy was written before that
+  landed and has not been consolidated with PR1a's -- porting or importing
+  from there instead of maintaining two Python copies is a known follow-up,
+  out of this PR's own territory (`scripts/validate-house.py` belongs to
+  10b5faa1).
 - **Maps common SweetHome3D catalogue names to 3dHome types** through a
   small, editable rule table (`--map` adds to it, checked first): radiators,
   fridges, wardrobes/dressers/bedside tables/glass cabinets to `cabinet`,
@@ -239,26 +240,25 @@ or corrupting the file. This tool catches that, cleans up the orphaned
 backup, and reports one line telling you to close whatever has the file open
 and re-run. The live file itself is untouched either way.
 
-### Why `--skip-furniture-schema` exists, and when to use it
+### `--skip-furniture-schema`: no longer needed for normal use
 
-The furniture schema itself (`furniture[]`, its `$defs`, the 1.2 version
-bump) is being built in parallel, in plan PR1a, and had not merged as of this
-PR. Until it has, `houses/schema.json` does not recognise a `furniture`
-property at all (its geometry definition uses `additionalProperties: false`),
-so schema-validating **any** file carrying `furniture[]` fails today,
-correctly -- not a bug in this tool.
+This flag was written while the furniture schema itself (`furniture[]`, its
+`$defs`, the 1.2 version bump) was being built in parallel, in plan PR1a.
+**PR1a has since merged**, so `houses/schema.json` now recognises `furniture`
+as a normal property, and a well-formed fragment validates in full with no
+flag at all -- that is the default, recommended path.
 
-`--skip-furniture-schema` skips **only that one verdict**. Every other check
-still runs for real, against a copy of the merged file with `furniture`
-stripped out: duplicate room/wall ids, a door or window referencing a
-non-existent wall, a centre outside a wall's span, and everything else
-`validate-house.py`'s structural and cross-reference checks catch. It also
-prints a `WARNING` line every time it is used, so a run with it enabled is
-never silently indistinguishable from a fully-validated one. **Once PR1a
-merges, drop `--skip-furniture-schema` from normal use** -- the real gate is
-`validate-house.py` validating the whole file, furniture schema included, and
-this flag existing at all is a stopgap for the parallel-PR window, not a
-permanent escape hatch.
+The flag is kept as a **documented fallback**, not removed, because it still
+does something real: it skips *only* the schema-validation verdict on the
+`furniture` property, while every other check still runs against a copy of
+the merged file with `furniture` stripped out (duplicate room/wall ids, a
+door or window referencing a non-existent wall, a centre outside a wall's
+span, and everything else `validate-house.py`'s structural and
+cross-reference checks catch). It prints a `WARNING` line every time it is
+used, so a run with it enabled is never silently indistinguishable from a
+fully-validated one. Reach for it only when debugging a furniture-schema
+false positive or running against an older schema checkout -- not as a
+routine part of applying a fragment.
 
 ### Testing
 

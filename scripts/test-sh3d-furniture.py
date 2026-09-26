@@ -755,13 +755,15 @@ def test_light_fixtures_are_reported_as_skipped():
     check("extractor: the skipped light is reported by name", "Invented ceiling lamp" in fragment["notes"], f"notes={fragment['notes']!r}")
 
 
-def test_output_validates_against_schema_or_skips_with_note():
-    """Acceptance criterion 8: 'Its output validates against the PR1a schema
-    (the check is skipped with a note until PR1a merges).' Confirms today's
-    state honestly: houses/schema.json has no furniture[] property yet, so
-    the fragment's shape cannot be schema-checked directly (a fragment is not
-    a full geometry document anyway) -- this asserts that condition rather
-    than pretending it validates."""
+def test_furniture_schema_is_now_recognised():
+    """Acceptance criterion 8: 'Its output validates against the PR1a schema.'
+    PR1a (item 10b5faa1) has merged: houses/schema.json now declares
+    `furniture` as a recognised property of a geometry profile. This
+    replaces the earlier self-expiring placeholder, which only asserted the
+    PRE-merge absence as an honest stand-in and was designed to fail the
+    moment this became true -- it has, so this now asserts the real
+    property directly instead of a proxy for "not yet checkable".
+    """
     schema = json.loads((REPO_ROOT / "houses" / "schema.json").read_text(encoding="utf-8"))
     geometry_def = None
     for _, defn in schema.get("$defs", {}).items():
@@ -771,11 +773,41 @@ def test_output_validates_against_schema_or_skips_with_note():
             break
     has_furniture_prop = bool(geometry_def and "furniture" in geometry_def.get("properties", {}))
     check(
-        "PR1a schema note: furniture[] is not yet a recognised property (skip is correct, not stale)",
-        not has_furniture_prop,
-        "PR1a has landed furniture[] in the schema -- the extractor's fragment output can now be "
-        "schema-checked directly; update this test and docs/sh3d-import.md accordingly",
+        "PR1a schema: furniture[] is now a recognised geometry property",
+        has_furniture_prop,
+        "houses/schema.json no longer declares `furniture` -- has PR1a been reverted?",
     )
+
+
+def test_apply_full_strict_validation_succeeds_without_skip_flag():
+    """The real acceptance test for criterion 8, now that PR1a has merged:
+    apply a fragment WITHOUT --skip-furniture-schema at all, and confirm the
+    full --strict validation (schema AND structural checks together) passes
+    for real. Before PR1a this could never succeed; that is exactly why the
+    flag existed. This is the proof the escape hatch is no longer load-
+    bearing for a well-formed fragment, though it is left in place as a
+    documented option (see docs/sh3d-import.md).
+    """
+    tmp = Path(tempfile.mkdtemp())
+    geo_path, geometry = make_synthetic_geometry(tmp)
+    geometry["schemaVersion"] = "1.2"
+    geo_path.write_text(json.dumps(geometry, indent=2), encoding="utf-8")
+
+    fragment = {
+        "proposedBy": "test",
+        "basedOn": geo_path.stat().st_mtime,
+        "furniture": [
+            {"id": "invented_lamp", "room": "north_room", "type": "box", "at": [50, 50], "rotation": 0, "params": {"width": 20, "depth": 20, "height": 40}},
+        ],
+        "notes": "synthetic",
+    }
+    frag_path = tmp / "fragment.json"
+    frag_path.write_text(json.dumps(fragment), encoding="utf-8")
+
+    proc = run_apply(["--geometry", str(geo_path), "--fragment", str(frag_path)])  # no --skip-furniture-schema
+    check("apply: full --strict validation succeeds with no --skip-furniture-schema, now that PR1a has merged", proc.returncode == 0, proc.stderr)
+    result = json.loads(geo_path.read_text(encoding="utf-8"))
+    check("apply: item present after a full-validation apply", any(f["id"] == "invented_lamp" for f in result.get("furniture", [])))
 
 
 # ---------------------------------------------------------------------------
@@ -901,10 +933,13 @@ def test_apply_never_overwrites_same_day_backup():
 
 
 def test_apply_rolls_back_on_validation_failure():
-    """Forces a real --strict failure (no --skip-furniture-schema) by leaving the
-    fragment's furniture[] in place against the CURRENT schema, which does not
-    yet declare that property -- exactly the PR1a-not-merged-yet situation
-    this script must handle safely rather than corrupt the live file over."""
+    """Forces a real --strict failure (no --skip-furniture-schema needed, now
+    that PR1a's furniture schema has merged) with a fragment whose id uses a
+    hyphen -- the schema's id pattern is `^[a-z][a-z0-9_]*$`, underscores
+    only. This is a genuine, ordinary validation failure (an invalid id),
+    not a workaround for a schema gap -- the point of the test is that
+    ANY validation failure, for any reason, must roll back cleanly rather
+    than corrupt the live file."""
     tmp = Path(tempfile.mkdtemp())
     geo_path, _ = make_synthetic_geometry(tmp)
     before = geo_path.read_bytes()
@@ -919,7 +954,7 @@ def test_apply_rolls_back_on_validation_failure():
 
     proc = run_apply(["--geometry", str(geo_path), "--fragment", str(frag_path)])  # no --skip-furniture-schema
     check(
-        "apply: --strict validation fails today (furniture[] not yet in the schema) -- exit 1",
+        "apply: --strict validation fails on an invalid id (hyphen, not underscore) -- exit 1",
         proc.returncode == 1, proc.stderr,
     )
     check("apply: live file is byte-identical after a validation failure", geo_path.read_bytes() == before)
@@ -1053,7 +1088,8 @@ def main():
         test_apply_refuses_fragment_with_duplicate_ids,
         test_furniture_group_not_double_counted,
         test_light_fixtures_are_reported_as_skipped,
-        test_output_validates_against_schema_or_skips_with_note,
+        test_furniture_schema_is_now_recognised,
+        test_apply_full_strict_validation_succeeds_without_skip_flag,
         test_skip_furniture_schema_still_runs_structural_checks,
         test_apply_upserts_and_backs_up,
         test_apply_refuses_id_collision_without_replace,

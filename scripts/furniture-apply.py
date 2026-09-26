@@ -175,14 +175,19 @@ def run_validator_structural_only(geometry, target_path):
     """Runs validate-house.py against a copy of `geometry` with `furniture`
     stripped, so the STRUCTURAL and cross-reference checks in check_geometry
     still run for real (duplicate ids, missing rooms/walls, wall-span
-    overlaps, and so on) even though the schema itself doesn't recognise
-    `furniture` yet (PR1a hasn't merged). This is what
-    `--skip-furniture-schema` actually skips: only the schema-validation
-    verdict on the `furniture` property, never the rest of the file.
+    overlaps, and so on) without the schema's verdict on the `furniture`
+    property itself. This is what `--skip-furniture-schema` actually skips:
+    only that one property's schema check, never the rest of the file.
+
+    PR1a's furniture schema has now merged, so this path is no longer needed
+    for a well-formed fragment (full `--strict` validation works directly --
+    see run_validator_strict). It is kept as a documented fallback: someone
+    running against an older schema checkout, or debugging a furniture-schema
+    false positive, can still get real structural validation without it.
 
     `--strict` is NOT passed here deliberately: the point is exactly to
-    tolerate one specific, known-and-explained gap (no furniture schema yet),
-    which is what --strict's whole purpose is to refuse to tolerate.
+    tolerate one specific gap (skipping the furniture schema check), which is
+    what --strict's whole purpose is to refuse to tolerate.
     """
     stripped = {k: v for k, v in geometry.items() if k != "furniture"}
     stripped_path = target_path.parent / f"{target_path.name}.no-furniture-{os.getpid()}"
@@ -228,9 +233,10 @@ def apply(geometry_path, fragment_path, replace, skip_furniture_schema=False):
     if skip_furniture_schema:
         print(
             "WARNING: --skip-furniture-schema is in effect -- schema validation of the "
-            "furniture property is skipped (PR1a's furniture schema hasn't merged yet). "
-            "Every OTHER check (structural, cross-reference, upsert rules, backup, atomic "
-            "swap, mtime guard) still runs for real. See docs/sh3d-import.md.",
+            "furniture property is skipped. Every OTHER check (structural, cross-reference, "
+            "upsert rules, backup, atomic swap, mtime guard) still runs for real. Now that "
+            "PR1a's furniture schema has merged, this flag is no longer required for normal "
+            "use -- see docs/sh3d-import.md.",
             file=sys.stderr,
         )
 
@@ -327,8 +333,9 @@ def build_arg_parser():
     p.add_argument(
         "--skip-furniture-schema", action="store_true",
         help="skip ONLY the schema-validation verdict on the furniture property (structural and "
-             "cross-reference checks still run in full); for use only until PR1a's furniture "
-             "schema has merged -- prints a warning when used; see docs/sh3d-import.md",
+             "cross-reference checks still run in full); not needed for normal use now that "
+             "PR1a's furniture schema has merged -- kept as a documented fallback; prints a "
+             "warning when used; see docs/sh3d-import.md",
     )
     return p
 
