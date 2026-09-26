@@ -2143,6 +2143,11 @@
         "frameColor": {
           "$ref": "#/$defs/hexColor",
           "default": "#f2f1ec"
+        },
+        "controlSide": {
+          "enum": ["left", "right"],
+          "default": "right",
+          "description": "Which side of the front edge the control panel sits on, as seen by a person standing at the front of the desk facing it. Its outer edge sits 4cm in from the desk's side edge on that side."
         }
       },
       "additionalProperties": false

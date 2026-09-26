@@ -94,7 +94,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "maxHeight": 120,
   "topThickness": 2.5,
   "topColor": "#f4f2ee",
-  "frameColor": "#f2f1ec"
+  "frameColor": "#f2f1ec",
+  "controlSide": "right"
 }/*EDITMODE-END*/;
 
 // ============== Desk model (delegates to the shared builder) ==============
@@ -116,6 +117,7 @@ function deskParams(t) {
     topThickness: t.topThickness,
     topColor: t.topColor,
     frameColor: t.frameColor,
+    controlSide: t.controlSide,
   };
 }
 function buildDesk(t, group, THREE, ctx) {
@@ -176,6 +178,7 @@ function App() {
               <tr><td>Max height (stand)</td><td className="num">{t.maxHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Top thickness</td><td className="num">{t.topThickness.toFixed(1)}</td><td><b>Variable</b></td></tr>
               <tr><td>Overall envelope height <span style={{opacity:0.6}}>(DEFAULTS.height)</span></td><td className="num">{(clamped + t.topThickness).toFixed(1)}</td><td>Derived: topHeight + topThickness</td></tr>
+              <tr><td>Control panel side</td><td className="num">{t.controlSide}</td><td><b>Variable</b> — left/right, 4cm gap to the desk's side edge</td></tr>
             </tbody>
           </table>
           <div className="legend">
@@ -194,7 +197,9 @@ function App() {
             stages: a fixed lower sleeve sized to the desk's lowest reach, and an upper stage that visibly
             extends further out of it as the desk stands taller) rising from a flat foot bar that runs the
             full depth, front to back. A horizontal crossbar sits under the top between the two legs, and a
-            small control panel sits on the front edge, centred (dropped at low detail).
+            small control panel sits on the front edge, offset to the left or right (dropped at low detail)
+            — its outer edge 4cm in from the desk's side edge on that side. "Left"/"right" are as seen by a
+            person standing at the front of the desk facing it.
           </div>
           <div className="row">
             <button className="btn" onClick={copyAsJSON}>{copied ? 'Copied!' : 'Copy as furniture JSON'}</button>
@@ -237,6 +242,10 @@ function App() {
           onChange={v => setTweak('topColor', v)} />
         <TweakColor label="Frame colour" value={t.frameColor}
           onChange={v => setTweak('frameColor', v)} />
+
+        <TweakSection label="Control panel" />
+        <TweakRadio label="Side" value={t.controlSide} options={['left', 'right']}
+          onChange={v => setTweak('controlSide', v)} />
       </TweaksPanel>
     </>
   );

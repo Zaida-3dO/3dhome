@@ -34,6 +34,7 @@ export const DEFAULTS = Object.freeze({
   topThickness: 2.5,
   topColor: '#f4f2ee',
   frameColor: '#f2f1ec',
+  controlSide: 'right',
 });
 
 const CM = 0.01;
@@ -158,19 +159,38 @@ export function build(THREE, params, opts) {
   crossbar.castShadow = true; crossbar.receiveShadow = true;
   group.add(crossbar);
 
-  // ---- control panel: small box on the front edge, under the top, centred.
-  // Dropped at low detail (a small part with no bearing on the silhouette).
-  // Its display strip is emissive and kept out of any merge pass.
+  // ---- control panel: small box on the front edge, under the top, offset
+  // to one side. `controlSide` is as seen by a person standing at the front
+  // of the desk (z=D) facing it (looking toward -z, toward the wall) -- in
+  // that view, world +x is their right hand and world -x is their left
+  // (same convention as legLeft/legRight above and wall-sign's leftBar/
+  // rightBar). The panel's outer edge sits 4 cm in from the desk's side
+  // edge on that side; an unrecognised value falls back to 'right' with a
+  // console warning. Dropped at low detail (a small part with no bearing on
+  // the silhouette). Its display strip is emissive and kept out of any
+  // merge pass, and it follows the panel to whichever side it lands on.
   if (!isLow) {
+    let side = p.controlSide;
+    if (side !== 'left' && side !== 'right') {
+      if (side !== undefined) {
+        console.warn(`standing-desk: unknown controlSide "${side}", falling back to "right"`);
+      }
+      side = 'right';
+    }
+    const sign = side === 'left' ? -1 : 1;
+
     const panelW = Math.min(0.12, W * 0.1);
+    const EDGE_GAP = 0.04; // 4 cm from the panel's outer edge to the desk's side edge
+    const panelX = sign * (W / 2 - EDGE_GAP - panelW / 2);
+
     const panel = new THREE.Mesh(new THREE.BoxGeometry(panelW, 0.035, 0.03), panelMat);
-    panel.position.set(0, H - 0.03, D - 0.05);
+    panel.position.set(panelX, H - 0.03, D - 0.05);
     panel.name = 'controlPanel';
     panel.castShadow = true; panel.receiveShadow = true;
     group.add(panel);
 
     const display = new THREE.Mesh(new THREE.BoxGeometry(panelW * 0.5, 0.012, 0.002), displayMat);
-    display.position.set(0, H - 0.03, D - 0.05 + 0.03 / 2 + 0.001);
+    display.position.set(panelX, H - 0.03, D - 0.05 + 0.03 / 2 + 0.001);
     display.name = 'controlPanelDisplay';
     if (isKeptFinish(display.material.userData.finish)) display.userData.keep = true;
     group.add(display);
