@@ -226,6 +226,19 @@ jobs:
           # module, same as test-wall-fittings.mjs.
           set -euo pipefail
           node scripts/test-wall-decor.mjs
+      - name: Cabinet builder bbox, back-face, low-detail and fronts-grid rules
+        run: |
+          # Asserts src/furniture/cabinet.js: the built group's bounding box
+          # matches params (width/height/depth, cm -> m) with y=0 the floor,
+          # z=0 is the back (nothing behind it), detail:'low' produces fewer
+          # triangles than 'full', normaliseFronts() fills/normalises/errors
+          # per the fronts-grid contract, every mesh is tagged with a finish
+          # from the closed set with glass/mirror/emissive marked keep=true,
+          # and the bedside-table LED wrap sits in a drawer gap and wraps the
+          # front + both sides (never the back). Builds real three.js
+          # geometry from the vendored module.
+          set -euo pipefail
+          node scripts/test-cabinet.mjs
       - name: WebGL failure is classified correctly
         run: |
           # Asserts which of the two WebGL failures we tell the user about. Out
