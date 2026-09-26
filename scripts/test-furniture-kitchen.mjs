@@ -460,25 +460,15 @@ function draws(groups) {
     const leds = [...meshes(L.wall, m => m.name === name), ...meshes(L.wallB, m => m.name === name)];
     check('L: ' + name + ' strips exist, emissive and kept', leds.length >= 3 &&
       leds.every(m => Fin.partFinish(m).finish === 'emissive' && Fin.partKeep(m).keep === true), leds.length);
-    const ret = meshes(L.wall, m => m.name === name).map(boxCm).find(b => b.z1 - b.z0 > b.x1 - b.x0);
-    const bS = meshes(L.wallB, m => m.name === name).map(boxCm).filter(b => b.z1 - b.z0 > b.x1 - b.x0)
-      .sort((p, q) => p.z0 - q.z0)[0];
-    check('L: ' + name + ' turns the wall corner and meets the other run\'s strip', !!ret && !!bS &&
-      near(ret.z1, bS.z0, 0.05) && near(ret.x0, bS.x0, 0.05) && near(ret.y0, bS.y0, 0.05), { ret, bS });
+    // Wall runs do not corner: no strip turns along a return.
+    const turned = leds.map(boxCm).filter(b => b.z1 - b.z0 > b.x1 - b.x0 && b.x1 - b.x0 < 2 && Math.abs(b.z1 - b.z0) < 40);
+    check('L: ' + name + ' does not turn a wall corner (wall runs do not corner)', meshes(L.wall, m => m.name === name).map(boxCm).every(b => b.x1 - b.x0 > b.z1 - b.z0), turned);
   });
   const under = meshes(L.wall, m => m.name === 'under-led').map(boxCm);
   check('L: under-cabinet strips follow each module\'s own bottom (70 and 55 differ)',
     new Set(under.map(b => Math.round(b.y0))).size === 2, under.map(b => b.y0));
   const hoodX = unionBox(meshes(L.wall, m => m.name === 'hood'));
   check('L: no LED under the hood', under.every(b => b.x1 <= hoodX.x0 + 0.05 || b.x0 >= hoodX.x1 - 0.05), { under, hoodX });
-
-  // Probe: the continuity check fails when the wall owner is told the wrong depth.
-  const wrong = JSON.parse(JSON.stringify(ex));
-  wrong.wall.cornerDepth = 40;
-  const Lw = placeL(wrong);
-  const r = meshes(Lw.wall, m => m.name === 'top-led').map(boxCm).find(b => b.z1 - b.z0 > b.x1 - b.x0);
-  const q = meshes(Lw.wallB, m => m.name === 'top-led').map(boxCm).filter(b => b.z1 - b.z0 > b.x1 - b.x0).sort((p, q2) => p.z0 - q2.z0)[0];
-  check('probe: a wrong wall cornerDepth breaks the top strip', !!r && !!q && !near(r.x0, q.x0, 0.05), { r, q });
 
   // One LED colour everywhere: four draws. A second colour is the fifth.
   check('L with plinth, under and top strips in one colour: four draws or fewer', draws(Object.values(L)).size <= 4, [...draws(Object.values(L))]);
@@ -492,6 +482,116 @@ function draws(groups) {
   check('fridge: stands on a recessed plinth', meshes(f, m => m.name === 'plinth').length === 1 &&
     boxCm(meshes(f, m => m.name === 'plinth')[0]).z1 <= FRIDGE.DEFAULTS.depth - 7.9);
   check('fridge: plinthLed draws a strip', meshes(build(FRIDGE, { plinthLed: true }), m => m.name === 'plinth-led').length === 1);
+}
+
+const GAPCM = 0.15;   // the half shadow gap each front is inset by (kitchen.js GAP)
+
+// ---- 10. owner-import fixes -----------------------------------------------------------
+/** Every part lies inside the run's declared envelope (a bare wall run need not fill it). */
+function contained(g, p) {
+  const b = boxCm(g);
+  return b.x0 >= -p.width / 2 - 0.5 && b.x1 <= p.width / 2 + 0.5 && b.y0 >= -0.5 && b.y1 <= p.height + 0.5 &&
+    b.z0 >= -0.5 && b.z1 <= p.depth + 0.5;
+}
+
+// 10.1 A wall run's unused width is bare wall, and modules can be placed with `at`.
+{
+  const p = Object.assign({}, WALL.DEFAULTS, { width: 180, height: 120,
+    modules: [{ kind: 'hood', width: 60, at: 70, height: 60, style: 'chimney', splashback: 60 }] });
+  const g = WALL.build(THREE, p, { detail: 'full' });
+  check('bare wall run: no filler panel, no carcass, no door', meshes(g, m => /filler|carcass|door/.test(m.name)).length === 0,
+    meshes(g).map(m => m.name));
+  const hood = unionBox(meshes(g, m => /hood/.test(m.name) || m.name === 'splashback'));
+  check('bare wall run: the hood sits at 70-130 cm from the left end', near(hood.x0, -90 + 70, 0.01) && near(hood.x1, -90 + 130, 0.01), hood);
+  check('bare wall run: everything drawn is inside the envelope', contained(g, p), boxCm(g));
+  check('bare wall run: its height is still the whole envelope (splashback to top line)', near(boxCm(g).y0, 0, 0.01) && near(boxCm(g).y1, 120, 0.01), boxCm(g));
+  const lf = WALL.build(THREE, Object.assign({}, p, { fill: 'filler' }), { detail: 'full' });
+  const fl = meshes(lf, m => m.name === 'filler').map(boxCm).sort((a, b) => a.x0 - b.x0);
+  check('fill: "filler" closes both sides of the hood', fl.length === 2 && near(fl[0].x0, -90 + GAPCM, 0.05) && near(fl[1].x1, 90 - GAPCM, 0.05), fl);
+  check('fill: "filler" fills the width exactly', near(boxCm(lf).x1 - boxCm(lf).x0, 180, 0.5), boxCm(lf));
+  const lay = K.layoutWallModules([{ kind: 'cabinet', width: 60 }, { kind: 'gap', width: 40 }, { kind: 'cabinet', width: 60 }], 200, 'bare');
+  check('a gap module takes width and the next module follows it', lay.length === 3 && near(lay[2].x0, -100 + 100, 0.01) && near(lay[2].x1, 60, 0.01), lay);
+  const gw = WALL.build(THREE, Object.assign({}, WALL.DEFAULTS, { width: 200, modules: [{ kind: 'cabinet', width: 60 }, { kind: 'gap', width: 40 }, { kind: 'cabinet', width: 60 }] }), { detail: 'full' });
+  check('a gap module draws nothing', meshes(gw, m => m.name === 'carcass').map(boxCm).every(b => b.x1 <= -40 + 0.01 || b.x0 >= 0 - 0.01));
+  warnings.length = 0;
+  const ov = K.layoutWallModules([{ kind: 'cabinet', width: 60 }, { kind: 'cabinet', width: 60, at: 30 }], 200, 'bare');
+  check('an `at` that overlaps is pushed right, with a warning', near(ov[1].x0, -40, 0.01) && warnings.some(w => /overlaps/.test(w)), { ov, warnings });
+  warnings.length = 0;
+  const past = K.layoutWallModules([{ kind: 'cabinet', width: 60, at: 170 }], 200, 'bare');
+  check('a module past the end is cut short, with a warning', near(past[0].x1, 100, 0.01) && warnings.some(w => /past the end/.test(w)), { past, warnings });
+  // Base runs keep their filler, and may have a bare `gap` under the worktop.
+  const bp = Object.assign({}, BASE.DEFAULTS, { width: 180, modules: [{ kind: 'cabinet', width: 60 }, { kind: 'gap', width: 60 }, { kind: 'cabinet', width: 60 }] });
+  const bg = BASE.build(THREE, bp, { detail: 'full' });
+  check('base gap: no carcass or plinth under it', meshes(bg, m => m.name === 'carcass' || m.name === 'plinth').map(boxCm)
+    .every(b => b.x1 <= -30 + 0.01 || b.x0 >= 30 - 0.01));
+  check('base gap: the worktop runs over it', worktopTiling(bg, bp) === 0);
+  checkEnvelope('base with a gap', BASE, bp);
+}
+
+// 10.2 hinge "top": a lift-up flap, handle along its bottom edge, hinge line along its top.
+[[BASE, 'base'], [WALL, 'wall']].forEach(([impl, tag]) => {
+  const p = Object.assign({}, impl.DEFAULTS, { width: 60, modules: [{ kind: 'cabinet', width: 60, height: impl === WALL ? 40 : undefined, hinge: 'top' }] });
+  if (impl === WALL) p.height = 40;
+  const g = impl.build(THREE, p, { detail: 'full' });
+  const flap = meshes(g, m => m.name === 'flap').map(boxCm);
+  check(tag + ' hinge top: one flap, no side door', flap.length === 1 && meshes(g, m => m.name === 'door').length === 0, meshes(g).map(m => m.name));
+  const h = meshes(g, m => m.name === 'handle').map(boxCm)[0];
+  const line = meshes(g, m => m.name === 'door-gap').map(boxCm)[0];
+  check(tag + ' hinge top: the handle is horizontal, centred, in the lower quarter of the flap', !!h && h.x1 - h.x0 > h.y1 - h.y0 &&
+    near((h.x0 + h.x1) / 2, 0, 0.05) && (h.y0 + h.y1) / 2 < flap[0].y0 + (flap[0].y1 - flap[0].y0) / 4, { h, flap });
+  check(tag + ' hinge top: the hinge line runs along the top edge', !!line && line.x1 - line.x0 > 50 && near(line.y1, flap[0].y1, 0.05), { line, flap });
+  checkEnvelope(tag + ' with a top-hinged flap', impl, p);
+});
+{
+  const wide = build(BASE, { width: 90, modules: [{ kind: 'cabinet', width: 90, hinge: 'top' }] });
+  check('a 90 cm top-hinged cabinet is one flap, not two doors', meshes(wide, m => m.name === 'flap').length === 1 && meshes(wide, m => m.name === 'door').length === 0);
+}
+
+// 10.3 Wall runs do not corner: a 70 cm cabinet from the wall is ONE door; `corner` is ignored.
+{
+  warnings.length = 0;
+  const p = { width: 130, height: 70, corner: 'left', modules: [{ kind: 'cabinet', width: 70, hinge: 'left' }, { kind: 'cabinet', width: 60, hinge: 'right' }] };
+  const g = build(WALL, p);
+  const ds = meshes(g, m => m.name === 'door').map(boxCm).sort((a, b) => a.x0 - b.x0);
+  check('wall: the 70 cm cabinet from the wall is one door', ds.length === 2 && near(ds[0].x1 - ds[0].x0, 70 - 0.3, 0.05), ds);
+  check('wall: no blind panel on a wall run', meshes(g, m => m.name === 'blind-panel').length === 0);
+  check('wall: `corner` is ignored, with a warning', warnings.some(w => /do not corner/.test(w)), warnings);
+  warnings.length = 0;
+  const c = build(WALL, { width: 60, modules: [{ kind: 'corner', width: 60 }] });
+  check('wall: a `corner` module is drawn as a cabinet, with a warning', meshes(c, m => m.name === 'door').length === 1 &&
+    meshes(c, m => m.name === 'blind-panel').length === 0 && warnings.some(w => /drawn as a cabinet/.test(w)));
+  check('wall DEFAULTS carry no corner', !('corner' in WALL.DEFAULTS) && !('cornerDepth' in WALL.DEFAULTS));
+  // Base runs still corner.
+  check('base: corner still gives a blind panel', meshes(build(BASE, { width: 100, corner: 'left', modules: [{ kind: 'corner', width: 100 }] }), m => m.name === 'blind-panel').length === 1);
+  // With no hinge, a wide cabinet still gets two doors.
+  check('no hinge, 80 cm: two doors', meshes(build(WALL, { width: 80, modules: [{ kind: 'cabinet', width: 80 }] }), m => m.name === 'door').length === 2);
+}
+
+// 10.4 Every wall door shows which way it opens: handle on the opening edge, hinge line on the other.
+{
+  ['left', 'right'].forEach(hinge => {
+    [BASE, WALL].forEach(impl => {
+      const g = build(impl, { width: 60, modules: [{ kind: 'cabinet', width: 60, hinge: hinge }] });
+      const d = boxCm(meshes(g, m => m.name === 'door')[0]);
+      const h = boxCm(meshes(g, m => m.name === 'handle')[0]);
+      const l = boxCm(meshes(g, m => m.name === 'door-gap')[0]);
+      const hc = (h.x0 + h.x1) / 2, lc = (l.x0 + l.x1) / 2;
+      const ok = hinge === 'left' ? (lc < d.x0 + 1 && hc > 0) : (lc > d.x1 - 1 && hc < 0);
+      check((impl === WALL ? 'wall' : 'base') + ' hinge ' + hinge + ': hinge line on the hinge edge, handle on the other', ok, { d, h, l });
+    });
+  });
+  const ex = JSON.parse(JSON.stringify(K.EXAMPLE_L));
+  ['wall', 'wallB'].forEach(k => {
+    const g = WALL.build(THREE, Object.assign({}, WALL.DEFAULTS, ex[k]), { detail: 'full' });
+    const fronts = meshes(g, m => m.name === 'door' || m.name === 'flap').length;
+    check('EXAMPLE_L.' + k + ': every wall door has a handle and a hinge line', fronts > 0 &&
+      meshes(g, m => m.name === 'handle').length === fronts && meshes(g, m => m.name === 'door-gap').length === fronts,
+      { fronts, handles: meshes(g, m => m.name === 'handle').length, lines: meshes(g, m => m.name === 'door-gap').length });
+  });
+  const low = build(WALL, { width: 60, modules: [{ kind: 'cabinet', width: 60, hinge: 'left' }] }, 'low');
+  check('low detail drops the hinge line and the handle', meshes(low, m => m.name === 'door-gap' || m.name === 'handle').length === 0);
+  // The hinge line merges into the matte bucket: no extra draw for the example L.
+  check('hinge lines cost no draw', draws(Object.values(placeL(JSON.parse(JSON.stringify(K.EXAMPLE_L))))).size <= 4);
 }
 
 // ---- 9. Copy JSON ------------------------------------------------------------------

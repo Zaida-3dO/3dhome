@@ -137,7 +137,7 @@ function ModuleRow({ m, i, n, isWall, onChange, onMove, onRemove }) {
     if (v === undefined || v === '' || v === false) delete next[k]; else next[k] = v;
     onChange(next);
   };
-  const hingeable = ['cabinet', 'sink', 'corner'].includes(m.kind);
+  const hingeable = ['cabinet', 'sink'].includes(m.kind);
   return (
     <tr>
       <td>{i + 1}</td>
@@ -150,9 +150,12 @@ function ModuleRow({ m, i, n, isWall, onChange, onMove, onRemove }) {
       <td>
         <div className="opts">
           {hingeable &&
-            <select title="hinge" value={m.hinge || 'left'} onChange={e => set('hinge', e.target.value)}>
-              <option value="left">hinge L</option><option value="right">hinge R</option>
+            <select title="hinge (none: two doors when over 60 cm)" value={m.hinge || ''} onChange={e => set('hinge', e.target.value || undefined)}>
+              <option value="">hinge auto</option><option value="left">hinge L</option><option value="right">hinge R</option><option value="top">hinge top (flap)</option>
             </select>}
+          {isWall &&
+            <label className="f" title="cm from the run's left end to this module (blank: right after the one before)">at
+              <input type="number" min="0" step="1" value={m.at === undefined ? '' : m.at} placeholder="next" onChange={e => set('at', e.target.value === '' ? undefined : Number(e.target.value))} /></label>}
           {!isWall && m.kind === 'oven' &&
             <label className="f"><input type="checkbox" checked={!!m.hob} onChange={e => set('hob', e.target.checked)} />hob</label>}
           {isWall && m.kind === 'hood' &&
@@ -213,12 +216,17 @@ function RunEditor({ run, isWall, onChange }) {
               {' '}<button className="btn ghost" onClick={() => num('height', wallFit(run))} disabled={Math.abs(wallFit(run) - run.height) < 0.05}>fit height ({wallFit(run)})</button></span></>
           : <><span>worktop</span><span><input type="number" step="0.5" value={run.worktopHeight} onChange={e => num('worktopHeight', e.target.value)} /> cm high
               {' '}(height {run.height}{run.height > run.worktopHeight ? ', with the tap' : ''})</span></>}
-        <span>corner</span><span>
-          <select value={run.corner} onChange={e => onChange(Object.assign({}, run, { corner: e.target.value }))}>
-            <option value="none">none</option><option value="left">left</option><option value="right">right</option>
-          </select>
-          {run.corner !== 'none' && <> other run's depth <input type="number" step="1" value={run.cornerDepth} onChange={e => num('cornerDepth', e.target.value)} /> cm</>}
-        </span>
+        {isWall
+          ? <><span>unused width</span><span>
+              <select value={run.fill || 'bare'} onChange={e => onChange(Object.assign({}, run, { fill: e.target.value }))}>
+                <option value="bare">bare wall</option><option value="filler">filler panels</option>
+              </select> (wall runs do not corner)</span></>
+          : <><span>corner</span><span>
+              <select value={run.corner} onChange={e => onChange(Object.assign({}, run, { corner: e.target.value }))}>
+                <option value="none">none</option><option value="left">left</option><option value="right">right</option>
+              </select>
+              {run.corner !== 'none' && <> other run's depth <input type="number" step="1" value={run.cornerDepth} onChange={e => num('cornerDepth', e.target.value)} /> cm</>}
+            </span></>}
       </div>
       <div className="tw"><table style={{ marginTop: 12 }}>
         <thead><tr><th>#</th><th>kind</th><th>width</th><th>options</th><th>order</th></tr></thead>
@@ -233,12 +241,14 @@ function RunEditor({ run, isWall, onChange }) {
       </table></div>
       <div className="row">
         <span style={{ fontSize: 11 }}>add:</span>
-        {(isWall ? ['cabinet', 'hood', 'open'] : ['cabinet', 'drawers', 'oven', 'sink', 'dishwasher']).map(k => (
+        {(isWall ? ['cabinet', 'hood', 'open', 'gap'] : ['cabinet', 'drawers', 'oven', 'sink', 'dishwasher', 'gap']).map(k => (
           <button key={k} className="btn ghost" onClick={() => setMods(mods.concat([{ kind: k, width: k === 'cabinet' && !isWall ? 30 : 60 }]))}>+ {k}</button>
         ))}
       </div>
       {!isWall && <SinkEditor run={run} onChange={emit} />}
-      {Math.abs(sum - run.width) >= 0.05
+      {isWall
+        ? <div className="ok">Wall runs leave unused width as {run.fill === 'filler' ? 'filler panels' : 'bare wall'}; place a module with <i>at</i>.</div>
+        : Math.abs(sum - run.width) >= 0.05
         ? <div className="warn">Modules add up to {sum} cm but the run is {run.width} cm — the builder {sum < run.width ? 'fills the gap with a filler' : 'scales every module down to fit'}. Use "fit to modules" to match.</div>
         : <div className="ok">Modules add up to the run's width ({sum} cm).</div>}
     </div>
@@ -300,6 +310,22 @@ function copyText(text) {
   return legacy();
 }
 
+// The inverse of exportJson: an array in the same order as ITEMS, each
+// entry's params merged over its type's DEFAULTS. A missing entry keeps the
+// piece as it is; a type that does not match its slot is refused.
+function loadJson(text, current) {
+  const arr = JSON.parse(text);
+  if (!Array.isArray(arr)) throw new Error('expected an array, as Copy JSON gives');
+  const next = Object.assign({}, current);
+  arr.forEach((entry, i) => {
+    const it = ITEMS[i];
+    if (!it) throw new Error('entry ' + (i + 1) + ' has no slot (this page has ' + ITEMS.length + ' pieces)');
+    if (!entry || entry.type !== it.type) throw new Error('entry ' + (i + 1) + ' should be a ' + it.type);
+    next[it.key] = Object.assign(clone(K.TYPES[it.type].DEFAULTS), clone(entry.params || {}));
+  });
+  return next;
+}
+
 function exportJson(t) {
   return JSON.stringify(ITEMS.map(it => ({
     type: it.type,
@@ -320,6 +346,17 @@ function App() {
     return next;
   });
   const json = exportJson(t);
+  const [pasted, setPasted] = React.useState('');
+  const [loadMsg, setLoadMsg] = React.useState('');
+  const doLoad = () => {
+    try {
+      const next = loadJson(pasted, t);
+      setT(next);
+      setLoadMsg('Loaded.');
+    } catch (e) {
+      setLoadMsg('Not loaded: ' + e.message);
+    }
+  };
   const doCopy = () => copyText(json).then(() => setCopied('Copied ' + json.length + ' characters.'), e => setCopied('Copy failed (' + e.message + ') — select the JSON below.'));
 
   return (
@@ -342,7 +379,8 @@ function App() {
           <div className="legend">
             Run A owns the corner (blind corner unit at its left end; its worktop runs to the side wall). Run B stops at A's
             front face; the two may differ in depth, and A's <i>other run's depth</i> must match B's so its plinth return and
-            LED turn at B's plinth; the same goes for wall run A and B. Wall units hang from one top line, so a 55 cm unit
+            LED turn at B's plinth. Wall runs do not corner: each is measured from the same left end as the base run under
+            it, a module's <i>at</i> places it along the run, and unused width is bare wall. Wall units hang from one top line, so a 55 cm unit
             sits higher than a 70. Every piece's height is its whole envelope: a base run with a tap is worktop + tap, and a
             wall run with a hood splashback reaches down to the worktop. One LED
             colour everywhere keeps the kitchen at four draws; each further colour costs one.
@@ -380,6 +418,13 @@ function App() {
           </div>
           <pre id="json-out">{json}</pre>
           <div className="legend">Placement (wall anchors, offsets, elevation) is the house profile's job, not this page's; paste each <code>params</code> into a <code>furniture[]</code> entry of the matching <code>type</code>.</div>
+          <h2 style={{ marginTop: 20 }}>Load JSON — paste what Copy JSON gave you</h2>
+          <textarea id="json-in" rows="5" style={{ width: '100%', font: 'inherit', fontSize: 10 }} placeholder="[ { &quot;type&quot;: &quot;kitchen-base-run&quot;, &quot;params&quot;: { ... } }, ... ]"
+            value={pasted} onChange={e => setPasted(e.target.value)} />
+          <div className="row">
+            <button className="btn" onClick={doLoad}>Load JSON</button>
+            <span style={{ fontSize: 11 }}>{loadMsg}</span>
+          </div>
         </div>
       </div>
     </>
