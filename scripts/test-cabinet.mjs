@@ -30,6 +30,14 @@
  *   8. Columns grid (open shelving): normaliseColumns() fills/normalises/
  *      errors like normaliseFronts(), and a built columns cabinet has no
  *      front cells (fully open) with the right shelf-panel count per column.
+ *   9. A 'stack' cell (e.g. the TV console: open above a bottom drawer,
+ *      flanked by full-height doors) builds the right part counts and bbox,
+ *      and throws if its sub-cell heights don't sum to the parent row height
+ *      or if a sub-cell tries to nest another stack.
+ *  10. glassSidePanel (the tall display cabinet): the named side gets a glass
+ *      window + wood panel in the middle band and plain panels elsewhere, the
+ *      OTHER side stays a plain slab, an implicit band height splits the
+ *      remainder evenly, and mismatched explicit heights throw.
  */
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -256,6 +264,140 @@ function triangleCount(group) {
     if (!FINISH_SET.has(f)) badFinish = { name: o.name, finish: f };
   });
   check('columns cabinet: every mesh has a finish from the closed set', badFinish === null, badFinish);
+}
+
+// ---- 9. stack cell: TV console (open above a bottom drawer) ---------------
+{
+  // 180w x 34h x 40d: left/right full-height doors, centre 80cm column is a
+  // stack - open (14cm) above a drawer (20cm) at the BOTTOM.
+  const params = {
+    width: 180, height: 34, depth: 40,
+    fronts: [
+      { height: 34, cells: [
+        { kind: 'door', width: 50 },
+        { kind: 'stack', width: 80, cells: [
+          { kind: 'open', height: 14 },
+          { kind: 'drawer', height: 20 }
+        ] },
+        { kind: 'door', width: 50 }
+      ] }
+    ],
+    plinth: { type: 'plinth', height: 0 }, gloss: true, color: '#ffffff', topColor: '#ffffff'
+  };
+  const g = C.build(THREE, params, {});
+  const box = bbox(g);
+  check('TV console: bbox width matches params', near(box.max.x - box.min.x, 1.80, 0.01), box);
+  check('TV console: bbox height matches params', near(box.max.y - box.min.y, 0.34, 0.01), box);
+  check('TV console: bbox depth matches params', near(box.max.z - box.min.z, 0.40, 0.01), box);
+  let doors = 0, drawers = 0;
+  g.traverse(o => {
+    if (!o.isMesh) return;
+    if (o.name === 'cabinetDoor') doors++;
+    if (o.name === 'drawerFront') drawers++;
+  });
+  check('TV console: 2 full-height doors either side', doors === 2, doors);
+  check('TV console: exactly 1 drawer (the stack sub-cell), no drawer for "open"', drawers === 1, drawers);
+
+  // The drawer sub-cell must sit at the BOTTOM of the stack (its yBottom is
+  // near the row's own yBottom, i.e. near the floor here with no plinth).
+  let drawerY = null;
+  g.traverse(o => { if (o.isMesh && o.name === 'drawerFront') drawerY = o.position.y; });
+  check('TV console: drawer sits low (bottom of the stack)', drawerY !== null && drawerY < 0.34 / 2, drawerY);
+
+  let threwMismatch = false;
+  try {
+    C.build(THREE, Object.assign({}, params, { fronts: [
+      { height: 34, cells: [
+        { kind: 'door', width: 50 },
+        { kind: 'stack', width: 80, cells: [
+          { kind: 'open', height: 10 },
+          { kind: 'drawer', height: 20 }
+        ] },
+        { kind: 'door', width: 50 }
+      ] }
+    ] }), {});
+  } catch (e) { threwMismatch = true; }
+  check('stack cell: sub-cell heights not summing to the row height throws', threwMismatch);
+
+  let threwNesting = false;
+  try {
+    C.build(THREE, Object.assign({}, params, { fronts: [
+      { height: 34, cells: [
+        { kind: 'door', width: 50 },
+        { kind: 'stack', width: 80, cells: [
+          { kind: 'stack', height: 14, cells: [{ kind: 'open', height: 14 }] },
+          { kind: 'drawer', height: 20 }
+        ] },
+        { kind: 'door', width: 50 }
+      ] }
+    ] }), {});
+  } catch (e) { threwNesting = true; }
+  check('stack cell: a nested stack sub-cell throws', threwNesting);
+}
+
+// ---- 10. glassSidePanel: the tall display cabinet --------------------------
+{
+  const baseParams = {
+    width: 80, height: 189, depth: 34,
+    fronts: [
+      { height: 189, cells: [
+        { kind: 'door', width: 29 },
+        { kind: 'open', width: 2 },
+        { kind: 'stack', width: 49, cells: [
+          { kind: 'door', height: 32 },
+          { kind: 'glass', height: 125 },
+          { kind: 'door', height: 32 }
+        ] }
+      ] }
+    ],
+    plinth: { type: 'plinth', height: 0 }, gloss: true, color: '#ffffff', topColor: '#ffffff',
+    glassSidePanel: { side: 'right', bands: [{}, { height: 125, glassDepth: 13, woodDepth: 20 }, {}] }
+  };
+  const g = C.build(THREE, baseParams, {});
+  const box = bbox(g);
+  check('display cabinet: bbox width matches params', near(box.max.x - box.min.x, 0.80, 0.01), box);
+  check('display cabinet: bbox height matches params', near(box.max.y - box.min.y, 1.89, 0.01), box);
+  check('display cabinet: bbox depth matches params', near(box.max.z - box.min.z, 0.34, 0.01), box);
+
+  let glassSide = null, woodSide = null, mirrorFinishCount = 0;
+  g.traverse(o => {
+    if (!o.isMesh) return;
+    if (o.name === 'displaySideGlass') glassSide = o;
+    if (o.name === 'displaySideWood') woodSide = o;
+  });
+  check('display cabinet: exactly one glass side panel', !!glassSide);
+  check('display cabinet: exactly one wood side panel', !!woodSide);
+  check('display cabinet: glass side panel is on the RIGHT (+x)', glassSide && glassSide.position.x > 0, glassSide && glassSide.position.x);
+  check('display cabinet: glass side panel is keep=true', glassSide && glassSide.userData.keep === true);
+  check('display cabinet: glass side sits in FRONT of the wood side (larger z)',
+    glassSide && woodSide && glassSide.position.z > woodSide.position.z,
+    glassSide && woodSide && { glassZ: glassSide.position.z, woodZ: woodSide.position.z });
+
+  // Mirror image: side:'left' puts the glass panel on the LEFT (-x) instead.
+  const mirrored = Object.assign({}, baseParams, {
+    glassSidePanel: { side: 'left', bands: [{}, { height: 125, glassDepth: 13, woodDepth: 20 }, {}] }
+  });
+  const gm = C.build(THREE, mirrored, {});
+  let glassSideMirrored = null;
+  gm.traverse(o => { if (o.isMesh && o.name === 'displaySideGlass') glassSideMirrored = o; });
+  check('display cabinet mirrored: glass side panel is on the LEFT (-x)',
+    glassSideMirrored && glassSideMirrored.position.x < 0, glassSideMirrored && glassSideMirrored.position.x);
+
+  // The OTHER side (left, solid-door side) stays a single plain slab - only
+  // ONE 'carcassSide' mesh sits on the LEFT (-x); the glass side's own plain
+  // top/bottom bands are also named 'carcassSide' but sit on the right (+x).
+  let leftPlainPanelCount = 0;
+  g.traverse(o => { if (o.isMesh && o.name === 'carcassSide' && o.position.x < 0) leftPlainPanelCount++; });
+  check('display cabinet: the OTHER side (left, solid-door side) stays a single plain slab',
+    leftPlainPanelCount === 1, leftPlainPanelCount);
+
+  let threwMismatch = false;
+  try {
+    C.build(THREE, Object.assign({}, baseParams, {
+      glassSidePanel: { side: 'right', bands: [{ height: 40 }, { height: 125, glassDepth: 13, woodDepth: 20 }, { height: 40 }] }
+    }), {});
+  } catch (e) { threwMismatch = true; }
+  check('glassSidePanel: explicit band heights not summing to the side height throws', threwMismatch);
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

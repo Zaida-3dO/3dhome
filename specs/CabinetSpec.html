@@ -40,6 +40,20 @@
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 <script type="text/babel" src="spec-three.jsx"></script>
 
+<!-- cabinet.js is a plain ESM module (export/import) - Babel's browser
+     transform (below) rewrites a dynamic import() into a require() call that
+     does not exist outside Node/webpack, so an import() INSIDE a `text/babel`
+     script silently rejects with "require is not defined". A real
+     `type="module"` script is never touched by Babel, so the dynamic import
+     happens here instead, and the Babel-transpiled app below just awaits
+     window.cabinetModuleReady. -->
+<script type="module">
+  window.CabinetFurniture = null;
+  window.cabinetModuleReady = import('../src/furniture/cabinet.js').then(m => {
+    window.CabinetFurniture = m;
+  });
+</script>
+
 <script type="text/babel">
 /* =====================================================================
    CABINET SPEC   ·   one configurable cabinet carcass
@@ -98,32 +112,56 @@ const PRESETS = {
       gloss: false, color: '#ffffff', topColor: '#ffffff'
     }
   },
-  displayCabinetGlassUpper: {
-    label: 'Display cabinet, glass upper',
+  tallDisplayCabinet: {
+    label: 'Tall display cabinet',
     params: {
-      width: 80, height: 190, depth: 35,
+      width: 80, height: 189, depth: 34,
+      // Left: a solid door (29w). A 2cm divider. Right: a glass door (49w)
+      // stacked white(32)/glass(125, w/ shelves + LED)/white(32).
       fronts: [
-        { height: 110, cells: [{ kind: 'glass', width: 80 }] },
-        { height: 72, cells: [{ kind: 'door', width: 80 }] }
-      ],
-      plinth: { type: 'plinth', height: 8 },
-      gloss: true, color: '#ffffff', topColor: '#ffffff',
-      shelfLights: true
-    }
-  },
-  tvStand: {
-    label: 'Low TV stand',
-    params: {
-      width: 180, height: 35, depth: 40,
-      fronts: [
-        { height: 27, cells: [
-          { kind: 'open', width: 60 },
-          { kind: 'drawer', width: 60 },
-          { kind: 'drawer', width: 60 }
+        { height: 189, cells: [
+          { kind: 'door', width: 29 },
+          { kind: 'open', width: 2 },
+          { kind: 'stack', width: 49, cells: [
+            { kind: 'door', height: 32 },
+            { kind: 'glass', height: 125 },
+            { kind: 'door', height: 32 }
+          ] }
         ] }
       ],
-      plinth: { type: 'plinth', height: 8 },
-      gloss: true, color: '#ffffff', topColor: '#2a2a2a'
+      plinth: { type: 'plinth', height: 0 },
+      gloss: true, color: '#ffffff', topColor: '#ffffff',
+      shelfLights: true,
+      // The glass door's side of the carcass has a matching glass side
+      // window (13cm deep) at the front, with a wood-tone panel (20cm deep)
+      // behind it, over the same 125cm middle band. Set side:'left' (and
+      // mirror the fronts cell order) for the second, mirror-image unit that
+      // flanks a TV on the other side.
+      glassSidePanel: {
+        side: 'right',
+        bands: [ {}, { height: 125, glassDepth: 13, woodDepth: 20 }, {} ]
+      }
+    }
+  },
+  tvConsole: {
+    label: 'TV console',
+    params: {
+      width: 180, height: 34, depth: 40,
+      // Left/right doors span the full height; the centre section is open
+      // above a 20cm-tall drawer at the BOTTOM (a 'stack' cell, since its
+      // own front splits at different heights than its door neighbours).
+      fronts: [
+        { height: 34, cells: [
+          { kind: 'door', width: 50 },
+          { kind: 'stack', width: 80, cells: [
+            { kind: 'open', height: 14 },
+            { kind: 'drawer', height: 20 }
+          ] },
+          { kind: 'door', width: 50 }
+        ] }
+      ],
+      plinth: { type: 'plinth', height: 0 },
+      gloss: true, color: '#ffffff', topColor: '#ffffff'
     }
   },
   chestOfDrawers: {
@@ -208,29 +246,23 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 }/*EDITMODE-END*/;
 
 // ============== Cabinet model (buildModel) ==============
-// cabinet.js is a plain ESM module (same file the Node tests and, later, the
-// live renderer import) with no import-map dependency of its own - THREE is
-// injected, never imported. It is loaded here via a dynamic import() rather
-// than a second `text/babel` script tag: `export`/`import` are real ES module
-// syntax and Babel's browser transform does not turn a `text/babel` script
-// into a module, so `import()` (valid in any script, module or not) is what
-// actually resolves cabinet.js's `export`s. Fetched once at module scope so
-// every render of App reuses the same builder.
-let CabinetFurniture = null;
-const cabinetModuleReady = import('../src/furniture/cabinet.js').then(m => { CabinetFurniture = m; });
-
-function buildCabinet(paramsRef) {
+// cabinet.js (a plain ESM module - same file the Node tests and, later, the
+// live renderer import; THREE is injected, never imported by it) is loaded
+// by the real `type="module"` script above, NOT here: Babel's browser
+// transform rewrites a dynamic import() into a require() call, which does
+// not exist in a browser, so window.cabinetModuleReady / window.CabinetFurniture
+// are what this Babel-transpiled script reads instead.
+function buildCabinet(params) {
   return (t, group, THREE, ctx) => {
-    if (!CabinetFurniture) return; // not loaded yet; App doesn't render until it is
-    const params = paramsRef.current;
-    const built = CabinetFurniture.build(THREE, params, { detail: 'full' });
+    if (!window.CabinetFurniture) return; // not loaded yet; App doesn't render until it is
+    const built = window.CabinetFurniture.build(THREE, params, { detail: 'full' });
     group.add(built);
     ctx.built = built;
   };
 }
 
-function heightOfParams(paramsRef) {
-  return () => (paramsRef.current.height || 200) * 0.01;
+function heightOfParams(params) {
+  return () => (params.height || 200) * 0.01;
 }
 
 // ============== App ==============
@@ -255,8 +287,10 @@ function App() {
 
   // Parsed params actually fed to the builder. Falls back to the preset's
   // last-known-good params if the edited JSON doesn't parse or doesn't build,
-  // so a mid-edit typo never blanks the 3D view.
-  const paramsRef = React.useRef(preset.params);
+  // so a mid-edit typo never blanks the 3D view. Real STATE (not a ref) -
+  // the Numbers table and the 3D view both read this at render time, and a
+  // ref mutation alone does not trigger the re-render either of them needs.
+  const [params, setParams] = React.useState(preset.params);
   const [copyStatus, setCopyStatus] = React.useState('');
   React.useEffect(() => {
     try {
@@ -264,19 +298,19 @@ function App() {
       // Cheap validation: build once off-screen via the real builder so a
       // fronts grid that doesn't fill the width surfaces here, not silently
       // in the 3D view.
-      CabinetFurniture.build(THREE, parsed, { detail: 'low' });
-      paramsRef.current = parsed;
+      window.CabinetFurniture.build(THREE, parsed, { detail: 'low' });
+      setParams(parsed);
       setJsonError('');
     } catch (e) {
       setJsonError(e.message);
-      // keep the last good paramsRef.current
+      // keep the last good `params`
     }
   }, [paramsJson]);
 
   const copyJson = () => {
     const furnitureJson = {
       type: 'cabinet',
-      params: paramsRef.current
+      params: params
     };
     const text = JSON.stringify(furnitureJson, null, 2);
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -290,7 +324,7 @@ function App() {
     setTimeout(() => setCopyStatus(''), 2000);
   };
 
-  const p = paramsRef.current;
+  const p = params;
 
   return (
     <>
@@ -332,9 +366,9 @@ function App() {
         <div className="card full">
           <h2>3D — {preset.label}</h2>
           <ThreeView
-            t={{ paramsJson }}
-            buildModel={buildCabinet(paramsRef)}
-            heightOf={heightOfParams(paramsRef)}
+            t={params}
+            buildModel={buildCabinet(params)}
+            heightOf={heightOfParams(params)}
           />
         </div>
       </div>
@@ -342,10 +376,10 @@ function App() {
   );
 }
 
-// App reads CabinetFurniture synchronously on first render (paramsRef init,
-// the JSON-validation effect), so mounting is held until the dynamic import
-// above resolves rather than racing it.
-cabinetModuleReady.then(() => {
+// App reads window.CabinetFurniture synchronously on first render (the
+// JSON-validation effect that seeds `params` state), so mounting is held
+// until the module script's dynamic import resolves rather than racing it.
+window.cabinetModuleReady.then(() => {
   ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 });
 

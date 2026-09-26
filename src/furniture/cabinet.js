@@ -32,6 +32,18 @@
  *     'sliding' - a sliding door split into equal horizontal `panels`, each
  *                 'white' (matte, carcass colour) or 'mirror' (keep = true).
  *     'open'    - no front: an open cubby/shelf opening.
+ *     'stack'   - this ONE column has its OWN vertical stack of sub-cells,
+ *                 independent of the row height: `cells: [{kind, height}]`,
+ *                 stacked bottom-up within the parent row's y-span (e.g. a
+ *                 TV-console centre section that is open above a drawer,
+ *                 while its neighbours are a single full-height door -
+ *                 fronts rows are otherwise a uniform-height band across the
+ *                 whole width, so a stack cell is the escape hatch for a
+ *                 column whose own front doesn't split at the same heights as
+ *                 its neighbours). Sub-cell heights must sum to the parent
+ *                 row's height (same fill/error rule as a row's own cells,
+ *                 checked against the row height rather than the width).
+ *                 Sub-cells cannot themselves be 'stack' (no nesting).
  *   A row with no `cells` (or an empty array) renders nothing (e.g. a plinth
  *   reveal). A row may also set `ledGapBelow: true` to place a warm emissive
  *   LED strip in the gap between it and the row below (the bedside-table-
@@ -48,6 +60,22 @@
  *   in this mode - it shows the carcass back). A vertical divider panel is
  *   drawn between adjacent columns. `params.columns` and `params.fronts` are
  *   mutually exclusive; if both are given, `columns` wins.
+ *
+ * GLASS SIDE PANEL (tall display cabinet)
+ *   params.glassSidePanel = { side: 'left'|'right', bands: [...] } replaces
+ *   ONE carcass side's plain slab with three vertically-stacked bands (top,
+ *   middle, bottom), top to bottom. A band is `{height}` for a plain solid
+ *   panel in the carcass finish, or `{height, glassDepth, woodDepth}` for a
+ *   middle band split FRONT TO BACK into a glass window (keep = true) and a
+ *   wood-tone panel behind it - e.g. a display cabinet whose glass door has a
+ *   matching glass side window, with the storage/wood side of the carcass
+ *   behind it. `height` is optional per band (an implicit band's height
+ *   splits the side's remaining clear height evenly, same rule as a fronts
+ *   row/column) so a caller typically only states the structural middle
+ *   band's height. The OTHER side is unaffected (a plain slab). Two units
+ *   built as mirror images of each other (glass doors facing across a TV)
+ *   just use `side: 'left'` on one and `side: 'right'` on the other, with the
+ *   fronts grid's cell order swapped to match.
  *
  * PRESETS live in CabinetSpec.html, not here - this module only builds
  * whatever `params` it is given. Preset *names* are generic and descriptive
@@ -303,6 +331,65 @@ function buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth) {
   });
 }
 
+/**
+ * Dispatches one non-stack front cell (door/drawer/glass/mirror/sliding/
+ * open) to its builder. Shared by the row loop and buildStackCell's
+ * sub-cells, so a stack's sub-cells support every ordinary cell kind.
+ */
+function buildFrontCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p, low) {
+  switch (cell.kind) {
+    case 'door':
+      buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p.handles);
+      break;
+    case 'drawer':
+      buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p.handles);
+      break;
+    case 'glass':
+      buildGlassOrMirrorCell(THREE, group, 'glass', x0, x1, yBot, yTop, depth);
+      if (p.shelfLights && !low) addShelfLight(THREE, group, x0, x1, yTop, depth);
+      break;
+    case 'mirror':
+      buildGlassOrMirrorCell(THREE, group, 'mirror', x0, x1, yBot, yTop, depth);
+      break;
+    case 'sliding':
+      buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth);
+      break;
+    case 'open':
+    default:
+      break; // no front: open cubby
+  }
+}
+
+/**
+ * A 'stack' cell: this one column has its OWN vertical stack of sub-cells,
+ * independent of the parent row's uniform height (e.g. an open bay above a
+ * drawer, while the neighbouring columns are each a single full-height
+ * door). Sub-cell heights (cm) must sum to the parent row's height, using
+ * the same fill/error rule as normaliseFronts - checked here directly since
+ * a stack's sub-cells share the parent row's WIDTH already (fixed by the
+ * caller) and only need their own y-split.
+ */
+function buildStackCell(THREE, group, cell, x0, x1, rowYBottomCm, rowYTopCm, depth, gloss, color, p, low) {
+  const subCells = cell.cells || [];
+  const rowHeightCm = rowYTopCm - rowYBottomCm;
+  const explicitSum = subCells.reduce((s, c) => s + (c.height || 0), 0);
+  if (Math.abs(explicitSum - rowHeightCm) > 0.5) {
+    throw new Error(
+      `cabinet stack cell sub-cells sum to ${explicitSum}cm but the row is ${rowHeightCm}cm tall`
+    );
+  }
+  // Sub-cells are authored TOP TO BOTTOM (same convention as fronts rows).
+  let yTopCm = rowYTopCm;
+  for (const sub of subCells) {
+    if (sub.kind === 'stack') {
+      throw new Error('cabinet stack cell: sub-cells cannot themselves be "stack" (no nesting)');
+    }
+    const yBotCm = yTopCm - sub.height;
+    buildFrontCell(THREE, group, sub, x0, x1, yBotCm * CM, yTopCm * CM, depth, gloss, color, p, low);
+    yTopCm = yBotCm;
+  }
+}
+
 function addHandle(THREE, group, x, y, frontZ, isDrawer) {
   const mat = finish(THREE, 'metal', '#d8dadc');
   if (isDrawer) {
@@ -359,6 +446,74 @@ function buildBase(THREE, group, base, width, depth, gloss, color) {
   plinth.position.set(0, h / 2, (depth - inset) / 2 + inset / 2);
   tag(plinth, 'plinth');
   group.add(plinth);
+}
+
+// ---- glass side panel (tall display cabinet) ------------------------------
+
+/**
+ * One carcass side panel built as three vertically-stacked bands instead of
+ * one plain slab: `bands` is [{height}, {height, glassDepth, woodDepth},
+ * {height}] top to bottom (cm). The middle band is split FRONT TO BACK: a
+ * glass pane `glassDepth` deep at the front (keep = true) and a wood-tone
+ * panel `woodDepth` deep behind it, glassDepth + woodDepth <= the cabinet
+ * depth. Top and bottom bands are plain solid panels in the carcass finish.
+ *
+ * A band's `height` is optional - like a fronts row/column, any band missing
+ * one gets an even share of whatever height is left after the explicit
+ * bands, so the caller can give just the (structural) middle band's height
+ * and let the plain top/bottom bands fill the rest of the side's own clear
+ * height (sideH), which already has the carcass top/bottom panels and the
+ * plinth subtracted out - it is NOT the same number as the cabinet's overall
+ * `height` param.
+ */
+function buildGlassSidePanel(THREE, group, gsp, sx, W, D, plinthH, CARC_T, sideH, gloss, color) {
+  const explicit = gsp.bands.filter(b => typeof b.height === 'number');
+  const explicitSum = explicit.reduce((s, b) => s + b.height * CM, 0);
+  const implicitCount = gsp.bands.length - explicit.length;
+  const remaining = sideH - explicitSum;
+  if (implicitCount === 0 && Math.abs(explicitSum - sideH) > 0.005) {
+    throw new Error(
+      `cabinet glassSidePanel bands sum to ${(explicitSum / CM).toFixed(1)}cm but the side's clear ` +
+      `height is ${(sideH / CM).toFixed(1)}cm`
+    );
+  }
+  if (implicitCount > 0 && remaining <= 0) {
+    throw new Error(
+      `cabinet glassSidePanel: explicit band heights already exceed the side's clear height ` +
+      `(${(sideH / CM).toFixed(1)}cm), leaving nothing for ${implicitCount} band(s)`
+    );
+  }
+  const share = implicitCount > 0 ? remaining / implicitCount : 0;
+  const bands = gsp.bands.map(b => (typeof b.height === 'number' ? b : Object.assign({}, b, { height: share / CM })));
+
+  const carcassMat = finish(THREE, gloss ? 'gloss' : 'matte', color);
+  const x = sx * (W / 2 - CARC_T / 2);
+  let yTop = plinthH + CARC_T + sideH;
+  bands.forEach((band, i) => {
+    const h = band.height * CM;
+    const yBot = yTop - h;
+    const cy = (yBot + yTop) / 2;
+    if (band.glassDepth) {
+      // Front glass window (keep = true) + a wood-tone panel behind it.
+      const glassD = band.glassDepth * CM;
+      const woodD = Math.min(band.woodDepth * CM, D - glassD);
+      const glass = new THREE.Mesh(box(THREE, CARC_T, h, glassD), finish(THREE, 'glass', null));
+      glass.position.set(x, cy, D - glassD / 2);
+      tag(glass, 'displaySideGlass');
+      group.add(glass);
+
+      const wood = new THREE.Mesh(box(THREE, CARC_T, h, woodD), finish(THREE, 'matte', '#6b4a35'));
+      wood.position.set(x, cy, D - glassD - woodD / 2);
+      tag(wood, 'displaySideWood');
+      group.add(wood);
+    } else {
+      const panel = new THREE.Mesh(box(THREE, CARC_T, h, D), carcassMat);
+      panel.position.set(x, cy, D / 2);
+      tag(panel, 'carcassSide');
+      group.add(panel);
+    }
+    yTop = yBot;
+  });
 }
 
 // ---- columns grid (open shelving) ----------------------------------------
@@ -433,7 +588,19 @@ export function build(THREE, params, opts) {
   group.add(top);
 
   const sideH = H - plinthH - CARC_T;
+  // glassSidePanel: an optional override for ONE side's panel (the tall
+  // display cabinet), where the middle band is split front-to-back into a
+  // glass window (keep = true) at the front and a wood panel behind it,
+  // rather than one plain solid slab. `side` is 'left' | 'right'; `bands` is
+  // [{height}, {height, glassDepth, woodDepth}, {height}] top to bottom, cm,
+  // summing to the cabinet height. The OTHER side is unaffected (plain).
+  const gsp = p.glassSidePanel;
   [-1, 1].forEach(sx => {
+    const isGlassSide = gsp && ((sx < 0 && gsp.side === 'left') || (sx > 0 && gsp.side === 'right'));
+    if (isGlassSide) {
+      buildGlassSidePanel(THREE, group, gsp, sx, W, D, plinthH, CARC_T, sideH, gloss, color);
+      return;
+    }
     const side = new THREE.Mesh(box(THREE, CARC_T, sideH, D), carcassMat);
     side.position.set(sx * (W / 2 - CARC_T / 2), plinthH + CARC_T + sideH / 2, D / 2);
     tag(side, 'carcassSide');
@@ -501,26 +668,10 @@ export function build(THREE, params, opts) {
       for (const cell of row.cells) {
         const cw = cell.width * CM;
         const x0 = x, x1 = x + cw;
-        switch (cell.kind) {
-          case 'door':
-            buildDoorCell(THREE, frontsGroup, cell, x0, x1, yBot, yTop, D, gloss, color, p.handles);
-            break;
-          case 'drawer':
-            buildDrawerCell(THREE, frontsGroup, cell, x0, x1, yBot, yTop, D, gloss, color, p.handles);
-            break;
-          case 'glass':
-            buildGlassOrMirrorCell(THREE, frontsGroup, 'glass', x0, x1, yBot, yTop, D);
-            if (p.shelfLights && !low) addShelfLight(THREE, frontsGroup, x0, x1, yTop, D);
-            break;
-          case 'mirror':
-            buildGlassOrMirrorCell(THREE, frontsGroup, 'mirror', x0, x1, yBot, yTop, D);
-            break;
-          case 'sliding':
-            buildSlidingCell(THREE, frontsGroup, cell, x0, x1, yBot, yTop, D);
-            break;
-          case 'open':
-          default:
-            break; // no front: open cubby
+        if (cell.kind === 'stack') {
+          buildStackCell(THREE, frontsGroup, cell, x0, x1, row.yBottom, row.yTop, D, gloss, color, p, low);
+        } else {
+          buildFrontCell(THREE, frontsGroup, cell, x0, x1, yBot, yTop, D, gloss, color, p, low);
         }
         x = x1;
       }
