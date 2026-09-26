@@ -1,6 +1,6 @@
 {
   "kind": "rooms",
-  "schemaVersion": "1.2",
+  "schemaVersion": "1.3",
   "house": "demo",
   "homeAssistant": {
     "enabled": false,
@@ -36,12 +36,13 @@
   },
   "sensors": {
     "presence": {
-      "lounge": ["binary_sensor.demo_lounge_occupancy"],
+      "lounge": ["binary_sensor.demo_lounge_occupancy", "binary_sensor.demo_lounge_sofa_zone"],
       "kitchen": ["binary_sensor.demo_kitchen_motion"],
       "study": ["binary_sensor.demo_study_occupancy"],
       "hall": ["binary_sensor.demo_hall_motion"]
     },
     "doors": {
+      "front_door": ["binary_sensor.demo_front_door_contact"],
       "store_door": ["binary_sensor.demo_store_door_contact"],
       "bedroom_door": ["binary_sensor.demo_bedroom_door_contact"]
     },
@@ -53,6 +54,14 @@
     "corniceLights": {
       "lounge_curtain": ["light.demo_lounge_cornice"],
       "bedroom_curtain": ["light.demo_bedroom_cornice"]
+    },
+    "climate": {
+      "lounge": "climate.demo_lounge_thermostat",
+      "kitchen": "climate.demo_kitchen_radiator",
+      "study": "climate.demo_study_radiator",
+      "hall": "climate.demo_hall_radiator",
+      "bathroom": "climate.demo_bathroom_radiator",
+      "bedroom": "climate.demo_bedroom_radiator"
     }
   }
 }

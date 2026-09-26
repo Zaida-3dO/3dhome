@@ -161,7 +161,8 @@ fi
 # CI gate for the whole repo, and a false positive on documentation trains
 # people to weaken it, which is worse than the narrow rule.
 # ---------------------------------------------------------------------------
-ENTITY_RE='"(light|switch|sensor|binary_sensor|cover)\.[a-z0-9_]+"'
+# climate: added with the sidebar temperature row (rooms.json sensors.climate).
+ENTITY_RE='"(light|switch|sensor|binary_sensor|cover|climate)\.[a-z0-9_]+"'
 
 # is_fictional_id <object_id> - true if an id is obviously invented.
 #

@@ -34,10 +34,10 @@
  * reach it.
  */
 function coverPositionCommand(pct, entities) {
-  const ids = Array.isArray(entities) ? entities.filter(Boolean) : (entities ? [entities] : []);
+  const ids = entityList(entities);
   if (!ids.length) return null;
-  const n = +pct;
-  if (!isFinite(n)) return null;
+  const n = finiteOrNull(pct);
+  if (n === null) return null;
   const position = Math.max(0, Math.min(100, Math.round(n)));
   return {
     domain: 'cover',
@@ -45,6 +45,127 @@ function coverPositionCommand(pct, entities) {
     data: { position },
     target: { entity_id: ids.length === 1 ? ids[0] : ids.slice() }
   };
+}
+
+/** Bound entity ids as a clean array: one id, several, or none. */
+function entityList(entities) {
+  return Array.isArray(entities) ? entities.filter(Boolean) : (entities ? [entities] : []);
+}
+
+/**
+ * A user-supplied number, or null when it is not one. Stricter than `+v`
+ * on purpose: `+null`, `+''` and `+false` are all 0, and 0 is a real
+ * command (curtain fully CLOSED). Only a finite number, or a non-blank
+ * numeric string (what a range input's `.value` holds), counts.
+ */
+function finiteOrNull(v) {
+  let n;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string' && v.trim() !== '') n = +v;
+  else return null;
+  return isFinite(n) ? n : null;
+}
+
+/**
+ * Curtain Open / Close button -> `cover.open_cover` / `cover.close_cover`,
+ * fanned out to every bound motor exactly like coverPositionCommand. Null
+ * for anything other than 'open'|'close', or when nothing is bound.
+ */
+function coverOpenCloseCommand(action, entities) {
+  const service = action === 'open' ? 'open_cover' : action === 'close' ? 'close_cover' : null;
+  if (!service) return null;
+  const ids = entityList(entities);
+  if (!ids.length) return null;
+  return {
+    domain: 'cover',
+    service,
+    data: {},
+    target: { entity_id: ids.length === 1 ? ids[0] : ids.slice() }
+  };
+}
+
+// Home Assistant's own climate defaults, used only when an entity does not
+// publish its limits. target_temp_step is commonly absent on a room
+// thermostat; 0.5 is what the brief (and most TRVs) use.
+const CLIMATE_DEFAULT_MIN = 7;
+const CLIMATE_DEFAULT_MAX = 35;
+const CLIMATE_DEFAULT_STEP = 0.5;
+
+/**
+ * One climate entity's HA state -> the sidebar's reading:
+ *   { available, off, current, target, min, max, step }
+ * `off` is true for hvac state 'off' AND for a null/missing target
+ * temperature (a thermostat that is off often reports `temperature: null`)
+ * -- the row then shows "off" and its slider is disabled, so no command can
+ * ever be derived from a missing target. `target` is null whenever `off`.
+ * Limits come from min_temp / max_temp / target_temp_step, falling back to
+ * HA's defaults when absent or nonsensical (min > max, step <= 0).
+ */
+function parseClimate(haState) {
+  const st = haState ? haState.state : undefined;
+  const available = typeof st === 'string' && st !== 'unavailable' && st !== 'unknown';
+  const a = (haState && haState.attributes) || {};
+  const num = v => (typeof v === 'number' && isFinite(v)) ? v : null;
+  let min = num(a.min_temp), max = num(a.max_temp);
+  if (min === null) min = CLIMATE_DEFAULT_MIN;
+  if (max === null) max = CLIMATE_DEFAULT_MAX;
+  if (min > max) { min = CLIMATE_DEFAULT_MIN; max = CLIMATE_DEFAULT_MAX; }
+  let step = num(a.target_temp_step);
+  if (step === null || step <= 0) step = CLIMATE_DEFAULT_STEP;
+  const rawTarget = num(a.temperature);
+  const off = st === 'off' || rawTarget === null;
+  return {
+    available,
+    off,
+    current: num(a.current_temperature),
+    target: off ? null : rawTarget,
+    min,
+    max,
+    step
+  };
+}
+
+/**
+ * Temperature slider value -> `climate.set_temperature`. Rounds to the
+ * entity's step, clamps into [min, max], and strips float noise (21.499999
+ * -> 21.5). Returns null -- send nothing -- when the value is not a number,
+ * when no entity is bound, or when the reading says the entity cannot take
+ * a target right now (no reading, unavailable, or off / null target). The
+ * last guard duplicates the disabled slider on purpose: a thermostat is a
+ * physical device, and "the DOM was disabled" is not a safety argument.
+ */
+function climateTargetCommand(value, entityId, reading) {
+  if (typeof entityId !== 'string' || !entityId) return null;
+  if (!reading || !reading.available || reading.off) return null;
+  const n = finiteOrNull(value);
+  if (n === null) return null;
+  const step = reading.step > 0 ? reading.step : CLIMATE_DEFAULT_STEP;
+  let t = Math.round(n / step) * step;
+  t = Math.max(reading.min, Math.min(reading.max, t));
+  const decimals = Math.min(3, (String(step).split('.')[1] || '').length);
+  t = +t.toFixed(decimals);
+  return {
+    domain: 'climate',
+    service: 'set_temperature',
+    data: { temperature: t },
+    target: { entity_id: entityId }
+  };
+}
+
+/**
+ * Several binary sensors on one target -> 'on' | 'off' | 'unavailable'.
+ * `states` are raw HA state strings, with undefined for a sensor that has
+ * never reported. ANY 'on' wins (a room with three zone sensors is occupied
+ * when any one of them is); otherwise any sensor that is reporting a real
+ * state makes it 'off'; only when EVERY sensor is unavailable, unknown or
+ * silent is the target 'unavailable'. Used for the sidebar's motion tag and
+ * door status text.
+ */
+function reduceBinarySensorStates(states) {
+  const list = Array.isArray(states) ? states : [];
+  if (list.some(s => s === 'on')) return 'on';
+  if (list.some(s => typeof s === 'string' && s !== 'unavailable' && s !== 'unknown')) return 'off';
+  return 'unavailable';
 }
 
 export const HAClient = (() => {
@@ -111,6 +232,30 @@ export const HAClient = (() => {
     // sensorState because with two entities on one door we must remember both
     // to know whether the OR has flipped.
     const sensorEntityOn = new Map();
+    // The sidebar's STATUS for the same targets ('on'|'off'|'unavailable'),
+    // tracked alongside the boolean above rather than replacing it: the
+    // boolean path deliberately folds 'unavailable' into off (a dropped
+    // sensor must not leave footsteps walking or a door hanging open), while
+    // the status row has to say "unavailable" out loud. Raw per-entity state
+    // string in, resolved status per target out, notify on a real change.
+    const sensorEntityRaw = new Map();
+    const sensorStatus = { presence: new Map(), door: new Map() };
+    const sensorStatusCallbacks = [];
+
+    // ---- Climate (one entity per room, sidebar temperature row) ----
+    // climateIndex: entityId -> [roomId] (an entity may serve two rooms).
+    // climateResolved: roomId -> { reading, key } last dispatched.
+    const climateIndex = new Map();
+    const climateByRoom = new Map();
+    const climateResolved = new Map();
+    const climateCallbacks = [];
+    if (sensors && sensors.climate && typeof sensors.climate === 'object') {
+      Object.entries(sensors.climate).forEach(([roomId, eid]) => {
+        if (typeof eid !== 'string' || !eid) return;
+        climateByRoom.set(roomId, eid);
+        (climateIndex.get(eid) || climateIndex.set(eid, []).get(eid)).push(roomId);
+      });
+    }
 
     if (sensors) {
       const indexKind = (kind, map) => {
@@ -298,6 +443,10 @@ export const HAClient = (() => {
       if (!mapping) return false;
       const { kind, targetId } = mapping;
 
+      // Status first, and independently of the boolean early-return below:
+      // off -> unavailable does not change `on`, but it must change the row.
+      maybeUpdateSensorStatus(entityId, kind, targetId, haState.state);
+
       // HA's convention for both an occupancy/motion sensor and a door/opening
       // contact is the same: 'on' means detected/open. 'unavailable' and
       // 'unknown' are NOT 'on', so a dropped sensor reads as empty/closed
@@ -318,6 +467,42 @@ export const HAClient = (() => {
         try { cb(targetId, resolved); } catch (e) { console.warn('HAClient sensorCb:', e); }
       });
       return true;
+    }
+
+    function maybeUpdateSensorStatus(entityId, kind, targetId, rawState) {
+      const raw = typeof rawState === 'string' ? rawState : undefined;
+      if (sensorEntityRaw.has(entityId) && sensorEntityRaw.get(entityId) === raw) return;
+      sensorEntityRaw.set(entityId, raw);
+      const group = sensorGroups[kind][targetId] || [];
+      const status = reduceBinarySensorStates(group.map(eid => sensorEntityRaw.get(eid)));
+      if (sensorStatus[kind].get(targetId) === status) return;
+      sensorStatus[kind].set(targetId, status);
+      sensorStatusCallbacks.forEach(cb => {
+        try { cb(kind, targetId, status); } catch (e) { console.warn('HAClient sensorStatusCb:', e); }
+      });
+    }
+
+    /**
+     * Fold one climate entity into every room it is bound to. Notifies only
+     * when the parsed reading changed -- hvac_action flapping, or any
+     * attribute the row does not show, is not a repaint.
+     */
+    function processClimateUpdate(entityId, haState) {
+      const roomIds = climateIndex.get(entityId);
+      if (!roomIds) return false;
+      const reading = parseClimate(haState);
+      const key = JSON.stringify(reading);
+      let fired = false;
+      roomIds.forEach(roomId => {
+        const prev = climateResolved.get(roomId);
+        if (prev && prev.key === key) return;
+        climateResolved.set(roomId, { reading, key });
+        fired = true;
+        climateCallbacks.forEach(cb => {
+          try { cb(roomId, reading); } catch (e) { console.warn('HAClient climateCb:', e); }
+        });
+      });
+      return fired;
     }
 
     // Echo suppression
@@ -464,6 +649,7 @@ export const HAClient = (() => {
               // happens to change.
               else if (sensorIndex.has(state.entity_id)) processSensorUpdate(state.entity_id, state);
               if (fittingIndex.has(state.entity_id)) processFittingUpdate(state.entity_id, state);
+              if (climateIndex.has(state.entity_id)) processClimateUpdate(state.entity_id, state);
             });
             setStatus('connected');
           } else {
@@ -476,6 +662,7 @@ export const HAClient = (() => {
           if (entityIndex.has(entity_id)) processStateUpdate(entity_id, new_state, false);
           else if (sensorIndex.has(entity_id)) processSensorUpdate(entity_id, new_state);
           if (fittingIndex.has(entity_id)) processFittingUpdate(entity_id, new_state);
+          if (climateIndex.has(entity_id)) processClimateUpdate(entity_id, new_state);
         }
       };
       ws.onclose = () => {
@@ -542,6 +729,7 @@ export const HAClient = (() => {
             processSensorUpdate(state.entity_id, state);
           }
           if (fittingIndex.has(state.entity_id)) processFittingUpdate(state.entity_id, state);
+          if (climateIndex.has(state.entity_id)) processClimateUpdate(state.entity_id, state);
         });
       } catch (e) {
         console.warn('HAClient: Poll failed:', e.message);
@@ -611,6 +799,24 @@ export const HAClient = (() => {
       getCurtainAvailable(curtainId) {
         return curtainAvailable.has(curtainId) ? curtainAvailable.get(curtainId) : null;
       },
+      // cb(kind, targetId, status): kind 'presence'|'door', status
+      // 'on'|'off'|'unavailable' (see reduceBinarySensorStates). Fired only
+      // when a target's resolved status actually changes. This is the
+      // sidebar's motion tag / door text; the booleans above still drive
+      // the 3D scene.
+      onSensorStatusChange(cb) { sensorStatusCallbacks.push(cb); },
+      getSensorStatus(kind, targetId) {
+        const m = sensorStatus[kind];
+        return m && m.has(targetId) ? m.get(targetId) : null;
+      },
+      // cb(roomId, reading) with reading from parseClimate(). Fired only on
+      // a real change of the parsed reading.
+      onClimateChange(cb) { climateCallbacks.push(cb); },
+      getClimate(roomId) {
+        const r = climateResolved.get(roomId);
+        return r ? r.reading : null;
+      },
+      climateEntityFor(roomId) { return climateByRoom.get(roomId) || null; },
       onStatusChange(cb) { statusCallbacks.push(cb); },
       // Test/diagnostic seam: drive a sensor without a live HA socket. Returns
       // true if the resolved boolean changed (and callbacks fired).
@@ -624,6 +830,11 @@ export const HAClient = (() => {
       // getCurtainAvailable() or the availability callback for that signal.
       _injectFittingState(entityId, haState) {
         return processFittingUpdate(entityId, haState);
+      },
+      // Same seam for a climate entity: full HA state object in, true if
+      // the climate callback fired.
+      _injectClimateState(entityId, haState) {
+        return processClimateUpdate(entityId, haState);
       },
       callService,
       callServiceDebounced,
@@ -691,5 +902,13 @@ export const HAClient = (() => {
     }
   }  // end fetchInitialState
 
-  return { create, fetchInitialState, coverPositionCommand };
+  return {
+    create,
+    fetchInitialState,
+    coverPositionCommand,
+    coverOpenCloseCommand,
+    parseClimate,
+    climateTargetCommand,
+    reduceBinarySensorStates
+  };
 })();

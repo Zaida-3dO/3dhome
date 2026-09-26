@@ -194,6 +194,17 @@ jobs:
           # not false -- before any reading has ever arrived).
           set -euo pipefail
           node scripts/test-curtain-slider-command.mjs
+      - name: Room sidebar rows (climate, curtain buttons, motion, door) and slider write path
+        run: |
+          # Asserts climate.set_temperature mapping (clamp to min/max, round
+          # to target_temp_step, nothing sent when off / null target /
+          # unavailable / NaN), curtain Open/Close service calls, the motion
+          # OR-reduction and door status text, row disabled states, and the
+          # shared drag sender (one send per release, per-drag dedupe, button
+          # cancels a pending slider send, drag lock released on pointerup)
+          # against the real callServiceDebounced.
+          set -euo pipefail
+          node scripts/test-room-panel.mjs
       - name: Gaming chair builder
         run: |
           # Asserts src/furniture/gaming-chair.js: the furniture frame (floor at

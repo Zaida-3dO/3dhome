@@ -3206,6 +3206,19 @@
                 },
                 "minItems": 1
               }
+            },
+            "climate": {
+              "type": "object",
+              "description": "Room id -> the ONE Home Assistant climate entity that drives that room's sidebar temperature row (current temperature, target temperature, and a target slider that calls climate.set_temperature). Room ids MUST exist in the paired geometry profile's `rooms`. Deliberately a single string, not a list: a room with two climate devices (say a room thermostat and a radiator valve) picks which one the row shows here, so switching is a one-value data edit. The slider's limits come from the entity's own min_temp / max_temp / target_temp_step attributes (step defaults to 0.5). A room with no entry has no temperature row. Needs rooms schemaVersion 1.3.",
+              "propertyNames": {
+                "$ref": "#/$defs/roomId"
+              },
+              "additionalProperties": {
+                "allOf": [
+                  { "$ref": "#/$defs/entityId" },
+                  { "pattern": "^climate\\." }
+                ]
+              }
             }
           },
           "additionalProperties": false
