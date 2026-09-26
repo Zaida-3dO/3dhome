@@ -18,7 +18,7 @@
  * visual recipe: vertical wood/black slats over a dark felt backing, spaced
  * by a fixed pitch, protruding a fixed depth off the backing.
  */
-import { makeFinish, isKeptFinish, makeOakGrainRoughnessMap } from './finishes.js';
+import { makeFinish, isKeptFinish } from './finishes.js';
 
 // ---------------------------------------------------------------------------
 // slat-panel
@@ -47,12 +47,78 @@ const SLAT_DEFAULTS = Object.freeze({
   finish: 'matte',
   // Subtle low-contrast vertical streaks on the slat faces, matching the
   // bedroom panel's procedural oak-grain roughness map (home3d-scene.js
-  // makeOakGrainTexture, ~L605-633, extracted to finishes.js so both places
-  // draw from one generator). Off by default (only the oak preset wants it);
-  // a builder opting in departs from "every material is exactly what
-  // makeFinish() returns" -- see the note on grainMap below.
+  // makeOakGrainTexture, ~L736 -- that module already declares this
+  // generator twice, so the duplicate here is deliberate rather than shared:
+  // importing across the furniture/scene boundary either way conflicts with
+  // feat/furniture-renderer's own use of the scene module. See
+  // makeOakGrainRoughnessMap() below for the copy used here). Off by
+  // default (only the oak preset wants it); a builder opting in departs
+  // from "every material is exactly what makeFinish() returns" -- see the
+  // note on grainMap below.
+  //
+  // ROUGHNESS PARITY (not exact): the bedroom's hard-coded panel uses
+  // roughness 0.55; the palette's `matte` finish (used here) is 0.8, so the
+  // grain map's shading sits on a duller base than the real panel. A
+  // `satin` finish (0.6, closer to 0.55) is landing via fix/chair-leather-satin
+  // but is not on main yet -- do NOT depend on an unmerged branch.
+  // TODO(finish-palette): switch the oak preset to `satin` once it lands.
   grainMap: false
 });
+
+/**
+ * Procedural oak-grain roughness map: subtle, low-contrast vertical streaks.
+ * DUPLICATED from src/home3d-scene.js's makeOakGrainTexture (~L736, the
+ * bedroom's hard-coded acoustic slat panel) rather than shared, on purpose:
+ * that module already declares this generator twice internally, and an
+ * import either direction across the furniture/scene boundary conflicts
+ * with feat/furniture-renderer's own use of home3d-scene.js. If the two
+ * generators ever need to diverge, they are independent copies; keep them
+ * in step by eye until a real shared module exists for both sides.
+ *
+ * NODE / NO-DOM BUILDS: `document.createElement('canvas')` does not exist
+ * under plain Node, which is where the builder-contract drift tests run
+ * this module (bbox vs DEFAULTS, finish/keep tagging, low-detail triangle
+ * count) -- same pattern as wall-sign.js's resolveCreateCanvas. With no
+ * global `document`, this returns null and the caller simply does not get
+ * a grain map (matte colour only) rather than throwing.
+ *
+ * This is deliberately NOT part of the closed finish palette in
+ * finishes.js: a roughness map is a real, if narrow, exception to "every
+ * material comes from makeFinish() unmodified" (see the file header above)
+ * -- there is no grained finish key. A caller applies it on top of a
+ * makeFinish() material and should mark that mesh `keep` so it opts out of
+ * any future finish-bucket merge instead of silently losing the map to it.
+ *
+ * @param {Object} THREE
+ * @returns {?THREE.CanvasTexture}  null if no DOM canvas is available
+ */
+function makeOakGrainRoughnessMap(THREE) {
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') return null;
+  const w = 16, h = 256;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#d9d9d9';
+  ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 40; i++) {
+    const x0 = Math.random() * w;
+    const shade = 190 + Math.random() * 50; // subtle, low-contrast like wallRoughMap
+    ctx.strokeStyle = `rgba(${shade},${shade},${shade},0.5)`;
+    ctx.lineWidth = 0.4 + Math.random() * 0.6;
+    ctx.beginPath();
+    ctx.moveTo(x0, 0);
+    ctx.bezierCurveTo(
+      x0 + (Math.random() - 0.5) * 3, h * 0.33,
+      x0 + (Math.random() - 0.5) * 3, h * 0.66,
+      x0 + (Math.random() - 0.5) * 2, h
+    );
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1, 5);
+  return tex;
+}
 
 /**
  * Vertical slat panelling: a felt backing plane with evenly spaced slats
@@ -84,13 +150,14 @@ function buildSlatPanel(THREE, params, opts) { // eslint-disable-line no-unused-
 
   const backingMat = makeFinish(THREE, 'matte', p.backingColor);
   const slatMat = makeFinish(THREE, p.finish, p.slatColor);
-  // Opt-in oak-grain roughness map (matches the bedroom's hard-coded panel,
-  // home3d-scene.js makeOakGrainTexture): stamped directly on the material
-  // makeFinish() returned, which is a deliberate, narrow exception to "every
-  // material comes from makeFinish() unmodified" -- the alternative is no
-  // grain at all, since the palette has no grained finish. Marking the mesh
-  // `keep` (below) means it opts out of the renderer's future finish-bucket
-  // merge instead of silently losing the map to it. makeOakGrainRoughnessMap
+  // Opt-in oak-grain roughness map (matches the bedroom's hard-coded panel;
+  // see makeOakGrainRoughnessMap() above for why it is a duplicate rather
+  // than a shared import): stamped directly on the material makeFinish()
+  // returned, which is a deliberate, narrow exception to "every material
+  // comes from makeFinish() unmodified" -- the alternative is no grain at
+  // all, since the palette has no grained finish. Marking the mesh `keep`
+  // (below) means it opts out of the renderer's future finish-bucket merge
+  // instead of silently losing the map to it. makeOakGrainRoughnessMap
   // returns null under plain Node (no DOM canvas) -- the drift/geometry
   // tests still exercise every other grainMap effect (keep flag, params).
   const grainTex = p.grainMap ? makeOakGrainRoughnessMap(THREE) : null;
@@ -226,10 +293,13 @@ export const DEFAULTS_HEX_PANEL_CLUSTER = Object.freeze(Object.assign({}, HEX_CL
 }));
 
 /**
- * A honeycomb cluster of regular hexagon felt panels: one merged geometry
- * (all hexes as one BufferGeometry via THREE.BufferGeometryUtils-free manual
- * merge -- see mergeGeometries below), single material, so a 29-hex cluster
- * is one draw call and a handful of triangles rather than 29 meshes.
+ * A honeycomb cluster of regular hexagon felt panels: 29 meshes (at the
+ * living-room default) sharing ONE geometry instance and one material --
+ * each hex is its own THREE.Mesh (so it can be independently positioned),
+ * but all 29 reuse the same small ExtrudeGeometry and MeshStandardMaterial
+ * rather than each allocating its own, which is what "cheap" means here
+ * (low memory, a handful of triangles total) -- not a single merged
+ * BufferGeometry / one draw call, which this does not attempt.
  *
  * @param {Object} THREE
  * @param {Object} [params]  overrides for DEFAULTS_HEX_PANEL_CLUSTER.

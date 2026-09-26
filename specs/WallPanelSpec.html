@@ -71,9 +71,9 @@
          "Oak slats"   — the bedroom headboard wall: light oak slats on a
                          black felt backing.
 
-     HEX PANEL CLUSTER — a honeycomb of regular hexagon felt panels, one
-     merged geometry, cheap to draw. The living-room default is 29 hexes in
-     vertical columns, left to right (3,4,5,4,4,4,3,2), 18cm side, matching
+     HEX PANEL CLUSTER — a honeycomb of regular hexagon felt panels, 29
+     meshes sharing one geometry, cheap to draw. The living-room default is
+     29 hexes in vertical columns, left to right (3,4,5,4,4,4,3,2), 18cm side, matching
      the photo reference named in the plan (living-room-hex-wall-tv.jpg):
      flat-top hexes, stacked in an offset honeycomb, each column centred by
      default except column 5, shifted down half a hex to interlock with
@@ -254,6 +254,13 @@ function App() {
             t={t}
             buildModel={buildPanel}
             heightOf={tt => (tt.panelType === 'slat-panel' ? tt.slatHeightCm * 0.01 : hexClusterHeightM(tt.hexSide, HEX_LIVING_ROOM_COLUMNS, HEX_LIVING_ROOM_COLUMN_OFFSETS))}
+            // The dark-green felt (#1e3228, rgb ~22,32,27) is nearly invisible
+            // against ThreeView's default near-black background (rgb
+            // 26,26,28), making the colour hard to judge on this page. Hex
+            // mode gets a pale, off-white wall colour instead (matching the
+            // photo reference named in the plan comment above). Slat mode is
+            // unaffected (keeps the original dark viewer background).
+            backgroundOf={tt => (tt.panelType === 'hex-panel-cluster' ? '#d8d3c8' : 0x1a1a1c)}
           />
         </div>
       </div>

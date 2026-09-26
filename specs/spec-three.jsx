@@ -32,6 +32,15 @@
        Returns the focus height (m) used to centre the camera + presets.
        Defaults to 1.0 (DoorSpec centred on ~half door height).
 
+   backgroundOf(t)  [optional]
+       Returns a THREE.Color-constructible value (hex number or CSS string)
+       for the scene background, re-evaluated on every `t` change alongside
+       buildModel. Defaults to the original fixed 0x1a1a1c for every page
+       that does not pass it, so DoorSpec/WindowSpec/etc. are unaffected.
+       Added for WallPanelSpec's hex-cluster mode (2026-09-26, review round
+       2): the default dark background made the dark-green felt (#1e3228,
+       rgb ~22,32,27) nearly invisible against it (rgb 26,26,28).
+
    -------------------------------------------------------------------
    OPT-IN ROOM FEATURES (added for the bathroom specs — 2026-07-18)
    -------------------------------------------------------------------
@@ -91,12 +100,12 @@
        userData.isMirror = true (optional but recommended); no other work.
    ===================================================================== */
 
-function ThreeView({ t, buildModel, animate, heightOf, presetHeight }) {
+function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeight }) {
   const canvasRef = React.useRef(null);
   const stateRef = React.useRef({});
   // keep latest callbacks without re-running the init effect
   const cbRef = React.useRef({});
-  cbRef.current = { buildModel, animate, heightOf };
+  cbRef.current = { buildModel, animate, heightOf, backgroundOf };
 
   // ---- initialise scene once ----------------------------------------
   React.useEffect(() => {
@@ -109,7 +118,7 @@ function ThreeView({ t, buildModel, animate, heightOf, presetHeight }) {
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a1c);
+    scene.background = new THREE.Color(cbRef.current.backgroundOf ? cbRef.current.backgroundOf(t) : 0x1a1a1c);
     const cam = new THREE.PerspectiveCamera(35, W / H, 0.01, 50);
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.45));
@@ -307,6 +316,12 @@ function ThreeView({ t, buildModel, animate, heightOf, presetHeight }) {
     const s = stateRef.current;
     if (!s || !s.sceneRoot) return;
     s.t = t;
+
+    // background can react to `t` too (e.g. WallPanelSpec lightens it in
+    // hex mode so the felt colour reads against it) -- no-op for every page
+    // that does not pass backgroundOf, which keeps s.scene.background at
+    // its init-time value forever, same as before this prop existed.
+    if (cbRef.current.backgroundOf) s.scene.background.set(cbRef.current.backgroundOf(t));
 
     // tear down previous group + dispose geometry
     while (s.sceneRoot.children.length) {

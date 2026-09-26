@@ -1504,7 +1504,7 @@
 
     "furnitureParams_hex-panel-cluster": {
       "type": "object",
-      "description": "Params for `hex-panel-cluster` (src/furniture/wall-panels.js): a honeycomb cluster of regular hexagon felt panels, one merged geometry per cluster. Each `default` equals wall-panels.js TYPES['hex-panel-cluster'].DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). `width`, `height` and `depth` are DERIVED from `side`, `columns` and `thickness` (the cluster's own bbox) -- the validator cannot run JavaScript, so these three carry the pre-computed values for the DEFAULT cluster only; a house that changes `side` or `columns` gets the real derived bbox at render time, and the footprint checks that read `width`/`height` from a placed item's schema defaults will be approximate for a customised cluster.",
+      "description": "Params for `hex-panel-cluster` (src/furniture/wall-panels.js): a honeycomb cluster of regular hexagon felt panels, one mesh per hex sharing a single geometry instance per cluster (29 meshes sharing one geometry at the living-room default). Each `default` equals wall-panels.js TYPES['hex-panel-cluster'].DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). `width`, `height` and `depth` are DERIVED from `side`, `columns` and `thickness` (the cluster's own bbox) -- the validator cannot run JavaScript, so these three carry the pre-computed values for the DEFAULT cluster only; a house that changes `side` or `columns` gets the real derived bbox at render time, and the footprint checks that read `width`/`height` from a placed item's schema defaults will be approximate for a customised cluster.",
       "properties": {
         "side": {
           "type": "number",

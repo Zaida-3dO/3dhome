@@ -16,9 +16,9 @@
  *      3,4,5,4,4,4,3,2 left to right) produces exactly 29 hex meshes; a hex
  *      is flat-top (a flat edge left/right, not a vertex); columns are
  *      centred by default except column 5 shifted down half a hex
- *      (columnOffsets [0,0,0,0,1,0,0,0]); the cluster is one merged geometry
- *      + one material (cheap, per the plan); the DEFAULTS bbox this module
- *      freezes at load time is internally consistent with the live layout
+ *      (columnOffsets [0,0,0,0,1,0,0,0]); the cluster is 29 meshes sharing
+ *      one geometry + one material (cheap, per the plan); the DEFAULTS bbox
+ *      this module freezes at load time is internally consistent with the live layout
  *      maths, not a hand-typed guess that could drift from the code that
  *      draws it; and the honeycomb has no overlaps and no gaps between
  *      neighbouring columns.
@@ -159,10 +159,11 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   g.traverse(o => { if (o.isMesh) hexMeshes.push(o); });
   check('hex-panel-cluster: exactly 29 hex meshes at the living-room preset', hexMeshes.length === 29, hexMeshes.length);
 
-  // One merged geometry: every hex mesh shares the SAME BufferGeometry
-  // instance (cheap to draw -- the plan's "one merged geometry" requirement,
-  // read as "one shared geometry resource" since three.js has no single
-  // "merged multi-instance" primitive short of InstancedMesh).
+  // 29 meshes sharing one geometry: every hex mesh shares the SAME
+  // BufferGeometry instance (cheap in memory -- the plan's "one merged
+  // geometry" requirement, read as "one shared geometry resource" rather
+  // than a single merged BufferGeometry / one draw call, since three.js has
+  // no single "merged multi-instance" primitive short of InstancedMesh).
   const geoSet = new Set(hexMeshes.map(m => m.geometry));
   check('hex-panel-cluster: all hexes share one geometry instance', geoSet.size === 1, geoSet.size);
   const matSet = new Set(hexMeshes.map(m => Array.isArray(m.material) ? m.material[0] : m.material));
@@ -219,58 +220,94 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   check('hex-panel-cluster: a mirror-finish cluster is flagged keep', mirrorKept);
 
   // ---- no overlaps, no gaps: adjacent columns must interlock -------------
-  // Re-derive each hex's own 6 world-space vertices (flat-top, local frame)
-  // and check two geometric properties directly against the living-room
-  // preset's actual centres, independent of any bbox shortcut:
-  //   1. no two hexes overlap (centre-to-centre distance is never less than
-  //      the honeycomb's minimum packing distance for two same-size hexes);
-  //   2. every hex in columns 1-7 (0-indexed 0-6) shares an edge with at
-  //      least one hex in the next column (centre-to-centre distance from
-  //      SOME hex in column c+1 equals the honeycomb's own neighbour
-  //      distance, i.e. no gap).
+  // NOT a re-derivation of layoutHexes's own formula (that was hollow: a
+  // sign flip on the offset term, or dropping columnOffsets entirely, still
+  // passed every check because the test and the code shared the same bug --
+  // review-flagged 2026-09-26 round 2). Instead this reads the BUILT
+  // group's actual mesh.position values -- the thing a wrong sign or a
+  // dropped offset would visibly change -- and buckets them into columns by
+  // their own x coordinate (layoutHexes places every hex in column c at the
+  // same x = c*colPitch, so grouping by x is a property of the honeycomb
+  // shape itself, not a copy of the layout code). Mutation-tested by hand:
+  // both `y0 -= off*halfHex` -> `y0 +=` and hard-coding `off = 0` in
+  // wall-panels.js's layoutHexes make this block fail (5 of its checks trip
+  // on the ignore-offsets mutation; the "lowest column"/"half a hex below"
+  // checks specifically trip on both).
   {
+    g.updateMatrixWorld(true);
     const sideCm = D.side;
     const rowPitch = Math.sqrt(3) * sideCm, colPitch = 1.5 * sideCm, halfHex = rowPitch / 2;
-    const columns = D.columns, offsets = D.columnOffsets;
     // neighbourDist: centre-to-centre distance between two hexes that share
     // an edge (one column apart, offset by half a row-pitch) -- derived from
     // the honeycomb geometry itself (colPitch horizontally, halfHex
     // vertically), not hand-typed, so a side-length change cannot desync it.
     const neighbourDist = Math.sqrt(colPitch * colPitch + halfHex * halfHex);
-    const centresByCol = columns.map((count, c) => {
-      const off = offsets[c] || 0;
-      const y0 = -((count - 1) * rowPitch) / 2 - off * halfHex;
-      const x = c * colPitch;
-      const out = [];
-      for (let r = 0; r < count; r++) out.push([x, y0 + r * rowPitch]);
-      return out;
+
+    // Read every hex mesh's world-space (x, y) centre from the built group.
+    const worldCentres = hexMeshes.map(m => {
+      const v = new THREE.Vector3();
+      m.getWorldPosition(v);
+      return [v.x * 100, v.y * 100]; // m -> cm, matching D.side's units
     });
-    const allCentres = centresByCol.flat();
+
+    // Bucket by x (column): sort distinct x values, group hexes whose x is
+    // within a small tolerance of each bucket's representative x.
+    const xs = [...new Set(worldCentres.map(([x]) => Math.round(x * 100) / 100))].sort((a, b) => a - b);
+    const columnsByX = xs.map(x => worldCentres.filter(([cx]) => near(cx, x, 0.01)).map(([, y]) => y).sort((a, b) => a - b));
+    check('hex-panel-cluster: built mesh positions form 8 distinct columns (by x)', columnsByX.length === 8, xs.length);
+    check('hex-panel-cluster: column x-spacing matches colPitch (1.5*side)',
+      xs.every((x, i) => i === 0 || near(x - xs[i - 1], colPitch, 0.01)), xs);
+
     const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
-    // 1. No overlap: every pair of distinct hexes is at least neighbourDist
-    // apart (same-column neighbours are rowPitch apart, which is larger).
+    // 1. No overlap: every pair of distinct built meshes is at least
+    // neighbourDist apart (same-column neighbours are rowPitch apart, which
+    // is larger).
     let minPairDist = Infinity;
-    for (let i = 0; i < allCentres.length; i++) {
-      for (let j = i + 1; j < allCentres.length; j++) {
-        minPairDist = Math.min(minPairDist, dist(allCentres[i], allCentres[j]));
+    for (let i = 0; i < worldCentres.length; i++) {
+      for (let j = i + 1; j < worldCentres.length; j++) {
+        minPairDist = Math.min(minPairDist, dist(worldCentres[i], worldCentres[j]));
       }
     }
-    check('hex-panel-cluster: no two hexes overlap (min centre distance >= neighbour distance)',
-      minPairDist >= neighbourDist - 1e-6, { minPairDist, neighbourDist });
+    check('hex-panel-cluster: no two built hexes overlap (min centre distance >= neighbour distance)',
+      minPairDist >= neighbourDist - 1e-2, { minPairDist, neighbourDist });
 
     // 2. No gaps: every hex in columns 1-7 (index 0-6) has at least one
-    // neighbour in the next column at exactly neighbourDist.
+    // neighbour in the next column at exactly neighbourDist, read from the
+    // built positions.
+    const centresByColXY = xs.map((x, c) => worldCentres.filter(([cx]) => near(cx, x, 0.01)));
     let gapFound = null;
-    for (let c = 0; c < columns.length - 1; c++) {
-      for (const centre of centresByCol[c]) {
-        const hasNeighbour = centresByCol[c + 1].some(other => near(dist(centre, other), neighbourDist, 1e-6));
+    for (let c = 0; c < centresByColXY.length - 1; c++) {
+      for (const centre of centresByColXY[c]) {
+        const hasNeighbour = centresByColXY[c + 1].some(other => near(dist(centre, other), neighbourDist, 1e-2));
         if (!hasNeighbour) { gapFound = { column: c, centre }; break; }
       }
       if (gapFound) break;
     }
-    check('hex-panel-cluster: every hex in columns 1-7 shares an edge with the next column (no gaps)',
+    check('hex-panel-cluster: every built hex in columns 1-7 shares an edge with the next column (no gaps)',
       gapFound === null, gapFound);
+
+    // 3. The specific claim the review asked for directly: column 5 (index
+    // 4, the one with a non-zero columnOffset) has its LOWEST hex sitting
+    // half a hex (halfHex = rowPitch/2) BELOW column 4's lowest (and
+    // column 6's lowest) -- not level with them, and not shifted up. This
+    // is the one assertion a sign-flipped or ignored offset cannot survive:
+    // flipping the sign moves column 5's lowest hex ABOVE its neighbours
+    // instead of below, and dropping the offset entirely leaves it level
+    // (delta 0), both of which fail the `near(..., halfHex)` check below.
+    const col4Lowest = Math.min(...columnsByX[3]);
+    const col5Lowest = Math.min(...columnsByX[4]);
+    const col6Lowest = Math.min(...columnsByX[5]);
+    // Lower in scene-Y means a SMALLER y value (layoutHexes's y decreases
+    // downward before the builder's own re-centring re-expresses it in the
+    // group's own y-up-from-floor frame; either way "lower" is min y here
+    // since the whole group is built bottom-up from y=0).
+    check('hex-panel-cluster: column 5 (index 4) is the lowest-reaching column',
+      col5Lowest < col4Lowest && col5Lowest < col6Lowest, { col4Lowest, col5Lowest, col6Lowest });
+    check('hex-panel-cluster: column 5\'s lowest hex sits half a hex below column 4\'s lowest',
+      near(col4Lowest - col5Lowest, halfHex, 0.01), { delta: col4Lowest - col5Lowest, halfHex });
+    check('hex-panel-cluster: column 5\'s lowest hex sits half a hex below column 6\'s lowest',
+      near(col6Lowest - col5Lowest, halfHex, 0.01), { delta: col6Lowest - col5Lowest, halfHex });
   }
 }
 
