@@ -1,7 +1,7 @@
 /**
- * dining.js - the kitchen dining set: a round table, its chairs, and a wall
- * clock (two styles). A multi-type module per the builder contract (see
- * docs/house-profile.md, "Multi-type modules").
+ * dining.js - the kitchen dining set: a round table and its chairs. A
+ * multi-type module per the builder contract (see docs/house-profile.md,
+ * "Multi-type modules").
  *
  * THE BUILDER CONTRACT (every src/furniture/<type>.js follows it):
  *   - Pure ESM, THREE injected; no `import 'three'`.
@@ -12,36 +12,47 @@
  *   - Every material comes from makeFinish() (./finishes.js).
  * See docs/house-profile.md, "Furniture".
  *
- * REFERENCE. Modelled from real kitchen photos of this house (a small round
- * space-saving set: a white gloss round top on a slim pedestal base, with
- * four low-back chairs whose tapered legs tuck fully under the rim) and,
- * separately, a DIY wall clock seen in the living room (numerals/dots stuck
- * straight on the wall around a plain hands unit, no visible face disc).
- * `wall-clock` therefore models BOTH the `framed` style (a conventional round
- * face + rim + hands) and the `diy-numerals` style the photo actually shows.
+ * REFERENCE. Modelled from real kitchen photos of this house: a small round
+ * SPACE-SAVING NESTING set. Round WHITE MATTE top (~2.5-3cm thin, ~100cm
+ * diameter) on FOUR slim square black legs splayed outward (no pedestal),
+ * positioned in the GAPS between the tucked chairs, joined by a low black
+ * crossbar frame near the floor. Four `dining-chair`s are each a 90-degree
+ * WEDGE (quadrant) of a cylinder -- black velvet, a continuous curved back
+ * shell as the outer arc, the seat narrowing to a point at the front (the
+ * side facing the table centre). Tucked in, the four wedges together form a
+ * black cylinder that the white top overhangs slightly, like a lid. Each
+ * chair stands on four slim square black legs (inside its own wedge
+ * footprint, so nested chairs' legs never collide) joined by a low box
+ * stretcher.
  *
- * REGISTRY NOTE. `clock` was already pre-seeded in registry.js pointing at
- * small-items.js (a module that does not exist on this branch). This module
- * does not repoint or touch that entry -- small-items.js is someone else's
- * territory. It registers a NEW type, `wall-clock`, instead. See the PR
- * description for why.
+ * REDESIGN (item 89769f2b, 2026-09-26): new reference photos of the real set
+ * arrived (private, never committed) and the nesting concept was explained
+ * over several corrections, closing 30f119ef (the earlier tub-back likeness
+ * gap) at the same time. This replaces the original pedestal table and
+ * low-back/tapered-leg chair entirely.
+ *
+ * HISTORY. The wall clock that used to live in this module was split out
+ * (item 89769f2b, 2026-09-26) into its own module, src/furniture/wall-clock.js,
+ * and its own spec page, specs/ClockSpec.html -- it shared no geometry with
+ * the table/chairs, just a spec page by coincidence of both being kitchen
+ * photos. See wall-clock.js for the clock's own history note.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 
-const TAU = Math.PI * 2;
-
 // ---------------------------------------------------------------------------
-// dining-table - round top on a slim pedestal base.
+// dining-table - round top on four splayed square legs, no pedestal, joined
+// by a low X crossbar frame near the floor.
 // ---------------------------------------------------------------------------
 
 const TABLE_DEFAULTS = Object.freeze({
   width: 100,     // diameter, cm (also used as `depth` -- see build())
   depth: 100,
   height: 75,
-  topColor: '#f2f0eb',
-  topFinish: 'gloss',
-  baseColor: '#1c1c1c',
-  baseFinish: 'matte'
+  topColor: '#f5f5f2',
+  topFinish: 'matte',
+  legColor: '#1a1a1a',
+  legFinish: 'matte',
+  frameHeight: 22   // cm, floor to the crossbar frame's centre
 });
 
 /**
@@ -57,13 +68,19 @@ function buildDiningTable(THREE, params, opts) {
   const h = p.height / 100;
   const detail = opts && opts.detail === 'low';
 
-  const topThickness = 0.04;
-  const segments = detail ? 20 : 48;
+  const topThickness = 0.028;
+  // A thin flat disk reads the same at 32 segments as at 48 -- kept low to
+  // stay inside the per-type triangle budget (200 full / 100 low, see
+  // perf-audit-furniture.md B3) now that this builder also carries 4 legs
+  // and a crossbar frame it did not have as a pedestal design.
+  const segments = detail ? 14 : 32;
+  const legMat = makeFinish(THREE, p.legFinish, p.legColor);
 
   const group = new THREE.Group();
   group.name = 'furniture:dining-table';
 
-  // Top: a short cylinder, its top face at y = h.
+  // Top: a short cylinder, its top face at y = h. Thin (2.8 cm) and matte
+  // white per the photo -- no gloss sheen on the real top.
   const topGeo = new THREE.CylinderGeometry(r, r, topThickness, segments);
   topGeo.translate(0, h - topThickness / 2, r);
   const top = new THREE.Mesh(topGeo, makeFinish(THREE, p.topFinish, p.topColor));
@@ -71,354 +88,278 @@ function buildDiningTable(THREE, params, opts) {
   if (isKeptFinish(top.material.userData.finish)) top.userData.keep = true;
   group.add(top);
 
-  // Pedestal: a slim column rising from a wider round foot, centred under
-  // the top. Two stacked cylinders read as a real pedestal base without
-  // needing a lathed profile.
-  const footR = r * 0.32;
-  const footH = 0.03;
-  const footGeo = new THREE.CylinderGeometry(footR, footR * 1.08, footH, segments);
-  footGeo.translate(0, footH / 2, r);
-  const foot = new THREE.Mesh(footGeo, makeFinish(THREE, p.baseFinish, p.baseColor));
-  foot.name = 'pedestalFoot';
-  group.add(foot);
+  // Four slim square legs, splayed outward: each leg's TOP attaches inset
+  // under the rim and its FOOT lands further out and exactly at the floor
+  // (y=0) -- the outward lean the photo shows. Each leg is tilted about a
+  // single horizontal axis PERPENDICULAR to its own outward diagonal (so the
+  // tilt is purely radial, away from centre, not skewed), and its length is
+  // scaled by 1/cos(splayAngle) so its VERTICAL projection still spans
+  // exactly h - topThickness -- the foot lands at y=0 by construction,
+  // independent of splayAngle.
+  const legSize = 0.032;               // square cross-section, metres
+  const legTopInset = r * 0.62;        // how far in from the rim the leg attaches
+  const splayAngle = 0.16;             // radians outward tilt, from vertical
+  // The centreline compensation below (1/cos(splayAngle)) is exact for a
+  // ROUND leg; a SQUARE leg's tilted corners drop a little further still.
+  // Rather than solve the exact trig for an arbitrary diagonal tilt axis,
+  // shrink the target span by the same order-of-magnitude correction
+  // (half the cross-section times sin(splayAngle)) so the corner-accurate
+  // fix-up below (measured from the real geometry) only has a sub-millimetre
+  // residual to correct, keeping both y=0 AND y=h accurate to the contract's
+  // 0.5 cm tolerance.
+  const vertSpan = h - topThickness - (legSize / 2) * Math.sin(splayAngle);
+  const legLen = vertSpan / Math.cos(splayAngle);
 
-  const colR = footR * 0.55;
-  const colH = h - topThickness - footH;
-  const colGeo = new THREE.CylinderGeometry(colR, colR * 1.15, colH, detail ? 10 : 20);
-  colGeo.translate(0, footH + colH / 2, r);
-  const column = new THREE.Mesh(colGeo, makeFinish(THREE, p.baseFinish, p.baseColor));
-  column.name = 'pedestalColumn';
-  group.add(column);
+  const legGeo = new THREE.BoxGeometry(legSize, legLen, legSize);
+  legGeo.translate(0, -legLen / 2, 0); // pivot (0,0,0) is the TOP end of the leg
+  const legCorners = [
+    { sx: -1, sz: -1 }, { sx: 1, sz: -1 }, { sx: -1, sz: 1 }, { sx: 1, sz: 1 }
+  ];
+  const legFeet = [];
+  const legTops = [];
+  legCorners.forEach((c, i) => {
+    const leg = new THREE.Mesh(legGeo.clone(), legMat.clone());
+    leg.name = 'leg' + i;
+    // The outward diagonal in the xz-plane, from centre through this
+    // corner: (c.sx, c.sz) normalised. Tilting about the axis perpendicular
+    // to that diagonal (in the horizontal plane) swings the foot straight
+    // out along the diagonal, away from centre -- true radial splay.
+    const diag = new THREE.Vector2(c.sx, c.sz).normalize();
+    const tiltAxis = new THREE.Vector3(-diag.y, 0, diag.x); // perpendicular, horizontal
+    leg.setRotationFromAxisAngle(tiltAxis, splayAngle);
+    const top3 = new THREE.Vector3(c.sx * legTopInset, h - topThickness, c.sz * legTopInset + r);
+    leg.position.copy(top3);
+    group.add(leg);
+    legTops.push(top3);
+    // The foot's world position, for the crossbar frame below.
+    const footLocal = new THREE.Vector3(0, -legLen, 0);
+    leg.updateMatrix();
+    footLocal.applyMatrix4(leg.matrix);
+    legFeet.push(footLocal);
+  });
+
+  // Low crossbar frame joining the four legs, an X across the diagonals --
+  // the "black crossbar frame joining the legs, visible as an X ... in the
+  // floor shadow" from the photo. Two thin bars, one per diagonal, crossing
+  // at the centre at a fixed height, each running leg-centreline to
+  // leg-centreline at that height.
+  const frameY = Math.max(0.01, Math.min(p.frameHeight / 100, vertSpan - 0.02));
+  const barThickness = 0.02;
+  function crossbar(a, b, name) {
+    const mid = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
+    const dir = new THREE.Vector3().subVectors(b, a);
+    const lenFlat = Math.hypot(dir.x, dir.z);
+    const barGeo = new THREE.BoxGeometry(lenFlat, barThickness, barThickness);
+    const bar = new THREE.Mesh(barGeo, legMat.clone());
+    bar.name = name;
+    bar.position.set(mid.x, frameY, mid.z);
+    bar.rotation.y = -Math.atan2(dir.z, dir.x);
+    group.add(bar);
+  }
+  // Each leg's centreline point at height frameY, by linear interpolation
+  // between its (known) top and foot world positions.
+  const framePoints = legTops.map((top3, i) => {
+    const foot = legFeet[i];
+    const t = (top3.y - frameY) / (top3.y - foot.y);
+    return new THREE.Vector3().lerpVectors(top3, foot, Math.min(1, Math.max(0, t)));
+  });
+  crossbar(framePoints[0], framePoints[3], 'crossbarA'); // (-,-) to (+,+)
+  crossbar(framePoints[1], framePoints[2], 'crossbarB'); // (+,-) to (-,+)
+
+  // The splayed legs are SQUARE in cross-section, so their tilted corners
+  // (not just the centreline the trig above targets) drop a fraction of a
+  // centimetre past y=0 -- solving that in closed form for an arbitrary
+  // diagonal tilt axis is not worth it when a single measured correction
+  // is exact and cheap: nudge the whole assembly up so its true minimum Y
+  // (from the real geometry, corners included) lands at exactly 0, per the
+  // builder contract.
+  const realMinY = new THREE.Box3().setFromObject(group).min.y;
+  if (realMinY !== 0) group.position.y -= realMinY;
 
   return group;
 }
 
 // ---------------------------------------------------------------------------
-// dining-chair - low-back chair, tapered A-frame legs, from the photo.
+// dining-chair - a 90-degree WEDGE (quadrant) of a cylinder: four of these,
+// tucked in, form the black cylinder the round table top sits on like a lid.
+// The curved velvet back is the cylinder's OUTER arc; the seat is the wedge
+// itself, its narrow point (the front) aimed at the table centre.
 // ---------------------------------------------------------------------------
 
 const CHAIR_DEFAULTS = Object.freeze({
-  width: 45,
-  depth: 50,
+  // width/depth are DERIVED from radius/backSweep (see build()) -- carried
+  // in DEFAULTS anyway because the builder contract requires numeric
+  // width/depth/height, and the furniture-defaults drift test computes
+  // footprints from these without running any JS.
+  width: 63.6,     // 2 * radius * sin(backSweep/2) at the DEFAULTS below
+  depth: 45,       // == radius
   height: 75,
-  seatHeight: 45,
+  radius: 45,          // cm, the arc's radius -- also this wedge's depth
+  backSweep: 90,       // degrees, the arc's angular span, centred on straight back
+  seatHeight: 52,      // cm, floor to the top of the seat (photo reads 50-55cm)
   seatColor: '#1a1a1a',
   seatFinish: 'matte',
   legColor: '#1a1a1a',
   legFinish: 'matte'
 });
 
+/**
+ * Local frame per the builder contract: y=0 bottom, x centred, BACK at
+ * z=0, front faces +z. For this wedge that means: the curved arc (the
+ * chair's back, symmetric about x=0) touches z=0 at its centre (straight
+ * back) and curves forward (+z) toward its two side edges; the wedge's
+ * point -- the front, aimed at the table centre when placed -- sits at
+ * (0, radius), the far +z corner. Placing the arc's centre of curvature AT
+ * the apex point means every arc vertex is exactly `radius` from the apex,
+ * which is what keeps the back-vertex-at-z=0 / apex-at-z=depth relationship
+ * exact regardless of backSweep.
+ */
 function buildDiningChair(THREE, params, opts) {
   const p = Object.assign({}, CHAIR_DEFAULTS, params || {});
-  const w = p.width / 100, d = p.depth / 100, h = p.height / 100;
+  const radius = p.radius / 100;
+  const sweep = (p.backSweep * Math.PI) / 180;
+  const h = p.height / 100;
   const seatH = Math.min(p.seatHeight / 100, h - 0.02);
   const detail = opts && opts.detail === 'low';
 
   const group = new THREE.Group();
   group.name = 'furniture:dining-chair';
 
-  // Leg radius at the floor -- legs are the widest thing at the very edges of
-  // the footprint, so every other part (seat, back) is sized to stay INSIDE
-  // half width/depth minus this, and leg endpoints are placed at exactly
-  // half width/depth minus this. That is what pins the overall bbox to
-  // width/depth/height exactly, independent of the splay trig below.
-  const legBotR = Math.min(0.018, w * 0.03, d * 0.03);
-  const halfW = w / 2 - legBotR;
-  const frontZ = d - legBotR;
-  const backZ = legBotR;
+  const seatMat = makeFinish(THREE, p.seatFinish, p.seatColor);
+  const legMat = makeFinish(THREE, p.legFinish, p.legColor);
 
-  // Seat: a padded-looking box, slightly rounded by chamfering is out of
-  // scope for 'low' -- a plain box reads fine at furniture scale.
-  const seatThickness = 0.10;
-  const seatDepth = frontZ - backZ;
-  const seatGeo = new THREE.BoxGeometry(halfW * 2, seatThickness, seatDepth);
-  seatGeo.translate(0, seatH - seatThickness / 2, backZ + seatDepth / 2);
-  const seat = new THREE.Mesh(seatGeo, makeFinish(THREE, p.seatFinish, p.seatColor));
+  // ---- Seat: an extruded wedge (a wide "pie slice" that narrows to a
+  // point at the front), built as a THREE.Shape swept to seatThickness. ----
+  const seatThickness = 0.04;
+  const arcSegs = detail ? 6 : 14;
+  const apex = new THREE.Vector2(0, radius); // the front point, +z
+  const shape = new THREE.Shape();
+  shape.moveTo(apex.x, apex.y);
+  for (let i = 0; i <= arcSegs; i++) {
+    const a = -sweep / 2 + (i / arcSegs) * sweep; // angle from straight back
+    // Arc centred AT the apex, radius `radius`: back-centre (a=0) lands at
+    // z=0 exactly; side edges land at z = radius*(1-cos(a/2... )) > 0.
+    const x = radius * Math.sin(a);
+    const z = radius - radius * Math.cos(a);
+    shape.lineTo(x, z);
+  }
+  shape.lineTo(apex.x, apex.y);
+  const seatGeo = new THREE.ExtrudeGeometry(shape, { depth: seatThickness, bevelEnabled: false });
+  // ExtrudeGeometry builds in the shape's local xy-plane extruded along +z
+  // (its OWN z, i.e. thickness) -- rotateX(+90deg) maps shape-local (x,y) to
+  // world (x,z) directly (shape y=radius, our apex, lands at world z=radius,
+  // matching the seat-shape convention above) but leaves the extrude's own
+  // thickness axis spanning world y in [-seatThickness, 0], so translate by
+  // +seatThickness to bring it to [0, seatThickness].
+  seatGeo.rotateX(Math.PI / 2);
+  seatGeo.translate(0, seatH, 0);
+  const seat = new THREE.Mesh(seatGeo, seatMat);
   seat.name = 'seat';
   if (isKeptFinish(seat.material.userData.finish)) seat.userData.keep = true;
   group.add(seat);
 
-  // Low back: a short padded panel rising from the seat's back edge, exactly
-  // filling the remaining height up to h.
-  const backHeight = Math.max(0.01, h - seatH);
-  const backThickness = 0.06;
-  const backGeo = new THREE.BoxGeometry(halfW * 2, backHeight, backThickness);
-  backGeo.translate(0, seatH + backHeight / 2, backZ + backThickness / 2);
-  const back = new THREE.Mesh(backGeo, makeFinish(THREE, p.seatFinish, p.seatColor));
-  back.name = 'back';
-  if (isKeptFinish(back.material.userData.finish)) back.userData.keep = true;
-  group.add(back);
+  // ---- Back: a thin curved shell rising from the arc, the outer wall of
+  // the eventual cylinder. ~40cm tall per the photo, highest at the centre
+  // back and curving down/out toward the sides is out of scope for a first
+  // cut -- a constant-height shell already reads as "one continuous arc"
+  // from every normal viewing angle, and keeps the bbox height exact. ----
+  const backHeight = Math.max(0.01, Math.min(0.40, h - seatH));
+  const backThickness = 0.025;
+  const innerR = radius - backThickness;
+  const backSegs = detail ? 6 : 16;
 
-  // Four straight, gently tapered legs, one under each corner of the seat --
-  // the "tucked fully under the rim" look from the photo, without a tilted
-  // cylinder's elliptical-footprint overshoot putting any point outside the
-  // declared width/depth/height envelope (a vertical cylinder's own footprint
-  // is exactly its radius around its axis, in every direction, so insetting
-  // the axis by legBotR keeps the WHOLE leg inside the bbox by construction).
-  const legTopR = 0.012;
-  const legSegments = detail ? 6 : 10;
-  const legLen = seatH - seatThickness;
-  const legGeo = new THREE.CylinderGeometry(legTopR, legBotR, legLen, legSegments);
-  legGeo.translate(0, legLen / 2, 0);
-  const corners = [
-    { sx: -1, z: backZ },
-    { sx: 1, z: backZ },
-    { sx: -1, z: frontZ },
-    { sx: 1, z: frontZ }
-  ];
-  corners.forEach((leg, i) => {
-    const mesh = new THREE.Mesh(legGeo.clone(), makeFinish(THREE, p.legFinish, p.legColor));
-    mesh.name = 'leg' + i;
-    mesh.position.set(leg.sx * halfW, 0, leg.z);
-    group.add(mesh);
-  });
-
-  return group;
-}
-
-// ---------------------------------------------------------------------------
-// wall-clock - `framed` (round face + hands) or `diy-numerals` (numerals
-// stuck on the wall around a central hands unit, no face disc).
-// ---------------------------------------------------------------------------
-
-const CLOCK_DEFAULTS = Object.freeze({
-  width: 30,
-  depth: 4,
-  height: 30,
-  kind: 'diy-numerals',    // 'framed' | 'diy-numerals' -- the photo is diy-numerals
-  diameter: 30,
-  faceColor: '#f5f2ea',
-  rimColor: '#1a1a1a',
-  numeralColor: '#1a1a1a',
-  handColor: '#1a1a1a',
-  time: '10:10'            // "HH:MM", the INITIAL hand pose only -- see setClockTime()
-});
-
-/**
- * "HH:MM" -> hour/minute/second hand angles, radians clockwise from 12
- * o'clock. Seconds are not encoded in "HH:MM" so they default to 0 -- this is
- * only ever used to lay out the STARTING pose at build time; a live scene
- * calls setClockTime() with a real Date immediately after and every tick
- * after that.
- */
-function handAngles(time) {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(time || '').trim());
-  const h = m ? (parseInt(m[1], 10) % 12) : 10;
-  const min = m ? (parseInt(m[2], 10) % 60) : 10;
-  const secondAngle = 0;
-  const minuteAngle = (min / 60) * TAU;
-  const hourAngle = ((h + min / 60) / 12) * TAU;
-  return { hourAngle, minuteAngle, secondAngle };
-}
-
-/**
- * Hour/minute/second hand angles for a real Date, same convention as
- * handAngles(): radians clockwise from 12 o'clock. Pure -- reads only the
- * Date's local hour/minute/second/ms, never the DOM or a clock.
- */
-export function angleForTime(date) {
-  const h = date.getHours() % 12;
-  const min = date.getMinutes();
-  const sec = date.getSeconds() + date.getMilliseconds() / 1000;
-  const secondAngle = (sec / 60) * TAU;
-  const minuteAngle = ((min + sec / 60) / 60) * TAU;
-  const hourAngle = ((h + min / 60) / 12) * TAU;
-  return { hourAngle, minuteAngle, secondAngle };
-}
-
-/**
- * Rotate a built `wall-clock` group's hands to show `date` (a JS Date;
- * defaults to now). Pure with respect to everything except the three named
- * hand meshes' `.rotation.z` -- it does not touch geometry, materials or any
- * other part of the group, so it is cheap enough to call every animation
- * frame, and safe to call on a group built at any `time` default.
- *
- * THE LIVE SCENE calls this once a MINUTE (the minute hand is the coarsest
- * visible movement that matters at furniture scale, and re-laying every
- * frame for a wall clock nobody is standing next to is wasted work); the
- * spec page below calls it every SECOND so the second hand is visibly live
- * while tweaking. Both are valid callers -- this helper itself has no
- * opinion on cadence.
- *
- * @param {Object} group  a THREE.Group returned by wall-clock's build()
- * @param {Date} [date]   defaults to `new Date()`
- */
-export function setClockTime(group, date) {
-  const d = date || new Date();
-  const { hourAngle, minuteAngle, secondAngle } = angleForTime(d);
-  const hour = group.getObjectByName('hourHand');
-  const minute = group.getObjectByName('minuteHand');
-  const second = group.getObjectByName('secondHand');
-  if (hour) hour.rotation.z = -hourAngle;
-  if (minute) minute.rotation.z = -minuteAngle;
-  if (second) second.rotation.z = -secondAngle;
-}
-
-/**
- * @param {number} totalDepth  the item's own declared depth (metres) -- the
- *   hub, the deepest part, is placed with its FRONT face exactly at
- *   totalDepth, so the whole assembly's z-extent matches params.depth exactly
- *   (the builder contract's bbox check) regardless of kind.
- * @param {number} backZ  where the hands' own back face should land (metres,
- *   in the caller's frame) -- callers pass whatever z their own geometry
- *   already treats as "flush with the wall/face".
- */
-function addHands(THREE, group, radius, handColor, time, detail, backZ, totalDepth) { // eslint-disable-line no-unused-vars
-  const { hourAngle, minuteAngle, secondAngle } = handAngles(time);
-  const handThickness = Math.max(0.003, Math.min(0.008, (totalDepth - backZ) * 0.3));
-  const z = backZ + handThickness / 2;
-  const mat = makeFinish(THREE, 'matte', handColor);
-
-  const hourLen = radius * 0.5, minuteLen = radius * 0.72, secondLen = radius * 0.78;
-  const handW = radius * 0.06, secondW = radius * 0.02;
-
-  function hand(name, length, width, angle, matInstance) {
-    const geo = new THREE.BoxGeometry(width, length, handThickness);
-    // Pivot at one end: shift geometry so y=0 is the pivot, tip at +y.
-    geo.translate(0, length / 2, 0);
-    const mesh = new THREE.Mesh(geo, matInstance);
+  // CylinderGeometry's own local frame sweeps theta -> (x=r*sin(theta),
+  // z=r*cos(theta)); to match the seat shape's x=r*sin(a), z=r-r*cos(a)
+  // convention (back-centre a=0 at world z=0, curving forward to +z), the
+  // cylinder needs its z axis MIRRORED (scale z by -1) before translating by
+  // +radius -- confirmed by probe: theta=0 -> z=0, theta=+-sweep/2 -> the
+  // same side-edge z the seat shape produces, for every sweep.
+  function backShell(rad, name) {
+    const geo = new THREE.CylinderGeometry(rad, rad, backHeight, backSegs, 1, true, -sweep / 2, sweep);
+    geo.scale(1, 1, -1);
+    geo.translate(0, 0, rad);
+    geo.translate(0, seatH + backHeight / 2, 0);
+    const mesh = new THREE.Mesh(geo, seatMat.clone());
     mesh.name = name;
-    mesh.position.set(0, 0, z);
-    // Clockwise from 12 o'clock (+y) -> rotate about z by -angle.
-    mesh.rotation.z = -angle;
-    // Hands move every frame/minute in the live scene: keep them their own
-    // draw rather than folding into the merged static-furniture bucket, the
-    // same way any moving or emissive part is kept (see finishes.js).
-    mesh.userData.keep = true;
+    // Matte velvet, same finish/merge rule as every other flat-palette part
+    // (see finishes.js) -- curved geometry alone is not a reason to force
+    // userData.keep; only glass/mirror/emissive or a genuinely moving part
+    // is (neither applies to a static upholstered back).
+    if (isKeptFinish(mesh.material.userData.finish)) mesh.userData.keep = true;
     return mesh;
   }
-  group.add(hand('hourHand', hourLen, handW, hourAngle, mat));
-  group.add(hand('minuteHand', minuteLen, handW * 0.7, minuteAngle, mat.clone()));
-  group.add(hand('secondHand', secondLen, secondW, secondAngle, mat.clone()));
+  const backGroup = new THREE.Group();
+  backGroup.name = 'back';
+  backGroup.add(backShell(radius, 'backOuter'), backShell(innerR, 'backInner'));
+  group.add(backGroup);
 
-  // The hub is the deepest part: its FRONT face lands exactly at totalDepth
-  // so the group's overall z-extent equals params.depth precisely.
-  const hubThickness = Math.max(0.004, totalDepth - backZ);
-  const hubGeo = new THREE.CylinderGeometry(radius * 0.05, radius * 0.05, hubThickness, detail ? 8 : 16);
-  hubGeo.rotateX(Math.PI / 2);
-  hubGeo.translate(0, 0, totalDepth - hubThickness / 2);
-  const hub = new THREE.Mesh(hubGeo, mat.clone());
-  hub.name = 'hub';
-  hub.userData.keep = true;
-  group.add(hub);
-}
+  // ---- Legs: 4 slim square near-vertical legs, placed INSIDE the wedge
+  // footprint (well clear of the arc AND the two straight sides) so four
+  // nested chairs' legs never collide, joined by a low box stretcher. ----
+  const legSize = 0.03;
+  const legLen = seatH - seatThickness;
+  const legMargin = 0.045; // safety margin in from the wedge's true edge
 
-function buildFramedClock(THREE, p, detail, totalDepth) {
-  const group = new THREE.Group();
-  group.name = 'furniture:wall-clock:framed';
-  const r = (p.diameter / 100) / 2;
-  const segments = detail ? 20 : 40;
-  // The rim + face take up most of the declared depth; hands and the hub
-  // (the deepest part) fit in what is left, driven by totalDepth below.
-  const faceThickness = Math.max(0.006, totalDepth * 0.5);
-
-  const rimGeo = new THREE.CylinderGeometry(r, r, faceThickness, segments);
-  rimGeo.rotateX(Math.PI / 2);
-  rimGeo.translate(0, 0, faceThickness / 2); // back face at local z = 0
-  const rim = new THREE.Mesh(rimGeo, makeFinish(THREE, 'matte', p.rimColor));
-  rim.name = 'rim';
-  group.add(rim);
-
-  const faceR = r * 0.92;
-  const faceThin = 0.005;
-  const faceGeo = new THREE.CylinderGeometry(faceR, faceR, faceThin, segments);
-  faceGeo.rotateX(Math.PI / 2);
-  faceGeo.translate(0, 0, faceThickness + faceThin / 2);
-  const face = new THREE.Mesh(faceGeo, makeFinish(THREE, 'matte', p.faceColor));
-  face.name = 'face';
-  group.add(face);
-
-  // Twelve tick marks around the face.
-  const tickCount = 12;
-  for (let i = 0; i < tickCount; i++) {
-    const a = (i / tickCount) * TAU;
-    const isQuarter = i % 3 === 0;
-    const tickLen = faceR * (isQuarter ? 0.14 : 0.08);
-    const tickGeo = new THREE.BoxGeometry(faceR * 0.025, tickLen, 0.004);
-    tickGeo.translate(0, faceR * 0.88 - tickLen / 2, 0);
-    const tick = new THREE.Mesh(tickGeo, makeFinish(THREE, 'matte', p.numeralColor));
-    tick.name = 'tick' + i;
-    tick.position.z = faceThickness + faceThin;
-    tick.rotation.z = -a;
-    group.add(tick);
-  }
-
-  // Hands sit just in front of the face, which is itself in front of the
-  // rim -- the rim's own back face is already at z = 0 (see rimGeo above).
-  addHands(THREE, group, faceR, p.handColor, p.time, detail, faceThickness + faceThin, totalDepth);
-  return group;
-}
-
-function buildDiyNumeralsClock(THREE, p, detail, totalDepth) {
-  const group = new THREE.Group();
-  group.name = 'furniture:wall-clock:diy-numerals';
-  const r = (p.diameter / 100) / 2;
-  const markThickness = Math.max(0.003, totalDepth * 0.3); // stuck straight on the wall
-
-  // Numerals/dots stuck straight on the wall: at 12/3/6/9 a flat numeral
-  // plaque (a small box standing in for the printed digit), and a plain dot
-  // at the other eight hours -- matching the reference photo, where only a
-  // few positions carry a printed number ("12", "9", "6" are the ones the
-  // photo shows) and the rest are unmarked dots.
-  //
-  // The ring radius is shrunk by the numeral's own half-extent so the
-  // FARTHEST point of the farthest numeral lands exactly on the declared
-  // diameter, never past it -- otherwise a fixed 0.88*r ring radius plus the
-  // numeral's box half-width overshoots the bbox the contract test measures.
-  // The plaque is kept SQUARE (equal half-width/half-height) specifically so
-  // one inset works whichever axis a numeral sits on (12/6 are on the y axis,
-  // 3/9 on the x axis) -- an oblong plaque would need a per-position inset.
-  const numeralHalf = r * 0.09;
-  const numeralHalfW = numeralHalf, numeralHalfH = numeralHalf;
-  const ringR = r - numeralHalf;
-  const numeralPositions = [0, 3, 6, 9];
-  for (let i = 0; i < 12; i++) {
-    const a = (i / 12) * TAU;
-    const x = ringR * Math.sin(a);
-    const y = ringR * Math.cos(a);
-    let mark;
-    if (numeralPositions.includes(i)) {
-      const geo = new THREE.BoxGeometry(numeralHalfW * 2, numeralHalfH * 2, markThickness);
-      geo.translate(0, 0, markThickness / 2); // back face at local z = 0
-      mark = new THREE.Mesh(geo, makeFinish(THREE, 'matte', p.numeralColor));
-      mark.name = 'numeral' + i;
-    } else {
-      const geo = new THREE.CylinderGeometry(r * 0.035, r * 0.035, markThickness, detail ? 6 : 10);
-      geo.rotateX(Math.PI / 2);
-      geo.translate(0, 0, markThickness / 2); // back face at local z = 0
-      mark = new THREE.Mesh(geo, makeFinish(THREE, 'matte', p.numeralColor));
-      mark.name = 'dot' + i;
+  // The wedge's actual boundary, for a leg-safe half-width at any z: the arc
+  // (0 <= z <= zEnd, the arc endpoints' own z) for the back, then the two
+  // STRAIGHT sides running from the arc endpoints up to the apex (0, radius)
+  // for the rest -- this is a triangle-ish wedge, not a rectangle, so a
+  // fixed half-width (the earlier approach) put the front two legs outside
+  // the shape entirely once z exceeded zEnd.
+  const halfSweep = sweep / 2;
+  const xEnd = radius * Math.sin(halfSweep);
+  const zEnd = radius - radius * Math.cos(halfSweep);
+  function safeHalfWidthAtZ(z) {
+    if (z <= zEnd) {
+      // On the arc: invert z = radius - radius*cos(a) -> a = acos(1 - z/radius).
+      const a = Math.acos(Math.min(1, Math.max(-1, 1 - z / radius)));
+      return radius * Math.sin(a) - legMargin;
     }
-    mark.position.set(x, y, 0);
-    group.add(mark);
+    // On the straight side: linear from (xEnd, zEnd) to (0, radius).
+    return Math.max(0, xEnd * (radius - z) / (radius - zEnd) - legMargin);
   }
+  // Two rows: a "back" row just past the arc (z = zEnd + a small step) and a
+  // "front" row well short of the apex, both using the shape's own safe
+  // half-width at that z so every backSweep/radius combination stays inside.
+  const zBack = zEnd + 0.02;
+  const zFront = Math.min(radius * 0.75, radius - 0.10);
+  const legPositions = [
+    { x: -safeHalfWidthAtZ(zBack) * 0.9, z: zBack },
+    { x: safeHalfWidthAtZ(zBack) * 0.9, z: zBack },
+    { x: -safeHalfWidthAtZ(zFront) * 0.9, z: zFront },
+    { x: safeHalfWidthAtZ(zFront) * 0.9, z: zFront }
+  ];
+  const legGeo = new THREE.BoxGeometry(legSize, legLen, legSize);
+  legGeo.translate(0, legLen / 2, 0);
+  legPositions.forEach((pos, i) => {
+    const leg = new THREE.Mesh(legGeo.clone(), legMat.clone());
+    leg.name = 'leg' + i;
+    leg.position.set(pos.x, 0, pos.z);
+    group.add(leg);
+  });
 
-  // Hands + hub mount flush on the wall too -- their own back face at z = 0.
-  addHands(THREE, group, r, p.handColor, p.time, detail, 0, totalDepth);
+  // Low box stretcher joining the four legs near the floor.
+  const stretcherY = 0.15;
+  const stretcherThickness = 0.018;
+  function stretcher(a, b, name) {
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const len = Math.hypot(dx, dz);
+    const geo = new THREE.BoxGeometry(len, stretcherThickness, stretcherThickness);
+    const bar = new THREE.Mesh(geo, legMat.clone());
+    bar.name = name;
+    bar.position.set((a.x + b.x) / 2, stretcherY, (a.z + b.z) / 2);
+    bar.rotation.y = -Math.atan2(dz, dx);
+    group.add(bar);
+  }
+  stretcher(legPositions[0], legPositions[1], 'stretcherBack');
+  stretcher(legPositions[2], legPositions[3], 'stretcherFront');
+  stretcher(legPositions[0], legPositions[2], 'stretcherLeft');
+  stretcher(legPositions[1], legPositions[3], 'stretcherRight');
+
   return group;
-}
-
-function buildWallClock(THREE, params, opts) {
-  const p = Object.assign({}, CLOCK_DEFAULTS, params || {});
-  const detail = opts && opts.detail === 'low';
-  const totalDepth = p.depth / 100;
-  const group = p.kind === 'diy-numerals'
-    ? buildDiyNumeralsClock(THREE, p, detail, totalDepth)
-    : buildFramedClock(THREE, p, detail, totalDepth);
-  group.name = 'furniture:wall-clock';
-  // Both builders draw centred on x = 0, back already at z = 0 and every part
-  // within [0, totalDepth] (see addHands' hub placement). Lift only in y so
-  // the bottom of the whole assembly sits at the contract's y = 0.
-  const h = p.height / 100;
-  const wrapper = new THREE.Group();
-  wrapper.name = 'furniture:wall-clock';
-  group.position.y += h / 2;
-  wrapper.add(group);
-  return wrapper;
 }
 
 export const TYPES = {
   'dining-table': { DEFAULTS: TABLE_DEFAULTS, build: buildDiningTable },
-  'dining-chair': { DEFAULTS: CHAIR_DEFAULTS, build: buildDiningChair },
-  'wall-clock': { DEFAULTS: CLOCK_DEFAULTS, build: buildWallClock }
+  'dining-chair': { DEFAULTS: CHAIR_DEFAULTS, build: buildDiningChair }
 };

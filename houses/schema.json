@@ -1179,30 +1179,43 @@
 
     "furnitureParams_dining-chair": {
       "type": "object",
-      "description": "Params for `dining-chair` (src/furniture/dining.js, TYPES['dining-chair']): a low-back chair with four straight legs, modelled from a kitchen photo of a space-saving round-table set. Each `default` equals dining.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `dining-chair` (src/furniture/dining.js, TYPES['dining-chair']): a 90-degree WEDGE (quadrant) of a cylinder -- four of these, tucked in around a common centre, form the black cylinder a `dining-table` top sits on like a lid. `radius` is the arc's radius (also this wedge's `depth`); `backSweep` is the arc's angular span in degrees (`width` derives as 2*radius*sin(backSweep/2)). Each `default` equals dining.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 45,
-          "description": "cm, along the item's local x."
+          "default": 63.6,
+          "description": "cm, DERIVED from radius/backSweep: 2*radius*sin(backSweep/2). Carried as a schema default (rather than computed) because the validator does not run JS."
         },
         "depth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 50,
-          "description": "cm, back to front."
+          "default": 45,
+          "description": "cm, equals `radius` -- apex (front) to the back-arc's centre."
         },
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 75,
-          "description": "cm, floor to the top of the low back."
+          "description": "cm, floor to the top of the curved back shell."
+        },
+        "radius": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 45,
+          "description": "cm, the wedge's arc radius -- also its `depth`. Four chairs at this radius, tucked in, form a cylinder of this radius."
+        },
+        "backSweep": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 180,
+          "default": 90,
+          "description": "degrees, the arc's angular span, centred on straight back. 90 (a quarter circle) is the nesting default -- 4 chairs exactly ring a full 360 degrees with no gap or overlap."
         },
         "seatHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 45,
+          "default": 52,
           "description": "cm, floor to the top of the seat. Clamped below `height`."
         },
         "seatColor": {
@@ -1227,7 +1240,7 @@
 
     "furnitureParams_dining-table": {
       "type": "object",
-      "description": "Params for `dining-table` (src/furniture/dining.js, TYPES['dining-table']): a round table on a slim pedestal base, modelled from a kitchen photo. `width` and `depth` both carry the diameter -- a round footprint only has one horizontal size, but the builder contract's bbox check needs both keys present and equal. Each `default` equals dining.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `dining-table` (src/furniture/dining.js, TYPES['dining-table']): a round white top on FOUR splayed square legs (no pedestal), joined by a low crossbar frame -- modelled from a kitchen photo of a space-saving nesting set. `width` and `depth` both carry the diameter -- a round footprint only has one horizontal size, but the builder contract's bbox check needs both keys present and equal. Each `default` equals dining.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": {
           "type": "number",
@@ -1249,19 +1262,25 @@
         },
         "topColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#f2f0eb"
+          "default": "#f5f5f2"
         },
         "topFinish": {
           "$ref": "#/$defs/furnitureFinish",
-          "default": "gloss"
+          "default": "matte"
         },
-        "baseColor": {
+        "legColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#1c1c1c"
+          "default": "#1a1a1a"
         },
-        "baseFinish": {
+        "legFinish": {
           "$ref": "#/$defs/furnitureFinish",
           "default": "matte"
+        },
+        "frameHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 22,
+          "description": "cm, floor to the crossbar frame's centre."
         }
       },
       "additionalProperties": false
@@ -2513,7 +2532,7 @@
 
     "furnitureParams_wall-clock": {
       "type": "object",
-      "description": "Params for `wall-clock` (src/furniture/dining.js, TYPES['wall-clock']): a working wall clock in two styles -- `framed` (a round face + rim + hands) or `diy-numerals` (numerals/dots stuck straight on the wall around a plain hands unit, matching a photo of a real DIY wall clock). `time` only sets the hands' pose at BUILD time; a live scene re-poses them continuously via dining.js's exported setClockTime(group, date) helper. Each `default` equals dining.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `wall-clock` (src/furniture/wall-clock.js): a working wall clock in two styles -- `framed` (a round face + rim + hands) or `diy-numerals` (numerals/dots stuck straight on the wall around a plain hands unit, matching a photo of a real DIY wall clock). `time` only sets the hands' pose at BUILD time; a live scene re-poses them continuously via wall-clock.js's exported setClockTime(group, date) helper. Each `default` equals wall-clock.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": {
           "type": "number",

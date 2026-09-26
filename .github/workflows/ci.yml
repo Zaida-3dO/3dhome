@@ -347,6 +347,50 @@ jobs:
           # from the vendored module.
           set -euo pipefail
           node scripts/test-digital-piano.mjs
+      - name: Dining set (nesting round table + quadrant chairs) builder contract
+        run: |
+          # Asserts the builder contract for src/furniture/dining.js
+          # (TYPES['dining-table'] and TYPES['dining-chair']): frozen
+          # DEFAULTS with numeric width/height/depth, bbox matching DEFAULTS
+          # within 0.5 cm, y=0 at the bottom, back face at z=0, and the
+          # finish/merge contract. Also: no pedestal and exactly 4 SPLAYED
+          # legs plus a crossbar frame for the table; the chair's 90-degree
+          # wedge (quadrant) shape at several radius/backSweep combinations,
+          # with its legs and stretcher verified to stay strictly inside the
+          # wedge's true boundary (arc + two straight sides -- a narrowing
+          # triangle, not a rectangle); the curved back shell's OUTER surface
+          # faces away from the wedge's own apex (sampled from the built
+          # geometry's own winding, with a mutation-probe proving a raw
+          # mirrored-scale build would fail this check); and NESTING
+          # geometry-sampling checks (round 1 review found the original
+          # arithmetic-only nesting checks hollow while the real tucked set
+          # interpenetrated): points sampled along the table's own leg and
+          # crossbar SURFACES (not just vertices -- a leg's surface can cross
+          # a thin band, like the chair seat's slab, entirely between its two
+          # vertex rings) are checked against every tucked chair's actual
+          # seat and back-shell geometry, with a mutation-probe proving a
+          # too-shallow leg inset would be caught; plus the chair back's
+          # highest point clearing the table's underside by about 1cm.
+          # dining.js had no per-module test file before this (noted on item
+          # b27ddcdd); this is that file, added alongside the wall-clock
+          # split and the nesting-set redesign (item 89769f2b).
+          set -euo pipefail
+          node scripts/test-dining.mjs
+      - name: Wall clock (framed + diy-numerals) builder contract
+        run: |
+          # Asserts the builder contract for src/furniture/wall-clock.js,
+          # split out of dining.js (item 89769f2b, 2026-09-26): frozen
+          # DEFAULTS with numeric width/height/depth, bbox matching DEFAULTS
+          # within 0.5 cm for both `kind`s, y=0 at the bottom, back face at
+          # z=0, and the finish/merge contract -- the three hand meshes and
+          # the hub (the parts that move or must stay flush at the declared
+          # depth) carry userData.keep. Also: angleForTime(date) matches the
+          # documented radians-clockwise-from-12 convention and is pure,
+          # setClockTime(group, date) rotates exactly the three named hand
+          # meshes and nothing else, and a garbage `time` string falls back
+          # to 10:10 rather than throwing.
+          set -euo pipefail
+          node scripts/test-wall-clock.mjs
       - name: WebGL failure is classified correctly
         run: |
           # Asserts which of the two WebGL failures we tell the user about. Out
