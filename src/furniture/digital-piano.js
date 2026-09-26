@@ -79,36 +79,38 @@ function buildDigitalPiano(THREE, params, opts) {
     return mesh;
   }
 
+  // ---- body slab: a slim slab whose TOP surface is keybedHM (where the
+  // keybed sits -- keybedHeight is measured to the top of the white keys,
+  // i.e. the body's top face). A real stage piano's case is much thinner
+  // than the stand is tall, so the body only occupies the top fraction of
+  // keybedHM, with the stand's legs visible below it. Back at z=0.
+  const bodyHM = Math.max(0.06, Math.min(keybedHM * 0.22, 0.12));
+  const bodyBottomM = keybedHM - bodyHM;
+  addMesh(new THREE.BoxGeometry(widthM, bodyHM, depthM), bodyMat, 0, bodyBottomM + bodyHM / 2, depthM / 2);
+
   // ---- stand: two straight legs + a crossbar, back at z=0 -------------------
   // Depth layout: the stand/body run from z=0 (back) to keybedDepthM (front,
   // the player's edge); the whole item's back face is the legs' own back
   // face, so a leg is centred at z = depthM/2 with a depth of exactly
-  // depthM -- its back face lands exactly on z=0.
+  // depthM -- its back face lands exactly on z=0. Legs run from the floor up
+  // to the underside of the body slab, so they read as visibly supporting it.
   const legW = 0.05, legSpan = widthM - 2 * p.legInset * CM;
   const legX = legSpan / 2;
-  const crossbarY = keybedHM * 0.25;
+  const crossbarY = bodyBottomM * 0.35;
   for (const s of [-1, 1]) {
     const footGeo = new THREE.BoxGeometry(legW * 3, legW * 0.6, depthM);
     addMesh(footGeo, standMat, s * legX, legW * 0.3, depthM / 2);
-    const upright = new THREE.BoxGeometry(legW, keybedHM - legW * 0.6, legW);
-    addMesh(upright, standMat, s * legX, legW * 0.6 + (keybedHM - legW * 0.6) / 2, depthM / 2);
+    const uprightH = Math.max(0.01, bodyBottomM - legW * 0.6);
+    const upright = new THREE.BoxGeometry(legW, uprightH, legW);
+    addMesh(upright, standMat, s * legX, legW * 0.6 + uprightH / 2, depthM / 2);
   }
   // crossbar between the legs
   const crossbar = new THREE.BoxGeometry(legSpan, legW * 0.7, legW * 0.7);
   addMesh(crossbar, standMat, 0, crossbarY, depthM / 2);
 
-  // ---- body / keybed slab, sits on top of the stand, back at z=0 -----------
-  // height budget above the keybed splits: most of it is the body slab, with
-  // a fixed sliver reserved for the music rest so the two always sum to
-  // exactly (heightM - keybedHM) -- keeping the built bbox equal to
-  // DEFAULTS.height regardless of restHeight.
-  const aboveKeybedM = heightM - keybedHM;
-  const restHM = Math.min(p.restHeight * CM, aboveKeybedM * 0.9);
-  const bodyHM = Math.max(0.01, aboveKeybedM - restHM);
-  addMesh(new THREE.BoxGeometry(widthM, bodyHM, depthM), bodyMat, 0, keybedHM + bodyHM / 2, depthM / 2);
-
   // key strips: one long white strip along the front edge, with a thinner
-  // black strip set back slightly to read as the black-key row.
+  // black strip set back slightly to read as the black-key row -- both
+  // flush with the body's top surface (keybedHM).
   const keyStripH = 0.02;
   const whiteKeyDepth = keybedDepthM * 0.55;
   addMesh(new THREE.BoxGeometry(widthM * 0.97, keyStripH, whiteKeyDepth), whiteKeyMat,
@@ -119,9 +121,30 @@ function buildDigitalPiano(THREE, params, opts) {
       0, keybedHM + keyStripH * 1.4 / 2 + 0.002, depthM - whiteKeyDepth - blackKeyDepth / 2 - 0.01);
   }
 
-  // ---- music rest: a thin upright panel at the very back of the body -------
-  addMesh(new THREE.BoxGeometry(widthM * 0.9, restHM, 0.015), bodyMat,
-    0, keybedHM + bodyHM + restHM / 2, 0.01);
+  // ---- music rest: an upright panel standing up from the back of the body --
+  // Upright extent pinned to exactly (heightM - keybedHM), so the overall
+  // envelope always equals DEFAULTS.height. restHeight only affects how far
+  // the panel LEANS BACK past the body's back face (visual only, since a
+  // reclined rest reads as shallower); it never changes the panel's own
+  // upright reach.
+  const uprightM = Math.max(0.01, heightM - keybedHM);
+  const restLean = Math.min(0.4, (p.restHeight * CM) / Math.max(uprightM, 0.01) * 0.3);
+  const restThickness = 0.02;
+  // The panel is drawn slightly LONGER than uprightM so that once leaned back
+  // by restLean its vertical (y) projection is exactly uprightM again --
+  // otherwise leaning would shrink the built bbox below DEFAULTS.height.
+  const panelLen = uprightM / Math.cos(restLean);
+  const restGeo = new THREE.BoxGeometry(widthM * 0.9, panelLen, restThickness);
+  // Pivot at the bottom-back edge of the panel (body's back-top corner), then
+  // lean it back by restLean radians -- geometry translated so the pivot is
+  // at its own local origin before rotation.
+  restGeo.translate(0, panelLen / 2, restThickness / 2);
+  const rest = new THREE.Mesh(restGeo, bodyMat);
+  rest.position.set(0, keybedHM, 0);
+  rest.rotation.x = restLean;
+  rest.castShadow = true; rest.receiveShadow = true;
+  if (isKeptFinish(bodyMat.userData.finish)) rest.userData.keep = true;
+  group.add(rest);
 
   group.userData = { type: 'digital-piano', params: p, detail: full ? 'full' : 'low' };
   return group;
