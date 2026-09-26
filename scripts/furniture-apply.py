@@ -36,8 +36,8 @@ Algorithm (§A5, replacing the original plan text -- read this, not §4):
 On any failure at any step, the live file is left byte-identical to how it
 started. This script never touches the .sh3d source.
 
-**This DOES run against a network share in real use.** The private house's
-real geometry.json lives on an SMB mount (`X:/projects/3dhome/house/`), so
+**This DOES run against a network share in real use.** A private house's
+real geometry.json typically lives on an SMB mount, so
 both the swap and the mtime guard need to behave correctly there, not just on
 a local disk:
 - `os.replace()` is atomic for a rename-with-replace on the SAME SMB share,

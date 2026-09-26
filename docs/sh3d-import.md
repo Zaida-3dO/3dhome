@@ -226,7 +226,7 @@ started.
 
 ### Running against a network share
 
-The real target, `X:/projects/3dhome/house/geometry.json`, is on an **SMB
+A private house's real geometry.json commonly lives on an **SMB
 mount**, not a local disk. `os.replace()`'s atomicity guarantee holds there
 too, for the same reason it holds locally: the temp file is always written
 into the **same directory** as the live file (never a different mount), so
