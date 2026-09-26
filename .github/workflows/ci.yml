@@ -183,6 +183,17 @@ jobs:
           # closed blackout shuts the daylight out while a sheer dims and warms it.
           set -euo pipefail
           node scripts/test-curtain-binding.mjs
+      - name: Curtain slider command mapping and availability
+        run: |
+          # Asserts the sidebar curtain slider's write path: slider value ->
+          # cover.set_cover_position payload (clamp/round, single vs
+          # multi-motor fan-out, null when nothing is bound), and the
+          # unavailable/unknown -> disabled-slider signal (any down motor on a
+          # multi-motor curtain disables the whole slider, flips back on a
+          # real reading, fires only on an actual change, and reports null --
+          # not false -- before any reading has ever arrived).
+          set -euo pipefail
+          node scripts/test-curtain-slider-command.mjs
       - name: Gaming chair builder
         run: |
           # Asserts src/furniture/gaming-chair.js: the furniture frame (floor at

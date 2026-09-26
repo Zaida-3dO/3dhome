@@ -13,6 +13,40 @@
  *   ha.connect();
  */
 
+/**
+ * Slider value -> a `cover.set_cover_position` call, fanned out to every
+ * motor bound to a curtain. Pure and framework-free on purpose: the sidebar
+ * slider is the only caller today, but the mapping (clamp/round the position,
+ * turn one or several bound entity ids into one target) is exactly the kind
+ * of thing that is easy to get subtly wrong inline in a DOM handler and hard
+ * to unit-test there. `entities` is the `sensors.curtains[<curtainId>]` array
+ * from rooms.json -- it may be empty/missing (curtain not bound to any real
+ * cover) or hold several ids (multi-motor track), same shape callService()
+ * already expects for its `target.entity_id`.
+ *
+ * Returns null when there is nothing to send: no bound entities, OR pct is
+ * not a finite number. The latter matters because these numbers drive a
+ * physical motor -- `+pct || 0` would silently turn NaN/undefined/a string
+ * into position 0 (fully CLOSE), which is the one failure mode with no safe
+ * default. No current caller can produce a non-numeric pct (the slider's
+ * `+e.target.value` always yields a number for a range input), but the
+ * fail-safe is "send nothing" regardless of whether today's call sites can
+ * reach it.
+ */
+function coverPositionCommand(pct, entities) {
+  const ids = Array.isArray(entities) ? entities.filter(Boolean) : (entities ? [entities] : []);
+  if (!ids.length) return null;
+  const n = +pct;
+  if (!isFinite(n)) return null;
+  const position = Math.max(0, Math.min(100, Math.round(n)));
+  return {
+    domain: 'cover',
+    service: 'set_cover_position',
+    data: { position },
+    target: { entity_id: ids.length === 1 ? ids[0] : ids.slice() }
+  };
+}
+
 export const HAClient = (() => {
 
   function create(opts) {
@@ -42,6 +76,7 @@ export const HAClient = (() => {
     const doorCallbacks = [];
     const curtainCallbacks = [];
     const corniceCallbacks = [];
+    const curtainAvailabilityCallbacks = [];
 
     // Reverse index: entityId -> { roomId, group }
     const entityIndex = new Map();
@@ -106,6 +141,17 @@ export const HAClient = (() => {
     const fittingGroups = { curtain: {}, cornice: {} };
     const fittingEntity = new Map();
     const fittingResolved = { curtain: new Map(), cornice: new Map() };
+    // Curtain availability, tracked SEPARATELY from fittingEntity/parseCover:
+    // parseCover deliberately returns null (no event, keep the last reading)
+    // for 'unavailable'/'unknown', which is exactly right for position but
+    // wrong for a slider's enabled state -- the sidebar needs to know a motor
+    // has dropped off even though its last-known position is being held.
+    // curtainEntityAvailable: entityId -> bool, raw per-entity input to the OR.
+    // curtainAvailable: targetId -> bool, last resolved (any motor down ->
+    // whole curtain unavailable, since one dead motor on a multi-motor track
+    // means the slider can no longer promise to move the whole curtain).
+    const curtainEntityAvailable = new Map();
+    const curtainAvailable = new Map();
     if (sensors) {
       const indexFitting = (kind, map) => {
         Object.entries(map || {}).forEach(([targetId, entities]) => {
@@ -178,11 +224,20 @@ export const HAClient = (() => {
      * Fold one cover/cornice entity into its curtain's resolved value and
      * notify ONLY when that value actually changed -- same reasoning as the
      * sensor path: an attribute-only republish must not become a render.
+     * Returns true if the curtain/cornice VALUE callback fired (pre-existing
+     * contract, depended on by callers that request a render on a truthy
+     * result). Availability is a SEPARATE signal on its own callback list --
+     * see maybeUpdateCurtainAvailability -- and never changes this return
+     * value, so an availability-only flip (no position/cornice change) still
+     * correctly reports false here.
      */
     function processFittingUpdate(entityId, haState) {
       const mapping = fittingIndex.get(entityId);
       if (!mapping) return false;
       const { kind, targetId } = mapping;
+
+      if (kind === 'curtain') maybeUpdateCurtainAvailability(entityId, targetId, haState);
+
       const reading = kind === 'curtain' ? parseCover(haState) : parseCorniceLight(haState);
       if (!reading) return false;
       fittingEntity.set(entityId, reading);
@@ -195,6 +250,36 @@ export const HAClient = (() => {
         try { cb(targetId, resolved); } catch (e) { console.warn('HAClient fittingCb:', e); }
       });
       return true;
+    }
+
+    /**
+     * Curtain availability, independent of the position path above: a
+     * slider must disable the moment its motor drops off even though
+     * parseCover() is (correctly) holding the last known position rather
+     * than firing a change. ANY bound motor unavailable/unknown resolves the
+     * WHOLE curtain unavailable -- a multi-motor track cannot honour a
+     * position command if only some of its motors can hear it. A motor that
+     * has never reported AT ALL counts the same as unavailable, not as
+     * available-by-default: curtainEntityAvailable.get(eid) is undefined
+     * until a first real reading arrives, and `every(... !== false)` would
+     * treat that undefined as passing -- exactly the gap a code review found
+     * (round 1), where a bound-but-silent motor left the curtain enabled on
+     * the other motor's reading alone, with commands still fanning out to the
+     * one entity nobody has ever heard from. `=== true` closes that: only an
+     * entity that has explicitly reported available counts. Notifies only on
+     * an actual flip, same discipline as every other fitting/sensor path.
+     */
+    function maybeUpdateCurtainAvailability(entityId, targetId, haState) {
+      const available = haState.state !== 'unavailable' && haState.state !== 'unknown';
+      if (curtainEntityAvailable.get(entityId) === available) return;
+      curtainEntityAvailable.set(entityId, available);
+      const group = fittingGroups.curtain[targetId] || [];
+      const resolvedAvailable = group.every(eid => curtainEntityAvailable.get(eid) === true);
+      if (curtainAvailable.get(targetId) === resolvedAvailable) return;
+      curtainAvailable.set(targetId, resolvedAvailable);
+      curtainAvailabilityCallbacks.forEach(cb => {
+        try { cb(targetId, resolvedAvailable); } catch (e) { console.warn('HAClient curtainAvailabilityCb:', e); }
+      });
     }
 
     function sensorCallbacksFor(kind) {
@@ -487,8 +572,14 @@ export const HAClient = (() => {
     }
 
     function callServiceDebounced(domain, service, data, target, debounceKey, delayMs) {
-      if (delayMs <= 0) { callService(domain, service, data, target); return; }
+      // ALWAYS clear first, even on the immediate (delayMs<=0) path: a caller
+      // that debounces on 'input' and then sends immediately on 'change' (the
+      // curtain slider does exactly this, to guarantee the final value on a
+      // release that lands inside the debounce window) would otherwise get
+      // its own pending timer firing ~delayMs later and re-sending the same
+      // command a second time. One user action, one command.
       clearTimeout(debounceTimers[debounceKey]);
+      if (delayMs <= 0) { callService(domain, service, data, target); return; }
       debounceTimers[debounceKey] = setTimeout(() => callService(domain, service, data, target), delayMs);
     }
 
@@ -506,6 +597,20 @@ export const HAClient = (() => {
       // and cb(curtainId, { on, bri, color }). Fired only on a real change.
       onCurtainChange(cb) { curtainCallbacks.push(cb); },
       onCorniceChange(cb) { corniceCallbacks.push(cb); },
+      // cb(curtainId, available). Fired only when the OR-across-motors
+      // availability actually flips -- 'unavailable'/'unknown' on ANY bound
+      // motor resolves the whole curtain unavailable, since a slider cannot
+      // promise to move a track it can only partly reach. Independent of
+      // onCurtainChange: a dropped motor disables the slider immediately even
+      // though the last known position keeps being shown (parseCover's
+      // "hold, don't invent" contract for position is unaffected).
+      onCurtainAvailabilityChange(cb) { curtainAvailabilityCallbacks.push(cb); },
+      // Last resolved availability for a curtain id, or null before any
+      // reading has arrived (bound but never heard from -- panel should
+      // treat "no reading yet" the same as "unavailable": nothing to send to).
+      getCurtainAvailable(curtainId) {
+        return curtainAvailable.has(curtainId) ? curtainAvailable.get(curtainId) : null;
+      },
       onStatusChange(cb) { statusCallbacks.push(cb); },
       // Test/diagnostic seam: drive a sensor without a live HA socket. Returns
       // true if the resolved boolean changed (and callbacks fired).
@@ -513,7 +618,10 @@ export const HAClient = (() => {
         return processSensorUpdate(entityId, { state });
       },
       // Same seam for a cover or cornice light: pass the full HA state object
-      // ({ state, attributes }). Returns true if a callback fired.
+      // ({ state, attributes }). Returns true if the curtain/cornice VALUE
+      // callback fired. An availability-only flip (see
+      // onCurtainAvailabilityChange) still returns false here -- check
+      // getCurtainAvailable() or the availability callback for that signal.
       _injectFittingState(entityId, haState) {
         return processFittingUpdate(entityId, haState);
       },
@@ -583,5 +691,5 @@ export const HAClient = (() => {
     }
   }  // end fetchInitialState
 
-  return { create, fetchInitialState };
+  return { create, fetchInitialState, coverPositionCommand };
 })();
