@@ -24,13 +24,21 @@
  * cover) or hold several ids (multi-motor track), same shape callService()
  * already expects for its `target.entity_id`.
  *
- * Returns null when there is nothing to send (no bound entities), so a caller
- * can skip the service call entirely rather than sending an empty target.
+ * Returns null when there is nothing to send: no bound entities, OR pct is
+ * not a finite number. The latter matters because these numbers drive a
+ * physical motor -- `+pct || 0` would silently turn NaN/undefined/a string
+ * into position 0 (fully CLOSE), which is the one failure mode with no safe
+ * default. No current caller can produce a non-numeric pct (the slider's
+ * `+e.target.value` always yields a number for a range input), but the
+ * fail-safe is "send nothing" regardless of whether today's call sites can
+ * reach it.
  */
 function coverPositionCommand(pct, entities) {
   const ids = Array.isArray(entities) ? entities.filter(Boolean) : (entities ? [entities] : []);
   if (!ids.length) return null;
-  const position = Math.max(0, Math.min(100, Math.round(+pct || 0)));
+  const n = +pct;
+  if (!isFinite(n)) return null;
+  const position = Math.max(0, Math.min(100, Math.round(n)));
   return {
     domain: 'cover',
     service: 'set_cover_position',
@@ -250,15 +258,23 @@ export const HAClient = (() => {
      * parseCover() is (correctly) holding the last known position rather
      * than firing a change. ANY bound motor unavailable/unknown resolves the
      * WHOLE curtain unavailable -- a multi-motor track cannot honour a
-     * position command if only some of its motors can hear it. Notifies only
-     * on an actual flip, same discipline as every other fitting/sensor path.
+     * position command if only some of its motors can hear it. A motor that
+     * has never reported AT ALL counts the same as unavailable, not as
+     * available-by-default: curtainEntityAvailable.get(eid) is undefined
+     * until a first real reading arrives, and `every(... !== false)` would
+     * treat that undefined as passing -- exactly the gap a code review found
+     * (round 1), where a bound-but-silent motor left the curtain enabled on
+     * the other motor's reading alone, with commands still fanning out to the
+     * one entity nobody has ever heard from. `=== true` closes that: only an
+     * entity that has explicitly reported available counts. Notifies only on
+     * an actual flip, same discipline as every other fitting/sensor path.
      */
     function maybeUpdateCurtainAvailability(entityId, targetId, haState) {
       const available = haState.state !== 'unavailable' && haState.state !== 'unknown';
       if (curtainEntityAvailable.get(entityId) === available) return;
       curtainEntityAvailable.set(entityId, available);
       const group = fittingGroups.curtain[targetId] || [];
-      const resolvedAvailable = group.every(eid => curtainEntityAvailable.get(eid) !== false);
+      const resolvedAvailable = group.every(eid => curtainEntityAvailable.get(eid) === true);
       if (curtainAvailable.get(targetId) === resolvedAvailable) return;
       curtainAvailable.set(targetId, resolvedAvailable);
       curtainAvailabilityCallbacks.forEach(cb => {
@@ -556,8 +572,14 @@ export const HAClient = (() => {
     }
 
     function callServiceDebounced(domain, service, data, target, debounceKey, delayMs) {
-      if (delayMs <= 0) { callService(domain, service, data, target); return; }
+      // ALWAYS clear first, even on the immediate (delayMs<=0) path: a caller
+      // that debounces on 'input' and then sends immediately on 'change' (the
+      // curtain slider does exactly this, to guarantee the final value on a
+      // release that lands inside the debounce window) would otherwise get
+      // its own pending timer firing ~delayMs later and re-sending the same
+      // command a second time. One user action, one command.
       clearTimeout(debounceTimers[debounceKey]);
+      if (delayMs <= 0) { callService(domain, service, data, target); return; }
       debounceTimers[debounceKey] = setTimeout(() => callService(domain, service, data, target), delayMs);
     }
 

@@ -1103,9 +1103,31 @@
       // Curtain ids the user is actively dragging: a live onCurtainChange /
       // onCurtainAvailabilityChange arriving mid-drag must not repaint the
       // panel and yank the slider out from under the pointer. Added on the
-      // slider's first 'input' and removed on 'change' (fires once on
-      // release), so it spans exactly the drag and no longer.
+      // slider's first 'input'. Cleared on 'change' (release), on
+      // 'pointercancel'/'blur' (a drag that ends without 'change' ever
+      // firing), and UNCONDITIONALLY at the top of every room-detail
+      // renderPanel() call, right before the innerHTML replace that builds
+      // the new panel: if a re-render happens mid-drag for an unrelated
+      // reason -- another light or door changing, or the OTHER curtain in
+      // this room reporting -- the slider element the lock refers to is
+      // about to be destroyed, so 'change' can never fire on it and the id
+      // used to stay locked forever (code review finding, PR #40 round 1).
+      // Clearing the whole set on every render is safe because the render
+      // itself is what makes the lock's job moot: the fresh markup it
+      // produces always reads home.getCurtainOpen() at build time, so it is
+      // never stale regardless of drag state.
       const curtainDragging = new Set();
+      // Position actually SENT to HA per curtain id during the CURRENT drag
+      // (not the slider's displayed value, and reset at the start of every
+      // new drag -- see the 'input' handler below): guards against sending
+      // the same position twice within one drag-then-release, which matters
+      // most on 'change' immediately after an 'input' already sent that
+      // exact value (a keyboard nudge, or a release that lands squarely on
+      // the last debounced value). Deliberately NOT a cross-drag cache: a
+      // curtain HA reports at position X at some earlier, unrelated time
+      // (a physical remote, or a previous drag's settled value) must not
+      // suppress a genuine new command to move it back to X later.
+      const curtainLastSent = new Map();
       // Last resolved availability per curtain id, mirrored from
       // ha.onCurtainAvailabilityChange (or the __home3dSensors.curtainAvailable
       // test seam, which drives this exact map -- same idiom as doorSensorOpen
@@ -1808,14 +1830,25 @@
 
       // Curtain slider -> HA. Fans out to every motor bound to this curtain
       // (HAClient.coverPositionCommand handles the single-vs-multi-motor
-      // target shape and the clamp/round -- see its unit tests in
-      // scripts/test-curtain-slider-command.mjs) via the same debounced-send
-      // idiom as sendToHA above, keyed per curtain so two curtains' drags
-      // never cancel each other's pending timer.
+      // target shape, the clamp/round, and refusing a non-numeric position --
+      // see its unit tests in scripts/test-curtain-slider-command.mjs) via the
+      // same debounced-send idiom as sendToHA above, keyed per curtain so two
+      // curtains' drags never cancel each other's pending timer.
+      //
+      // De-duped against curtainLastSent on the RESOLVED position (post
+      // clamp/round, i.e. what would actually reach the motor): a release
+      // that lands exactly on the value the debounced 'input' send already
+      // queued must send that command ONCE, not twice. callServiceDebounced
+      // itself now also clears its own pending timer before an immediate
+      // send (see ha-client.js), which is the other half of this fix -- this
+      // half stops a redundant send from being scheduled at all when the
+      // value genuinely has not changed.
       function sendCurtainToHA(curtainId, pct, debounceMs) {
         if (!ha) return;
         const cmd = HAClient.coverPositionCommand(pct, curtainEntities.get(curtainId));
         if (!cmd) return;
+        if (curtainLastSent.get(curtainId) === cmd.data.position) return;
+        curtainLastSent.set(curtainId, cmd.data.position);
         ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target, 'curtain-' + curtainId, debounceMs || 0);
       }
 
@@ -2196,6 +2229,16 @@
           }
 
           html += '</div>';
+          // The elements any in-progress curtain drag was locking against are
+          // about to be destroyed by the innerHTML replace below, so the lock
+          // can only ever be stale past this point -- clear it here rather
+          // than relying solely on 'change' (mouse-up), which never fires
+          // when a re-render (an unrelated light/door change, or the OTHER
+          // curtain in this room reporting) replaces the slider out from
+          // under an active pointer drag. This was the leak the code review
+          // found in round 1: the lock stuck forever and that curtain's
+          // position/availability updates silently stopped repainting.
+          curtainDragging.clear();
           panelBody.innerHTML = html;
 
           // Wire up controls with HA integration
@@ -2236,7 +2279,18 @@
               const curtainId = el.dataset.curtain;
               el.addEventListener('input', e => {
                 const pct = +e.target.value;
-                curtainDragging.add(curtainId); // don't let a live reading yank this slider mid-drag
+                if (!curtainDragging.has(curtainId)) {
+                  // First 'input' of a NEW drag: forget whatever this curtain
+                  // last sent. curtainLastSent must only dedupe WITHIN one
+                  // drag-then-release (the double-send this fixes) -- it must
+                  // never suppress a send because HA reported the curtain
+                  // sitting at this position at some earlier, unrelated time
+                  // (a physical remote, or last drag's settled value), which
+                  // would silently drop a genuine new command to a physical
+                  // motor.
+                  curtainLastSent.delete(curtainId);
+                  curtainDragging.add(curtainId); // don't let a live reading yank this slider mid-drag
+                }
                 home.setCurtainOpen(curtainId, pct, null);
                 el.previousElementSibling.textContent = `Open: ${pct}%`;
                 sendCurtainToHA(curtainId, pct, 200);
@@ -2246,12 +2300,25 @@
               // the common case -- but a drag that ends in the last 200ms
               // window needs its OWN send so the final value is never dropped,
               // and this is also the signal to let onCurtainChange repaint the
-              // slider again.
+              // slider again. sendCurtainToHA no-ops if this exact position was
+              // already sent (curtainLastSent), so the common case where the
+              // debounced 'input' send already landed this value costs one
+              // Map lookup and nothing else -- never a second motor command
+              // for the same release.
+              const endDrag = () => curtainDragging.delete(curtainId);
               el.addEventListener('change', e => {
-                const pct = +e.target.value;
-                sendCurtainToHA(curtainId, pct, 0);
-                curtainDragging.delete(curtainId);
+                sendCurtainToHA(curtainId, +e.target.value, 0);
+                endDrag();
               });
+              // Belt-and-braces beyond the innerHTML-replace clear above: a
+              // drag can end without 'change' ever firing at all (pointer
+              // released outside the window, captured then cancelled, or the
+              // tab loses focus mid-drag), and none of those replace this
+              // element. Each still leaves the lock exactly where 'change'
+              // would have -- released, nothing sent (there is no committed
+              // new value to send on a cancel/blur).
+              el.addEventListener('pointercancel', endDrag);
+              el.addEventListener('blur', endDrag);
             }
             if (action === 'door-open') el.addEventListener('input', e => {
               const pct = +e.target.value;
