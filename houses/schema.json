@@ -1170,8 +1170,60 @@
 
     "furnitureParams_standing-desk": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `standing-desk`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `standing-desk` (src/furniture/standing-desk.js): a sit-stand desk, rectangular top on two T-foot telescoping legs. width/depth/height are the OVERALL ENVELOPE at the default pose (height = topHeight + topThickness); topHeight is the separate sit-stand-adjustable input, clamped to [minHeight, maxHeight]. Each `default` equals standing-desk.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 120,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 80,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 98.5,
+          "description": "cm, floor (or `elevation`) to the top surface, at the default pose: topHeight + topThickness."
+        },
+        "topHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 96,
+          "description": "cm, floor to the underside of the desk top -- the sit-stand-adjustable input, clamped to [minHeight, maxHeight]."
+        },
+        "minHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 72,
+          "description": "cm, the lowest `topHeight` (sit)."
+        },
+        "maxHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 120,
+          "description": "cm, the highest `topHeight` (stand)."
+        },
+        "topThickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 2.5,
+          "description": "cm, thickness of the desk top slab."
+        },
+        "topColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f4f2ee"
+        },
+        "frameColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f2f1ec"
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_tv": {

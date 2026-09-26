@@ -194,6 +194,21 @@ jobs:
           # detail genuinely cheaper. See the script's header.
           set -euo pipefail
           node scripts/test-gaming-chair.mjs
+      - name: Standing desk builder geometry and height clamp
+        run: |
+          # Asserts src/furniture/standing-desk.js against the generic
+          # furniture contract (bbox vs DEFAULTS within 0.5cm, x centred,
+          # bottom y=0, back z=0, finish/keep tags, low <= full triangles --
+          # already covered for every registered type by
+          # test-furniture-core.mjs below) plus the desk-specific behaviour a
+          # screenshot cannot pin: a requested topHeight outside
+          # [minHeight, maxHeight] is CLAMPED rather than honoured (the sit-
+          # stand slider's acceptance criterion), an absent topHeight
+          # defaults to the range midpoint, and the two T-foot legs visibly
+          # telescope (the upper stage's extension grows with topHeight while
+          # the lower sleeve and its overlap stay fixed).
+          set -euo pipefail
+          node scripts/test-standing-desk.mjs
       - name: WebGL failure is classified correctly
         run: |
           # Asserts which of the two WebGL failures we tell the user about. Out
