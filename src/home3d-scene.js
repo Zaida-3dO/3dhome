@@ -2417,7 +2417,9 @@ export const Home3DScene = (() => {
         // intensity by it, so on/off, brightness and colour work as before.
         const emitters = ls.splice(0, ls.length);
         collapseEmitters(emitters, { minX: tx(rm.x1), maxX: tx(rm.x2), minZ: tz(rm.y1), maxZ: tz(rm.y2) },
-          { merge: g.fixtureType !== 'strip', floorY: FY })
+          { merge: g.fixtureType !== 'strip', floorY: FY, houseBox: HOUSE.footprint ? {
+            minX: tx(HOUSE.footprint.minX), maxX: tx(HOUSE.footprint.maxX),
+            minZ: tz(HOUSE.footprint.minY), maxZ: tz(HOUSE.footprint.maxY) } : null })
           .forEach(m => {
             const pl = new THREE.PointLight(tint, 0.6, m.distance, m.decay);
             pl.position.set(m.x, m.y, m.z);

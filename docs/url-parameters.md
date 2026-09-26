@@ -279,13 +279,15 @@ By default the tier is detected on two axes (`src/quality-tier.js`):
 - **A mobile GPU.** This is true when the GPU's renderer string names Mali,
   Immortalis, Adreno, PowerVR or Xclipse, or names "Apple GPU" on iOS or
   iPadOS. Failing that, it is true for Android or iOS/iPadOS with a coarse
-  pointer. A mobile GPU is capped at `mid`, which means:
+  pointer. A mobile-class GPU in a desktop OS without a touch pointer (a
+  Snapdragon X Windows laptop's Adreno) is not treated as mobile. A mobile GPU
+  is capped at `mid`, which means:
   - no room-shadow lights, even with `?shadows=high`
   - a pixel-ratio ceiling of 1.5
   - no `priority: "minor"` furniture
 
-`?tier=` wins over the mobile cap, which is what makes it an A/B knob on a
-tablet. It never goes **above** what the uniform budget compiles: `?tier=ultra`
+`?tier=` wins over the mobile cap, and lifts the pixel-ratio ceiling and the
+minor-furniture skip with it, which is what makes it an A/B knob on a tablet. It never goes **above** what the uniform budget compiles: `?tier=ultra`
 on a 256-vector phone stays `low`, because the ultra shader would not compile
 and nothing would render. The detected values, including `mobileGpu`, the
 reason for it and the light counts, are printed in the console's

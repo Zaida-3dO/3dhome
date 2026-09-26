@@ -16,13 +16,14 @@
  * farthest pair, each joining the nearer end. A long room's downlights are
  * therefore two lights, one per end; a tight cluster in a long room is one.
  *
- * HOW BRIGHT the merged light is: the intensity that gives the room's floor
- * the same MEAN irradiance the separate fixtures gave it, computed with
- * three.js's own punctual-light falloff (inverse power `decay`, windowed to
- * `distance`) and the floor's cosine term, sampled over the room. Summing
- * the intensities instead over-lights a room -- one light at the centre puts
- * more of its light on the floor than N spread towards the walls -- by 8-17%
- * on the fixture house and ~9% on the demo's lounge.
+ * HOW BRIGHT the merged light is: the intensity that gives the floor the
+ * same MEAN irradiance the separate fixtures gave it, computed with three.js's
+ * own punctual-light falloff (inverse power `decay`, windowed to `distance`)
+ * and the floor's cosine term, over matchPoints(): the room's open floor plus
+ * the neighbouring floor within MATCH_MARGIN_M (room lights are unshadowed
+ * and light the rooms next door through the walls). Summing intensities
+ * instead over-lit merged rooms by 8-17%. Measured on rendered frames the
+ * match holds each room within about +-3% (see the PR for the per-room table).
  *
  * Linear strips are NOT merged (opts.merge false, as the scene passes for
  * fixtureType 'strip'): a strip's light is a short-range glow on the surface
@@ -37,8 +38,20 @@
 /** Fixtures further apart than this (metres) are never one light. */
 export const SPREAD_M = 2.5;
 
+/**
+ * The floor the irradiance is matched over: the room grown by this much on
+ * every side (metres). Room lights are unshadowed, so a room's lights also
+ * light its neighbours' floors through the walls; matching the room alone
+ * let a merged light (brighter at the centre, reaching further) over-light
+ * the rooms around it.
+ */
+export const MATCH_MARGIN_M = 2.5;
+
+/** The share of each side of the room left out of the match (the ring by the walls). */
+const EDGE_RING = 0.1;
+
 /** Floor samples per axis when matching irradiance. */
-const SAMPLES = 12;
+const SAMPLES = 24;
 
 /** three.js's punctual light attenuation (physically correct lights, r155+). */
 export function attenuation(d, cutoff, decay) {
@@ -72,6 +85,31 @@ function floorGrid(box, floorY) {
 }
 
 /**
+ * The floor points a merged light's irradiance is matched over: the room
+ * grown by MATCH_MARGIN_M on every side, clipped to the house (opts.houseBox:
+ * light that falls outside it lands on nothing anyone looks at), without the
+ * room's own outer ring (EDGE_RING of each side: the floor right against the
+ * walls is mostly hidden by them and by furniture).
+ */
+export function matchPoints(roomBox, opts) {
+  const o = opts || {};
+  const box = { minX: Math.min(roomBox.minX, roomBox.maxX), maxX: Math.max(roomBox.minX, roomBox.maxX),
+    minZ: Math.min(roomBox.minZ, roomBox.maxZ), maxZ: Math.max(roomBox.minZ, roomBox.maxZ) };
+  const grow = o.matchMarginM != null ? o.matchMarginM : MATCH_MARGIN_M;
+  const floorY = o.floorY != null ? o.floorY : 0;
+  const hb = o.houseBox;
+  const rx = (box.maxX - box.minX) * EDGE_RING, rz = (box.maxZ - box.minZ) * EDGE_RING;
+  return floorGrid({ minX: box.minX - grow, maxX: box.maxX + grow, minZ: box.minZ - grow, maxZ: box.maxZ + grow }, floorY)
+    .filter(([px, , pz]) => !hb || (px >= Math.min(hb.minX, hb.maxX) && px <= Math.max(hb.minX, hb.maxX) &&
+      pz >= Math.min(hb.minZ, hb.maxZ) && pz <= Math.max(hb.minZ, hb.maxZ)))
+    .filter(([px, , pz]) => {
+      const inRoom = px >= box.minX && px <= box.maxX && pz >= box.minZ && pz <= box.maxZ;
+      const inInner = px >= box.minX + rx && px <= box.maxX - rx && pz >= box.minZ + rz && pz <= box.maxZ - rz;
+      return !inRoom || inInner;
+    });
+}
+
+/**
  * @param {Array<{x:number, y:number, z:number, intensity:number, distance:number, decay:number}>} emitters
  *        metres, world space; `intensity` is each fixture light's base weight
  * @param {{minX:number, maxX:number, minZ:number, maxZ:number}} roomBox
@@ -81,6 +119,8 @@ function floorGrid(box, floorY) {
  * @param {boolean} [opts.merge]    false: one light per emitter, unchanged (strips)
  * @param {number} [opts.floorY]    floor height, default 0
  * @param {number} [opts.spreadM]   default SPREAD_M
+ * @param {Object} [opts.houseBox]  {minX,maxX,minZ,maxZ}: the irradiance match ignores floor outside it
+ * @param {number} [opts.matchMarginM] default MATCH_MARGIN_M
  * @returns {Array<{x, y, z, intensity, distance, decay, count, members}>}
  *          `members` indexes into the (finite) emitters
  */
@@ -93,7 +133,6 @@ export function collapseEmitters(emitters, roomBox, opts) {
   const idx = list.map((e, i) => i);
   if (o.merge === false) return idx.map(single);
   const spreadM = o.spreadM != null ? o.spreadM : SPREAD_M;
-  const floorY = o.floorY != null ? o.floorY : 0;
   const box = { minX: Math.min(roomBox.minX, roomBox.maxX), maxX: Math.max(roomBox.minX, roomBox.maxX),
     minZ: Math.min(roomBox.minZ, roomBox.maxZ), maxZ: Math.max(roomBox.minZ, roomBox.maxZ) };
 
@@ -109,7 +148,7 @@ export function collapseEmitters(emitters, roomBox, opts) {
     }
   }
 
-  const grid = floorGrid(box, floorY);
+  const grid = matchPoints(box, o);
   return groups.map(g => {
     if (g.length === 1) return single(g[0]);   // a lone fixture is left exactly as it was
     let wsum = 0, x = 0, y = 0, z = 0;

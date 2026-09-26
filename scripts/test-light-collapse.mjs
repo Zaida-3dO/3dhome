@@ -91,12 +91,21 @@ const E = (x, z, extra) => Object.assign({ x, y: 2.4, z, intensity: 1, distance:
   const room = { minX: 0, maxX: 3.9, minZ: 0, maxZ: 3.3 };
   const dl = [E(1, 1), E(2, 1), E(3, 1), E(1, 2.3), E(2, 2.3), E(3, 2.3)].map(e => Object.assign(e, { y: 2.43, distance: 7 }));
   const mm = L.collapseEmitters(dl, room)[0];
-  const meanE = lights => { let s = 0, n = 0; for (let i = 0; i < 40; i++) for (let j = 0; j < 40; j++) {
-    const px = room.minX + (room.maxX - room.minX) * (i + 0.5) / 40, pz = room.minZ + (room.maxZ - room.minZ) * (j + 0.5) / 40;
-    lights.forEach(l => { s += (l.intensity || 0) * L.floorIrradiance(l, px, 0, pz); }); n++; } return s / n; };
+  const pts = L.matchPoints(room, {});
+  const meanE = lights => { let t = 0; pts.forEach(([px, py, pz]) => lights.forEach(l => {
+    t += (l.intensity || 0) * L.floorIrradiance(l, px, py, pz); })); return t / pts.length; };
   const before = meanE(dl), after = meanE([mm]);
-  check('merged light matches the floor\'s mean irradiance (within 2% on an independent 40x40 grid)',
-    Math.abs(after / before - 1) < 0.02, { before, after });
+  check('merged light matches the mean irradiance over its match points',
+    Math.abs(after / before - 1) < 1e-9, { before, after });
+  // The match region: the room's open floor plus a margin, clipped to the
+  // house, without the ring along the room's own walls.
+  const inside = (p, b) => p[0] >= b.minX && p[0] <= b.maxX && p[2] >= b.minZ && p[2] <= b.maxZ;
+  check('match region reaches past the room (neighbouring floor counts)', pts.some(p => !inside(p, room)));
+  check('match region leaves out the ring along the room walls', !pts.some(p => inside(p, room) &&
+    (p[0] < room.minX + 0.39 - 1e-9 || p[0] > room.maxX - 0.39 + 1e-9)));
+  const clipped = L.matchPoints(room, { houseBox: { minX: 0, maxX: 10, minZ: 0, maxZ: 10 } });
+  check('match region is clipped to the house', clipped.length > 0 && clipped.every(p => p[0] >= 0 && p[2] >= 0) &&
+    clipped.length < pts.length);
   check('...which is LESS than the summed intensity (a central light over-lights the floor)', mm.intensity < 6, mm.intensity);
   check('three.js falloff: 1/max(d^decay, 0.01), windowed to the cutoff',
     near(L.attenuation(2, 0, 2), 0.25) && near(L.attenuation(2, 4, 2), 0.25 * Math.pow(1 - 1 / 16, 2)) && L.attenuation(5, 4, 2) === 0);
@@ -109,7 +118,7 @@ const E = (x, z, extra) => Object.assign({ x, y: 2.4, z, intensity: 1, distance:
   const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
   const builders = src.slice(src.indexOf('const addDownlight = '), src.indexOf('const fixtureY = '));
   check('fixture builders create no PointLight of their own', builders.length > 0 && !/new THREE\.PointLight/.test(builders));
-  check('strips are passed merge: false', /\{ merge: g\.fixtureType !== 'strip', floorY: FY \}/.test(src));
+  check('strips are passed merge: false', /\{ merge: g\.fixtureType !== 'strip', floorY: FY, houseBox:/.test(src));
   check('each channel collapses its emitters into gain-carrying lights',
     /collapseEmitters\(emitters, \{ minX: tx\(rm\.x1\)/.test(src) && /pl\.userData\.gain = m\.intensity;/.test(src));
   check('syncLights scales main AND accent lights by their gain',
