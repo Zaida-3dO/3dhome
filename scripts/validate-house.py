@@ -396,8 +396,34 @@ def inside_poly(poly, px, py):
     return inside
 
 
+WALL_SIDE_CONTACT_CM = 10
+
+
+def face_gap(poly, horizontal, face, probe, along):
+    """Port of faceGap() in house-loader.js: how far the room's boundary stops
+    short of the wall face, on the perpendicular at `along`. 0 if it reaches."""
+    lo, hi = min(face, probe), max(face, probe)
+    crossing = None
+    j = len(poly) - 1
+    for i in range(len(poly)):
+        ui, vi = (poly[i][0], poly[i][1]) if horizontal else (poly[i][1], poly[i][0])
+        uj, vj = (poly[j][0], poly[j][1]) if horizontal else (poly[j][1], poly[j][0])
+        j = i
+        if (ui > along) == (uj > along):
+            continue
+        v = vi + (vj - vi) * (along - ui) / (uj - ui)
+        if v < lo or v > hi:
+            continue
+        if crossing is None or abs(v - probe) < abs(crossing - probe):
+            crossing = v
+    return 0.0 if crossing is None else abs(crossing - face)
+
+
 def probe_wall_side(poly, horizontal, at, thickness, span, centre, width=None):
-    """Returns 'plus' | 'minus' | 'both' | 'neither'. See probeWallSide() in house-loader.js."""
+    """Returns (result, gap_or_None): result is 'plus' | 'minus' | 'both' |
+    'neither', or 'far-plus' / 'far-minus' when the only hit is a room that
+    stops more than WALL_SIDE_CONTACT_CM short of the face. See probeWallSide()
+    in house-loader.js."""
     lo, hi = min(span), max(span)
 
     def clamp(v):
@@ -408,6 +434,7 @@ def probe_wall_side(poly, horizontal, at, thickness, span, centre, width=None):
     if isinstance(width, (int, float)) and width > 2:
         alongs += [clamp(c - (width / 2.0 - 1)), clamp(c + (width / 2.0 - 1))]
     saw_both = False
+    far = None
     for along in alongs:
         for d in WALL_SIDE_PROBE_CM:
             e = thickness / 2.0 + d
@@ -416,10 +443,19 @@ def probe_wall_side(poly, horizontal, at, thickness, span, centre, width=None):
             else:
                 in_plus, in_minus = inside_poly(poly, at + e, along), inside_poly(poly, at - e, along)
             if in_plus != in_minus:
-                return "plus" if in_plus else "minus"
+                s = 1 if in_plus else -1
+                gap = face_gap(poly, horizontal, at + s * thickness / 2.0, at + s * e, along)
+                name = "plus" if in_plus else "minus"
+                if gap <= WALL_SIDE_CONTACT_CM:
+                    return name, gap
+                if far is None:
+                    far = ("far-" + name, gap)
+                continue
             if in_plus and in_minus:
                 saw_both = True
-    return "both" if saw_both else "neither"
+    if far is not None:
+        return far
+    return ("both" if saw_both else "neither"), None
 
 
 def _wall_thickness(wall, geo):
@@ -430,28 +466,34 @@ def _wall_thickness(wall, geo):
 
 
 def wall_side(room, wall, centre, width, geo):
-    """(result, inDir) with the engine's fallback applied: 'both' takes the
+    """(result, inDir, gap) with the engine's fallback applied: 'both' takes the
     side of the room's bounding-box midpoint, 'neither' gives inDir 0."""
     poly = room.get("polygon") or []
     axis = _wall_axis(wall)
     if len(poly) < 3 or axis is None:
-        return "neither", 0
+        return "neither", 0, None
     horizontal, lo, hi = axis
     at = wall["start"][1] if horizontal else wall["start"][0]
-    result = probe_wall_side(poly, horizontal, at, _wall_thickness(wall, geo), (lo, hi), centre, width)
-    if result == "plus":
-        return result, 1
-    if result == "minus":
-        return result, -1
+    result, gap = probe_wall_side(poly, horizontal, at, _wall_thickness(wall, geo), (lo, hi), centre, width)
+    if result in ("plus", "far-plus"):
+        return result, 1, gap
+    if result in ("minus", "far-minus"):
+        return result, -1, gap
     if result == "both":
         ks = [p[1] if horizontal else p[0] for p in poly]
-        return result, (1 if (min(ks) + max(ks)) / 2.0 >= at else -1)
-    return result, 0
+        return result, (1 if (min(ks) + max(ks)) / 2.0 >= at else -1), None
+    return result, 0, None
 
 
 def check_wall_side(where, room, wall, centre, width, geo, report):
     """Error on 'neither side', warn on 'both'. Returns inDir (1/-1), or 0 for neither."""
-    result, in_dir = wall_side(room, wall, centre, width, geo)
+    result, in_dir, gap = wall_side(room, wall, centre, width, geo)
+    if result.startswith("far-"):
+        report.warn(
+            where,
+            f"room '{room.get('id')}' only reaches to {gap:.1f} cm from wall {wall.get('id')}'s face at centre "
+            f"{centre} -- the engine uses that side, but the room may not be on this wall; check it",
+        )
     if result == "neither":
         report.error(
             where,

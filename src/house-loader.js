@@ -314,6 +314,11 @@ export const HouseLoader = (() => {
     let inDir;
     if (probe.inDir) {
       inDir = probe.inDir;
+      if (probe.far) {
+        warn(kindLabel + ' "' + item.id + '": room "' + room.id + '" only reaches to ' + probe.gap.toFixed(1) +
+          ' cm from wall ' + item.wall + '’s ' + (inDir > 0 ? (horizontal ? 'south' : 'east') : (horizontal ? 'north' : 'west')) +
+          ' face at centre ' + item.centre + ' -- using that side, but the room may not be on this wall; check it');
+      }
     } else if (probe.result === 'both') {
       const roomMid = horizontal ? (room.y1 + room.y2) / 2 : (room.x1 + room.x2) / 2;
       inDir = roomMid >= at ? 1 : -1;
@@ -363,6 +368,7 @@ export const HouseLoader = (() => {
       alongs.push(clamp(c - (width / 2 - 1)), clamp(c + (width / 2 - 1)));
     }
     let sawBoth = false;
+    let far = null;
     for (let a = 0; a < alongs.length; a++) {
       const along = alongs[a];
       for (let k = 0; k < WALL_SIDE_PROBE_CM.length; k++) {
@@ -370,12 +376,59 @@ export const HouseLoader = (() => {
         const inPlus = horizontal ? insidePoly(poly, along, at + e) : insidePoly(poly, at + e, along);
         const inMinus = horizontal ? insidePoly(poly, along, at - e) : insidePoly(poly, at - e, along);
         if (inPlus !== inMinus) {
-          return { result: inPlus ? 'plus' : 'minus', inDir: inPlus ? 1 : -1, along: along };
+          const dir = inPlus ? 1 : -1;
+          // A hit only counts if the room actually reaches the wall here: its
+          // boundary, walking back from the probe point toward the wall, must
+          // come within WALL_SIDE_CONTACT_CM of the face. A far step can
+          // otherwise land in the named room on the other side of something
+          // else entirely (a corridor, a cupboard) and pick that side.
+          const gap = faceGap(poly, horizontal, at + dir * thickness / 2, at + dir * e, along);
+          const hit = { result: inPlus ? 'plus' : 'minus', inDir: dir, along: along, gap: gap, far: false };
+          if (gap <= WALL_SIDE_CONTACT_CM) return hit;
+          if (!far) { hit.far = true; far = hit; }
+          continue;
         }
         if (inPlus && inMinus) sawBoth = true;
       }
     }
-    return { result: sawBoth ? 'both' : 'neither', inDir: 0, along: null };
+    // Only a far hit: the room is on that side but does not touch the wall.
+    // Use it (skipping would drop an item that has rendered for months), but
+    // the caller warns.
+    if (far) return far;
+    return { result: sawBoth ? 'both' : 'neither', inDir: 0, along: null, gap: null, far: false };
+  }
+
+  // How close (cm) the room's boundary must come to a wall's face, at the
+  // probed position, for the probe to count the room as touching that wall.
+  // Plans routinely trace a room a few cm off the face; more than this and
+  // the room is probably not on this wall at all.
+  const WALL_SIDE_CONTACT_CM = 10;
+
+  /**
+   * Distance from a wall face to the room's boundary, measured along the
+   * perpendicular at `along`, walking back from a probe point that is inside
+   * the room. 0 if the room reaches the face (or runs into the wall).
+   *
+   * @param {Array} poly
+   * @param {boolean} horizontal  the wall runs along plan x
+   * @param {number} face   the face's coordinate on the wall's short axis
+   * @param {number} probe  the probe point's coordinate on the same axis
+   * @param {number} along  position along the wall
+   */
+  function faceGap(poly, horizontal, face, probe, along) {
+    const lo = Math.min(face, probe), hi = Math.max(face, probe);
+    let crossing = null;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      // u = coordinate along the wall, v = across it.
+      const ui = horizontal ? poly[i][0] : poly[i][1], vi = horizontal ? poly[i][1] : poly[i][0];
+      const uj = horizontal ? poly[j][0] : poly[j][1], vj = horizontal ? poly[j][1] : poly[j][0];
+      if ((ui > along) === (uj > along)) continue;
+      const v = vi + (vj - vi) * (along - ui) / (uj - ui);
+      if (v < lo || v > hi) continue;
+      // Keep the crossing nearest the probe point: the room's edge on this line.
+      if (crossing === null || Math.abs(v - probe) < Math.abs(crossing - probe)) crossing = v;
+    }
+    return crossing === null ? 0 : Math.abs(crossing - face);
   }
 
   // Window defaults. Centimetres, like every authored length.
@@ -707,6 +760,17 @@ export const HouseLoader = (() => {
     if (!isNum(f.centre)) {
       warn(label + ' is wall-anchored but has no numeric `centre` -- skipped');
       return null;
+    }
+    {
+      // Same rule as scripts/validate-house.py: the back's centre must lie
+      // on the wall. Off the end, the item would float beside it.
+      const horiz = Math.abs(wall.y1 - wall.y2) < Math.abs(wall.x1 - wall.x2);
+      const lo = Math.min(horiz ? wall.x1 : wall.y1, horiz ? wall.x2 : wall.y2);
+      const hi = Math.max(horiz ? wall.x1 : wall.y1, horiz ? wall.x2 : wall.y2);
+      if (f.centre < lo - 1e-6 || f.centre > hi + 1e-6) {
+        warn(label + ' centre ' + f.centre + ' is outside wall ' + f.wall + '’s span (' + lo + '..' + hi + ') -- skipped');
+        return null;
+      }
     }
     const side = wallSide('furniture', f, wall, room, warn, isNum(params.width) ? params.width : undefined);
     if (!side) return null;
@@ -1327,6 +1391,8 @@ export const HouseLoader = (() => {
     stackCurtains: stackCurtains,
     wallSide: wallSide,
     probeWallSide: probeWallSide,
+    faceGap: faceGap,
+    WALL_SIDE_CONTACT_CM: WALL_SIDE_CONTACT_CM,
     compileFurniture: compileFurniture,
     rotationIntoRoom: rotationIntoRoom,
     WALL_SIDE_PROBE_CM: WALL_SIDE_PROBE_CM,

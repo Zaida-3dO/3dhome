@@ -359,8 +359,10 @@ polygon. If the window's centre is ambiguous, it tries again a centimetre in
 from each end of the window. If the room is on **neither** side there, the
 window is skipped with a warning, and the validator reports an error. If it is
 on **both** sides (the room wraps round a stub wall), the loader falls back to
-the side of the room's bounding-box midpoint and warns. The same rule applies to
-curtains and to wall-anchored furniture.
+the side of the room's bounding-box midpoint and warns. A side found only by a
+far step, where the room's outline stops more than 10 cm short of the wall face,
+is still used, but it warns, because that room is probably not on this wall at
+all. The same rule applies to curtains and to wall-anchored furniture.
 
 (It used to be the side the room's bounding-box midpoint lay on. That is wrong
 for an L-shaped room: the midpoint of an L can sit on the far side of a wall
@@ -468,7 +470,7 @@ Other fields:
 | `label`, `notes`, `source` | — | Documentation only. |
 
 The loader skips an item, with a warning, if it names a missing room or wall,
-sits on a wall that is not axis-aligned, gives both anchors or neither, gives
+sits on a wall that is not axis-aligned, has a `centre` beyond the ends of its wall, gives both anchors or neither, gives
 `rotation` with `wall`, or names a `fade.wall` that does not exist. An
 **unknown or not-yet-built `type`** is skipped with a warning too. That is the
 same forward-compatibility rule `decor` follows.

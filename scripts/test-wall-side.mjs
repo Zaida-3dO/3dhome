@@ -143,6 +143,33 @@ function lHouse(opts) {
   const g7 = house.furniture.find(f => f.id === 'g7');
   check('gap: item still compiles', !!g7, warnings);
   check('gap: still faces into the arm', g7 && g7.rotationDeg === 0, g7);
+  check('gap: a 7 cm gap counts as touching the wall (no contact warning)',
+    !warnings.some(w => /only reaches/.test(w)), warnings);
+}
+
+// ---- 3b. a far hit: the room is on that side but does not reach the wall ----
+// Only the 40 cm step lands in the room, 25 cm past the face. That is not a
+// room ON this wall: the side is still used (nothing else is known), but it
+// must warn rather than pass as a clean placement.
+{
+  const doc = lHouse({ furniture: [
+    { id: 'far', room: 'yard', type: 'box', wall: 50, centre: 150 },
+    { id: 'close', room: 'patio', type: 'box', wall: 51, centre: 150 }
+  ] });
+  doc.walls.segments.push({ id: 50, start: [0, 500], end: [300, 500], thickness: 10 });
+  doc.walls.segments.push({ id: 51, start: [0, 800], end: [300, 800], thickness: 10 });
+  doc.rooms.push({ id: 'yard', label: 'Yard', polygon: [[0, 530], [300, 530], [300, 700], [0, 700]] });
+  doc.rooms.push({ id: 'patio', label: 'Patio', polygon: [[0, 813], [300, 813], [300, 900], [0, 900]] });
+  const { house, warnings } = compile(doc);
+  const far = house.furniture.find(f => f.id === 'far');
+  check('far hit: still placed on the only side the room is on', far && far.rotationDeg === 0, far);
+  check('far hit: warns that the room stops 25 cm short of the wall',
+    warnings.some(w => /"far".*only reaches to 25\.0 cm from wall 50/.test(w)), warnings);
+  check('near hit (8 cm off): placed with no contact warning',
+    house.furniture.some(f => f.id === 'close') && !warnings.some(w => /"close".*only reaches/.test(w)), warnings);
+  check('faceGap: 0 when the room reaches the face',
+    HouseLoader.faceGap([[0, 0], [10, 0], [10, 10], [0, 10]], true, 0, 5, 5) === 0);
+  check('faceGap: measures the shortfall', HouseLoader.faceGap([[0, 530], [300, 530], [300, 700], [0, 700]], true, 505, 545, 150) === 25);
 }
 
 // ---- 4. an ambiguous centre is resolved from the item's ends ----------------

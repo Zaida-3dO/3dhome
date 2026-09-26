@@ -171,6 +171,19 @@ fit_ok = {"windows": [{"id": "w", "room": "room", "wall": 2, "centre": 300, "wid
 errs, _ = run_checks(house(None, **fit_ok))
 check("no error: window and curtain on their room's wall", errs == [], errs)
 
+# A far hit: the room is on one side of the wall but stops 25 cm short of it.
+far_doc = house([{"id": "far", "room": "yard", "type": "box", "wall": 50, "centre": 150}])
+far_doc["walls"]["segments"].append({"id": 50, "start": [0, 500], "end": [300, 500]})
+far_doc["walls"]["highestIdEverAssigned"] = 50
+far_doc["rooms"].append({"id": "yard", "label": "Yard", "polygon": [[0, 530], [300, 530], [300, 700], [0, 700]]})
+errs, warns = run_checks(far_doc)
+check("far hit: a warning, not an error", not has(errs, "furniture/far") and
+      has(warns, "furniture/far", "only reaches to 25.0 cm from wall 50"), (errs, warns))
+near_doc = copy.deepcopy(far_doc)
+near_doc["rooms"][-1]["polygon"] = [[0, 511], [300, 511], [300, 700], [0, 700]]   # 6 cm off the face
+errs, warns = run_checks(near_doc)
+check("near hit (6 cm off the face): no contact warning", not has(warns, "only reaches"), warns)
+
 # ---- 4. validator WARNINGS -------------------------------------------------------
 _, warns = run_checks(house([dict(BOX_FREE, at=[110, 300])]))
 check("warn: footprint outside the room polygon", has(warns, "furniture/stool", "outside room 'room'"), warns)

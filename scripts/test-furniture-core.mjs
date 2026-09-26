@@ -168,7 +168,8 @@ const compileF = furniture => quietly(() => HouseLoader.compile(house(furniture)
     [{ id: 'fadestr', room: 'r', type: 'box', at: [300, 250], fade: 'sometimes' }, /is not "auto", "never"/],
     [{ id: 'badtype', room: 'r', type: 'Box!', at: [300, 250] }, /no valid type/],
     [{ id: 'badat', room: 'r', type: 'box', at: [1] }, /`at` is not \[x, y\]/],
-    [{ id: 'nocentre', room: 'r', type: 'box', wall: 1 }, /no numeric `centre`/]
+    [{ id: 'nocentre', room: 'r', type: 'box', wall: 1 }, /no numeric `centre`/],
+    [{ id: 'offspan', room: 'r', type: 'box', wall: 1, centre: 600 }, /centre 600 is outside wall 1.s span \(95\.\.505\)/]
   ];
   cases.forEach(([item, re]) => {
     let out;
@@ -266,34 +267,130 @@ const compileF = furniture => quietly(() => HouseLoader.compile(house(furniture)
     !['matte', 'gloss', 'metal'].some(Fin.isKeptFinish));
 }
 
-// ---- 7. the box meets the builder contract -----------------------------------
+// ---- 7. every built type meets the builder contract ---------------------------
+// This is the gate for every builder that lands in src/furniture/, not just
+// the box: it loops over each registry type whose module EXISTS (a
+// multi-type module through its TYPES[key]) and builds it at its DEFAULTS.
+//   - build() returns a THREE.Group
+//   - bbox == DEFAULTS width/depth/height within 0.5 cm, x centred on 0
+//   - bottom at y = 0, back at z = 0 (front toward +z)
+//   - every material's userData.finish is in the palette
+//   - every glass / mirror / emissive part is marked userData.keep
+//   - detail 'low' has no more triangles than 'full'
 function bboxCm(group) {
   group.updateMatrixWorld(true);
   const b = new THREE.Box3().setFromObject(group);
   return { minX: b.min.x * 100, maxX: b.max.x * 100, minY: b.min.y * 100, maxY: b.max.y * 100, minZ: b.min.z * 100, maxZ: b.max.z * 100 };
 }
+function triangles(group) {
+  let n = 0;
+  group.traverse(o => {
+    if (!o.isMesh || !o.geometry) return;
+    const g = o.geometry;
+    const count = g.index ? g.index.count : (g.attributes.position ? g.attributes.position.count : 0);
+    n += (count / 3) * (o.isInstancedMesh ? o.count : 1);
+  });
+  return n;
+}
+function meshParts(group) {
+  const parts = [];
+  group.traverse(o => {
+    if (!o.isMesh) return;
+    (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => parts.push({ mesh: o, material: m }));
+  });
+  return parts;
+}
+/** Every contract check on one built group. `tag` names it; `p` is the resolved params. */
+function checkContract(tag, build, p) {
+  let full, low;
+  try {
+    full = build(THREE, p, { detail: 'full' });
+    low = build(THREE, p, { detail: 'low' });
+  } catch (e) {
+    check(tag + ': builds without throwing', false, String(e && e.stack || e));
+    return;
+  }
+  check(tag + ': build() returns a THREE.Group', !!full && full.isGroup === true);
+  if (!full || !full.isObject3D) return;
+  const b = bboxCm(full);
+  check(tag + ': width == params within 0.5 cm', Math.abs((b.maxX - b.minX) - p.width) <= 0.5, { bbox: b, width: p.width });
+  check(tag + ': centred on x', Math.abs((b.maxX + b.minX) / 2) <= 0.5, b);
+  check(tag + ': bottom at y = 0', Math.abs(b.minY) <= 0.5, b);
+  check(tag + ': height == params within 0.5 cm', Math.abs(b.maxY - b.minY - p.height) <= 0.5, { bbox: b, height: p.height });
+  check(tag + ': back at z = 0', Math.abs(b.minZ) <= 0.5, b);
+  check(tag + ': depth == params within 0.5 cm, toward +z', Math.abs(b.maxZ - b.minZ - p.depth) <= 0.5, { bbox: b, depth: p.depth });
+  const parts = meshParts(full);
+  check(tag + ': has meshes', parts.length > 0);
+  const offPalette = parts.filter(x => !x.material || !Fin.FINISHES.includes(x.material.userData && x.material.userData.finish));
+  check(tag + ': every material has a palette userData.finish', offPalette.length === 0,
+    offPalette.map(x => (x.mesh.name || x.mesh.type) + ':' + (x.material && x.material.userData && x.material.userData.finish)));
+  const unkept = parts.filter(x => x.material && Fin.isKeptFinish(x.material.userData.finish) && x.mesh.userData.keep !== true);
+  check(tag + ': glass/mirror/emissive parts are marked keep', unkept.length === 0,
+    unkept.map(x => (x.mesh.name || x.mesh.type) + ':' + x.material.userData.finish));
+  if (low && low.isObject3D) {
+    const tf = triangles(full), tl = triangles(low);
+    check(tag + ': detail low has no more triangles than full', tl <= tf, { full: tf, low: tl });
+  } else {
+    check(tag + ": detail 'low' returns a Group", false);
+  }
+}
 {
   check('box: TYPE', Box.TYPE === 'box');
   check('box: DEFAULTS frozen with width/depth/height', Object.isFrozen(Box.DEFAULTS) &&
     ['width', 'depth', 'height'].every(k => typeof Box.DEFAULTS[k] === 'number'));
-  [undefined, { width: 120, depth: 35, height: 75 }, { width: 13, depth: 90, height: 201.5 }].forEach(params => {
-    const p = Object.assign({}, Box.DEFAULTS, params || {});
-    const g = Box.build(THREE, params, { detail: 'full' });
-    const b = bboxCm(g);
-    const tag = 'box ' + JSON.stringify(params || 'defaults');
-    check(tag + ': is a Group', g.isGroup === true);
-    check(tag + ': width == params within 0.5 cm, centred on x',
-      Math.abs((b.maxX - b.minX) - p.width) <= 0.5 && Math.abs(b.maxX + b.minX) <= 0.5, b);
-    check(tag + ': height == params, bottom at y = 0', Math.abs(b.minY) <= 0.5 && Math.abs(b.maxY - p.height) <= 0.5, b);
-    check(tag + ': back at z = 0, depth == params toward +z', Math.abs(b.minZ) <= 0.5 && Math.abs(b.maxZ - p.depth) <= 0.5, b);
+
+  const covered = [];
+  for (const [t, entry] of Object.entries(R.REGISTRY)) {
+    if (!fs.existsSync(path.join(root, 'src/furniture', entry.path))) continue;
+    let impl;
+    try {
+      const mod = await imp('src/furniture/' + entry.path);
+      impl = entry.key ? (mod.TYPES && mod.TYPES[entry.key]) : mod;
+    } catch (e) {
+      check(t + ': module loads', false, String(e));
+      continue;
+    }
+    const ok = !!impl && !!impl.DEFAULTS && typeof impl.build === 'function' &&
+      ['width', 'depth', 'height'].every(k => typeof impl.DEFAULTS[k] === 'number');
+    check(t + ': exports DEFAULTS (with numeric width/depth/height) and build()', ok,
+      impl && impl.DEFAULTS && { width: impl.DEFAULTS.width, depth: impl.DEFAULTS.depth, height: impl.DEFAULTS.height });
+    if (!ok) continue;
+    covered.push(t);
+    checkContract(t + ' (defaults)', impl.build, Object.assign({}, impl.DEFAULTS));
+  }
+  check('contract loop covers box', covered.includes('box'), covered);
+  console.log('builder contract checked for: ' + covered.join(', '));
+
+  // The box also at other sizes, and with a kept finish.
+  [{ width: 120, depth: 35, height: 75 }, { width: 13, depth: 90, height: 201.5, finish: 'glass' }].forEach(params => {
+    checkContract('box ' + JSON.stringify(params), Box.build, Object.assign({}, Box.DEFAULTS, params));
   });
-  const g = Box.build(THREE, { finish: 'glass' });
-  let finishes = [], kept = true;
-  g.traverse(o => { if (o.isMesh) { finishes.push(o.material.userData.finish); kept = kept && o.userData.keep === true; } });
-  check('box: materials come from the palette', finishes.length > 0 && finishes.every(f => Fin.FINISHES.includes(f)), finishes);
-  check('box: a glass box is flagged keep', kept);
-  const low = Box.build(THREE, {}, { detail: 'low' });
-  check('box: detail low still builds', low.isGroup === true && low.children.length > 0);
+  let glassKept = false;
+  Box.build(THREE, { finish: 'glass' }).traverse(o => { if (o.isMesh) glassKept = o.userData.keep === true; });
+  check('box: a glass box is flagged keep', glassKept);
+
+  // The checker itself must be able to fail: a deliberately broken builder
+  // (back at the middle, emissive part not kept, low detail heavier) trips it.
+  const before = failures;
+  const brokenBuild = (T, p, o) => {
+    const g = new T.Group();
+    const segs = o && o.detail === 'low' ? 16 : 1;
+    const m = new T.Mesh(new T.BoxGeometry(p.width / 100, p.height / 100, p.depth / 100, segs, segs, segs),
+      Fin.makeFinish(T, 'emissive', '#ffffff'));
+    m.position.y = p.height / 200;   // back NOT moved to z = 0
+    g.add(m);
+    return g;
+  };
+  const savedError = console.error;
+  const caught = [];
+  console.error = m => caught.push(String(m));
+  checkContract('broken probe', brokenBuild, { width: 50, depth: 40, height: 30 });
+  console.error = savedError;
+  const tripped = failures - before;
+  failures = before;                     // the probe's failures are expected
+  check('contract checker trips on a broken builder (back, keep, low detail)',
+    tripped === 3 && caught.some(m => /back at z = 0/.test(m)) && caught.some(m => /marked keep/.test(m)) &&
+    caught.some(m => /no more triangles/.test(m)), caught);
 }
 
 // ---- 8. the registry -------------------------------------------------------------
@@ -373,11 +470,73 @@ function bboxCm(group) {
 }
 
 // ---- 9. no file in src/furniture imports three ------------------------------------
+// THREE is injected. A builder that imports it itself -- by the bare
+// specifier, by a path into vendor/, or dynamically -- gets a SECOND copy of
+// three in the page (different class identities, so instanceof checks and
+// the merge break) and cannot load from the spec pages' import map at all.
+//
+// Comments are stripped first, so a doc comment saying "no `import 'three'`"
+// is not a hit. A dynamic import() whose argument is not a string literal is
+// refused in builders outright: it cannot be checked, and a builder has no
+// reason to load anything at runtime. registry.js is the one module whose job
+// is exactly that.
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+}
+const isThreeSpecifier = s =>
+  s === 'three' || /^three\//.test(s) || /(^|\/)vendor\/three/.test(s) ||
+  /(^|\/)three(-r\d+)?(\/|$)/.test(s) || /(^|\/)three(\.module)?(\.min)?\.(m?js)(\?|$)/.test(s);
+function threeImportProblems(src, allowDynamic) {
+  const code = stripComments(src);
+  const problems = [];
+  const specRes = [
+    /\bimport\s+(?:[\w$*{}\s,]+?\s+from\s+)?['"]([^'"]+)['"]/g,   // import x from '...'; import '...'
+    /\bexport\s+[\w$*{}\s,]*?\s*from\s*['"]([^'"]+)['"]/g,         // export ... from '...'
+    /\bimport\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g,                   // import('...')
+    /\brequire\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g                   // require('...')
+  ];
+  specRes.forEach(re => {
+    let m;
+    while ((m = re.exec(code))) if (isThreeSpecifier(m[1])) problems.push(m[0]);
+  });
+  if (!allowDynamic) {
+    const dyn = /\bimport\s*\(\s*(?!['"`][^'"`]*['"`]\s*\))/g;
+    let m;
+    while ((m = dyn.exec(code))) problems.push('non-literal ' + m[0].trim());
+  }
+  return problems;
+}
 {
+  // The detector itself, on the shapes that must and must not trip it.
+  const bad = [
+    "import * as THREE from 'three';",
+    "import 'three';",
+    "import { Mesh } from \"three\";",
+    "import * as T from '../../vendor/three-r160/three.module.min.js';",
+    "import * as T from '../../vendor/three-r160/three.module.min.js?v=1';",
+    "const T = await import('three');",
+    "const T = await import('../../vendor/three-r160/three.module.min.js');",
+    "import('three').then(t => t);",
+    "export { Mesh } from 'three';",
+    "const t = require('three');",
+    "const u = 'x'; const T = await import(u);"
+  ];
+  const good = [
+    "/** no `import 'three'` here */ export const TYPE = 'x';",
+    "// import * as THREE from 'three';\nexport const a = 1;",
+    "import { makeFinish } from './finishes.js';",
+    "export function build(THREE, params) { return new THREE.Group(); }",
+    "const url = 'https://example.com/three';"
+  ];
+  bad.forEach(src => check('no-three detector catches: ' + src, threeImportProblems(src, false).length > 0));
+  good.forEach(src => check('no-three detector allows: ' + src, threeImportProblems(src, false).length === 0,
+    threeImportProblems(src, false)));
+
   const dir = path.join(root, 'src/furniture');
   fs.readdirSync(dir).filter(f => f.endsWith('.js')).forEach(f => {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
-    check(f + ': does not import three (THREE is injected)', !/^\s*import[^;]*?['"]three['"]/m.test(src));
+    const problems = threeImportProblems(src, f === 'registry.js');
+    check(f + ': does not import three (THREE is injected)', problems.length === 0, problems);
   });
 }
 
