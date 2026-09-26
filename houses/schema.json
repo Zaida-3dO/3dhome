@@ -876,8 +876,110 @@
 
     "furnitureParams_gaming-chair": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `gaming-chair`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `gaming-chair` (src/furniture/gaming-chair.js): a racing-style gaming chair, size L. Each `default` equals gaming-chair.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). seatHeight / reclineDeg / armHeight must lie in the ranges given here; the builder also clamps to them.",
+      "properties": {
+        "primaryColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#3fc9b8",
+          "description": "The colourway: seat cushion, seat bolsters, backrest front incl. the shoulder wings."
+        },
+        "backColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#18181a",
+          "description": "Backrest back and side panels."
+        },
+        "frameColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#141416",
+          "description": "Armrests, recline lever, gas lift, mechanism, 5-star base and casters."
+        },
+        "pillowColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#111113",
+          "description": "Neck pillow."
+        },
+        "labelColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f4f4f4",
+          "description": "Wordmark strip on the neck pillow."
+        },
+        "seatHeight": {
+          "type": "number",
+          "minimum": 44.5,
+          "maximum": 51,
+          "default": 47,
+          "description": "cm, floor to the top of the seat cushion."
+        },
+        "reclineDeg": {
+          "type": "number",
+          "minimum": 90,
+          "maximum": 155,
+          "default": 95,
+          "description": "Degrees between seat and backrest; 90 is upright."
+        },
+        "armHeight": {
+          "type": "number",
+          "minimum": 20,
+          "maximum": 33,
+          "default": 24,
+          "description": "cm, top of the arm pads above the seat top."
+        },
+        "seatWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 52.5,
+          "description": "cm, across both seat bolsters."
+        },
+        "seatDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 46.5,
+          "description": "cm, seat back to front."
+        },
+        "backrestHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 80,
+          "description": "cm, height of the backrest itself."
+        },
+        "backrestWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 53,
+          "description": "cm, backrest width at the shoulder wings."
+        },
+        "baseDiameter": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 53.7,
+          "description": "cm, 5-star wheelbase diameter."
+        },
+        "casterDiameter": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 6.5,
+          "description": "cm, twin-wheel caster diameter."
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 70,
+          "description": "cm, overall envelope at the default pose (the armrest span). Descriptive: the builder does not read it."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 119.7,
+          "description": "cm, overall envelope at the default pose (floor to backrest top). Descriptive: the builder does not read it."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 61.5,
+          "description": "cm, overall envelope at the default pose (backrest back to caster tip). Descriptive: the builder does not read it."
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_hex-panel-cluster": {

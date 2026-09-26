@@ -183,6 +183,17 @@ jobs:
           # closed blackout shuts the daylight out while a sheer dims and warms it.
           set -euo pipefail
           node scripts/test-curtain-binding.mjs
+      - name: Gaming chair builder
+        run: |
+          # Asserts src/furniture/gaming-chair.js: the furniture frame (floor at
+          # y=0, back at z=0 at every recline), the published size-L dimensions,
+          # recline measured on the built geometry, and colour placement -- the
+          # colourway on the seat and backrest FRONT only, black everywhere
+          # else. A colour leaking onto the back is invisible from the front
+          # 3/4 view a screenshot shows. Also: flat finishes only, and 'low'
+          # detail genuinely cheaper. See the script's header.
+          set -euo pipefail
+          node scripts/test-gaming-chair.mjs
       - name: WebGL failure is classified correctly
         run: |
           # Asserts which of the two WebGL failures we tell the user about. Out
