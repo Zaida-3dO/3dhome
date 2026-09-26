@@ -27,6 +27,8 @@
  *   HouseLoader.compile(geometryDoc, baseUrl);      // compile an in-memory doc
  */
 
+import { insidePoly } from './footstep-walk.js';
+
 export const HouseLoader = (() => {
   'use strict';
 
@@ -257,20 +259,49 @@ export const HouseLoader = (() => {
   }
 
   /**
-   * Where a wall-mounted fitting (a window, a curtain) sits relative to its
-   * wall: which way is INTO the room, and where the wall's two faces are.
+   * Where a wall-mounted item (a window, a curtain, a wall-anchored piece of
+   * furniture) sits relative to its wall: which way is INTO the room, and
+   * where the wall's two faces are.
    *
-   * Windows and curtains both need to know which face of the wall is the
-   * room's. Unlike a door -- whose swing the author states -- a window has no
-   * natural compass field for it, and asking the author for one invites a
-   * contradiction with the `room` they already named. So it is DERIVED: the
-   * side of the wall's centreline the room's bounding-box centre lies on.
+   * A window has no natural compass field for its inside, and asking the
+   * author for one invites a contradiction with the `room` they already named.
+   * So it is DERIVED from `room` -- by PROBING, not by the room's bounding box.
+   *
+   * WHY A PROBE. This used to take the side of the wall's centreline that the
+   * room's bounding-box MIDPOINT lay on. For a convex room that is right; for an
+   * L-shaped one it is not. An L's bbox midpoint can sit on the far side of a
+   * wall that bounds one of its arms, so an item on that wall was turned to
+   * face out of the room -- a frame on the wrong face, a curtain hung outside
+   * the building, a cabinet backed into the wall. So instead: step a short way
+   * off each face of the wall, AT THE ITEM'S OWN POSITION along it, and ask
+   * which of the two points is inside the room's polygon.
+   *
+   * The details, each for a reason:
+   *   - The step is tried at several distances (WALL_SIDE_PROBE_CM past the
+   *     face). A room polygon is traced a few cm off the wall face in some
+   *     plans; a single fixed step shorter than that gap lands in the gap on
+   *     both sides and reports "neither".
+   *   - If the item's centre is ambiguous (an L's inside corner, a polygon
+   *     vertex right at the probe), it is retried a centimetre in from each
+   *     end of the item's width, before any fallback.
+   *   - "Both sides" (the room wraps round a stub wall) falls back to the old
+   *     bbox-midpoint rule and SAYS SO. "Neither side" (the room does not touch
+   *     this wall there) is an authoring error: warn and skip.
+   *
+   * scripts/validate-house.py runs the same probe; keep the two in step.
    *
    * Returns null (with a warning) for a wall that is not axis-aligned, exactly
    * as compileDoor's hinge/swing check effectively does -- the carving code in
    * the renderer only cuts openings in walls that run along x or y.
+   *
+   * @param {string} kindLabel  'window' | 'curtain' | 'furniture', for messages
+   * @param {Object} item       has id, wall, centre
+   * @param {Object} wall       compiled raw wall (x1..y2, thickness)
+   * @param {Object} room       compiled room (poly, bbox)
+   * @param {Function} warn
+   * @param {number} [width]    the item's width along the wall, cm, if known
    */
-  function wallSide(kindLabel, item, wall, room, warn) {
+  function wallSide(kindLabel, item, wall, room, warn, width) {
     const dx = Math.abs(wall.x1 - wall.x2), dy = Math.abs(wall.y1 - wall.y2);
     if (dx >= 0.5 && dy >= 0.5) {
       warn(kindLabel + ' "' + item.id + '" is on wall ' + item.wall + ', which is not axis-aligned -- skipped');
@@ -278,9 +309,28 @@ export const HouseLoader = (() => {
     }
     const horizontal = dy < dx;
     const at = horizontal ? wall.y1 : wall.x1;
-    const roomMid = horizontal ? (room.y1 + room.y2) / 2 : (room.x1 + room.x2) / 2;
+    const probe = probeWallSide(room.poly, horizontal, at, wall.thickness,
+      horizontal ? [wall.x1, wall.x2] : [wall.y1, wall.y2], item.centre, width);
+    let inDir;
+    if (probe.inDir) {
+      inDir = probe.inDir;
+      if (probe.far) {
+        warn(kindLabel + ' "' + item.id + '": room "' + room.id + '" only reaches to ' + probe.gap.toFixed(1) +
+          ' cm from wall ' + item.wall + '’s ' + (inDir > 0 ? (horizontal ? 'south' : 'east') : (horizontal ? 'north' : 'west')) +
+          ' face at centre ' + item.centre + ' -- using that side, but the room may not be on this wall; check it');
+      }
+    } else if (probe.result === 'both') {
+      const roomMid = horizontal ? (room.y1 + room.y2) / 2 : (room.x1 + room.x2) / 2;
+      inDir = roomMid >= at ? 1 : -1;
+      warn(kindLabel + ' "' + item.id + '": room "' + room.id + '" is on BOTH sides of wall ' + item.wall +
+        ' at centre ' + item.centre + ' -- falling back to the room bounding-box midpoint (' +
+        (inDir > 0 ? (horizontal ? 'south' : 'east') : (horizontal ? 'north' : 'west')) + ' side)');
+    } else {
+      warn(kindLabel + ' "' + item.id + '": room "' + room.id + '" is on neither side of wall ' + item.wall +
+        ' at centre ' + item.centre + ' -- skipped');
+      return null;
+    }
     // +1: the room lies on the +y (south) / +x (east) side of the wall.
-    const inDir = roomMid >= at ? 1 : -1;
     return {
       axis: horizontal ? 'x' : 'z',
       at: at,
@@ -290,6 +340,95 @@ export const HouseLoader = (() => {
       roomFace: at + inDir * wall.thickness / 2,
       outerFace: at - inDir * wall.thickness / 2
     };
+  }
+
+  // How far past each face of a wall the side probe steps, in cm, nearest
+  // first. The first distance at which exactly one side is in the room wins.
+  const WALL_SIDE_PROBE_CM = Object.freeze([5, 10, 20, 40]);
+
+  /**
+   * The pure half of wallSide(): which side of an axis-aligned wall `poly`
+   * lies on, at position `centre` along it.
+   *
+   * @param {Array} poly        room polygon
+   * @param {boolean} horizontal  the wall runs along plan x
+   * @param {number} at         the wall's fixed coordinate (y if horizontal)
+   * @param {number} thickness  cm
+   * @param {Array} span        the wall's two end coordinates along its length
+   * @param {number} centre     the item's centre along the wall
+   * @param {number} [width]    the item's width along the wall
+   * @returns {{result: 'plus'|'minus'|'both'|'neither', inDir: (1|-1|0), along: ?number}}
+   */
+  function probeWallSide(poly, horizontal, at, thickness, span, centre, width) {
+    const lo = Math.min(span[0], span[1]), hi = Math.max(span[0], span[1]);
+    const clamp = v => Math.max(lo, Math.min(hi, v));
+    const c = typeof centre === 'number' && isFinite(centre) ? centre : (lo + hi) / 2;
+    const alongs = [clamp(c)];
+    if (typeof width === 'number' && width > 2) {
+      alongs.push(clamp(c - (width / 2 - 1)), clamp(c + (width / 2 - 1)));
+    }
+    let sawBoth = false;
+    let far = null;
+    for (let a = 0; a < alongs.length; a++) {
+      const along = alongs[a];
+      for (let k = 0; k < WALL_SIDE_PROBE_CM.length; k++) {
+        const e = thickness / 2 + WALL_SIDE_PROBE_CM[k];
+        const inPlus = horizontal ? insidePoly(poly, along, at + e) : insidePoly(poly, at + e, along);
+        const inMinus = horizontal ? insidePoly(poly, along, at - e) : insidePoly(poly, at - e, along);
+        if (inPlus !== inMinus) {
+          const dir = inPlus ? 1 : -1;
+          // A hit only counts if the room actually reaches the wall here: its
+          // boundary, walking back from the probe point toward the wall, must
+          // come within WALL_SIDE_CONTACT_CM of the face. A far step can
+          // otherwise land in the named room on the other side of something
+          // else entirely (a corridor, a cupboard) and pick that side.
+          const gap = faceGap(poly, horizontal, at + dir * thickness / 2, at + dir * e, along);
+          const hit = { result: inPlus ? 'plus' : 'minus', inDir: dir, along: along, gap: gap, far: false };
+          if (gap <= WALL_SIDE_CONTACT_CM) return hit;
+          if (!far) { hit.far = true; far = hit; }
+          continue;
+        }
+        if (inPlus && inMinus) sawBoth = true;
+      }
+    }
+    // Only a far hit: the room is on that side but does not touch the wall.
+    // Use it (skipping would drop an item that has rendered for months), but
+    // the caller warns.
+    if (far) return far;
+    return { result: sawBoth ? 'both' : 'neither', inDir: 0, along: null, gap: null, far: false };
+  }
+
+  // How close (cm) the room's boundary must come to a wall's face, at the
+  // probed position, for the probe to count the room as touching that wall.
+  // Plans routinely trace a room a few cm off the face; more than this and
+  // the room is probably not on this wall at all.
+  const WALL_SIDE_CONTACT_CM = 10;
+
+  /**
+   * Distance from a wall face to the room's boundary, measured along the
+   * perpendicular at `along`, walking back from a probe point that is inside
+   * the room. 0 if the room reaches the face (or runs into the wall).
+   *
+   * @param {Array} poly
+   * @param {boolean} horizontal  the wall runs along plan x
+   * @param {number} face   the face's coordinate on the wall's short axis
+   * @param {number} probe  the probe point's coordinate on the same axis
+   * @param {number} along  position along the wall
+   */
+  function faceGap(poly, horizontal, face, probe, along) {
+    const lo = Math.min(face, probe), hi = Math.max(face, probe);
+    let crossing = null;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      // u = coordinate along the wall, v = across it.
+      const ui = horizontal ? poly[i][0] : poly[i][1], vi = horizontal ? poly[i][1] : poly[i][0];
+      const uj = horizontal ? poly[j][0] : poly[j][1], vj = horizontal ? poly[j][1] : poly[j][0];
+      if ((ui > along) === (uj > along)) continue;
+      const v = vi + (vj - vi) * (along - ui) / (uj - ui);
+      if (v < lo || v > hi) continue;
+      // Keep the crossing nearest the probe point: the room's edge on this line.
+      if (crossing === null || Math.abs(v - probe) < Math.abs(crossing - probe)) crossing = v;
+    }
+    return crossing === null ? 0 : Math.abs(crossing - face);
   }
 
   // Window defaults. Centimetres, like every authored length.
@@ -317,7 +456,7 @@ export const HouseLoader = (() => {
       warn('window "' + win.id + '" references wall ' + win.wall + ', which does not exist -- skipped');
       return null;
     }
-    const side = wallSide('window', win, wall, room, warn);
+    const side = wallSide('window', win, wall, room, warn, win.width);
     if (!side) return null;
 
     // Extra leaves the opening passes through. Each must run parallel to the
@@ -452,7 +591,7 @@ export const HouseLoader = (() => {
       warn('curtain "' + cur.id + '" references wall ' + cur.wall + ', which does not exist -- skipped');
       return null;
     }
-    const side = wallSide('curtain', cur, wall, room, warn);
+    const side = wallSide('curtain', cur, wall, room, warn, cur.width);
     if (!side) return null;
     const ceiling = defaults.ceilingHeight != null ? defaults.ceilingHeight : defaults.wallHeight;
     const top = cur.top != null ? cur.top : ceiling;
@@ -500,6 +639,149 @@ export const HouseLoader = (() => {
       innerPleats: cur.innerPleats != null ? cur.innerPleats : CURTAIN_DEFAULTS.innerPleats,
       cornice: cornice
     };
+  }
+
+  // ---- Furniture (schemaVersion 1.2) --------------------------------------
+  // Placement only. The loader knows nothing about builders: it resolves WHERE
+  // an item stands and which way it faces, and passes `params` through
+  // untouched. src/furniture/place.js turns this into a back-centre point once
+  // the builder's DEFAULTS have filled `params`; src/furniture/registry.js
+  // finds the builder. See docs/house-profile.md, "Furniture".
+
+  const FURNITURE_TYPE_RE = /^[a-z][a-z0-9-]*$/;
+
+  /**
+   * Plan rotation (degrees clockwise, 0 = front faces +y/south) that makes an
+   * item on an axis-aligned wall face INTO the room. The front direction for
+   * rotation r is (-sin r, cos r), so:
+   *   horizontal wall, room south (+y) -> front ( 0,  1) -> 0
+   *   horizontal wall, room north (-y) -> front ( 0, -1) -> 180
+   *   vertical wall,   room east  (+x) -> front ( 1,  0) -> 270
+   *   vertical wall,   room west  (-x) -> front (-1,  0) -> 90
+   */
+  function rotationIntoRoom(axis, inDir) {
+    if (axis === 'x') return inDir > 0 ? 0 : 180;
+    return inDir > 0 ? 270 : 90;
+  }
+
+  const isNum = v => typeof v === 'number' && isFinite(v);
+
+  /**
+   * One `furniture[]` entry -> the compiled placement the renderer reads:
+   *
+   *   { id, room, type, origin: 'back'|'centre', x, y, rotationDeg, elevation,
+   *     params, hostWallId, exterior, fade, priority, label }
+   *
+   * `origin: 'back'` (wall anchor): x/y is already the back-centre point.
+   * `origin: 'centre'` (free anchor): x/y is the footprint centre, and the back
+   * is found later from the resolved depth (place.js resolvePlacement).
+   *
+   * Every failure warns and skips just this item, like doors and windows.
+   */
+  function compileFurniture(f, wallsById, rooms, warn) {
+    const id = f && f.id != null ? f.id : '?';
+    const label = 'furniture "' + id + '"';
+    if (!f || typeof f !== 'object') {
+      warn('furniture entry is not an object -- skipped');
+      return null;
+    }
+    if (typeof f.type !== 'string' || !FURNITURE_TYPE_RE.test(f.type)) {
+      warn(label + ' has no valid type -- skipped');
+      return null;
+    }
+    const room = rooms[f.room];
+    if (!room) {
+      warn(label + ' belongs to room "' + f.room + '", which is not in this profile -- skipped');
+      return null;
+    }
+    const hasAt = f.at != null, hasWall = f.wall != null;
+    if (hasAt === hasWall) {
+      warn(label + (hasAt ? ' gives both `at` and `wall`' : ' gives neither `at` nor `wall`') +
+        ' -- an item uses exactly one anchor; skipped');
+      return null;
+    }
+    if (hasWall && f.rotation != null) {
+      warn(label + ' gives `rotation` with a wall anchor -- a wall-anchored item always faces into ' +
+        'its room; skipped');
+      return null;
+    }
+
+    let fade = 'auto';
+    if (f.fade === 'never' || f.fade === 'auto' || f.fade == null) {
+      fade = f.fade || 'auto';
+    } else if (typeof f.fade === 'object' && f.fade.wall != null) {
+      if (!wallsById[f.fade.wall]) {
+        warn(label + ' fade.wall names wall ' + f.fade.wall + ', which does not exist -- skipped');
+        return null;
+      }
+      fade = { wall: f.fade.wall };
+    } else {
+      warn(label + ' fade ' + JSON.stringify(f.fade) + ' is not "auto", "never" or {wall} -- skipped');
+      return null;
+    }
+
+    const params = (f.params && typeof f.params === 'object') ? Object.assign({}, f.params) : {};
+    const elevation = isNum(f.elevation) ? f.elevation : 0;
+    const out = {
+      id: f.id,
+      room: f.room,
+      type: f.type,
+      origin: null,
+      x: 0,
+      y: 0,
+      rotationDeg: 0,
+      elevation: elevation,
+      params: params,
+      hostWallId: null,
+      exterior: false,
+      fade: fade,
+      priority: f.priority === 'minor' ? 'minor' : 'normal',
+      label: f.label || f.id
+    };
+
+    if (hasAt) {
+      if (!Array.isArray(f.at) || f.at.length !== 2 || !isNum(f.at[0]) || !isNum(f.at[1])) {
+        warn(label + ' `at` is not [x, y] -- skipped');
+        return null;
+      }
+      const r = isNum(f.rotation) ? f.rotation : 0;
+      out.origin = 'centre';
+      out.x = f.at[0];
+      out.y = f.at[1];
+      out.rotationDeg = ((r % 360) + 360) % 360;
+      return out;
+    }
+
+    const wall = wallsById[f.wall];
+    if (!wall) {
+      warn(label + ' references wall ' + f.wall + ', which does not exist -- skipped');
+      return null;
+    }
+    if (!isNum(f.centre)) {
+      warn(label + ' is wall-anchored but has no numeric `centre` -- skipped');
+      return null;
+    }
+    {
+      // Same rule as scripts/validate-house.py: the back's centre must lie
+      // on the wall. Off the end, the item would float beside it.
+      const horiz = Math.abs(wall.y1 - wall.y2) < Math.abs(wall.x1 - wall.x2);
+      const lo = Math.min(horiz ? wall.x1 : wall.y1, horiz ? wall.x2 : wall.y2);
+      const hi = Math.max(horiz ? wall.x1 : wall.y1, horiz ? wall.x2 : wall.y2);
+      if (f.centre < lo - 1e-6 || f.centre > hi + 1e-6) {
+        warn(label + ' centre ' + f.centre + ' is outside wall ' + f.wall + '’s span (' + lo + '..' + hi + ') -- skipped');
+        return null;
+      }
+    }
+    const side = wallSide('furniture', f, wall, room, warn, isNum(params.width) ? params.width : undefined);
+    if (!side) return null;
+    const offset = isNum(f.offset) ? f.offset : 0;
+    const perp = side.roomFace + side.inDir * offset;
+    out.origin = 'back';
+    if (side.axis === 'x') { out.x = f.centre; out.y = perp; } else { out.x = perp; out.y = f.centre; }
+    out.rotationDeg = rotationIntoRoom(side.axis, side.inDir);
+    out.hostWallId = f.wall;
+    out.exterior = !!wall.outer;
+    return out;
   }
 
   /**
@@ -718,6 +1000,22 @@ export const HouseLoader = (() => {
       if (compiled) curtains.push(compiled);
     });
     stackCurtains(curtains);
+
+    // ---- Furniture (schemaVersion 1.2) --------------------------------------
+    // Optional; an older engine ignores the key, and a profile without it
+    // compiles to an empty list. Duplicate ids keep the first.
+    const furniture = [];
+    const furnitureIds = new Set();
+    (Array.isArray(geo.furniture) ? geo.furniture : []).forEach(f => {
+      const compiled = compileFurniture(f, wallsById, rooms, warn);
+      if (!compiled) return;
+      if (furnitureIds.has(compiled.id)) {
+        warn('furniture "' + compiled.id + '" is a duplicate id -- keeping the first');
+        return;
+      }
+      furnitureIds.add(compiled.id);
+      furniture.push(compiled);
+    });
 
     // ---- Lights -----------------------------------------------------------
     // THE BIG ONE. The predecessor placed fixtures inside the renderer with a
@@ -945,6 +1243,8 @@ export const HouseLoader = (() => {
       doors: doors,
       windows: windows,
       curtains: curtains,
+      // Placed furniture (see compileFurniture). Empty when the profile has none.
+      furniture: furniture,
       lights: lights,
       site: site,
       footprint: footprint,
@@ -1089,6 +1389,13 @@ export const HouseLoader = (() => {
     polygonArea: polygonArea,
     extendWallsForCorners: extendWallsForCorners,
     stackCurtains: stackCurtains,
+    wallSide: wallSide,
+    probeWallSide: probeWallSide,
+    faceGap: faceGap,
+    WALL_SIDE_CONTACT_CM: WALL_SIDE_CONTACT_CM,
+    compileFurniture: compileFurniture,
+    rotationIntoRoom: rotationIntoRoom,
+    WALL_SIDE_PROBE_CM: WALL_SIDE_PROBE_CM,
     SUPPORTED_SCHEMA_MAJOR: SUPPORTED_SCHEMA_MAJOR
   };
 })();

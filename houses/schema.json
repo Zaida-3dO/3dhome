@@ -588,6 +588,392 @@
       "required": ["id", "room", "wall", "centre", "width"],
       "additionalProperties": false
     },
+    "furnitureItem": {
+      "type": "object",
+      "title": "A piece of furniture",
+      "description": "One placed item. Two anchor forms; an item uses exactly one.\n\nFREE: `at` [x, y] is the CENTRE of the footprint in plan cm, and `rotation` is degrees CLOCKWISE in plan (y points south). 0 = the front faces +y (south); 90 west, 180 north, 270 east. The front direction is (-sin r, cos r). This is Sweet Home 3D's x/y/angle convention verbatim.\n\nWALL: `wall` + `centre` + `offset`. The item's BACK sits `offset` cm off the ROOM face of `wall`, centred at `centre` along it, and its front faces into `room`. Which face is the room's is derived exactly as for windows and curtains. `rotation` must not be given.\n\n`params` are the builder's own options (see each type's `furnitureParams_<type>` block); anything omitted falls back to the builder's DEFAULTS. An unknown or not-yet-built `type` is skipped with a warning.\n\nAdded in schemaVersion 1.2.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Stable identifier, unique among furniture."
+        },
+        "room": {
+          "$ref": "#/$defs/roomId",
+          "description": "The room the item stands in. For a wall anchor it also decides which face of the wall is the front side."
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "The builder, as named in src/furniture/registry.js."
+        },
+        "at": {
+          "$ref": "#/$defs/point2d",
+          "description": "FREE anchor: footprint centre, plan cm."
+        },
+        "rotation": {
+          "type": "number",
+          "default": 0,
+          "description": "FREE anchor only: degrees clockwise in plan; 0 = front faces south (+y)."
+        },
+        "wall": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "WALL anchor: the host wall's id. Must run along plan x or plan y."
+        },
+        "centre": {
+          "type": "number",
+          "description": "WALL anchor: the back's centre, as a coordinate along the wall (x for an east-west wall, y for a north-south one). Must lie within the wall's span."
+        },
+        "offset": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "description": "WALL anchor: gap between the wall's room face and the item's back, cm."
+        },
+        "elevation": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "description": "Floor to the bottom of the item, cm. Wall-mounted items use this."
+        },
+        "params": {
+          "type": "object",
+          "default": {},
+          "description": "The builder's options. Checked per type against `$defs/furnitureParams_<type>`."
+        },
+        "fade": {
+          "$ref": "#/$defs/furnitureFade"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "minor"
+          ],
+          "default": "normal",
+          "description": "`minor` items are dropped on the low GPU tier."
+        },
+        "label": {
+          "type": "string",
+          "description": "Display name. Documentation only."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Documentation only."
+        },
+        "source": {
+          "type": "object",
+          "description": "Where the item came from (e.g. {\"sh3d\": \"<piece name>\"}). Documentation only."
+        }
+      },
+      "required": [
+        "id",
+        "room",
+        "type"
+      ],
+      "oneOf": [
+        {
+          "title": "free anchor",
+          "required": [
+            "at"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "wall"
+                ]
+              },
+              {
+                "required": [
+                  "centre"
+                ]
+              },
+              {
+                "required": [
+                  "offset"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "title": "wall anchor",
+          "required": [
+            "wall",
+            "centre"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "at"
+                ]
+              },
+              {
+                "required": [
+                  "rotation"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "bed" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_bed" } } } },
+
+        { "if": { "properties": { "type": { "const": "box" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_box" } } } },
+
+        { "if": { "properties": { "type": { "const": "cabinet" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_cabinet" } } } },
+
+        { "if": { "properties": { "type": { "const": "clock" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_clock" } } } },
+
+        { "if": { "properties": { "type": { "const": "digital-piano" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_digital-piano" } } } },
+
+        { "if": { "properties": { "type": { "const": "fridge-freezer" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_fridge-freezer" } } } },
+
+        { "if": { "properties": { "type": { "const": "gaming-chair" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_gaming-chair" } } } },
+
+        { "if": { "properties": { "type": { "const": "kitchen-base-run" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_kitchen-base-run" } } } },
+
+        { "if": { "properties": { "type": { "const": "kitchen-wall-run" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_kitchen-wall-run" } } } },
+
+        { "if": { "properties": { "type": { "const": "mirror" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_mirror" } } } },
+
+        { "if": { "properties": { "type": { "const": "monitor" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_monitor" } } } },
+
+        { "if": { "properties": { "type": { "const": "pc-tower" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_pc-tower" } } } },
+
+        { "if": { "properties": { "type": { "const": "plant" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_plant" } } } },
+
+        { "if": { "properties": { "type": { "const": "radiator" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_radiator" } } } },
+
+        { "if": { "properties": { "type": { "const": "shelf" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_shelf" } } } },
+
+        { "if": { "properties": { "type": { "const": "slat-panel" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_slat-panel" } } } },
+
+        { "if": { "properties": { "type": { "const": "sofa" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_sofa" } } } },
+
+        { "if": { "properties": { "type": { "const": "speaker" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_speaker" } } } },
+
+        { "if": { "properties": { "type": { "const": "standing-desk" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_standing-desk" } } } },
+
+        { "if": { "properties": { "type": { "const": "tv" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_tv" } } } },
+
+        { "if": { "properties": { "type": { "const": "wall-art" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-art" } } } },
+
+        { "if": { "properties": { "type": { "const": "wall-sconce" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-sconce" } } } },
+
+        { "if": { "properties": { "type": { "const": "wall-sign" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-sign" } } } }
+      ]
+    },
+    "furnitureFade": {
+      "description": "How the item fades when the camera looks in through a wall. \"auto\" (default): items taller than 100 cm fade with their exterior host wall, or a free item with the nearest exterior wall it stands against. \"never\": always drawn. {\"wall\": <id>}: fade with that exterior wall.",
+      "default": "auto",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "auto",
+            "never"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "wall": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "wall"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "furnitureFinish": {
+      "type": "string",
+      "enum": [
+        "matte",
+        "gloss",
+        "metal",
+        "glass",
+        "mirror",
+        "emissive"
+      ],
+      "description": "The closed finish palette (src/furniture/finishes.js)."
+    },
+
+    "furnitureParams_bed": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `bed`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_box": {
+      "type": "object",
+      "description": "Params for `box` (src/furniture/box.js): a plain box, the test and demo stub and a type for minor clutter. Each `default` equals box.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 40,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 40,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 40,
+          "description": "cm, floor (or `elevation`) to top."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#b8ad9c"
+        },
+        "finish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "matte"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_cabinet": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `cabinet`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_clock": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `clock`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_digital-piano": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `digital-piano`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_fridge-freezer": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `fridge-freezer`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_gaming-chair": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `gaming-chair`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_kitchen-base-run": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `kitchen-base-run`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_kitchen-wall-run": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `kitchen-wall-run`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_mirror": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `mirror`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_monitor": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `monitor`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_pc-tower": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `pc-tower`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_plant": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `plant`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_radiator": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `radiator`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_shelf": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `shelf`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_slat-panel": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `slat-panel`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_sofa": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `sofa`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_speaker": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `speaker`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_standing-desk": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `standing-desk`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_tv": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `tv`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_wall-art": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `wall-art`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_wall-sconce": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `wall-sconce`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
+    "furnitureParams_wall-sign": {
+      "type": "object",
+      "x-placeholder": true,
+      "description": "PLACEHOLDER for `wall-sign`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+    },
+
     "lightFixture": {
       "type": "object",
       "title": "A light fixture group within a room",
@@ -1003,6 +1389,14 @@
           "description": "OPTIONAL curtains (blackout or sheer), hung on the room face of a wall. Added in schemaVersion 1.1.",
           "items": {
             "$ref": "#/$defs/curtain"
+          },
+          "default": []
+        },
+        "furniture": {
+          "type": "array",
+          "description": "OPTIONAL placed furniture: free-standing (`at` + `rotation`) or wall-anchored (`wall` + `centre` + `offset`). Each `type` is built by a module named in src/furniture/registry.js. Added in schemaVersion 1.2; an older engine ignores it.",
+          "items": {
+            "$ref": "#/$defs/furnitureItem"
           },
           "default": []
         },

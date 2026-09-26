@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. Currently `"1.1"` for both: `rooms.json` `1.1` added the optional `sensors` block, `geometry.json` `1.1` added the optional `windows` and `curtains`. A `1.0` geometry still loads. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.1"`, which added the optional `sensors` block. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older geometry still loads. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -139,6 +139,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | `doors` | no | The doors. |
 | `windows` | no | Windows and balcony glazing, each carving its own opening — see below. |
 | `curtains` | no | Curtains, blackout or sheer, hung on the room face of a wall — see below. |
+| `furniture` | no | Placed furniture, free-standing or wall-anchored — see below. Needs `schemaVersion` `1.2`. |
 | `lights` | no | The light fixtures, grouped by room. |
 | `cameraPresets` | no | Per-house camera overrides. Usually omit — see below. |
 
@@ -351,6 +352,22 @@ Placed exactly like a door: a wall **id**, a `centre` along it and a `width`.
 Which face of the wall is the inside is **derived from `room`** (the side of the
 wall the room lies on), so there is no inside/outside field to get wrong.
 
+**How the side is derived.** The loader steps a short way off each face of the
+wall *at the window's own position along it* (5, 10, 20 and then 40 cm past the
+face, nearest first) and asks which of the two points is inside the room's
+polygon. If the window's centre is ambiguous, it tries again a centimetre in
+from each end of the window. If the room is on **neither** side there, the
+window is skipped with a warning, and the validator reports an error. If it is
+on **both** sides (the room wraps round a stub wall), the loader falls back to
+the side of the room's bounding-box midpoint and warns. A side found only by a
+far step, where the room's outline stops more than 10 cm short of the wall face,
+is still used, but it warns, because that room is probably not on this wall at
+all. The same rule applies to curtains and to wall-anchored furniture.
+
+(It used to be the side the room's bounding-box midpoint lay on. That is wrong
+for an L-shaped room: the midpoint of an L can sit on the far side of a wall
+that bounds one of its arms.)
+
 ```json
 {
   "id": "lounge_balcony", "label": "Lounge balcony doors", "kind": "balcony",
@@ -378,7 +395,7 @@ wall the room lies on), so there is no inside/outside field to get wrong.
 ### Curtains
 
 Also placed like a door (wall id + `centre` + `width`), on the **room** face of
-the wall. Each is a CurtainSpec pair: floor-to-ceiling, centre-parted, two-tone
+the wall. Which face that is comes from the same probe as for windows (see above). Each is a CurtainSpec pair: floor-to-ceiling, centre-parted, two-tone
 pinch-pleat, under a white cornice with a glowing strip light.
 
 ```json
@@ -407,6 +424,149 @@ pinch-pleat, under a white cornice with a glowing strip light.
 - The strip light is emissive only. It adds no light source to the scene — the
   spec page's three point lights per cornice would overrun the mobile GPU
   budget the quality tiers protect.
+
+### Furniture
+
+Added in `schemaVersion` `1.2`. The validator reports an error for `furniture`
+in a profile that declares an older version. An engine older than 1.2 ignores
+the key.
+
+Every item names a `room`, a `type` and **exactly one** of two anchors.
+
+**Free anchor: `at` + `rotation`.** `at` is the **centre of the footprint** in
+plan centimetres. `rotation` is in degrees, **clockwise in plan** (as drawn,
+with y pointing south). At 0 the item's front faces **south** (+y), at 90 it
+faces **west**, at 180 **north** and at 270 **east**. The front direction is
+`(-sin r, cos r)`. This is exactly Sweet Home 3D's convention: its piece `x`/`y`
+is the footprint centre, and `rotation` is its `angle` in degrees.
+
+```json
+{ "id": "armchair", "room": "lounge", "type": "box",
+  "at": [240, 310], "rotation": 90,
+  "params": { "width": 80, "depth": 85, "height": 95 } }
+```
+
+**Wall anchor: `wall` + `centre` + `offset`.** The item's **back** sits `offset`
+cm (default 0) off the **room** face of `wall`. The back's centre is at `centre`
+along the wall, which is an x coordinate for an east-west wall and a y
+coordinate for a north-south one. The item faces into `room`. Which face is the
+room's is found by the same probe as for windows. `rotation` is not allowed
+with this anchor.
+
+```json
+{ "id": "hall_crate", "room": "hall", "type": "box",
+  "wall": 12, "centre": 415, "offset": 2, "elevation": 30,
+  "params": { "width": 60, "depth": 30, "height": 40, "finish": "gloss" } }
+```
+
+Other fields:
+
+| Field | Default | What it is |
+|---|---|---|
+| `elevation` | `0` | Floor to the bottom of the item, cm. Wall-mounted items use this. |
+| `params` | `{}` | The builder's own options: `width`, `depth` and `height` (cm), plus a colour, a `finish` and anything type-specific. Anything you leave out falls back to the builder's `DEFAULTS`. |
+| `fade` | `"auto"` | `"auto"`: an item taller than 100 cm fades with its host wall if that wall is exterior, or, if it is free-standing, with the nearest exterior wall it stands against (within 30 cm). `"never"`: never fades. `{ "wall": <id> }`: fades with that wall, which must exist and be exterior. |
+| `priority` | `"normal"` | `"minor"` items are dropped on the low GPU tier. |
+| `label`, `notes`, `source` | — | Documentation only. |
+
+The loader skips an item, with a warning, if it names a missing room or wall,
+sits on a wall that is not axis-aligned, has a `centre` beyond the ends of its wall, gives both anchors or neither, gives
+`rotation` with `wall`, or names a `fade.wall` that does not exist. An
+**unknown or not-yet-built `type`** is skipped with a warning too. That is the
+same forward-compatibility rule `decor` follows.
+
+**Rugs and fitted carpet are not furniture.** Use the room's `rug` (with
+`inset: 0` for a fitted carpet).
+
+#### Types, builders and the registry
+
+A type is drawn by a builder module, `src/furniture/<module>.js`.
+`src/furniture/registry.js` maps each type to its module. The registry is a
+data table pre-seeded with every planned type, so adding a type means creating
+the module at the path already named there. Modules are loaded with a dynamic
+`import()`, and only for the types a house actually uses. The `box` type
+(`src/furniture/box.js`) is a plain box, built in, and useful for minor
+clutter.
+
+**The builder contract.** A builder is pure ESM, with `THREE` passed in (no
+`import 'three'`), so it loads in Node tests, the live scene and the spec pages
+alike. A single-type module exports:
+
+- `TYPE`
+- `DEFAULTS`: frozen, in centimetres, and including `width`, `depth` and `height`
+- `build(THREE, params, { detail: 'full' | 'low' })`, which returns a `THREE.Group`
+
+The group's local frame is in **metres**. `y = 0` is the item's bottom, x is
+centred along the width, the **back face is at `z = 0`**, and the front faces
++z. Every material comes from `makeFinish(THREE, finish, color)` in
+`src/furniture/finishes.js`. That is a closed palette of `matte`, `gloss`,
+`metal`, `glass`, `mirror` and `emissive`, and each material is stamped with
+`material.userData.finish` so the renderer can merge a room's furniture into a
+few draws.
+
+**Finish and keep tags: the mesh or the material.** Every mesh part must say
+which palette finish it is. A builder may put the tag on the mesh
+(`mesh.userData.finish`) or on its material (`material.userData.finish`, which
+`makeFinish()` sets for you). Either passes. If both are set, they must agree,
+and a mismatch fails the contract test. Every `glass`, `mirror` and `emissive`
+part must also be marked `keep: true`, on the mesh or on the material, with the
+same agreement rule. Nothing reads these tags directly. The contract test
+(`scripts/test-furniture-core.mjs`) and the renderer's merge both go through
+`partFinish()` and `partKeep()` in `src/furniture/finishes.js`, so what is
+tested and what is drawn cannot diverge.
+
+**The contract test** builds every type whose module exists at its `DEFAULTS`
+and checks all of the following:
+- the bounding box equals `width`/`depth`/`height` within 0.5 cm
+- x is centred, the bottom is at y = 0 and the back is at z = 0
+- every finish tag is in the palette, and the kept finishes are marked keep
+- `detail: 'low'` has no more triangles than `'full'`
+- the module never imports three itself, whether by `'three'`, a `vendor/`
+  path or a dynamic `import()`
+- the builder runs in Node, so it cannot use the DOM (`document`, a canvas)
+
+**Multi-type modules.** A module that builds several related types, such as
+`kitchen.js` or `small-items.js`, exports one object instead:
+
+```js
+export const TYPES = {
+  'kitchen-base-run': { DEFAULTS, build },
+  'kitchen-wall-run': { DEFAULTS, build },
+};
+```
+
+Its registry entries name the property to use in `key`:
+
+```js
+'kitchen-base-run': { path: 'kitchen.js', key: 'kitchen-base-run', spec: 'KitchenSpec' },
+```
+
+A single-type module has `key: null`.
+
+**Cache-busting.** Every builder URL the registry imports carries the app
+version as `?v=`, just as `index.html` does for the scripts it names.
+Otherwise nginx's one-year immutable cache would keep serving the previous
+release's builders. The version comes from the `?v=` the registry itself was
+imported with, then from `window.HOME3D_CONFIG.version`, or it can be passed
+explicitly.
+
+**Schema params and the drift test.** Each type has a
+`$defs/furnitureParams_<type>` block in `houses/schema.json`. `furnitureItem`'s
+`allOf` rules check an item's `params` against it. The block's `default`s must
+equal the builder's `DEFAULTS`, because the validator cannot run JavaScript and
+reads those defaults to compute footprints. `scripts/test-furniture-defaults.mjs`
+fails when:
+
+- a registered type has no block or no `allOf` rule, or a block or rule exists
+  for an unregistered type
+- a type's spec page (`specs/<Spec>.html`, or a `SPEC_PAGES` entry in
+  `index.html`) has merged but its module has not
+- a module exists at a type's registry path while its schema block is still a
+  **placeholder** (`"x-placeholder": true`). Every planned type is pre-seeded
+  with a placeholder, which is allowed only until its module lands. The PR that
+  adds a module replaces its placeholder with the real params in the same PR.
+- a `DEFAULTS` value differs from the schema `default`, or either side has a
+  key the other lacks
 
 ### Lights
 
@@ -757,6 +917,17 @@ that a JSON Schema cannot express:
 - `sensors` presence room ids and door ids resolving against the geometry, and
   `sensors` appearing only in a profile that declares `schemaVersion` 1.1+
 - a `site.latitude` precise enough to locate a building rather than a city
+- which side of its wall each window, curtain and wall-anchored item faces,
+  using the same probe the engine uses: **error** if the room is on neither
+  side there, warning if it is on both
+- `furniture`: an **error** for `furniture` in a profile below `1.2`, a
+  duplicate id, a missing room or wall, a host wall that is not axis-aligned, a
+  `centre` outside the wall's span, or a `fade.wall` that is missing or not
+  exterior. A **warning** for a footprint outside the room's polygon, two items
+  overlapping in plan whose height ranges also overlap, a top above the ceiling,
+  an unregistered or not-yet-built type, a type with no schema defaults (the
+  footprint checks are then skipped), and a worktop overlap of more than 1 cm
+  between two `kitchen-base-run`s
 
 Run it before you commit a profile, and wire it into CI.
 
