@@ -13,6 +13,9 @@ import { HouseLoader } from './house-loader.js';
 import {
   insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, WALK_DEFAULTS
 } from './footstep-walk.js';
+import {
+  WINDOW_REVEAL_CM, windowVerticals, placeOnWall, buildWindow, buildCurtain
+} from './wall-fittings.js';
 
 export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------
@@ -44,6 +47,8 @@ export const Home3DScene = (() => {
   let ROOMS = {};                // room id -> { poly, derived bbox, name, area, ... }
   let LIGHTS = {};               // room id -> channel -> fixture group
   let DOORS = [];                // compiled door schedule
+  let WINDOWS = [];              // compiled windows (house-loader compileWindow)
+  let CURTAINS = [];             // compiled curtains, sheers included (compileCurtain)
   let WALL_COLOR = 0xece9e1;
   let DOOR_SLAB_COLOR = 0xece4d4;
   let CEILING_COLOR = 0xf2efe9;
@@ -115,6 +120,8 @@ export const Home3DScene = (() => {
     ROOMS = house.rooms;
     LIGHTS = house.lights;
     DOORS = house.doors;
+    WINDOWS = house.windows || [];
+    CURTAINS = house.curtains || [];
 
     WALL_COLOR = house.materials.wallColor;
     DOOR_SLAB_COLOR = house.materials.doorSlabColor;
@@ -1192,6 +1199,7 @@ export const Home3DScene = (() => {
     }
 
     const wallMeshes = [];
+    const wallEntryById = {};   // wall id -> its first wallMeshes entry (see addWallBox)
     // HEIGHTS REMODEL (2026-07-11, ACK'd) — wall vertical extents now depend
     // on the `outer` flag, and top at the CEILING UNDERSIDE (y=WH), not the
     // ceiling top:
@@ -1260,7 +1268,11 @@ export const Home3DScene = (() => {
         wall.castShadow = true;
         wall.receiveShadow = true;
         scene.add(wall);
-        wallMeshes.push({ mesh: wall, nx, nz, outer: !!outer });
+        const entry = { mesh: wall, nx, nz, outer: !!outer };
+        wallMeshes.push(entry);
+        // First registered box per wall id: windows and curtains on this wall
+        // borrow its (derived-outward) normal so they fade in lockstep with it.
+        if (!wallEntryById[id]) wallEntryById[id] = entry;
       };
       const horiz = Math.abs(y2 - y1) < 0.01, vert = Math.abs(x2 - x1) < 0.01;
       // Doors sitting on this segment
@@ -1275,7 +1287,12 @@ export const Home3DScene = (() => {
         }
         return false;
       });
-      if (dts.length === 0) {
+      // Windows cut through this segment -- as its host wall or as another
+      // leaf of the same cavity wall. Matched by wall ID, not by coordinate:
+      // the profile names the walls explicitly (see house-loader compileWindow).
+      const wts = WINDOWS.filter(wn => (horiz || vert) &&
+        (String(wn.wallId) === String(id) || wn.throughWallIds.some(t => String(t) === String(id))));
+      if (dts.length === 0 && wts.length === 0) {
         addWallBox((wx1+wx2)/2, (wz1+wz2)/2, len, WALL_YC, WALL_FULL_H);
         return;
       }
@@ -1287,22 +1304,32 @@ export const Home3DScene = (() => {
       };
       const p1 = horiz ? x1 : y1, p2 = horiz ? x2 : y2;
       const lo = Math.min(p1, p2), hi = Math.max(p1, p2);
+      // Each opening: a..b along the wall axis (cm), and the vertical hole
+      // bot..top (m). A door's hole runs down to the wall's own base (nothing
+      // below it); a window's hole leaves wall below the cill as well as the
+      // lintel above.
       const ops = dts.map(d => {
         const cw = d.w + 2 * REVEAL_CM;
-        return { a: d.c - cw / 2, b: d.c + cw / 2 };
-      }).sort((u, v) => u.a - v.a);
+        return { a: d.c - cw / 2, b: d.c + cw / 2, bot: WALL_BOTTOM_Y, top: OPEN_H };
+      }).concat(wts.map(wn => {
+        const v = windowVerticals(wn);
+        const cw = wn.w + 2 * WINDOW_REVEAL_CM;
+        return { a: wn.c - cw / 2, b: wn.c + cw / 2, bot: v.holeBot, top: v.holeTop };
+      })).sort((u, v) => u.a - v.a);
       let cur = lo;
       ops.forEach(o => {
         boxAt(cur, Math.min(Math.max(o.a, lo), hi), WALL_YC, WALL_FULL_H);
         cur = Math.max(cur, Math.min(o.b, hi));
       });
       boxAt(cur, hi, WALL_YC, WALL_FULL_H);
-      // Lintel above each opening (wall remains from OPEN_H up to the wall top,
-      // now WALL_TOP_Y = WH = the ceiling underside, so the lintel caps the
-      // opening up to the ceiling — no longer through the ceiling slab).
+      // Lintel above each opening (wall remains from the hole's top up to the
+      // wall top, WALL_TOP_Y = WH = the ceiling underside, so the lintel caps
+      // the opening up to the ceiling — no longer through the ceiling slab),
+      // and for a window the wall below its cill.
       ops.forEach(o => {
         const a = Math.max(o.a, lo), b = Math.min(o.b, hi);
-        boxAt(a, b, (OPEN_H + WALL_TOP_Y) / 2, WALL_TOP_Y - OPEN_H);
+        if (WALL_TOP_Y - o.top > 0.005) boxAt(a, b, (o.top + WALL_TOP_Y) / 2, WALL_TOP_Y - o.top);
+        if (o.bot - WALL_BOTTOM_Y > 0.005) boxAt(a, b, (WALL_BOTTOM_Y + o.bot) / 2, o.bot - WALL_BOTTOM_Y);
       });
     });
 
@@ -1639,6 +1666,33 @@ export const Home3DScene = (() => {
         });
       });
     }
+
+    // === Windows + curtains (per WindowSpec / BalconyWindowSpec / CurtainSpec) ===
+    // The wall loop above has already carved each window's opening (through
+    // its host wall and any `throughWalls` leaves). Each assembly is built in
+    // its own wall-local frame (wall-fittings.js) and placed on the wall: a
+    // window at the host wall's OUTER face, a curtain at its ROOM face.
+    //
+    // FADE: on an exterior wall the opaque parts must fade with the wall, or
+    // looking into a room from outside would show a frame and a pair of
+    // curtains floating where the wall was. They are registered into
+    // wallMeshes AFTER deriveOutwardNormals below, borrowing the host wall's
+    // own (by then corrected) normal, so they cross the fade threshold in
+    // lockstep with it. Glass and sheers are already translucent and stay out
+    // of the fade -- it would drive them to opacity 1.
+    const fittingFades = [];   // { mesh, wallId }
+    WINDOWS.forEach(wn => {
+      const built = buildWindow(THREE, wn, wn.exterior);
+      placeOnWall(built.group, wn, wn.outerFace, tx, tz);
+      scene.add(built.group);
+      if (wn.exterior) built.fadeMeshes.forEach(mesh => fittingFades.push({ mesh, wallId: wn.wallId }));
+    });
+    CURTAINS.forEach(cu => {
+      const built = buildCurtain(THREE, cu, cu.exterior);
+      placeOnWall(built.group, cu, cu.roomFace, tx, tz);
+      scene.add(built.group);
+      if (cu.exterior) built.fadeMeshes.forEach(mesh => fittingFades.push({ mesh, wallId: cu.wallId }));
+    });
 
     // ── The ONE house-wide FLOOR + the ONE CEILING ────────────────────────
     // Two concerns are decoupled here: (1) ONE visible floor and ONE ceiling,
@@ -2610,6 +2664,17 @@ export const Home3DScene = (() => {
         }
       });
     })();
+
+    // Windows + curtains on exterior walls join the fade now, with their host
+    // wall's DERIVED outward normal (see the fittings block above). Pushed
+    // after the derivation on purpose: the derivation groups entries by
+    // normal and votes on mesh positions, and these meshes sit inside
+    // wall-local groups whose `position` is not a world position.
+    fittingFades.forEach(({ mesh, wallId }) => {
+      const host = wallEntryById[wallId];
+      if (!host || !host.outer) return;
+      wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true });
+    });
 
     return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom };
   }

@@ -336,6 +336,14 @@ function buildBalcony(t, group, THREE, ctx) {
   const WALL_H = t.wallHeight * cm;
   const REVEAL = 4 * cm;
   const doorOnWest = t.doorOnWest !== false;
+  // HANDEDNESS (fixed 2026-09-26). This model's frame is y = up and
+  // +z = NORTH (the room), so +x = up x north = WEST -- not east. The model
+  // used to treat +x as east, which mirrored it: with "door on west" the door
+  // sat on the LEFT seen from inside, when facing south from inside puts west
+  // on the RIGHT. (The top-down SVG above is drawn north-up, where east IS
+  // screen-right, and was correct all along.) Everything below is written in
+  // terms of the local side, so the compass is resolved once, here.
+  const doorAtNegX = !doorOnWest;
 
   // ---- DEPTH REFERENCE FRAME (matches WindowSpec) ----
   // Inner leaf SOUTH face at z = 0 — this is where the glazing frame's south face
@@ -350,7 +358,8 @@ function buildBalcony(t, group, THREE, ctx) {
 
   const frameMat = new THREE.MeshStandardMaterial({ color:0xf1ede2, roughness:0.5 });
   const sashMat  = new THREE.MeshStandardMaterial({ color:0xf6f5f1, roughness:0.55 });
-  const platMat  = new THREE.MeshStandardMaterial({ color:0xd8cfbb, roughness:0.8 });
+  // White cill, matching WindowSpec (was a tan/stone tone).
+  const platMat  = new THREE.MeshStandardMaterial({ color:0xf1ede2, roughness:0.65 });
   const handleMat = new THREE.MeshStandardMaterial({ color:0xeef0f2, roughness:0.18, metalness:0.95 });
   const glassMat = new THREE.MeshPhysicalMaterial({
     color:0xbcd8e6, roughness:0.05, metalness:0.0,
@@ -391,18 +400,22 @@ function buildBalcony(t, group, THREE, ctx) {
   asm.add(frameMesh);
 
   // ---- tiny platform / sill at the very bottom (step-over), full run ----
+  // fix (2026-09-26, as WindowSpec's): the platform was TOTAL*0.9 deep and
+  // off-centre, overhanging the outside face and stopping short of the inside
+  // one -- an open gap at the room-side foot of the opening. It now spans
+  // exactly the full wall thickness, flush at both faces.
   const PLAT_H = Math.max(SILL, 2 * cm);
-  const PLAT_D = TOTAL * 0.9;
+  const PLAT_D = TOTAL;
   const platform = new THREE.Mesh(
     new THREE.BoxGeometry(GW + 2*REVEAL, PLAT_H, PLAT_D), platMat
   );
-  platform.position.set(0, PLAT_H/2, frameSouthZ + T4*0.2);
+  platform.position.set(0, PLAT_H/2, (Z_32_SOUTH + Z_4_NORTH) / 2);
   platform.castShadow = true; platform.receiveShadow = true;
   asm.add(platform);
 
   // ---- mullion (vertical post) between fixed pane (east) and hinged door (west) ----
-  // local x of the split, measured from centre. EAST = +x, WEST = -x.
-  const splitLocalX = doorOnWest ? (-GW/2 + DOOR_W) : (+GW/2 - DOOR_W);
+  // local x of the split, measured from centre. WEST = +x, EAST = -x (see HANDEDNESS above).
+  const splitLocalX = doorAtNegX ? (-GW/2 + DOOR_W) : (+GW/2 - DOOR_W);
   const MULLION_W = Math.max(FT, 4*cm);
   const mullion = new THREE.Mesh(
     new THREE.BoxGeometry(MULLION_W, GLAZ_H, FD * 0.9), frameMat
@@ -417,8 +430,12 @@ function buildBalcony(t, group, THREE, ctx) {
   const fixedGroup = new THREE.Group();
   fixedGroup.name = 'fixedGlassEast';
   const SASH_FACE = Math.max(FT * 0.8, 3 * cm);
-  const fixX1 = doorOnWest ? (splitLocalX + MULLION_W/2) : (-GW/2 + SASH_FACE);
-  const fixX2 = doorOnWest ? (+GW/2 - SASH_FACE)          : (splitLocalX - MULLION_W/2);
+  // fix (2026-09-26): the far edge was inset by SASH_FACE from the jamb even
+  // though this pane has no stile there, leaving an open sliver between the
+  // glass and the frame. The pane now runs from the mullion face to the
+  // frame's inner edge, where the frame ring covers the join.
+  const fixX1 = doorAtNegX ? (splitLocalX + MULLION_W/2) : (-GW/2);
+  const fixX2 = doorAtNegX ? (+GW/2)                     : (splitLocalX - MULLION_W/2);
   const fixW  = Math.max(0.01, fixX2 - fixX1);
   const fixCx = (fixX1 + fixX2) / 2;
   function fixedBar(w, h, x, y) {
@@ -450,8 +467,8 @@ function buildBalcony(t, group, THREE, ctx) {
   // sash). Built in a pivot group at the hinge line; kinematics driven
   // by animate().
   // =================================================================
-  const doorX1 = doorOnWest ? (-GW/2 + 0)              : (splitLocalX + MULLION_W/2);
-  const doorX2 = doorOnWest ? (splitLocalX - MULLION_W/2) : (+GW/2 - 0);
+  const doorX1 = doorAtNegX ? (-GW/2 + 0)              : (splitLocalX + MULLION_W/2);
+  const doorX2 = doorAtNegX ? (splitLocalX - MULLION_W/2) : (+GW/2 - 0);
   // fix: was `(doorX2-doorX1) - SASH_FACE*0.5` -- an undocumented shrink
   // that left the leaf permanently ~2.8cm short of the mullion (default
   // tweaks), even at 0% (rest), not just mid-sweep. doorX1..doorX2 is
@@ -459,8 +476,8 @@ function buildBalcony(t, group, THREE, ctx) {
   // face -- use it directly so the leaf reaches the mullion exactly.
   const doorLeafW = Math.max(0.01, doorX2 - doorX1);
   // hinge sits on the OUTER jamb of the door quarter (SW corner for west door)
-  const hingeX = doorOnWest ? doorX1 : doorX2;
-  const leafDir = doorOnWest ? +1 : -1;   // leaf body extends from hinge toward the mullion
+  const hingeX = doorAtNegX ? doorX1 : doorX2;
+  const leafDir = doorAtNegX ? +1 : -1;   // leaf body extends from hinge toward the mullion
 
   const doorPivot = new THREE.Group();
   doorPivot.name = 'balconyDoorPivot';
@@ -558,14 +575,14 @@ function buildBalcony(t, group, THREE, ctx) {
   // The door swings OUTWARD (south, −z), NOT into the room. This flips
   // the sign of both branches below vs the original inward-opening
   // kinematics.
-  // West door: leaf tip starts at local (x=+d, z=0) (leafDir=+1). Swinging
+  // Door at local -x (hinge on the -x jamb): leaf tip starts at local (x=+d, z=0) (leafDir=+1). Swinging
   // outward (−z) requires z' < 0 → -d·sinθ < 0 → θ > 0 (positive).
-  // East door mirrors: leaf tip at (x=-d, z=0) (leafDir=-1); z' = d·sinθ < 0
+  // Door at local +x mirrors: leaf tip at (x=-d, z=0) (leafDir=-1); z' = d·sinθ < 0
   // → θ < 0 (negative).
   ctx.doorPivot = doorPivot;
   const openN = Math.max(0, Math.min(100, t.openPct)) / 100;
   const MAX_ANGLE = (110 * Math.PI) / 180;   // swings ~110° open, OUTWARD (−z / south)
-  ctx.doorTargetAngle = doorOnWest ? +openN * MAX_ANGLE : -openN * MAX_ANGLE;
+  ctx.doorTargetAngle = doorAtNegX ? +openN * MAX_ANGLE : -openN * MAX_ANGLE;
   if (ctx.doorAngle === undefined) ctx.doorAngle = ctx.doorTargetAngle;
   doorPivot.rotation.y = ctx.doorAngle;
 

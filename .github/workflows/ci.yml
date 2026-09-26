@@ -153,6 +153,16 @@ jobs:
           # direction actually changes. See the script's header.
           set -euo pipefail
           node scripts/test-footstep-turn.mjs
+      - name: Windows and curtains compile and place correctly
+        run: |
+          # Asserts the loader pass-through for windows[]/curtains[], the
+          # DERIVED inside/outside side of each fitting (backwards, every frame
+          # sits on the room face and every curtain hangs outside the building),
+          # the cavity-wall cill depth, the balcony door's compass end, and that
+          # a blackout curtain never folds back through a sheer behind it.
+          # Builds real three.js geometry from the vendored module.
+          set -euo pipefail
+          node scripts/test-wall-fittings.mjs
       - name: WebGL failure is classified correctly
         run: |
           # Asserts which of the two WebGL failures we tell the user about. Out
