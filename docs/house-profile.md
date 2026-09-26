@@ -514,29 +514,44 @@ same forward-compatibility rule `decor` follows.
 `src/furniture.js` builds each item with its builder and places it: the group
 sits at the item's back-centre, `elevation` cm up, turned by `-rotation` about
 the vertical (plan rotation is clockwise, three.js's is anticlockwise).
-`src/furniture/merge.js` then folds every room's parts into a few **buckets**:
+`src/furniture/merge.js` then folds the whole house's parts into a few
+**buckets**. The camera almost always frames the whole house, so buckets are
+house-wide, not per room:
 
-- **Opaque parts** (`matte`, `gloss`, `metal`) become one vertex-coloured mesh
-  per room, finish and fade wall. All the matte furniture in a room is one draw
-  whatever its colours.
-- **Kept parts** (`glass`, `mirror`, `emissive`, anything marked `keep`, and
-  any part whose material is textured or translucent) keep **their builder's
-  own material**: type, opacity, `transparent`, `side`, `depthWrite`,
-  emissive intensity and maps all survive. They merge only with parts whose
-  material is equivalent, one mesh per room, material and fade wall. All of a
-  room's identical screens are still one draw.
-- Opaque parts keep their `side` (a double-sided part gets its own bucket)
-  and any vertex colours they carry.
+- **Opaque parts** (`matte`, `gloss`, `satin`, `metal`, and a kept part whose
+  material is exactly a palette one, such as a plain mirror) become ONE
+  vertex-coloured mesh per fade wall, for every finish at once. Each vertex
+  carries its finish as a uv into a small palette texture, read through the
+  material's roughness and metalness maps, so a gloss handle on a matte
+  carcass still looks gloss.
+- **Glowing parts** (the `emissive` finish, opaque and untextured: screens,
+  LED edges, bulbs) become ONE unlit, vertex-coloured mesh per fade wall.
+  Each glows at its emissive colour plus its base colour, which stands in for
+  the room light a lit material would add. It adds no light to the room.
+- **Everything else kept** (glass, translucent parts, textured parts, and
+  parts marked `keep` whose material is not a palette one) keeps **its
+  builder's own material**: type, opacity, `transparent`, `side`,
+  `depthWrite`, emissive intensity and maps all survive. These merge only with
+  parts whose material is equivalent, one mesh per material and fade wall.
+- A double-sided part gets its own bucket, and parts keep any vertex colours
+  they carry.
+
+The opaque and glowing buckets are created `transparent` at full opacity and
+drawn first among transparent objects. The fade needs its copy of each to be
+transparent, and three.js compiles a separate shader for an opaque material,
+so this keeps one shader each. `bucketScope: 'room'` (a `buildFurnitureSync`
+option) restores per-room buckets for measuring.
 
 **Shadows.** Furniture meshes receive shadows but never cast them directly.
-Each furnished room instead gets one **shadow proxy**: a copy of the
-geometry of that room's casters, drawn with a material that writes neither
-colour nor depth, so it is invisible in the picture and casts in every shadow
-pass. An item casts when it stands low (`elevation` under 30 cm) and is at
-least 40 cm tall; wall-hung things and glass do not. A proxy over 15,000
-triangles, or a house over 60,000 in all (largest rooms first), is built from
-the builders' `detail: 'low'` output instead. No proxies are built on the low
-GPU tier, or when the scene has no shadows at all.
+Instead one **shadow proxy** is built for the whole house (two when some rooms
+drop to low detail): a copy of the geometry of every caster, drawn with a
+material that writes neither colour nor depth. It is invisible in the picture
+and casts in every shadow pass. An item casts when it stands low (`elevation`
+under 30 cm) and is at least 40 cm tall; wall-hung things and glass do not. A
+room whose casters come to over 15,000 triangles, or a house over 60,000 in
+all (largest rooms first), takes its casters from the builders'
+`detail: 'low'` output instead, in the second proxy. No proxies are built on
+the low GPU tier, or when the scene has no shadows at all.
 
 **Fade.** An item fades with **one** wall, chosen by `fade` (above). It fades
 exactly as the wall does. Glass, and anything else translucent, never fades:
@@ -547,9 +562,10 @@ receive and cast no shadow.
 **The low GPU tier** asks every builder for `detail: 'low'` and drops
 `priority: "minor"` items.
 
-**Timing.** Furniture is attached after the house's own shader precompile has
-finished, already compiled. It appears one frame later and never delays the
-first picture. `?furniture=0` hides it (see `docs/url-parameters.md`).
+**Timing.** Furniture is built after the house's own shader precompile has
+finished, **time-sliced**: the build hands the main thread back every few
+milliseconds, so a full house never becomes one long task. It is then
+compiled and attached in one go, and never delays the first picture. `?furniture=0` hides it (see `docs/url-parameters.md`).
 
 **Clicks.** Furniture is not clickable. A click on a piece of furniture selects
 the room it stands in, as a click on the floor there would.

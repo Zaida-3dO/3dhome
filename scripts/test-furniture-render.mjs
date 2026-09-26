@@ -8,9 +8,17 @@
  *   1. World placement in all four orientations, for BOTH anchor forms,
  *      checked on a marker part at the item's front-right corner. A sign
  *      error in group.rotation.y mirrors that marker at 90 and 270 degrees.
- *   2. Merge buckets: same-room opaque parts of one finish are ONE mesh;
- *      kept finishes stay separate (glass is one mesh per room and colour);
- *      finish tags are read through partFinish/partKeep.
+ *   2. Merge buckets (task f17a127f): every opaque finish in the house is
+ *      ONE palette mesh (finish per vertex through the palette texture);
+ *      every glowing part is ONE unlit vertex-coloured MeshBasic mesh; glass
+ *      keeps its builder material, one mesh per tint house-wide;
+ *      `bucketScope: 'room'` still splits per room. Finish tags are read through
+ *      partFinish/partKeep.
+ *   2b. The full-house fixture (scripts/make-perf-fixture.mjs, every
+ *      registered builder) stays inside the perf budget's bucket caps.
+ *   7b. The time-sliced build (task c399c2a4): it yields between steps,
+ *      builds exactly what the one-task build does, and a cancel part-way
+ *      frees everything and attaches nothing.
  *   3. Shadows (plan A1): beauty meshes never cast; one proxy per furnished
  *      room, built from exactly the casters' beauty geometry, writing neither
  *      colour nor depth. A stub-WebGL r160 renderer then shows the proxy IS
@@ -99,6 +107,17 @@ function centreOf(mesh) {
   bboxOf(mesh).getCenter(c);
   return c;
 }
+// The vertices of a palette bucket that carry one finish (by their uv).
+function finishBox(mesh, finish) {
+  const pos = mesh.geometry.attributes.position, uv = mesh.geometry.attributes.uv;
+  const u = M.paletteU(finish), b = new THREE.Box3(), v = new THREE.Vector3();
+  let n = 0;
+  for (let i = 0; i < pos.count; i++) {
+    if (Math.abs(uv.getX(i) - u) > 1e-6) continue;
+    b.expandByPoint(v.fromBufferAttribute(pos, i)); n++;
+  }
+  return n ? b : null;
+}
 
 // A 400 x 300 room (x 100..500, y 100..400) inside four 10 cm walls; walls 1
 // and 2 exterior. Same fixture shape as test-furniture-core.mjs.
@@ -144,10 +163,16 @@ const build = (h, quality, extra, opts) => quietly(() => F.buildFurnitureSync(TH
   cases.forEach(c => {
     const h = compile([c.item]);
     const res = build(h);
-    const body = res.beauty.find(m => m.userData.finish === 'matte');
-    const mark = res.beauty.find(m => m.userData.finish === 'gloss');
-    check(c.item.id + ': two buckets (body, marker)', res.beauty.length === 2 && body && mark, res.beauty.map(m => m.userData.bucket));
-    if (!body || !mark) return;
+    // Body (matte) and marker (gloss) share ONE palette bucket; the finish
+    // of each vertex is its uv.
+    const pal = res.beauty.length === 1 && res.beauty[0].userData.cls === 'opaque' ? res.beauty[0] : null;
+    check(c.item.id + ': one palette bucket for both finishes', !!pal, res.beauty.map(m => m.userData.bucket));
+    if (!pal) return;
+    const bodyBox = finishBox(pal, 'matte'), markBox = finishBox(pal, 'gloss');
+    check(c.item.id + ': both finishes present in it', !!bodyBox && !!markBox);
+    if (!bodyBox || !markBox) return;
+    const body = { geometry: { computeBoundingBox() {}, boundingBox: bodyBox } };
+    const mark = { geometry: { computeBoundingBox() {}, boundingBox: markBox } };
     const [f, u] = FR[c.rot];
     // Marker centre: back + u*(w/2 - 1) + f*(d - 1), at mid-height.
     const ex = c.back[0] + u[0] * 29 + f[0] * 19, ey = c.back[1] + u[1] * 29 + f[1] * 19;
@@ -180,23 +205,55 @@ const build = (h, quality, extra, opts) => quietly(() => F.buildFurnitureSync(TH
     { id: 'm', room: 'q', type: 'box', at: [800, 250] }
   ]);
   const res = build(h);
-  const by = (room, finish) => res.beauty.filter(m => m.userData.room === room && m.userData.finish === finish);
-  check('two same-room matte items -> ONE mesh', by('r', 'matte').length === 1 && by('r', 'matte')[0].userData.parts === 2,
-    by('r', 'matte').map(m => m.userData.bucket));
-  check('matte bucket is vertex-coloured, both colours present', (() => {
-    const m = by('r', 'matte')[0]; if (!m) return false;
+  const cls = c => res.beauty.filter(m => m.userData.cls === c);
+  const pal = cls('opaque');
+  check('house scope: every opaque part in both rooms -> ONE palette mesh', pal.length === 1 &&
+    pal[0].userData.parts === 3 && pal[0].userData.rooms.sort().join() === 'q,r', res.beauty.map(m => m.userData.bucket));
+  check('palette bucket is vertex-coloured, all three colours present', (() => {
+    const m = pal[0]; if (!m) return false;
     const col = m.geometry.attributes.color; if (!col || !m.material.vertexColors) return false;
-    const reds = new Set(); for (let i = 0; i < col.count; i++) reds.add(col.getX(i) > col.getY(i) ? 'r' : 'g');
-    return reds.size === 2;
+    const seen = new Set();
+    for (let i = 0; i < col.count; i++) seen.add(col.getX(i) > col.getY(i) + 0.1 ? 'r' : (col.getY(i) > col.getX(i) + 0.1 ? 'g' : 'grey'));
+    return seen.size === 3;
   })());
-  check('glass: one mesh per room and colour', by('r', 'glass').length === 2 && by('q', 'glass').length === 1,
+  const glass = res.beauty.filter(m => m.userData.finish === 'glass');
+  check('glass: one mesh per tint, house-wide (both rooms\' #ccddee together)', glass.length === 2 &&
+    glass.some(m => m.userData.parts === 3 && m.userData.rooms.sort().join() === 'q,r') && glass.some(m => m.userData.parts === 1),
     res.beauty.map(m => m.userData.bucket));
-  check('glass same colour merged', by('r', 'glass').some(m => m.userData.parts === 2));
-  check('glass keeps a real transparent material', by('r', 'glass').every(m => m.material.transparent && !m.material.vertexColors && m.material.opacity < 0.5));
-  check('screens: one emissive mesh for one colour', by('r', 'emissive').length === 1 && by('r', 'emissive')[0].userData.parts === 2);
-  check('other room is its own bucket', by('q', 'matte').length === 1);
-  check('one shared material per opaque finish across rooms', by('r', 'matte')[0].material === by('q', 'matte')[0].material);
-  check('total draws', res.beauty.length === 6, res.beauty.map(m => m.userData.bucket));
+  check('glass keeps a real transparent material (no vertex colours: no new program)', glass.every(m =>
+    m.material.transparent && !m.material.vertexColors && m.material.opacity < 0.5 && m.material.depthWrite === false));
+  const glow = cls('glow');
+  check('screens: ONE unlit glow mesh', glow.length === 1 && glow[0].userData.parts === 2 &&
+    glow[0].material.isMeshBasicMaterial && glow[0].material.vertexColors && glow[0].receiveShadow === false);
+  check('glow colour = emissive + GLOW_BASE_SHARE x base colour', (() => {
+    const col = glow[0] && glow[0].geometry.attributes.color; if (!col) return false;
+    const c = new THREE.Color('#3366ff'), want = c.r * (1 + M.GLOW_BASE_SHARE);
+    return near(col.getX(0), want) && near(col.getZ(0), c.b * (1 + M.GLOW_BASE_SHARE));
+  })(), glow[0] && glow[0].geometry.attributes.color.getX(0));
+  check('total draws: palette + 2 glass + glow', res.beauty.length === 4, res.beauty.map(m => m.userData.bucket));
+  check('palette and glow are transparent at opacity 1, drawn first, glow after palette (screen wins a depth tie)',
+    [pal[0], glow[0]].every(m => m.material.transparent && m.material.opacity === 1 && m.material.depthWrite) &&
+    pal[0].renderOrder < glow[0].renderOrder && glow[0].renderOrder < 0 && glass.every(m => m.renderOrder === 0));
+  // Room scope keeps the per-room split (for measuring the two).
+  const rr = build(h, ULTRA, null, { bucketScope: 'room' });
+  const byRoom = room => rr.beauty.filter(m => m.userData.room === room);
+  check('room scope: each room its own buckets', byRoom('r').length === 4 && byRoom('q').length === 2,
+    rr.beauty.map(m => m.userData.bucket));
+  check('room scope: one shared palette material across rooms',
+    byRoom('r').find(m => m.userData.cls === 'opaque').material === byRoom('q').find(m => m.userData.cls === 'opaque').material);
+  // The palette texture: G = roughness, B = metalness for every finish, and
+  // the palette material reads it through both maps at factor 1.
+  const pm = pal[0].material, tex = pm.roughnessMap;
+  check('palette material: roughness and metalness come from the palette texture', tex && pm.metalnessMap === tex &&
+    pm.roughness === 1 && pm.metalness === 1 && tex.magFilter === THREE.NearestFilter && tex.generateMipmaps === false);
+  check('palette texel per finish = FINISH_PARAMS', M.PALETTE_FINISHES.every((f, i) => {
+    const d = tex.image.data, P = Fin.FINISH_PARAMS[f];
+    return Math.abs(d[i * 4 + 1] / 255 - (P.roughness != null ? P.roughness : 1)) < 0.5 / 255 + 1e-9 &&
+      Math.abs(d[i * 4 + 2] / 255 - (P.metalness != null ? P.metalness : 0)) < 0.5 / 255 + 1e-9;
+  }));
+  check('a vertex uv lands on its own finish texel', ['matte', 'gloss', 'satin', 'metal', 'mirror'].every(f =>
+    Math.floor(M.paletteU(f) * M.PALETTE_FINISHES.length) === M.PALETTE_FINISHES.indexOf(f)));
+  check('the palette texture is freed with the furniture', res.extraDisposables.indexOf(tex) !== -1);
   // The tag is read through partFinish: a finish on the MESH only is honoured.
   const g = new THREE.Group();
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial());
@@ -210,9 +267,17 @@ const build = (h, quality, extra, opts) => quietly(() => F.buildFurnitureSync(TH
   check('untagged part is quantised, with a warning', flat2.parts[0].finish === 'metal' && flat2.warnings.length === 1, flat2);
   const g3 = new THREE.Group();
   const kept = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), Fin.makeFinish(THREE, 'matte'));
+  kept.material.polygonOffset = true;   // not a palette material
   kept.userData.keep = true;
   g3.add(kept);
   check('keep flag (partKeep) keeps a matte part', M.flattenGroup(THREE, g3).parts[0].keep === true);
+  // ...unless its material IS the palette's: then it draws identically in the
+  // palette bucket and goes there.
+  const g4 = new THREE.Group();
+  const plain = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), Fin.makeFinish(THREE, 'matte'));
+  plain.userData.keep = true;
+  g4.add(plain);
+  check('a kept part with an exact palette material joins the palette', M.flattenGroup(THREE, g4).parts[0].keep === false);
 }
 
 // ---- 3. shadows: beauty never casts, one proxy per room -----------------------
@@ -229,19 +294,24 @@ const build = (h, quality, extra, opts) => quietly(() => F.buildFurnitureSync(TH
   check('beauty meshes never cast', res.beauty.every(m => m.castShadow === false));
   check('opaque beauty receives, translucent (glass) does not',
     res.beauty.every(m => m.receiveShadow === !(m.userData.finish === 'glass')));
-  check('one proxy per furnished room', res.shadowProxies.length === 2, res.shadowProxies.map(p => p.name));
-  const pr = res.shadowProxies.find(p => p.userData.room === 'r');
+  check('ONE proxy for the whole house (both furnished rooms)', res.shadowProxies.length === 1 &&
+    res.shadowProxies[0].userData.rooms.sort().join() === 'q,r', res.shadowProxies.map(p => p.name));
+  const pr = res.shadowProxies[0];
   check('proxy casts, does not receive, is frustum-culled', pr && pr.castShadow && !pr.receiveShadow && pr.frustumCulled);
   check('proxy writes neither colour nor depth', pr && pr.material.colorWrite === false && pr.material.depthWrite === false);
   check('proxy is position-only', pr && Object.keys(pr.geometry.attributes).join() === 'position');
   check('proxy has a bounding sphere', pr && pr.geometry.boundingSphere && pr.geometry.boundingSphere.radius > 0);
   // Casters: elevation < 30 and height >= 40, glass excluded. A box is 12
-  // triangles, so 'tall' + 'tall2' only = 24 triangles = 72 vertices.
-  check('proxy = exactly the two casters (height 40 in, 39 out, elevation 30 out, glass out)',
-    pr && pr.geometry.attributes.position.count === 72, pr && pr.geometry.attributes.position.count);
+  // triangles, so 'tall' + 'tall2' + 'qtall' only = 36 triangles = 108 vertices.
+  check('proxy = exactly the three casters (height 40 in, 39 out, elevation 30 out, glass out)',
+    pr && pr.geometry.attributes.position.count === 108, pr && pr.geometry.attributes.position.count);
+  const perRoom = build(h, ULTRA, null, { proxyScope: 'room' });
+  const prr = perRoom.shadowProxies.find(p => p.userData.room === 'r');
+  check('proxyScope room: one proxy per furnished room, room r = its two casters',
+    perRoom.shadowProxies.length === 2 && prr && prr.geometry.attributes.position.count === 72);
   // Identical vertices to the beauty geometry: every proxy vertex is a vertex
   // of the room's matte bucket.
-  const matte = res.beauty.find(m => m.userData.room === 'r' && m.userData.finish === 'matte');
+  const matte = res.beauty.find(m => m.userData.cls === 'opaque');
   const key = (a, i) => a.getX(i).toFixed(5) + ',' + a.getY(i).toFixed(5) + ',' + a.getZ(i).toFixed(5);
   const beautyVerts = new Set();
   for (let i = 0; i < matte.geometry.attributes.position.count; i++) beautyVerts.add(key(matte.geometry.attributes.position, i));
@@ -254,7 +324,7 @@ const build = (h, quality, extra, opts) => quietly(() => F.buildFurnitureSync(TH
     res.depthPrecompile.material.depthPacking === THREE.RGBADepthPacking);
   const noShadows = build(h, { tier: 'ultra', sunShadow: false, roomShadowLights: false });
   check('no shadows at all -> no proxies', noShadows.shadowProxies.length === 0 && noShadows.depthPrecompile === null);
-  check('mid tier (sun only) still gets proxies', build(h, MID).shadowProxies.length === 2);
+  check('mid tier (sun only) still gets proxies', build(h, MID).shadowProxies.length === 1);
 }
 
 // ---- 3b. r160 actually draws the proxy in the shadow pass only -----------------
@@ -376,7 +446,11 @@ function lightScene() {
     { id: 'b1', room: 'q', type: 'dense', at: [700, 200] }    // room q: t64 < 15k
   ]);
   const res = build(h, ULTRA, { dense: Dense });
-  const pr = room => res.shadowProxies.find(p => p.userData.room === room);
+  // House scope: the capped room's casters go into the LOW proxy, every
+  // other room's into the full one.
+  const pr = room => res.shadowProxies.find(p => p.userData.rooms.indexOf(room) !== -1);
+  check('house scope: two proxies, full and low', res.shadowProxies.length === 2 &&
+    res.shadowProxies.filter(p => p.userData.detail === 'low').length === 1, res.shadowProxies.map(p => p.name));
   check('fixture: room r is over the per-room cap', 2 * t64 > F.PROXY_ROOM_TRI_CAP && t64 < F.PROXY_ROOM_TRI_CAP, t64);
   check('over-cap room proxy comes from a low build', pr('r').userData.detail === 'low' && pr('r').userData.triangles === 24,
     pr('r').userData);
@@ -387,7 +461,8 @@ function lightScene() {
     pr('r').customDepthMaterial.polygonOffsetUnits === 2);
   check('under-cap room stays full detail', pr('q').userData.detail === 'full' && pr('q').userData.triangles === t64);
   check('beauty is still full detail in the over-cap room',
-    res.beauty.find(m => m.userData.room === 'r').userData.triangles === 2 * t64);
+    res.beauty.filter(m => m.userData.rooms.indexOf('r') !== -1).reduce((n, m) => n + m.userData.triangles, 0) >= 2 * t64 &&
+    res.beauty.reduce((n, m) => n + m.userData.triangles, 0) === 3 * t64);
   check('stats name the capped rooms', res.stats.proxyLowRooms.join() === 'r');
   // Total cap: three rooms each under the room cap, over a lowered total.
   // Room sizes differ; the LARGEST must drop first, and only as many as needed.
@@ -401,11 +476,11 @@ function lightScene() {
   // largest room must drop.
   const cap = tMid + tSmall + 12 + 1;
   const r2 = build(h2, ULTRA, { dense: Dense }, { totalTriCap: cap });
-  const d = room => r2.shadowProxies.find(p => p.userData.room === room).userData.detail;
+  const d = room => r2.shadowProxies.find(p => p.userData.rooms.indexOf(room) !== -1).userData.detail;
   check('total cap: largest room drops first, only it', d('big') === 'low' && d('mid') === 'full' && d('small') === 'full',
     { big: d('big'), mid: d('mid'), small: d('small'), tBig, tMid, tSmall, cap });
   const r3 = build(h2, ULTRA, { dense: Dense }, { totalTriCap: tSmall + 24 + 1 });
-  const d3 = room => r3.shadowProxies.find(p => p.userData.room === room).userData.detail;
+  const d3 = room => r3.shadowProxies.find(p => p.userData.rooms.indexOf(room) !== -1).userData.detail;
   check('total cap: then the next largest', d3('big') === 'low' && d3('mid') === 'low' && d3('small') === 'full');
 }
 
@@ -458,7 +533,7 @@ function lightScene() {
   // Fade buckets get their own transparent material clone.
   const fading = res.beauty.filter(m => m.userData.fadeWallId === 1);
   check('fade bucket per wall, own transparent material', fading.length === 1 && fading[0].material.transparent &&
-    fading[0].material !== res.beauty.find(m => m.userData.fadeWallId == null && m.userData.finish === 'matte').material);
+    fading[0].material !== res.beauty.find(m => m.userData.fadeWallId == null && m.userData.cls === 'opaque').material);
   // Glass never fades (A3), even tall on an exterior host wall.
   const hg = compile([
     { id: 'gcase', room: 'r', type: 'box', wall: 1, centre: 200, params: { height: 180, finish: 'glass' } },
@@ -699,7 +774,13 @@ function sampleResult() {
     // The builder's own kept materials, as the builder made them.
     const src = Sconce.build(THREE, Object.assign({}, Sconce.DEFAULTS, { kind }));
     const keptSrc = [];
-    src.traverse(o => { if (o.isMesh && (o.userData.keep || (o.material.userData && o.material.userData.keep))) keptSrc.push(o.material); });
+    const finishOf = new Map();
+    src.traverse(o => {
+      if (o.isMesh && (o.userData.keep || (o.material.userData && o.material.userData.keep))) {
+        keptSrc.push(o.material);
+        finishOf.set(o.material, Fin.partFinish(o, o.material).finish);
+      }
+    });
     check(kind + ': fixture has kept parts', keptSrc.length >= 2, keptSrc.length);
     const h = compile([
       { id: 's1', room: 'r', type: 'sconce', wall: 3, centre: 200, elevation: 150, params: { kind } },
@@ -707,23 +788,31 @@ function sampleResult() {
     ]);
     const res = build(h, ULTRA, { sconce });
     const kept = res.beauty.filter(m => m.userData.keep);
-    check(kind + ': every builder kept material survives exactly (type, opacity, transparent, side, depthWrite, emissiveIntensity)',
-      keptSrc.every(sm => kept.some(m => same(sm, m.material))),
+    // Each kept builder material is drawn by a bucket that keeps its look:
+    // the glow bucket (opaque emissive), the palette (a material that IS a
+    // palette one), or a clone of the builder's own material.
+    const drawnBy = sm => {
+      if (finishOf.get(sm) === 'emissive' && !(sm.transparent && sm.opacity < 1)) return kept.find(m => m.userData.cls === 'glow');
+      if (M.isPaletteMaterial(THREE, sm, finishOf.get(sm))) return res.beauty.find(m => m.userData.cls === 'opaque');
+      return kept.find(m => m.userData.cls === 'kept' && same(sm, m.material));
+    };
+    check(kind + ': every builder kept material is drawn by a bucket that keeps its look',
+      keptSrc.every(sm => !!drawnBy(sm)),
       keptSrc.map(m => [m.type, m.opacity, m.transparent, m.side, m.depthWrite, m.emissiveIntensity]));
     check(kind + ': no kept bucket has a material the builder did not make',
-      kept.every(m => keptSrc.some(sm => same(sm, m.material))),
+      kept.every(m => m.userData.cls === 'glow' || keptSrc.some(sm => same(sm, m.material))),
       kept.map(m => [m.material.type, m.material.opacity, m.material.side]));
     check(kind + ': two identical sconces share their kept buckets', kept.every(m => m.userData.parts % 2 === 0),
       kept.map(m => m.userData.parts));
     check(kind + ': translucent kept parts never receive a shadow',
-      kept.filter(m => m.material.transparent && m.material.opacity < 1).every(m => m.receiveShadow === false));
+      kept.filter(m => m.material.transparent).every(m => m.receiveShadow === false));
   }
   // The up-down beam cones specifically: faint, double-sided, no depth write,
   // and never faded even on an exterior wall.
   {
     const h = compile([{ id: 'u', room: 'r', type: 'sconce', wall: 1, centre: 200, elevation: 150, params: { kind: 'up-down' } }]);
     const res = build(h, ULTRA, { sconce });
-    const beam = res.beauty.find(m => m.material.type === 'MeshBasicMaterial');
+    const beam = res.beauty.find(m => m.material.type === 'MeshBasicMaterial' && m.userData.cls === 'kept');
     check('up-down beam stays a faint translucent MeshBasicMaterial', beam && beam.material.transparent &&
       beam.material.opacity < 0.5 && beam.material.depthWrite === false && beam.material.side === THREE.DoubleSide,
       beam && [beam.material.opacity, beam.material.depthWrite, beam.material.side]);
@@ -745,10 +834,22 @@ function sampleResult() {
   // Interior wall: nothing fades, so the materials can be compared as built.
   const hg = compile([{ id: 'c', room: 'r', type: 'gm', wall: 3, centre: 200 }]);
   const rg = build(hg, ULTRA, { gm: GM });
-  const g = rg.beauty.find(m => m.userData.finish === 'glass'), mi = rg.beauty.find(m => m.userData.finish === 'mirror');
+  const g = rg.beauty.find(m => m.userData.finish === 'glass'), pal = rg.beauty.find(m => m.userData.cls === 'opaque');
   check('glass keeps opacity, transparent, depthWrite and its DoubleSide', g && same(srcGM.children[0].material, g.material) &&
     g.material.side === THREE.DoubleSide, g && [g.material.opacity, g.material.depthWrite, g.material.side]);
-  check('mirror keeps its metalness/roughness/colour', mi && same(srcGM.children[1].material, mi.material), rg.beauty.map(m => m.userData.bucket));
+  // A palette mirror joins the palette bucket: its roughness/metalness come
+  // from the mirror texel, its colour per vertex.
+  const mirrorBox = pal && finishBox(pal, 'mirror');
+  check('mirror joins the palette bucket, keeping roughness/metalness (texel) and colour (vertex)', !!mirrorBox &&
+    !rg.beauty.some(m => m.userData.finish === 'mirror') && (() => {
+      const col = pal.geometry.attributes.color, uv = pal.geometry.attributes.uv, src = srcGM.children[1].material.color;
+      for (let i = 0; i < col.count; i++) if (near(uv.getX(i), M.paletteU('mirror')) && !near(col.getX(i), src.r)) return false;
+      return true;
+    })(), rg.beauty.map(m => m.userData.bucket));
+  // A kept part whose material is NOT a palette material stays tinted.
+  const odd = Fin.makeFinish(THREE, 'mirror'); odd.roughness = 0.3;
+  check('a non-palette mirror is not mistaken for the palette', !M.isPaletteMaterial(THREE, odd, 'mirror') &&
+    M.isPaletteMaterial(THREE, Fin.makeFinish(THREE, 'mirror'), 'mirror'));
 }
 
 // ---- 13. opaque buckets: vertex colours and side (review 30d91c80) ---------------------------
@@ -771,8 +872,8 @@ function sampleResult() {
   } };
   const h = compile([{ id: 'v', room: 'r', type: 'vc', at: [200, 200], params: { double: true } }]);
   const res = build(h, ULTRA, { vc: VC });
-  const single = res.beauty.find(m => m.userData.finish === 'matte' && m.material.side === THREE.FrontSide);
-  const dbl = res.beauty.find(m => m.userData.finish === 'matte' && m.material.side === THREE.DoubleSide);
+  const single = res.beauty.find(m => m.userData.cls === 'opaque' && m.material.side === THREE.FrontSide);
+  const dbl = res.beauty.find(m => m.userData.cls === 'opaque' && m.material.side === THREE.DoubleSide);
   check('opaque: a DoubleSide part gets its own DoubleSide bucket', single && dbl && res.beauty.length === 2,
     res.beauty.map(m => m.userData.bucket));
   const grey = new THREE.Color(0x808080).r;
@@ -809,6 +910,124 @@ function sampleResult() {
   const res = build(h, ULTRA, { bad: Bad });
   check('throwing builder: warned and skipped, others built', !res.byId.bad && res.byId.ok &&
     res.warnings.some(w => /failed to build/.test(w)));
+}
+
+// ---- 2b. the full-house fixture stays inside the bucket budget (f17a127f) ---------------
+// Every registered builder that exists, ~95 items over ten rooms, fade auto and
+// never mixed (scripts/make-perf-fixture.mjs). Perf budget B2: beauty buckets
+// <= 30 on mid/ultra and <= 20 on low, proxies <= 10.
+const { makePerfFixture } = await imp('scripts/make-perf-fixture.mjs');
+const fixture = quietly(() => HouseLoader.compile(makePerfFixture().geometry, '')).value;
+const fixtureBuilders = (await quietlyAsync(() => F.loadFurnitureModules(fixture.furniture))).value;
+const buildFixture = (quality, opts) => quietly(() => F.buildFurnitureSync(THREE, fixture.furniture, fixtureBuilders,
+  Object.assign({ tx, tz, quality, walls: fixture.walls }, opts || {}))).value;
+{
+  check('fixture: ~90 items over 10 rooms, at least 20 builder types',
+    fixture.furniture.length >= 85 && new Set(fixture.furniture.map(f => f.room)).size === 10 && fixtureBuilders.size >= 20,
+    { items: fixture.furniture.length, types: fixtureBuilders.size });
+  const u = buildFixture(ULTRA), l = buildFixture(LOW);
+  const fades = u.beauty.filter(m => m.userData.fadeWallId != null).length;
+  check('fixture: fade-auto items are in it (fade buckets exist)', fades > 0, fades);
+  check('B2 ultra: beauty buckets <= 30', u.stats.beautyDraws <= 30, u.stats);
+  check('B2 ultra: proxies <= 10 (house scope: at most a full and a low one)', u.stats.proxyDraws >= 1 && u.stats.proxyDraws <= 2, u.stats);
+  check('B2 low: beauty buckets <= 20, no proxies', l.stats.beautyDraws <= 20 && l.stats.proxyDraws === 0, l.stats);
+  // The room-scoped split is what the budget was busted by; it stays
+  // measurable, and the house scope must beat it.
+  const ur = buildFixture(ULTRA, { bucketScope: 'room' });
+  check('house scope draws fewer buckets than room scope', u.stats.beautyDraws < ur.stats.beautyDraws,
+    [u.stats.beautyDraws, ur.stats.beautyDraws]);
+  check('same triangles either way', u.stats.beautyTriangles === ur.stats.beautyTriangles);
+  [u, l, ur].forEach(F.disposeFurniture);
+}
+
+// ---- 7b. the time-sliced build (c399c2a4) ----------------------------------------------
+{
+  const sync = buildFixture(ULTRA);
+  let yields = 0;
+  const sliced = (await quietlyAsync(() => F.buildFurnitureSliced(THREE, fixture.furniture, fixtureBuilders,
+    { tx, tz, quality: ULTRA, walls: fixture.walls, sliceMs: 0, yieldFn: () => { yields++; return Promise.resolve(); } }))).value;
+  const keys = r => r.beauty.map(m => m.userData.bucket + '#' + m.userData.triangles).sort().join('\n');
+  check('sliced: builds exactly what the one-task build does (buckets, triangles, proxies)', sliced &&
+    keys(sliced) === keys(sync) && sliced.stats.proxyTriangles === sync.stats.proxyTriangles &&
+    sliced.shadowProxies.length === sync.shadowProxies.length);
+  // sliceMs 0: a yield after EVERY step -- one per item built, one per bucket,
+  // one per room proxy.
+  const steps = sync.stats.items + sync.stats.beautyDraws + sync.stats.proxyDraws;
+  check('sliced: yields between items, buckets and proxies', yields >= steps && sliced.stats.slices === yields + 1,
+    { yields, steps, slices: sliced && sliced.stats.slices });
+  // Items are taken room by room, whatever order the profile lists them in.
+  // Interleaved: rooms round-robin, so no two neighbours share a room.
+  const perRoom = new Map();
+  fixture.furniture.forEach(it => { if (!perRoom.has(it.room)) perRoom.set(it.room, []); perRoom.get(it.room).push(it); });
+  const itemsShuffled = [];
+  for (let i = 0; itemsShuffled.length < fixture.furniture.length; i++) perRoom.forEach(list => { if (list[i]) itemsShuffled.push(list[i]); });
+  const trace = [];
+  const itemsTagged = itemsShuffled.map(it => Object.assign({}, it, { params: Object.assign({}, it.params) }));
+  const tracer = new Map(Array.from(fixtureBuilders.entries()).map(([t, b]) => [t, { DEFAULTS: b.DEFAULTS,
+    build: (T, p, o) => { trace.push(p.__room); return b.build(T, p, o); } }]));
+  itemsTagged.forEach(it => { it.params.__room = it.room; });
+  quietly(() => F.disposeFurniture(F.buildFurnitureSync(THREE, itemsTagged, tracer, { tx, tz, quality: LOW, walls: fixture.walls })));
+  const runs = trace.filter((r, i) => i === 0 || trace[i - 1] !== r);
+  check('items are built room by room (each room one contiguous run)', runs.length === new Set(trace).size && trace.length > 0,
+    runs);
+  // Cancelled part-way: resolves null, and every geometry the BUILD made
+  // (flattened parts, buckets, proxies) is freed. Scratch geometry a builder
+  // makes inside build() and never puts on a mesh is the builder's own, never
+  // reaches the GPU, and is not counted.
+  let inBuilder = false;
+  const made = new Set();
+  const origBG = THREE.BufferGeometry.prototype.dispose;
+  const live = new Set();
+  const Tracked = new Map(Array.from(fixtureBuilders.entries()).map(([t, b]) => [t, { DEFAULTS: b.DEFAULTS,
+    build: (T, p, o) => { inBuilder = true; try { return b.build(T, p, o); } finally { inBuilder = false; } } }]));
+  let n = 0, cancel = false;
+  const origSet = THREE.BufferGeometry.prototype.setAttribute;
+  THREE.BufferGeometry.prototype.setAttribute = function (name, attr) {
+    if (name === 'position' && !inBuilder && !made.has(this)) { made.add(this); live.add(this); }
+    return origSet.call(this, name, attr);
+  };
+  THREE.BufferGeometry.prototype.dispose = function () { live.delete(this); return origBG.call(this); };
+  let out;
+  try {
+    out = (await quietlyAsync(() => F.buildFurnitureSliced(THREE, fixture.furniture, Tracked,
+      { tx, tz, quality: ULTRA, walls: fixture.walls, sliceMs: 0, isCancelled: () => cancel,
+        yieldFn: () => { if (++n === 40) cancel = true; return Promise.resolve(); } }))).value;
+  } finally {
+    THREE.BufferGeometry.prototype.setAttribute = origSet;
+    THREE.BufferGeometry.prototype.dispose = origBG;
+  }
+  check('sliced: cancelled part-way -> null', out === null && n === 40, { n, out: !!out });
+  check('sliced: ...and every geometry it made is freed', made.size > 0 && live.size === 0,
+    { made: made.size, live: live.size });
+  // Wired through the attach sequence: a scene disposed mid-build attaches
+  // nothing and never compiles.
+  const { ren, calls } = fakeRenderer();
+  let disposed = false, k = 0;
+  const res = await F.scheduleFurnitureAttach({
+    precompileDone: Promise.resolve(), modulesLoaded: Promise.resolve(fixtureBuilders), isDisposed: () => disposed,
+    build: b => quietlyAsync(() => F.buildFurnitureSliced(THREE, fixture.furniture, b, { tx, tz, quality: ULTRA,
+      walls: fixture.walls, sliceMs: 0, isCancelled: () => disposed,
+      yieldFn: () => { if (++k === 10) disposed = true; return Promise.resolve(); } })).then(r => r.value),
+    renderer: ren, camera: {}, scene: {}, wantShadows: true, attach: () => calls.push(['attach'])
+  });
+  check('A2 sliced: dispose mid-build -> nothing attached, nothing compiled', res === null &&
+    !calls.some(c => c[0] === 'attach' || c[0] === 'compileAsync'));
+  // ...and an uninterrupted sliced build attaches once, compiled first.
+  const { ren: ren2, calls: calls2 } = fakeRenderer();
+  const res2 = await F.scheduleFurnitureAttach({
+    precompileDone: Promise.resolve(), modulesLoaded: Promise.resolve(fixtureBuilders), isDisposed: () => false,
+    build: b => quietlyAsync(() => F.buildFurnitureSliced(THREE, fixture.furniture, b, { tx, tz, quality: ULTRA,
+      walls: fixture.walls })).then(r => r.value),
+    renderer: ren2, camera: {}, scene: {}, wantShadows: true, attach: () => calls2.push(['attach'])
+  });
+  const iC = calls2.findIndex(c => c[0] === 'compileAsync'), iA = calls2.findIndex(c => c[0] === 'attach');
+  check('A2 sliced: compiled before its one attach', res2 && iC !== -1 && iA > iC &&
+    calls2.filter(c => c[0] === 'attach').length === 1);
+  // The scene uses the sliced build.
+  const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+  check('the scene builds furniture with buildFurnitureSliced', /buildFurnitureSliced\(THREE, furnitureItems/.test(src) &&
+    !/buildFurnitureSync\(THREE, furnitureItems/.test(src));
+  [sync, sliced, res2].forEach(r => r && F.disposeFurniture(r));
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
