@@ -336,16 +336,29 @@ export function buildCurtain(THREE, cur, fadeable) {
     transparent: !!fadeable, opacity: 1
   });
   const nU = pleats * 6, nV = 16;
-  const makeSurface = (side, isBack) => {
-    const cols = nU + 1, rows = nV + 1;
-    const pos = new Float32Array(cols * rows * 3);
-    const col = new Float32Array(cols * rows * 3);
+  const cols = nU + 1, rows = nV + 1;
+  // Each surface keeps its (side, isBack) so setOpen() can re-pose it in
+  // place: the vertex count, index and colours never change with openness,
+  // only positions (and so normals) do.
+  const surfaces = [];
+  const writePositions = (pos, side, isBack, openFrac) => {
     let p = 0;
     for (let j = 0; j < rows; j++) {
       for (let i = 0; i < cols; i++) {
-        const u = i / nU, vv = j / nV;
-        const [x, y, z] = curtainFoldVertex(u, vv, side, isBack, openN, P);
+        const [x, y, z] = curtainFoldVertex(i / nU, j / nV, side, isBack, openFrac, P);
         pos[p * 3] = x; pos[p * 3 + 1] = y; pos[p * 3 + 2] = z;
+        p++;
+      }
+    }
+  };
+  const makeSurface = (side, isBack) => {
+    const pos = new Float32Array(cols * rows * 3);
+    const col = new Float32Array(cols * rows * 3);
+    writePositions(pos, side, isBack, openN);
+    let p = 0;
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const u = i / nU;
         // Sharp two-tone cut on a pleat seam (pleat index, not u, decides).
         const pleatIdx = Math.min(pleats - 1, Math.floor(u * pleats));
         const c = isBack ? lining : (pleatIdx < outerPleats ? outer : inner);
@@ -369,11 +382,30 @@ export function buildCurtain(THREE, cur, fadeable) {
     const mesh = new THREE.Mesh(geo, fabricMat);
     mesh.name = 'curtain_' + (side < 0 ? 'L' : 'R') + '_' + (isBack ? 'back' : 'front');
     add(group, mesh, !sheer);
+    surfaces.push({ mesh, side, isBack });
   };
   makeSurface(-1, false); makeSurface(+1, false);
   if (!sheer) { makeSurface(-1, true); makeSurface(+1, true); }
 
-  if (!cn) return { group, fadeMeshes };
+  // Re-pose the fabric at a new openness, 0..100. Each half keeps its anchor
+  // at its own wall end and gathers toward it (curtainFoldVertex), so a
+  // centre-parted pair opens from the middle outward. Cheap: ~700 vertices a
+  // surface, rewritten in place with no reallocation.
+  let currentPct = openN * 100;
+  const setOpen = (pct) => {
+    const n = Math.max(0, Math.min(1, (+pct || 0) / 100));
+    currentPct = n * 100;
+    surfaces.forEach(sf => {
+      const attr = sf.mesh.geometry.getAttribute('position');
+      writePositions(attr.array, sf.side, sf.isBack, n);
+      attr.needsUpdate = true;
+      sf.mesh.geometry.computeVertexNormals();
+      sf.mesh.geometry.computeBoundingSphere();
+    });
+  };
+  const getOpen = () => currentPct;
+
+  if (!cn) return { group, fadeMeshes, setOpen, getOpen, corniceStrip: null };
 
   // ---- cornice: front face (+ optional ends), top flush with `top` ----
   const cH = cn.height * CM;
@@ -408,6 +440,89 @@ export function buildCurtain(THREE, cur, fadeable) {
     strip.position.set(cOffset, TOP - cH * 0.35, cDepth - 0.025);
     add(group, strip).name = 'corniceLightStrip';
     strip.castShadow = false;
+    // The colour this cornice rests at before any Home Assistant state
+    // arrives, and its length (for the scene's optional glow light).
+    strip.userData.restColor = lc.getHex();
+    strip.userData.stripLength = cWidth * 0.96;
+    return { group, fadeMeshes, setOpen, getOpen, corniceStrip: strip };
   }
-  return { group, fadeMeshes };
+  return { group, fadeMeshes, setOpen, getOpen, corniceStrip: null };
+}
+
+// ===== Daylight through a window, gated by whatever hangs in front of it =====
+//
+// Pure functions (no THREE), so the numbers a screenshot cannot pin are
+// testable in Node.
+
+// What a closed curtain lets through. A blackout is ~0 by definition; a
+// sheer passes a share of the light that falls with its opacity and tints it
+// toward its own colour (a golden sheer gives dim, warm light).
+export const BLACKOUT_TRANSMIT = 0.02;
+export function curtainTransmit(cur) {
+  if (!cur.sheer) return BLACKOUT_TRANSMIT;
+  const op = Math.max(0, Math.min(1, cur.opacity));
+  return Math.max(BLACKOUT_TRANSMIT, (1 - op) * 0.55);
+}
+
+/**
+ * Plan-coordinate intervals (cm, along the wall) the two halves of `cur`
+ * cover at openness `pct`. Mirrors curtainFoldVertex's span: each half is
+ * anchored at its own end and spans `closedSpan` (a touch over half the
+ * width, so the halves meet with an overlap) when closed, down to
+ * `gatherFrac` of a half when fully open.
+ */
+export function curtainCoverIntervals(cur, pct) {
+  const openN = Math.max(0, Math.min(1, (+pct || 0) / 100));
+  const half = cur.w / 2;
+  const closedSpan = half * 1.03, gathered = 0.16 * half;
+  const span = closedSpan + (gathered - closedSpan) * openN;
+  const lo = cur.c - half, hi = cur.c + half;
+  if (2 * span >= cur.w) return [[lo, hi]];
+  return [[lo, lo + span], [hi - span, hi]];
+}
+
+/** Fraction (0..1) of the window's WIDTH that `cur` covers at `pct`. */
+export function curtainCoverage(win, cur, pct) {
+  if (win.wallId == null || String(win.wallId) !== String(cur.wallId)) return 0;
+  const a = win.c - win.w / 2, b = win.c + win.w / 2;
+  if (b <= a) return 0;
+  let covered = 0;
+  curtainCoverIntervals(cur, pct).forEach(([lo, hi]) => {
+    covered += Math.max(0, Math.min(b, hi) - Math.max(a, lo));
+  });
+  return Math.max(0, Math.min(1, covered / (b - a)));
+}
+
+/**
+ * How much daylight gets through a window, and in what colour.
+ *
+ * Curtains on the same wall act as stacked filters: each passes its
+ * uncovered fraction plus its covered fraction times its own transmission,
+ * and the results multiply. A sheer also tints what it covers toward its own
+ * colour.
+ *
+ * @param win       compiled window ({ wallId, c, w })
+ * @param curtains  compiled curtains ({ id, wallId, c, w, sheer, opacity, outerColor, openPct })
+ * @param pctOf     id -> current openness (0..100); null/undefined falls back to cur.openPct
+ * @returns { transmit: 0..1, tint: [r,g,b] each 0..1 }
+ */
+export function windowDaylight(win, curtains, pctOf) {
+  let transmit = 1;
+  let tint = [1, 1, 1];
+  (curtains || []).forEach(cur => {
+    const live = pctOf ? pctOf(cur.id) : null;
+    const pct = live != null ? live : cur.openPct;
+    const cov = curtainCoverage(win, cur, pct);
+    if (cov <= 0) return;
+    transmit *= (1 - cov) + cov * curtainTransmit(cur);
+    if (cur.sheer) {
+      const hex = cur.outerColor | 0;
+      const col = [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255];
+      // Normalised so the tint changes hue, not brightness -- dimming is the
+      // transmission's job.
+      const m = Math.max(col[0], col[1], col[2]) || 1;
+      tint = tint.map((ch, i) => ch * ((1 - cov) + cov * (col[i] / m)));
+    }
+  });
+  return { transmit, tint };
 }

@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.1"`, which added the optional `sensors` block. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older geometry still loads. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.2"`: `1.1` added the optional `sensors` block and `1.2` its `curtains`/`corniceLights` keys. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -410,9 +410,16 @@ pinch-pleat, under a white cornice with a glowing strip light.
   `innerColor` the pleats toward the centre part (`outerPleats` / `innerPleats`
   of each, 5 and 2 by default). For a single-colour curtain give both the same
   value.
-- `openPct` is a static pose: 0 = drawn closed, 100 (the default) = gathered
-  into a stack at each end. There is no animation and no Home Assistant binding
-  yet; the `id` is what a future `cover.*` binding will key on.
+- `openPct` is the resting pose: 0 = drawn closed, 100 (the default) =
+  gathered into a stack at each end, each half toward its own wall end. Bind a
+  Home Assistant `cover.*` to the curtain's `id` in `rooms.json`
+  (`sensors.curtains`) and the curtain follows it, animated.
+- **Daylight comes in through the window** and a curtain in front of it gates
+  that light: fully open lets it all in, a closed blackout lets almost none
+  through, and a closed sheer lets in a dim share tinted toward its own colour.
+  It follows the same sun as the rest of the scene. A window's light is an
+  unlit floor patch on every GPU tier, plus one unshadowed light per room with
+  windows on the mid and ultra tiers.
 - **A sheer** is a curtain with `opacity` below 1 — one translucent layer, no
   lining. To hang one behind a blackout, give it a smaller `offset` (its
   distance from the wall, cm) and `"cornice": { "enabled": false }` so it shares
@@ -421,9 +428,13 @@ pinch-pleat, under a white cornice with a glowing strip light.
   through a curtain hung behind it.
 - `cornice.sideFaces: false` gives a wall-to-wall cornice spanning the whole
   room along that wall instead of a box just wider than the curtain.
-- The strip light is emissive only. It adds no light source to the scene — the
-  spec page's three point lights per cornice would overrun the mobile GPU
-  budget the quality tiers protect.
+- The strip light glows (emissive) and, on the mid and ultra tiers, adds ONE
+  unshadowed point light per cornice — the same cost as one ambient strip. The
+  spec page's three shadow-casting point lights per cornice would overrun the
+  mobile GPU budget the quality tiers protect. Bind its own light entity in
+  `rooms.json` (`sensors.corniceLights`). **Do not also list the cornice as a
+  strip under the room's `ambient` channel**: the cornice is already drawn by
+  the curtain, so that would draw and drive it twice (the validator warns).
 
 ### Furniture
 
@@ -743,6 +754,8 @@ renders exactly as it did before — both features simply stay dark.
 |-----|----------|---------|
 | `presence` | **room id**, from the geometry's `rooms` | The room shows footsteps on its floor while occupied |
 | `doors` | **door id**, from the geometry's `doors[].id` | The door swings open while the contact reads open |
+| `curtains` | **curtain id**, from the geometry's `curtains[].id` | The curtain follows the `cover.*` entity's `current_position` (0 closed, 100 open), and the window's daylight with it |
+| `corniceLights` | **curtain id** | The curtain's cornice strip follows the light entity: on/off, brightness and colour |
 
 Several entities on one target are OR-ed: any one of them reading `on` means
 occupied, or open. `unavailable` and `unknown` count as `off`, so a sensor that
@@ -773,6 +786,30 @@ sensor bound to a room or door that does not exist can never drive anything.
 `sensors` requires `schemaVersion` `"1.1"` or newer. The bump is additive: the
 engine gates on MAJOR only, so a `1.1` profile loads in an older engine (which
 ignores `sensors`) and a `1.0` profile loads in a newer one.
+
+#### Curtains and cornice lights
+
+```json
+"sensors": {
+  "curtains":      { "lounge_curtain": ["cover.example_lounge_curtain"] },
+  "corniceLights": { "lounge_curtain": ["light.example_lounge_cornice"] }
+}
+```
+
+A cover's `current_position` sets the curtain's openness. While the cover
+reports `opening` or `closing` the curtain runs toward that end stop at a
+motor-like pace, and the settled position corrects it when it arrives.
+`unavailable` keeps the curtain where it was rather than snapping it somewhere
+invented. Several covers on one curtain are averaged.
+
+The cornice light is keyed by the **curtain**, not the room, and is bound to
+the cornice's **own** entity. If your cornice is also a member of a room
+"ambience" light group, that is fine — keep the group on the room's `ambient`
+channel for the room's other strips, and remove the cornice's own strip from
+that channel in `geometry.json`, so each light is drawn and driven exactly once.
+
+`curtains` and `corniceLights` need `schemaVersion` `"1.2"`: an engine older
+than that rejects the unknown keys, so upgrade the engine before the profile.
 
 Leave `url` and `fallbackUrl` out of a committed profile. A hostname in a
 tracked file discloses infrastructure; supply them through runtime config
@@ -916,6 +953,10 @@ that a JSON Schema cannot express:
   fixtures in both directions
 - `sensors` presence room ids and door ids resolving against the geometry, and
   `sensors` appearing only in a profile that declares `schemaVersion` 1.1+
+- `sensors.curtains` / `sensors.corniceLights` curtain ids resolving against the
+  geometry, a cornice light bound only to a curtain with a lit cornice, a
+  warning when that cornice is ALSO listed as a strip under a light channel, and
+  both appearing only in a profile that declares `schemaVersion` 1.2+
 - a `site.latitude` precise enough to locate a building rather than a city
 - which side of its wall each window, curtain and wall-anchored item faces,
   using the same probe the engine uses: **error** if the room is on neither

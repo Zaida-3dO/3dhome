@@ -1656,6 +1656,34 @@
                 },
                 "minItems": 1
               }
+            },
+            "curtains": {
+              "type": "object",
+              "description": "Curtain id -> the Home Assistant cover entities that move it. Curtain ids MUST exist in the paired geometry profile's `curtains[].id` (a sheer is a curtain too). The cover's `current_position` (0 closed .. 100 open) sets the curtain's openness and, through it, how much daylight its window lets in; 'opening'/'closing' animate toward the end stop until a settled position arrives. Several entities on one curtain are averaged. Needs rooms schemaVersion 1.2.",
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/entityId"
+                },
+                "minItems": 1
+              }
+            },
+            "corniceLights": {
+              "type": "object",
+              "description": "Curtain id -> the light entities of that curtain's cornice LED strip. The curtain MUST have a lit cornice in geometry (cornice not disabled, light not false). Bind the cornice's OWN entity here, and do not also list a 'curtain cornice' strip under the room's ambient channel in geometry.lights -- that would draw and drive the same strip twice. Several entities are OR-ed. Needs rooms schemaVersion 1.2.",
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/entityId"
+                },
+                "minItems": 1
+              }
             }
           },
           "additionalProperties": false

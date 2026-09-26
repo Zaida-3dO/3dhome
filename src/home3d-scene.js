@@ -14,7 +14,8 @@ import {
   insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, WALK_DEFAULTS
 } from './footstep-walk.js';
 import {
-  WINDOW_REVEAL_CM, windowVerticals, placeOnWall, buildWindow, buildCurtain
+  WINDOW_REVEAL_CM, windowVerticals, placeOnWall, buildWindow, buildCurtain,
+  windowDaylight
 } from './wall-fittings.js';
 
 export const Home3DScene = (() => {
@@ -944,6 +945,40 @@ export const Home3DScene = (() => {
     return group;
   }
 
+  // Cornice LED glow at full brightness (same order as an ambient strip's).
+  const CORNICE_GLOW_INTENSITY = 0.25;
+  // Daylight gains, applied to sun factor x curtain transmission.
+  const DAYLIGHT_PATCH_GAIN = 0.4;    // additive floor patch colour
+  const DAYLIGHT_SPOT_GAIN = 7;       // shared per-room SpotLight intensity
+
+  /**
+   * A soft light-pool alpha map for the daylight floor patch: brightest at
+   * the window edge (v = 0), falling off into the room, soft at both sides.
+   */
+  function makeDaylightPatchTexture() {
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    const ctx = c.getContext('2d');
+    const img = ctx.createImageData(64, 64);
+    for (let y = 0; y < 64; y++) {
+      for (let x = 0; x < 64; x++) {
+        const u = x / 63, v = y / 63;
+        const along = Math.pow(1 - v, 1.6);
+        const side = Math.min(1, Math.min(u, 1 - u) / 0.18);
+        const a = Math.round(255 * along * side * side);
+        const i = (y * 64 + x) * 4;
+        img.data[i] = img.data[i + 1] = img.data[i + 2] = a;
+        img.data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(c);
+    // Canvas row 0 is the top; with flipY off, v = 0 samples row 0 (bright).
+    tex.flipY = false;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
   /**
    * Build the full Three.js scene (walls, floors, furniture, lights).
    * Returns { scene, mainLights, mainMeshes, ambientLights, ambientMeshes }
@@ -1687,12 +1722,114 @@ export const Home3DScene = (() => {
       scene.add(built.group);
       if (wn.exterior) built.fadeMeshes.forEach(mesh => fittingFades.push({ mesh, wallId: wn.wallId }));
     });
+    // curtainById: id -> { cu, built, glow, cornice } -- the handles the
+    // Home Assistant cover / cornice-light bindings drive at runtime.
+    const curtainById = {};
     CURTAINS.forEach(cu => {
       const built = buildCurtain(THREE, cu, cu.exterior);
       placeOnWall(built.group, cu, cu.roomFace, tx, tz);
       scene.add(built.group);
       if (cu.exterior) built.fadeMeshes.forEach(mesh => fittingFades.push({ mesh, wallId: cu.wallId }));
+      const entry = { cu, built, glow: null, cornice: null };
+      // A cornice's LED strip throws a little light as well as glowing: one
+      // unshadowed PointLight per cornice, on the same tier gate as the
+      // ambient strips (it is the same kind of light, and it replaces the
+      // 'curtain cornice' strip a profile would otherwise list under its
+      // room's ambient channel -- see docs/house-profile.md).
+      if (built.corniceStrip && quality.ambientStrips) {
+        const glow = new THREE.PointLight(built.corniceStrip.userData.restColor, CORNICE_GLOW_INTENSITY, 2.5, 2);
+        glow.position.set(0, -0.06, 0.06);
+        built.corniceStrip.add(glow);
+        entry.glow = glow;
+      }
+      curtainById[cu.id] = entry;
     });
+
+    // === Daylight through the windows ===
+    // The global sun + ambient light the house as a whole; this is the part
+    // that comes in THROUGH A WINDOW, so it is what a curtain can shut out.
+    // Cheap by design, per the uniform budget the quality tiers protect:
+    //   * every tier: an unlit, additive light patch on the floor in front of
+    //     each window (MeshBasicMaterial -- no light uniforms at all);
+    //   * mid/ultra only: ONE unshadowed SpotLight per room that has windows,
+    //     shared by all of them, aimed into the room.
+    // Intensities are all set by updateDaylight() in create(); built dark.
+    const daylight = { windows: [], rooms: {} };
+    if (WINDOWS.length) {
+      const patchTex = makeDaylightPatchTexture();
+      WINDOWS.forEach(wn => {
+        const curtains = CURTAINS.filter(cu =>
+          String(cu.wallId) === String(wn.wallId) && cu.room === wn.room);
+        const roomFace = wn.outerFace + wn.inDir * wn.hostThickness;   // plan cm
+        const v = windowVerticals(wn);
+        // Patch reach into the room: a tall window throws light further.
+        // Clamped to the room's own depth so it never crosses the far wall.
+        const room = ROOMS[wn.room];
+        const roomDepth = room
+          ? (wn.axis === 'x' ? Math.abs(room.y2 - room.y1) : Math.abs(room.x2 - room.x1))
+          : 300;
+        const reach = Math.min(roomDepth * 0.9, 80 + (v.openTop - v.openBot) * 100 * 0.9);  // cm
+        const half = wn.w / 2;
+        // Four corners in plan cm: [along-wall, across-wall]
+        const corners = [
+          [wn.c - half, roomFace], [wn.c + half, roomFace],
+          [wn.c - half * 1.25, roomFace + wn.inDir * reach], [wn.c + half * 1.25, roomFace + wn.inDir * reach]
+        ];
+        const toWorld = ([along, across]) => wn.axis === 'x'
+          ? [tx(along), tz(across)] : [tx(across), tz(along)];
+        const pos = new Float32Array(12);
+        corners.forEach((c, i) => {
+          const [wx, wz] = toWorld(c);
+          pos[i * 3] = wx; pos[i * 3 + 1] = 0.006; pos[i * 3 + 2] = wz;
+        });
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), 2));
+        geo.setIndex([0, 2, 1, 1, 2, 3]);
+        const mat = new THREE.MeshBasicMaterial({
+          map: patchTex, color: 0x000000, transparent: true,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+          side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2
+        });
+        const patch = new THREE.Mesh(geo, mat);
+        patch.name = 'daylightPatch:' + wn.id;
+        patch.castShadow = false; patch.receiveShadow = false;
+        patch.renderOrder = 2;
+        scene.add(patch);
+        const entry = { win: wn, curtains, patch, mat, transmit: 1, tint: [1, 1, 1] };
+        daylight.windows.push(entry);
+
+        const r = daylight.rooms[wn.room] || (daylight.rooms[wn.room] = { windows: [], light: null });
+        r.windows.push(entry);
+        // Window centre on the room face, in world metres, and the inward
+        // unit vector -- accumulated per room for the shared light.
+        const [cxW, czW] = toWorld([wn.c, roomFace]);
+        entry.faceWorld = [cxW, (v.openBot + v.openTop) / 2, czW];
+        entry.inWorld = wn.axis === 'x' ? [0, wn.inDir] : [wn.inDir, 0];
+      });
+      if (quality.tier !== 'low') {
+        Object.keys(daylight.rooms).forEach(roomId => {
+          const r = daylight.rooms[roomId];
+          let sw = 0, px = 0, py = 0, pz = 0, ix = 0, iz = 0;
+          r.windows.forEach(e => {
+            const w = e.win.w;
+            sw += w; px += e.faceWorld[0] * w; py += e.faceWorld[1] * w; pz += e.faceWorld[2] * w;
+            ix += e.inWorld[0] * w; iz += e.inWorld[1] * w;
+          });
+          px /= sw; py /= sw; pz /= sw;
+          const il = Math.hypot(ix, iz) || 1;
+          ix /= il; iz /= il;
+          const spot = new THREE.SpotLight(0xffffff, 0, 7, 1.05, 0.9, 1.4);
+          spot.name = 'daylight:' + roomId;
+          spot.castShadow = false;
+          spot.position.set(px + ix * 0.25, Math.min(WH - 0.1, py + 0.4), pz + iz * 0.25);
+          spot.target.position.set(px + ix * 2.2, 0, pz + iz * 2.2);
+          scene.add(spot.target);   // a SpotLight target must be in the graph
+          scene.add(spot);
+          r.light = spot;
+        });
+      }
+    }
 
     // ── The ONE house-wide FLOOR + the ONE CEILING ────────────────────────
     // Two concerns are decoupled here: (1) ONE visible floor and ONE ceiling,
@@ -2698,7 +2835,7 @@ export const Home3DScene = (() => {
       wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true });
     });
 
-    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom };
+    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight };
   }
 
   /**
@@ -3089,7 +3226,7 @@ export const Home3DScene = (() => {
     ren.domElement.style.touchAction = 'none';
     container.appendChild(ren.domElement);
 
-    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom } = buildScene(scene, quality);
+    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight } = buildScene(scene, quality);
 
     // ── On-demand render requests ──────────────────────────────────────────
     // A NON-auto-rotating scene (the #3d popup) only changes when the user moves
@@ -3230,6 +3367,77 @@ export const Home3DScene = (() => {
         invalidateShadows();
       });
       return moving;
+    }
+
+    // ── Curtains: HA-driven open/close, bounded like a door swing ───────────
+    //
+    // Two paces. A settled reading (a position with no motion) glides there
+    // quickly; an 'opening'/'closing' state runs toward its end stop at a
+    // motor-like pace, and the eventual settled reading corrects it. Both are
+    // interpolated from elapsed wall-clock time (see doorSwings for why).
+    const CURTAIN_SETTLE_MS_PER_100 = 2500;
+    const CURTAIN_MOTOR_MS_PER_100 = 12000;
+    const curtainMotions = new Map();   // id -> { from, to, startedAt, ms, pace }
+    let lastCurtainShadowAt = 0;
+
+    function tickCurtainMotions() {
+      if (!curtainMotions.size) return false;
+      let moving = false;
+      const now = performance.now();
+      curtainMotions.forEach((m, id) => {
+        const e = curtainById[id];
+        if (!e) { curtainMotions.delete(id); return; }
+        const t = Math.min(1, (now - m.startedAt) / m.ms);
+        const k = m.pace === 'settle' ? (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2) : t;
+        e.built.setOpen(m.from + (m.to - m.from) * k);
+        if (t >= 1) curtainMotions.delete(id);
+        else moving = true;
+      });
+      updateDaylight();
+      // MOVES GEOMETRY -- the fabric casts shadows. Throttled to ~4/s while
+      // moving (a curtain travels for seconds, unlike a 400 ms door swing),
+      // and always refreshed on arrival.
+      if (!moving || now - lastCurtainShadowAt > 250) {
+        lastCurtainShadowAt = now;
+        invalidateShadows();
+      }
+      return moving;
+    }
+
+    // Current sun factor (0 night .. 1 day) and colour, recorded by
+    // updateSunlight() so the daylight can be recomputed when only a curtain
+    // moved.
+    let daylightSunF = 0;
+    const daylightSunColor = new THREE.Color(1, 1, 1);
+
+    function updateDaylight() {
+      const pctOf = id => (curtainById[id] ? curtainById[id].built.getOpen() : null);
+      daylight.windows.forEach(e => {
+        const d = windowDaylight(e.win, e.curtains, pctOf);
+        e.transmit = d.transmit;
+        e.tint = d.tint;
+        const k = daylightSunF * d.transmit * DAYLIGHT_PATCH_GAIN;
+        e.mat.color.setRGB(daylightSunColor.r * d.tint[0] * k,
+          daylightSunColor.g * d.tint[1] * k, daylightSunColor.b * d.tint[2] * k);
+        e.patch.visible = k > 0.001;
+      });
+      Object.keys(daylight.rooms).forEach(roomId => {
+        const r = daylight.rooms[roomId];
+        if (!r.light) return;
+        let sw = 0, tr = 0, tint = [0, 0, 0];
+        r.windows.forEach(e => {
+          const w = e.win.w;
+          sw += w; tr += e.transmit * w;
+          tint = tint.map((c, i) => c + e.tint[i] * e.transmit * w);
+        });
+        const transmit = sw ? tr / sw : 0;
+        // Intensity only -- never `visible`: toggling a light's visibility
+        // changes the light count and forces every lit material to recompile.
+        r.light.intensity = daylightSunF * transmit * DAYLIGHT_SPOT_GAIN;
+        const norm = tr > 0 ? tr : 1;
+        r.light.color.setRGB(daylightSunColor.r * tint[0] / norm,
+          daylightSunColor.g * tint[1] / norm, daylightSunColor.b * tint[2] / norm);
+      });
     }
 
     // ── Adaptive pixel ratio ────────────────────────────────────────────────
@@ -3754,6 +3962,8 @@ export const Home3DScene = (() => {
       // loop's own 60-second tick — so a future caller cannot forget to.
       invalidateShadows();
       if (!sunEnabled) {
+        daylightSunF = 0;
+        updateDaylight();
         sun.intensity = 0;
         ambLight.intensity = 0.12;
         ambLight.color.setRGB(0.85, 0.85, 0.9);
@@ -3774,6 +3984,11 @@ export const Home3DScene = (() => {
       } else {
         sun.color.setRGB(1.0, 0.93, 0.85);   // neutral warm white (midday)
       }
+      // Daylight through the windows follows the same sun, gated per window
+      // by its curtains.
+      daylightSunF = f;
+      daylightSunColor.copy(sun.color);
+      updateDaylight();
       // Ambient: this is what lights the interior (penetrates roof)
       // Night: dim 0.12, Day: bright 0.7 — simulates light through windows
       ambLight.intensity = 0.12 + f * 0.58;
@@ -3967,6 +4182,7 @@ export const Home3DScene = (() => {
       // which looks like a rendering bug and is actually a stopped animation.
       if (tickFootstepFades()) animating = true;
       if (tickDoorSwings()) animating = true;
+      if (tickCurtainMotions()) animating = true;
 
       transitionsActive = animating;
       // Time the render itself rather than the gap between frames. The gap is
@@ -4225,6 +4441,82 @@ export const Home3DScene = (() => {
         // invalidating here would pay for ~60 cubemap shadow renders to show a
         // decal that cannot appear in any of them.
         requestRender();
+      },
+      /**
+       * Drive a curtain by its PROFILE id from a Home Assistant cover.
+       * pct: 0 closed .. 100 open (HA current_position). moving: 'opening' |
+       * 'closing' | null -- while moving, the curtain runs toward its end stop
+       * at a motor-like pace until a settled reading arrives. Idempotent: a
+       * republish of the state it is already in requests no frame.
+       */
+      setCurtainOpen(curtainId, pct, moving) {
+        const e = curtainById[curtainId];
+        if (!e) return;
+        let target = Math.max(0, Math.min(100, +pct || 0));
+        let pace = 'settle';
+        if (moving === 'opening') { target = 100; pace = 'motor'; }
+        else if (moving === 'closing') { target = 0; pace = 'motor'; }
+        const inFlight = curtainMotions.get(curtainId);
+        if (inFlight && inFlight.to === target && inFlight.pace === pace) return;
+        const from = e.built.getOpen();
+        if (!inFlight && Math.abs(from - target) < 0.01) return;
+        const perHundred = pace === 'motor' ? CURTAIN_MOTOR_MS_PER_100 : CURTAIN_SETTLE_MS_PER_100;
+        curtainMotions.set(curtainId, {
+          from, to: target, pace, startedAt: performance.now(),
+          ms: Math.max(150, Math.abs(target - from) / 100 * perHundred)
+        });
+        requestRender();
+      },
+      getCurtainOpen(curtainId) {
+        const e = curtainById[curtainId];
+        return e ? e.built.getOpen() : null;
+      },
+      getCurtainIds() { return Object.keys(curtainById); },
+      /**
+       * Drive a curtain's cornice LED strip from its own light entity.
+       * state: { on, bri (0..100), color ('#rrggbb' or null = the profile's
+       * cornice colour) }. No-op for a curtain with no lit cornice.
+       */
+      setCorniceLight(curtainId, state) {
+        const e = curtainById[curtainId];
+        if (!e || !e.built.corniceStrip) return;
+        const st = { on: !!(state && state.on), bri: state && state.bri != null ? +state.bri : 100,
+          color: (state && state.color) || null };
+        if (e.cornice && e.cornice.on === st.on && e.cornice.bri === st.bri && e.cornice.color === st.color) return;
+        e.cornice = st;
+        const strip = e.built.corniceStrip;
+        const col = new THREE.Color(st.color || strip.userData.restColor);
+        const k = st.on ? Math.max(0.05, Math.min(1, st.bri / 100)) : 0;
+        strip.material.emissive.copy(col);
+        strip.material.emissiveIntensity = 1.5 * k;
+        // Off: an unlit LED strip reads as a dim grey line, not a coloured one.
+        strip.material.color.copy(st.on ? col : new THREE.Color(0x3a3a3a));
+        if (e.glow) { e.glow.color.copy(col); e.glow.intensity = CORNICE_GLOW_INTENSITY * k; }
+        requestRender();
+      },
+      getCorniceLight(curtainId) {
+        const e = curtainById[curtainId];
+        if (!e || !e.built.corniceStrip) return null;
+        return e.cornice || { on: true, bri: 100, color: null, rest: true };
+      },
+      // What the window daylight is ACTUALLY doing -- the canvas cannot be
+      // read back (preserveDrawingBuffer:false), so this is how a test checks
+      // that a closed blackout shuts the light out.
+      getDaylightDebug() {
+        return {
+          sunFactor: daylightSunF,
+          windows: daylight.windows.map(e => ({
+            id: e.win.id, room: e.win.room, transmit: e.transmit, tint: e.tint.slice(),
+            patchVisible: e.patch.visible,
+            patchColor: [e.mat.color.r, e.mat.color.g, e.mat.color.b]
+          })),
+          rooms: Object.keys(daylight.rooms).map(roomId => {
+            const r = daylight.rooms[roomId];
+            return { room: roomId, light: r.light ? {
+              intensity: r.light.intensity, color: [r.light.color.r, r.light.color.g, r.light.color.b]
+            } : null };
+          })
+        };
       },
       // Frames drawn since construction. Monotonic, and flat while idle.
       getFrameCount() { return framesRendered; },

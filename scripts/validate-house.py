@@ -823,6 +823,64 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
                 f"door sensor bound to door '{did}', which has no matching door in geometry.json",
             )
 
+    check_curtain_binding(rooms_doc, geo, sensors, (major, minor), report)
+
+
+def check_curtain_binding(rooms_doc, geo, sensors, version, report):
+    """`sensors.curtains` (covers) and `sensors.corniceLights`, joined to the
+    geometry's curtains. Like a door sensor, a binding to a curtain that does
+    not exist can never drive anything, so it is an error. A cornice light
+    bound to a curtain whose cornice is not lit is an error for the same
+    reason. And a bound cornice whose room ALSO lists a 'cornice' strip under
+    a light channel is warned about: that strip would then be drawn and driven
+    twice, once by the room's group and once by the cornice's own entity.
+    """
+    covers = sensors.get("curtains") or {}
+    cornices = sensors.get("corniceLights") or {}
+    if not covers and not cornices:
+        return
+    if version < (1, 2):
+        report.warn(
+            "rooms.json/schemaVersion",
+            "`sensors.curtains`/`sensors.corniceLights` need schemaVersion 1.2 or newer, but this profile "
+            f"declares '{rooms_doc.get('schemaVersion')}' -- bump it; nothing else enforces this coupling",
+        )
+    geo_curtains = {c.get("id"): c for c in geo.get("curtains", [])}
+    for cid in covers:
+        if cid not in geo_curtains:
+            report.error(
+                f"rooms.json/sensors/curtains/{cid}",
+                f"cover bound to curtain '{cid}', which has no matching curtain in geometry.json",
+            )
+    for cid in cornices:
+        cur = geo_curtains.get(cid)
+        if cur is None:
+            report.error(
+                f"rooms.json/sensors/corniceLights/{cid}",
+                f"cornice light bound to curtain '{cid}', which has no matching curtain in geometry.json",
+            )
+            continue
+        cn = cur.get("cornice") or {}
+        if cn.get("enabled") is False or cn.get("light") is False:
+            report.error(
+                f"rooms.json/sensors/corniceLights/{cid}",
+                f"curtain '{cid}' has no lit cornice (cornice disabled or light:false), so this binding drives nothing",
+            )
+            continue
+        room = cur.get("room")
+        for group in geo.get("lights", []):
+            if group.get("room") != room:
+                continue
+            for fx in group.get("fixtures", []):
+                for pos in fx.get("positions") or []:
+                    if "cornice" in str(pos.get("label", "")).lower():
+                        report.warn(
+                            f"rooms.json/sensors/corniceLights/{cid}",
+                            f"room '{room}' also lists a '{pos.get('label')}' strip under light channel "
+                            f"'{fx.get('channel')}' -- the cornice is now drawn and driven by curtain '{cid}', so "
+                            "remove that position or it is drawn and driven twice",
+                        )
+
 
 def validate_target(target, schema):
     target = Path(target)
