@@ -858,8 +858,140 @@
 
     "furnitureParams_cabinet": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `cabinet`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `cabinet` (src/furniture/cabinet.js): one configurable cabinet carcass covering wardrobes, display cabinets, a TV console, a chest of drawers, bedside tables, a mobile pedestal and open shelving units. Each `default` equals cabinet.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). Real params live in a house's furniture[].params; the DEFAULT shown here is a 2-door mirrored wardrobe. See cabinet.js's header comment for the full fronts/columns/glassSidePanel contract - the validator cannot run JavaScript, so this schema only shapes the params, it does not re-derive the builder's fill/normalise/error rules for a fronts row, a columns width, or a glassSidePanel band.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 100,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 236,
+          "description": "cm, floor (or `elevation`) to top, INCLUDING the plinth/legs/wheels."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 60,
+          "description": "cm, back to front."
+        },
+        "fronts": {
+          "type": "array",
+          "description": "Row-based front, top to bottom: { height, cells: [ {kind, width, ...} ] }. Each row's cells must span the cabinet's width, and a row's own height is the space it takes ABOVE the plinth (rows sum to height - plinth.height). Cell kind is one of door|drawer|glass|mirror|sliding|open|stack. Mutually exclusive with `columns` - if both are set, `columns` wins.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "height": { "type": "number", "exclusiveMinimum": 0 },
+              "ledGapBelow": { "type": "boolean" },
+              "cells": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": ["door", "drawer", "glass", "mirror", "sliding", "open", "stack"]
+                    },
+                    "width": { "type": "number", "exclusiveMinimum": 0 },
+                    "handle": { "type": "boolean" },
+                    "panels": {
+                      "type": "array",
+                      "items": { "type": "string", "enum": ["white", "mirror"] }
+                    },
+                    "cells": {
+                      "type": "array",
+                      "description": "Only for kind:'stack' - this column's own vertical sub-stack of ordinary cells (not itself nesting a stack), { kind, height, ... }, heights summing to the parent row's height.",
+                      "items": { "type": "object" }
+                    }
+                  },
+                  "required": ["kind"]
+                }
+              }
+            },
+            "required": ["height", "cells"]
+          },
+          "default": [
+            { "height": 228, "cells": [
+              { "kind": "mirror", "width": 50 },
+              { "kind": "mirror", "width": 50 }
+            ] }
+          ]
+        },
+        "columns": {
+          "type": ["array", "null"],
+          "description": "Column-based front for open shelving, left to right: { width, rows }, `rows` a shelf-row COUNT splitting the column's own clear height into that many equal open bays. Mutually exclusive with `fronts` - if both are set, `columns` wins. null (the default) means this cabinet uses `fronts` instead.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "width": { "type": "number", "exclusiveMinimum": 0 },
+              "rows": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "default": null
+        },
+        "panelThickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 2,
+          "description": "cm, carcass panel thickness in `columns` mode only (fronts mode uses a fixed thickness)."
+        },
+        "plinth": {
+          "type": "object",
+          "description": "The cabinet's base.",
+          "properties": {
+            "type": { "type": "string", "enum": ["plinth", "legs", "wheels"] },
+            "height": { "type": "number", "minimum": 0 }
+          },
+          "required": ["type", "height"],
+          "default": { "type": "plinth", "height": 8 }
+        },
+        "gloss": {
+          "type": "boolean",
+          "default": false,
+          "description": "Carcass/front finish: gloss instead of matte."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f2f0ec"
+        },
+        "topColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f2f0ec"
+        },
+        "shelfLights": {
+          "type": "boolean",
+          "default": false,
+          "description": "Emissive LED strip under a glass shelf front."
+        },
+        "handles": {
+          "type": "boolean",
+          "default": true,
+          "description": "false = push-to-open, no handle meshes anywhere on this cabinet (a per-cell `handle:false` also works for just one door/drawer)."
+        },
+        "glassSidePanel": {
+          "type": ["object", "null"],
+          "description": "Optional override for ONE carcass side (the tall display cabinet): { side: 'left'|'right', bands: [{height?}, {height?, glassDepth, woodDepth}, {height?}] }, top to bottom. A band missing `height` splits the side's remaining clear height evenly. null (the default) means both sides are plain.",
+          "properties": {
+            "side": { "type": "string", "enum": ["left", "right"] },
+            "bands": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "height": { "type": "number", "exclusiveMinimum": 0 },
+                  "glassDepth": { "type": "number", "exclusiveMinimum": 0 },
+                  "woodDepth": { "type": "number", "exclusiveMinimum": 0 }
+                }
+              }
+            }
+          },
+          "default": null
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_clock": {

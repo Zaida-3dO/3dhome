@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cabinet Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  textarea.fronts-json { width:100%; min-height:220px; font:inherit; font-size:10.5px; padding:10px;
+    border:1px solid #d8d3c8; border-radius:4px; background:#fbfaf7; color:#1a1a1a; resize:vertical; }
+  .err { font-size:10px; color:#b23b3b; margin-top:6px; min-height:14px; }
+  select#presetSelect { font:inherit; font-size:11px; padding:6px 10px; border-radius:4px; border:1px solid #d8d3c8; background:#fff; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<!-- cabinet.js is a plain ESM module (export/import) - Babel's browser
+     transform (below) rewrites a dynamic import() into a require() call that
+     does not exist outside Node/webpack, so an import() INSIDE a `text/babel`
+     script silently rejects with "require is not defined". A real
+     `type="module"` script is never touched by Babel, so the dynamic import
+     happens here instead, and the Babel-transpiled app below just awaits
+     window.cabinetModuleReady. -->
+<script type="module">
+  window.CabinetFurniture = null;
+  window.cabinetModuleReady = import('../src/furniture/cabinet.js').then(m => {
+    window.CabinetFurniture = m;
+  });
+</script>
+
+<script type="text/babel">
+/* =====================================================================
+   CABINET SPEC   ·   one configurable cabinet carcass
+
+   Covers wardrobes, display cabinets, a TV stand, a chest of drawers,
+   bedside tables and a mobile pedestal - all through cabinet.js's `fronts`
+   grid (see that file's header for the full contract). This page is a
+   PRESET PICKER over that one builder: pick a preset, tweak its `fronts`
+   grid as raw JSON, and copy the resulting furniture-JSON for placement.
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Real dimensions as DEFAULTS are fine for furniture geometry (unlike a
+   house profile). Preset NAMES are generic and descriptive - no owner
+   names - because this repo is public.
+   ─────────────────────────────────────────────────────────────────────
+   ===================================================================== */
+
+// ---- presets --------------------------------------------------------------
+// Every preset is a complete cabinet.js `params` object. Cabinet.DEFAULTS
+// covers any field a preset omits.
+const PRESETS = {
+  mirroredWardrobe2Door: {
+    label: '2-door mirrored wardrobe',
+    params: {
+      width: 100, height: 236, depth: 60,
+      fronts: [{ height: 228, cells: [
+        { kind: 'mirror', width: 50 },
+        { kind: 'mirror', width: 50 }
+      ] }],
+      plinth: { type: 'plinth', height: 8 },
+      gloss: false, color: '#f2f0ec', topColor: '#f2f0ec'
+    }
+  },
+  wideMirroredWardrobe: {
+    label: 'Wide mirrored wardrobe',
+    params: {
+      width: 150, height: 237, depth: 66,
+      fronts: [{ height: 229, cells: [
+        { kind: 'mirror', width: 50 },
+        { kind: 'mirror', width: 50 },
+        { kind: 'mirror', width: 50 }
+      ] }],
+      plinth: { type: 'plinth', height: 8 },
+      gloss: false, color: '#f2f0ec', topColor: '#f2f0ec'
+    }
+  },
+  slidingWardrobe4Panel: {
+    label: '2-door sliding wardrobe, 4-panel doors',
+    params: {
+      width: 150, height: 236, depth: 60,
+      // ONE sliding cell spanning the full width, doors:2 - two doors total
+      // (not two adjacent sliding cells, which would build 4 doors: 2 each).
+      fronts: [{ height: 228, cells: [
+        { kind: 'sliding', width: 150, doors: 2, panels: ['white', 'mirror', 'mirror', 'white'] }
+      ] }],
+      plinth: { type: 'plinth', height: 8 },
+      gloss: false, color: '#ffffff', topColor: '#ffffff'
+    }
+  },
+  tallDisplayCabinet: {
+    label: 'Tall display cabinet',
+    params: {
+      width: 80, height: 189, depth: 34,
+      // 29 (solid door) + divider + 50 (glass door) = 80: the reference gives
+      // the solid door and glass door as 29 and 50 exactly, which already sum
+      // to 79, leaving only 1cm for the divider (not the illustrative "2cm"
+      // first assumed) - kept both real leaf widths exact and shrunk the
+      // divider instead of shrinking either door. Glass door stacked
+      // white(32)/glass(125, w/ shelves + LED)/white(32) = 189 exactly.
+      fronts: [
+        { height: 189, cells: [
+          { kind: 'door', width: 29 },
+          { kind: 'open', width: 1 },
+          { kind: 'stack', width: 50, cells: [
+            { kind: 'door', height: 32 },
+            { kind: 'glass', height: 125 },
+            { kind: 'door', height: 32 }
+          ] }
+        ] }
+      ],
+      plinth: { type: 'plinth', height: 0 },
+      gloss: true, color: '#ffffff', topColor: '#ffffff',
+      shelfLights: true,
+      // The glass door's side of the carcass has a matching glass side
+      // window (13cm deep) at the front, with a wood-tone panel (20cm deep)
+      // behind it, over the same 125cm middle band. Set side:'left' (and
+      // mirror the fronts cell order) for the second, mirror-image unit that
+      // flanks a TV on the other side.
+      glassSidePanel: {
+        side: 'right',
+        bands: [ {}, { height: 125, glassDepth: 13, woodDepth: 20 }, {} ]
+      }
+    }
+  },
+  tvConsole: {
+    label: 'TV console',
+    params: {
+      width: 180, height: 34, depth: 40,
+      // Left/right doors span the full height; the centre section is open
+      // above a 20cm-tall drawer at the BOTTOM (a 'stack' cell, since its
+      // own front splits at different heights than its door neighbours).
+      fronts: [
+        { height: 34, cells: [
+          { kind: 'door', width: 50 },
+          { kind: 'stack', width: 80, cells: [
+            { kind: 'open', height: 14 },
+            { kind: 'drawer', height: 20 }
+          ] },
+          { kind: 'door', width: 50 }
+        ] }
+      ],
+      plinth: { type: 'plinth', height: 0 },
+      // A dark recess/top over a white gloss body, not all-white.
+      gloss: true, color: '#ffffff', topColor: '#2a2a2a'
+    }
+  },
+  chestOfDrawers: {
+    label: 'Chest of drawers',
+    params: {
+      width: 80, height: 122, depth: 48,
+      // 2 small drawers on top, 4 wide drawers below, all push-to-open.
+      // Rows sum to 114 = 122 height - 8 plinth.
+      fronts: [
+        { height: 26, cells: [
+          { kind: 'drawer', width: 40, handle: false },
+          { kind: 'drawer', width: 40, handle: false }
+        ] },
+        { height: 22, cells: [{ kind: 'drawer', width: 80, handle: false }] },
+        { height: 22, cells: [{ kind: 'drawer', width: 80, handle: false }] },
+        { height: 22, cells: [{ kind: 'drawer', width: 80, handle: false }] },
+        { height: 22, cells: [{ kind: 'drawer', width: 80, handle: false }] }
+      ],
+      plinth: { type: 'plinth', height: 8 },
+      gloss: false, color: '#ffffff', topColor: '#ffffff', handles: false
+    }
+  },
+  bedsideTableLedNarrow: {
+    label: 'Bedside table, LED drawers — narrow',
+    params: {
+      width: 24, height: 60, depth: 50,
+      fronts: [
+        { height: 18, ledGapBelow: true, cells: [{ kind: 'drawer', width: 24 }] },
+        { height: 18, ledGapBelow: true, cells: [{ kind: 'drawer', width: 24 }] },
+        { height: 18, cells: [{ kind: 'drawer', width: 24 }] }
+      ],
+      plinth: { type: 'plinth', height: 6 },
+      gloss: false, color: '#ffffff', topColor: '#ffffff'
+    }
+  },
+  bedsideTableLedWide: {
+    label: 'Bedside table, LED drawers — wide',
+    params: {
+      width: 50, height: 60, depth: 40,
+      fronts: [
+        { height: 18, ledGapBelow: true, cells: [{ kind: 'drawer', width: 50 }] },
+        { height: 18, ledGapBelow: true, cells: [{ kind: 'drawer', width: 50 }] },
+        { height: 18, cells: [{ kind: 'drawer', width: 50 }] }
+      ],
+      plinth: { type: 'plinth', height: 6 },
+      gloss: false, color: '#ffffff', topColor: '#ffffff'
+    }
+  },
+  mobilePedestal: {
+    label: 'Mobile pedestal',
+    params: {
+      width: 40, height: 60, depth: 45,
+      // 3 stacked drawers, each the full 40cm width (implicit widths split
+      // the row's own width evenly - a SINGLE cell per row, so each gets 40).
+      fronts: [
+        { height: 18, cells: [{ kind: 'drawer' }] },
+        { height: 18, cells: [{ kind: 'drawer' }] },
+        { height: 19, cells: [{ kind: 'drawer' }] }
+      ],
+      plinth: { type: 'wheels', height: 5 },
+      gloss: false, color: '#ffffff', topColor: '#ffffff'
+    }
+  },
+  openShelving2Columns: {
+    label: 'Open shelving unit, 2 columns (56/33)',
+    params: {
+      width: 95, height: 140, depth: 39, panelThickness: 2,
+      // Each column splits its own clear height into 4 EQUAL shelf rows -
+      // the real unit looks staggered, but the rows are even per column.
+      columns: [
+        { width: 56, rows: 4 },
+        { width: 33, rows: 4 }
+      ],
+      plinth: { type: 'plinth', height: 0 },
+      gloss: false, color: '#ffffff', topColor: '#ffffff'
+    }
+  }
+};
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "preset": "mirroredWardrobe2Door"
+}/*EDITMODE-END*/;
+
+// ============== Cabinet model (buildModel) ==============
+// cabinet.js (a plain ESM module - same file the Node tests and, later, the
+// live renderer import; THREE is injected, never imported by it) is loaded
+// by the real `type="module"` script above, NOT here: Babel's browser
+// transform rewrites a dynamic import() into a require() call, which does
+// not exist in a browser, so window.cabinetModuleReady / window.CabinetFurniture
+// are what this Babel-transpiled script reads instead.
+function buildCabinet(params) {
+  return (t, group, THREE, ctx) => {
+    if (!window.CabinetFurniture) return; // not loaded yet; App doesn't render until it is
+    const built = window.CabinetFurniture.build(THREE, params, { detail: 'full' });
+    group.add(built);
+    ctx.built = built;
+  };
+}
+
+function heightOfParams(params) {
+  return () => (params.height || 200) * 0.01;
+}
+
+// ============== App ==============
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const presetKey = PRESETS[t.preset] ? t.preset : 'mirroredWardrobe2Door';
+  const preset = PRESETS[presetKey];
+
+  // Editable fronts-grid JSON, seeded from the selected preset and reset
+  // whenever the preset changes (but NOT on every keystroke - it's a
+  // separate piece of state the user is actively editing).
+  const [paramsJson, setParamsJson] = React.useState(() => JSON.stringify(preset.params, null, 2));
+  const [jsonError, setJsonError] = React.useState('');
+  const lastPresetRef = React.useRef(presetKey);
+  React.useEffect(() => {
+    if (lastPresetRef.current !== presetKey) {
+      lastPresetRef.current = presetKey;
+      setParamsJson(JSON.stringify(PRESETS[presetKey].params, null, 2));
+      setJsonError('');
+    }
+  }, [presetKey]);
+
+  // Parsed params actually fed to the builder. Falls back to the preset's
+  // last-known-good params if the edited JSON doesn't parse or doesn't build,
+  // so a mid-edit typo never blanks the 3D view. Real STATE (not a ref) -
+  // the Numbers table and the 3D view both read this at render time, and a
+  // ref mutation alone does not trigger the re-render either of them needs.
+  const [params, setParams] = React.useState(preset.params);
+  const [copyStatus, setCopyStatus] = React.useState('');
+  React.useEffect(() => {
+    try {
+      const parsed = JSON.parse(paramsJson);
+      // Cheap validation: build once off-screen via the real builder so a
+      // fronts grid that doesn't fill the width surfaces here, not silently
+      // in the 3D view.
+      window.CabinetFurniture.build(THREE, parsed, { detail: 'low' });
+      setParams(parsed);
+      setJsonError('');
+    } catch (e) {
+      setJsonError(e.message);
+      // keep the last good `params`
+    }
+  }, [paramsJson]);
+
+  const copyJson = () => {
+    const furnitureJson = {
+      type: 'cabinet',
+      params: params
+    };
+    const text = JSON.stringify(furnitureJson, null, 2);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => setCopyStatus('Copied!'),
+        () => setCopyStatus('Copy failed — select the JSON manually.')
+      );
+    } else {
+      setCopyStatus('Clipboard unavailable — select the JSON manually.');
+    }
+    setTimeout(() => setCopyStatus(''), 2000);
+  };
+
+  const p = params;
+
+  return (
+    <>
+      <h1>Cabinet Spec</h1>
+      <div className="sub">All units cm. One configurable carcass for wardrobes, display cabinets, a TV stand, a chest of drawers, bedside tables and a mobile pedestal.</div>
+
+      <div className="row" style={{ marginBottom: 16 }}>
+        <select id="presetSelect" value={presetKey} onChange={e => setTweak('preset', e.target.value)}>
+          {Object.keys(PRESETS).map(k => <option key={k} value={k}>{PRESETS[k].label}</option>)}
+        </select>
+        <button className="btn" onClick={copyJson}>Copy as furniture JSON</button>
+        {copyStatus && <span className="legend" style={{ marginTop: 0 }}>{copyStatus}</span>}
+      </div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Fronts grid (editable JSON)</h2>
+          <textarea className="fronts-json" value={paramsJson}
+            onChange={e => setParamsJson(e.target.value)} spellCheck={false} />
+          <div className="err">{jsonError}</div>
+        </div>
+
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th></tr>
+              <tr><td>Width</td><td className="num">{p.width}</td></tr>
+              <tr><td>Height</td><td className="num">{p.height}</td></tr>
+              <tr><td>Depth</td><td className="num">{p.depth}</td></tr>
+              <tr><td>Plinth / base</td><td className="num">{p.plinth ? `${p.plinth.type} · ${p.plinth.height}` : '—'}</td></tr>
+              <tr><td>Gloss</td><td className="num">{p.gloss ? 'yes' : 'no'}</td></tr>
+              <tr><td>Shelf lights</td><td className="num">{p.shelfLights ? 'yes' : 'no'}</td></tr>
+              <tr><td>Front rows</td><td className="num">{(p.fronts || []).length}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div className="card full">
+          <h2>3D — {preset.label}</h2>
+          <ThreeView
+            t={params}
+            buildModel={buildCabinet(params)}
+            heightOf={heightOfParams(params)}
+          />
+        </div>
+      </div>
+    </>
+  );
+}
+
+// App reads window.CabinetFurniture synchronously on first render (the
+// JSON-validation effect that seeds `params` state), so mounting is held
+// until the module script's dynamic import resolves rather than racing it.
+window.cabinetModuleReady.then(() => {
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+});
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// This page has no TweaksPanel controls of its own (the preset picker + JSON
+// editor above serve that role), but the self-post is kept for consistency
+// with the other spec pages in case a future control is added.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>
