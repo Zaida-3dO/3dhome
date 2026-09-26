@@ -174,9 +174,10 @@ export function build(THREE, params, opts) {
   // ---- materials ----------------------------------------------------------
   const primaryCol = new THREE.Color(P.primaryColor);
   const embossCol = primaryCol.clone().multiplyScalar(0.78);
-  // PVC leather reads glossy; the gas lift is metal; everything else is matte.
+  // PU leather gets a soft satin sheen (no sharp highlight); the gas lift is
+  // metal; everything else is matte.
   // Every material comes from makeFinish() so the renderer can merge by finish.
-  const FINISH = { primary: 'gloss', back: 'matte', frame: 'matte', metal: 'metal', pillow: 'matte', emboss: 'matte', label: 'matte' };
+  const FINISH = { primary: 'satin', back: 'matte', frame: 'matte', metal: 'metal', pillow: 'matte', emboss: 'matte', label: 'matte' };
   const hex = c => '#' + c.getHexString();
   const COLOR = {
     primary: P.primaryColor, back: P.backColor, frame: P.frameColor, metal: P.frameColor,
