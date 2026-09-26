@@ -829,7 +829,7 @@
 
     "furnitureParams_bed": {
       "type": "object",
-      "description": "Params for `bed` (src/furniture/bed.js): an upholstered bed with a tall channel-tufted (vertical fluted) headboard, a base, a mattress, pillows and an optional duvet. Each `default` equals bed.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). `height` is the overall envelope, driven by `headboardHeight` at the default pose.",
+      "description": "Params for `bed` (src/furniture/bed.js): an upholstered bed with a tall channel-tufted (vertical padded channel) headboard, a base, a mattress, pillows and an optional duvet. Each `default` equals bed.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). `height` IS the headboard height (floor to its top) -- there is no separate headboardHeight param.",
       "properties": {
         "width": {
           "type": "number",
@@ -847,13 +847,7 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 120,
-          "description": "cm, the overall envelope height -- equals headboardHeight at the default pose."
-        },
-        "headboardHeight": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 120,
-          "description": "cm, floor to the top of the headboard."
+          "description": "cm, floor to the top of the headboard -- honoured directly."
         },
         "baseHeight": {
           "type": "number",
@@ -871,13 +865,13 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 7,
-          "description": "Vertical channel-tufted flutes across the headboard width."
+          "description": "Vertical padded channels across the headboard width, butted edge-to-edge with a small crease between neighbours."
         },
         "channelDepth": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 3.5,
-          "description": "cm, how far each flute stands proud of the headboard backing."
+          "description": "cm, how far each channel stands proud of the headboard backing at its centre."
         },
         "headboardColor": {
           "$ref": "#/$defs/hexColor",

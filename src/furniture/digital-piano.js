@@ -67,7 +67,11 @@ function buildDigitalPiano(THREE, params, opts) {
   const bodyMat = makeFinish(THREE, p.finish, p.bodyColor);
   const whiteKeyMat = makeFinish(THREE, 'gloss', p.keyWhiteColor);
   const blackKeyMat = makeFinish(THREE, 'gloss', p.keyBlackColor);
-  const standMat = makeFinish(THREE, 'metal', p.standColor);
+  // 'gloss', not 'metal': the live scene has no environment map, so a
+  // metalness-0.9 material reflects only black ambient and renders as dark
+  // grey regardless of its base colour -- wrong for a white stand. 'gloss'
+  // (metalness 0) actually shows the white it's given.
+  const standMat = makeFinish(THREE, 'gloss', p.standColor);
 
   function addMesh(geo, mat, x, y, z) {
     const mesh = new THREE.Mesh(geo, mat);
@@ -124,24 +128,36 @@ function buildDigitalPiano(THREE, params, opts) {
   // ---- music rest: an upright panel standing up from the back of the body --
   // Upright extent pinned to exactly (heightM - keybedHM), so the overall
   // envelope always equals DEFAULTS.height. restHeight only affects how far
-  // the panel LEANS BACK past the body's back face (visual only, since a
-  // reclined rest reads as shallower); it never changes the panel's own
-  // upright reach.
+  // the panel leans AWAY FROM THE PLAYER (toward -z, back past the body's
+  // own back face) -- visual only, since a reclined rest reads as shallower;
+  // it never changes the panel's own upright reach.
   const uprightM = Math.max(0.01, heightM - keybedHM);
   const restLean = Math.min(0.4, (p.restHeight * CM) / Math.max(uprightM, 0.01) * 0.3);
   const restThickness = 0.02;
-  // The panel is drawn slightly LONGER than uprightM so that once leaned back
-  // by restLean its vertical (y) projection is exactly uprightM again --
-  // otherwise leaning would shrink the built bbox below DEFAULTS.height.
-  const panelLen = uprightM / Math.cos(restLean);
+  // A box of length L and thickness T, rotated by `restLean` about X, has
+  // its OWN vertical bbox extent equal to L*cos(restLean) + T*sin(restLean)
+  // -- the thickness contributes too, not just the length -- so L is solved
+  // backward from that so the panel's built vertical projection lands on
+  // exactly uprightM (otherwise leaning shrinks the built bbox below
+  // DEFAULTS.height; confirmed numerically for restHeight in [5,15,40]).
+  const panelLen = (uprightM - restThickness * Math.sin(restLean)) / Math.cos(restLean);
   const restGeo = new THREE.BoxGeometry(widthM * 0.9, panelLen, restThickness);
   // Pivot at the bottom-back edge of the panel (body's back-top corner), then
-  // lean it back by restLean radians -- geometry translated so the pivot is
-  // at its own local origin before rotation.
+  // lean it AWAY from the player -- geometry translated so the pivot is at
+  // its own local origin before rotation.
   restGeo.translate(0, panelLen / 2, restThickness / 2);
+  // NEGATIVE x-rotation swings the panel's top toward -z (away from the
+  // player, who stands at the +z front) -- a POSITIVE rotation here was the
+  // bug: it swung the top toward +z, into the player's space. Leaning
+  // backward pushes the panel's own back-most point past the pivot's z=0,
+  // which would break the furniture contract's "back at z=0" rule (measured
+  // on the whole group) -- so the pivot is shifted forward by exactly that
+  // overshoot (panelLen * sin(restLean)) to compensate, landing the leaned
+  // panel's back-most point back on z=0 without moving anything else.
+  const backOvershoot = panelLen * Math.sin(restLean);
   const rest = new THREE.Mesh(restGeo, bodyMat);
-  rest.position.set(0, keybedHM, 0);
-  rest.rotation.x = restLean;
+  rest.position.set(0, keybedHM, backOvershoot);
+  rest.rotation.x = -restLean;
   rest.castShadow = true; rest.receiveShadow = true;
   if (isKeptFinish(bodyMat.userData.finish)) rest.userData.keep = true;
   group.add(rest);
@@ -182,7 +198,9 @@ function buildPianoBench(THREE, params, opts) {
   group.name = 'furniture:piano-bench';
 
   const seatMat = makeFinish(THREE, p.finish, p.seatColor);
-  const baseMat = makeFinish(THREE, 'metal', p.baseColor);
+  // 'gloss', not 'metal': see the digital-piano stand's note above -- with no
+  // environment map, a metal finish reads as dark grey no matter its colour.
+  const baseMat = makeFinish(THREE, 'gloss', p.baseColor);
 
   function addMesh(geo, mat, x, y, z) {
     const mesh = new THREE.Mesh(geo, mat);
@@ -278,7 +296,14 @@ function buildOttoman(THREE, params, opts) {
 
   const widthM = p.width * CM, depthM = p.depth * CM, heightM = p.height * CM;
   const legHM = Math.min(0.08, heightM * 0.18);
-  const bodyHM = heightM - legHM;
+  // The ridge crown adds `radius` of height ON TOP of the flat lid (it
+  // stands PROUD, per the fix below) -- so that budget is reserved up front
+  // from the overall height, alongside the legs, leaving `caseHM` for the
+  // legs-to-flat-lid-top stack. Without this the ridges would push the
+  // built bbox `radius` cm above DEFAULTS.height.
+  const channelDepthMEstimate = p.channelDepth * CM;
+  const ridgeBudget = Math.min(channelDepthMEstimate, heightM * 0.15);
+  const caseHM = heightM - legHM - ridgeBudget;
 
   const group = new THREE.Group();
   group.name = 'furniture:ottoman';
@@ -301,35 +326,54 @@ function buildOttoman(THREE, params, opts) {
   const legR = 0.018;
   for (const sx of [-1, 1]) {
     for (const sz of [0.06, 1]) {
-      const legGeo = new THREE.CylinderGeometry(legR, legR * 0.8, legHM, full ? 12 : 6);
+      const legGeo = new THREE.CylinderGeometry(legR, legR * 0.8, legHM, full ? 12 : 4);
       addMesh(legGeo, legMat, sx * (widthM / 2 - legInset), legHM / 2, sz === 0.06 ? legInset : depthM - legInset);
     }
   }
 
   // ---- body, back at z=0 -------------------------------------------------------
-  const bodyGeo = new THREE.BoxGeometry(widthM, bodyHM * 0.82, depthM);
-  addMesh(bodyGeo, bodyMat, 0, legHM + bodyHM * 0.82 / 2, depthM / 2);
+  const bodyGeo = new THREE.BoxGeometry(widthM, caseHM * 0.82, depthM);
+  addMesh(bodyGeo, bodyMat, 0, legHM + caseHM * 0.82 / 2, depthM / 2);
 
   // ---- channel-tufted lid: parallel ridges across the top, front-to-back ----
-  const lidHM = bodyHM * 0.18;
-  const lidY = legHM + bodyHM * 0.82 + lidHM / 2;
+  // The flat lid slab occupies the rest of `caseHM`; the ridges (below) then
+  // stand proud of ITS top by `ridgeBudget`, and that budget is exactly what
+  // was reserved above, so the whole assembly's top lands on heightM.
+  const lidHM = caseHM * 0.18;
+  const lidY = legHM + caseHM * 0.82 + lidHM / 2;
   const lidBase = new THREE.BoxGeometry(widthM * 0.98, lidHM, depthM * 0.98);
   addMesh(lidBase, bodyMat, 0, lidY, depthM / 2);
 
+  // Built as an extruded semicircle profile rather than a rotated
+  // CylinderGeometry, to avoid ambiguity about which axis lands where after
+  // rotation: a Shape drawn in XY with a flat base at y=0 and a dome up to
+  // y=radius, extruded along Z, gives EXACTLY the frame a proud ridge needs
+  // with no rotation at all -- X centred `[-radius, radius]` (width), Y
+  // one-sided `[0, radius]` (flat bottom, domed top = proud height), Z
+  // centred `[-runLen/2, runLen/2]` (the run, front-to-back).
   const n = Math.max(1, Math.round(p.channelCount));
-  const seg = full ? 10 : 5;
-  const channelDepthM = p.channelDepth * CM;
+  const seg = full ? 10 : 2;
   const nominalW = (widthM * 0.98) / n;
-  const radius = Math.min(channelDepthM, nominalW / 2 * 0.98);
-  const ridgeGeo = new THREE.CylinderGeometry(radius, radius, depthM * 0.98, seg, 1, false, 0, Math.PI);
-  ridgeGeo.rotateX(Math.PI / 2); // swing the cylinder's axis from y into z, flat side down (round face up)
+  const creaseM = Math.min(0.01, nominalW * 0.06);
+  // The dome's radius is its own proud height (a semicircle profile), so it
+  // is capped at `ridgeBudget` -- the exact height reserved for it above --
+  // as well as at half its own share of the lid width, whichever is smaller.
+  const radius = Math.min(ridgeBudget, (nominalW - creaseM) / 2);
+  const runLen = depthM * 0.98;
+  const ridgeShape = new THREE.Shape();
+  ridgeShape.moveTo(-radius, 0);
+  ridgeShape.absarc(0, 0, radius, Math.PI, 0, true); // dome over the top (y > 0)
+  ridgeShape.lineTo(radius, 0);
+  ridgeShape.closePath();
+  const ridgeGeo = new THREE.ExtrudeGeometry(ridgeShape, { depth: runLen, bevelEnabled: false, curveSegments: seg });
+  ridgeGeo.translate(0, 0, -runLen / 2); // centre the extrusion on Z
   const startX = -widthM * 0.98 / 2 + nominalW / 2;
   for (let i = 0; i < n; i++) {
     const cx = startX + i * nominalW;
     const mesh = new THREE.Mesh(ridgeGeo, bodyMat);
-    // Sink the ridge's centre by its own radius below the lid's flat top, so
-    // its crown is flush with (never proud of) the overall envelope height.
-    mesh.position.set(cx, lidY + lidHM / 2 - radius, depthM / 2);
+    // Flat bottom face sits exactly on the lid's flat top, so the dome
+    // stands PROUD of it (never sunk inside, never floating above it).
+    mesh.position.set(cx, lidY + lidHM / 2, depthM / 2);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     if (isKeptFinish(bodyMat.userData.finish)) mesh.userData.keep = true;

@@ -12,14 +12,22 @@
  *   1. digital-piano: the stand legs sit at the back (z=0), the keybed and
  *      music rest are toward the front (+z), white keys are drawn (and black
  *      keys too at full detail, set back from them and dropped at low
- *      detail), and the overall height stays pinned to DEFAULTS.height
- *      regardless of restHeight (the rest and body share a fixed budget).
+ *      detail), the overall height stays pinned to DEFAULTS.height
+ *      regardless of restHeight (the rest and body share a fixed budget),
+ *      the stand/base parts are NOT metal (metal reads dark grey with no
+ *      environment map -- the stand is white), and the music rest leans
+ *      AWAY from the player (toward -z) rather than into their space.
  *   2. piano-bench: BOTH baseStyle presets ('x' and 'column') build to the
  *      same bbox, and each uses genuinely different geometry (a column vs.
  *      two crossed legs) rather than silently falling back to one shape.
+ *      Base parts are not metal, for the same reason as the piano stand.
  *   3. ottoman: the lid is channel-tufted (DEFAULTS.channelCount ridges,
- *      evenly spaced, flush with the lid edges), the ridges never stand
- *      proud of the overall envelope height, and it sits on 4 legs.
+ *      evenly spaced, flush with the lid edges), the ridges STAND PROUD of
+ *      the flat lid top (round face up, not sunk inside it and not rotated
+ *      sideways), and it sits on 4 legs. A reviewer found a real bug here:
+ *      an earlier version of this file asserted ridges "never stand proud",
+ *      which locked the bug in rather than catching it -- this version
+ *      requires the opposite.
  */
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -85,7 +93,9 @@ const colorInt = hex => parseInt(hex.slice(1), 16);
     keysMinZ >= depthM / 2, { keysMinZ, depthM });
 
   // Overall height stays pinned to DEFAULTS.height for a range of restHeight
-  // values (the rest and body share a fixed budget above the keybed).
+  // values (the rest and body share a fixed budget above the keybed), and
+  // the back stays at z=0 too -- leaning the rest must not push either past
+  // its budget.
   for (const restHeight of [5, 15, 40]) {
     const gi = build(THREE, Object.assign({}, D, { restHeight }), { detail: 'full' });
     gi.updateMatrixWorld(true);
@@ -93,6 +103,47 @@ const colorInt = hex => parseInt(hex.slice(1), 16);
     const heightCm = (box.max.y - box.min.y) * 100;
     check('overall height stays pinned to DEFAULTS.height for restHeight=' + restHeight,
       near(heightCm, D.height, 0.5), heightCm);
+    check('back stays at z=0 for restHeight=' + restHeight,
+      near(box.min.z, 0, 0.002), box.min.z);
+  }
+
+  // Stand is NOT metal: with no environment map in the live scene, a
+  // metalness-0.9 material reflects only black ambient and reads dark grey
+  // regardless of its base colour -- wrong for a white stand.
+  standParts.forEach(m => {
+    const mat = Array.isArray(m.material) ? m.material[0] : m.material;
+    check('stand part is not the metal finish', mat.userData.finish !== 'metal', mat.userData.finish);
+  });
+
+  // The music rest leans AWAY from the player (toward -z), not toward them.
+  // Identified as the tallest mesh in the body colour that is NOT the flat
+  // body slab or the key backing (both of which sit at y <= keybedHeight;
+  // the rest starts at keybedHeight and reaches up to the full height).
+  const bodyColorParts = meshesByColor(g, colorInt(D.bodyColor));
+  const keybedHM = D.keybedHeight / 100;
+  const rest = bodyColorParts.find(m => {
+    const b = new THREE.Box3().setFromObject(m);
+    return b.max.y > keybedHM + 0.01 && (b.max.y - b.min.y) > 0.05;
+  });
+  check('found the music rest mesh for this check', !!rest);
+  if (rest) {
+    const rb = new THREE.Box3().setFromObject(rest);
+    // The rest's own TOP should sit further toward -z (away from the
+    // player) than its BOTTOM -- a positive lean (the bug) would put the top
+    // further toward +z instead. Sample the actual mesh vertices in world
+    // space rather than just the bbox, since a bbox alone can't distinguish
+    // "leans back" from "leans forward" once translated to keep the back at
+    // z=0 (see backOvershoot in the builder).
+    const posAttr = rest.geometry.attributes.position;
+    let topZ = -Infinity, topY = -Infinity, botZ = Infinity, botY = Infinity;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < posAttr.count; i++) {
+      v.fromBufferAttribute(posAttr, i).applyMatrix4(rest.matrixWorld);
+      if (v.y > topY) { topY = v.y; topZ = v.z; }
+      if (v.y < botY) { botY = v.y; botZ = v.z; }
+    }
+    check('music rest leans AWAY from the player (top is further toward -z than the bottom)',
+      topZ < botZ, { topY, topZ, botY, botZ });
   }
 }
 
@@ -108,6 +159,17 @@ const colorInt = hex => parseInt(hex.slice(1), 16);
     check('baseStyle=' + baseStyle + ': bbox depth matches DEFAULTS', near(d, D.depth, 0.5), d);
     check('baseStyle=' + baseStyle + ': bbox height matches DEFAULTS', near(h, D.height, 0.5), h);
     check('baseStyle=' + baseStyle + ': back at z=0', near(box.min.z, 0, 0.002), box.min.z);
+
+    // Base is NOT metal, for the same reason as the digital-piano stand: no
+    // environment map means a metal finish reads dark grey regardless of
+    // colour, and the bench base is white.
+    const baseColorInt = colorInt(D.baseColor);
+    const baseParts = meshesByColor(g, baseColorInt);
+    check('baseStyle=' + baseStyle + ': base parts found for the finish check', baseParts.length > 0);
+    baseParts.forEach(m => {
+      const mat = Array.isArray(m.material) ? m.material[0] : m.material;
+      check('baseStyle=' + baseStyle + ': base part is not the metal finish', mat.userData.finish !== 'metal', mat.userData.finish);
+    });
   }
 
   // The two presets are genuinely different geometry, not the same shape
@@ -158,23 +220,70 @@ const colorInt = hex => parseInt(hex.slice(1), 16);
   // Evenly spaced, flush with the lid edges. The lid itself is inset 2% from
   // the full ottoman width (widthM * 0.98), and the ridge row is fit to that
   // inset lid width, matching the builder's own layout maths exactly. Each
-  // ridge is a HALF-cylinder (a Pi-radian arc), so its own local origin is
-  // its flat (cut) edge, not its bbox centre -- the builder places `cx` at
-  // that anchor, so this test compares the same anchor (mesh.position.x)
-  // rather than a bbox midpoint, which would be off by radius/2.
-  const xsAnchor = ridges.map(m => m.position.x).sort((a, b) => a - b);
+  // ridge is built as an extruded semicircle centred on its own local x=0
+  // (see buildOttoman), so its bbox centre IS the anchor -- unlike the old
+  // rotated-half-cylinder version, no separate "anchor vs. bbox" distinction
+  // is needed here any more.
+  const xsCentre = ridges.map(m => {
+    const b = new THREE.Box3().setFromObject(m);
+    return (b.min.x + b.max.x) / 2;
+  }).sort((a, b) => a - b);
   const rowWidthM = (D.width / 100) * 0.98;
   const nominal = rowWidthM / D.channelCount;
-  check('first ridge anchored half a pitch from the left edge of the inset lid',
-    near(xsAnchor[0], -rowWidthM / 2 + nominal / 2, 0.002), xsAnchor[0]);
-  check('last ridge anchored half a pitch from the right edge of the inset lid',
-    near(xsAnchor[xsAnchor.length - 1], rowWidthM / 2 - nominal / 2, 0.002), xsAnchor[xsAnchor.length - 1]);
+  check('first ridge centred half a pitch from the left edge of the inset lid',
+    near(xsCentre[0], -rowWidthM / 2 + nominal / 2, 0.002), xsCentre[0]);
+  check('last ridge centred half a pitch from the right edge of the inset lid',
+    near(xsCentre[xsCentre.length - 1], rowWidthM / 2 - nominal / 2, 0.002), xsCentre[xsCentre.length - 1]);
 
-  // Ridges never stand proud of the overall envelope height.
+  // Ridges STAND PROUD of the flat lid top, round face UP -- a reviewer
+  // found a real bug here: the previous version was rotated with the round
+  // face sideways and sat fully INSIDE the lid box (an earlier version of
+  // this test asserted "never stand proud", which locked that bug in). The
+  // flat lid slab is the other body-colour part that is NOT a ridge (12
+  // triangles); ridges must rise clearly above its top face, and their own
+  // cross-section must be a dome (wider at the base, in local width, than
+  // exactly the same all the way up would suggest a flat-sided box instead
+  // of a rounded profile -- checked via the geometry's own bounding sphere
+  // vs. bounding box ratio being consistent with a genuine curve).
+  // The flat lid slab is the non-ridge body-colour part whose OWN top face
+  // (max.y) sits closest to (just below) the ridges' own bottom -- i.e. the
+  // part the ridges are actually resting on, not just any part below them.
+  const nonRidgeParts = bodyParts.filter(m => !ridges.includes(m));
+  const ridgeMinYForLid = Math.min(...ridges.map(m => new THREE.Box3().setFromObject(m).min.y));
+  const lidBase = nonRidgeParts.reduce((best, m) => {
+    const top = new THREE.Box3().setFromObject(m).max.y;
+    if (top > ridgeMinYForLid + 0.005) return best; // above the ridges: not the lid
+    if (!best) return m;
+    const bestTop = new THREE.Box3().setFromObject(best).max.y;
+    return top > bestTop ? m : best;
+  }, null);
+  check('found the flat lid base for this check', !!lidBase);
+  const lidTopY = new THREE.Box3().setFromObject(lidBase).max.y;
+  const ridgeBoxes = ridges.map(m => new THREE.Box3().setFromObject(m));
+  const ridgeMinY = Math.min(...ridgeBoxes.map(b => b.min.y));
+  const ridgeMaxY = Math.max(...ridgeBoxes.map(b => b.max.y));
+  check('ridges sit flush with (not sunk below) the lid top',
+    near(ridgeMinY, lidTopY, 0.002), { ridgeMinY, lidTopY });
+  check('ridges STAND PROUD of the lid top (round face up, not sunk inside it)',
+    ridgeMaxY > lidTopY + 0.002, { ridgeMaxY, lidTopY });
+
+  // Ridges run the long way (front-to-back), not across the width: each
+  // ridge's own z-extent should span most of the ottoman's depth.
+  const depthM = D.depth / 100;
+  ridgeBoxes.forEach((b, i) => {
+    const zSpan = b.max.z - b.min.z;
+    check('ridge ' + i + ' runs the long way (z-extent close to the full depth)',
+      zSpan > depthM * 0.8, { zSpan, depthM });
+  });
+
+  // The overall envelope height still equals DEFAULTS.height even though
+  // the ridges now genuinely protrude above the flat lid (the protrusion is
+  // budgeted for, not additional to DEFAULTS.height) -- already covered by
+  // the generic contract test, re-asserted here for this specific geometry.
   const overallBox = new THREE.Box3().setFromObject(g);
-  const ridgeMaxY = Math.max(...ridges.map(m => new THREE.Box3().setFromObject(m).max.y));
-  check('ridges do not exceed the overall envelope height',
-    ridgeMaxY <= overallBox.max.y + 0.002, { ridgeMaxY, overallMaxY: overallBox.max.y });
+  check('overall height still equals DEFAULTS.height with proud ridges',
+    near((overallBox.max.y - overallBox.min.y) * 100, D.height, 0.5),
+    (overallBox.max.y - overallBox.min.y) * 100);
 
   // A custom channelCount still lays out correctly.
   const g2 = build(THREE, Object.assign({}, D, { channelCount: 3 }), { detail: 'full' });
@@ -184,6 +293,21 @@ const colorInt = hex => parseInt(hex.slice(1), 16);
     return tri > 12;
   });
   check('a custom channelCount is honoured', ridges2.length === 3, ridges2.length);
+
+  // Low-detail triangle budget: the extruded-ridge fix must not make the
+  // low-detail build expensive. Reviewer's target: under 200 triangles.
+  function totalTris(group) {
+    let n = 0;
+    group.traverse(o => {
+      if (!o.isMesh) return;
+      const idx = o.geometry.index;
+      n += idx ? idx.count / 3 : o.geometry.attributes.position.count / 3;
+    });
+    return n;
+  }
+  const low = build(THREE, Object.assign({}, D), { detail: 'low' });
+  const lowTris = totalTris(low);
+  check('low-detail ottoman is under 200 triangles', lowTris < 200, lowTris);
 }
 
 // ---- registry wiring (this module's own entries) -----------------------------

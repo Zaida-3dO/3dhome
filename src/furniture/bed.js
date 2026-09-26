@@ -15,25 +15,33 @@
  * grey velvet, a base, a mattress and pillows, plus an optional duvet -- no
  * real measurements, no house-specific placement; this module is a generic,
  * publishable bed shape only. `width`/`depth` describe the base/mattress
- * footprint; `height` is the OVERALL envelope (driven by the headboard,
- * which is normally the tallest part), per the furniture contract's bbox
- * check. `headboardHeight` may be taller or shorter than the base+mattress
- * stack; DEFAULTS.height is always max(headboardHeight, base+mattress top).
+ * footprint. `height` is an EXPLICIT, HONOURED param: it directly sets the
+ * headboard height (the headboard is drawn to `height`, not to a separate
+ * `headboardHeight` -- there is no such param; the built envelope equals
+ * `height` whenever the headboard is the tallest part, which is the normal
+ * case, and equals the base+mattress stack instead only if `height` is set
+ * shorter than that stack). The headboard is at the BACK (z=0, per the
+ * furniture contract); pillows sit at that same end, resting on the
+ * mattress against the headboard -- NOT at the foot.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 
 export const TYPE = 'bed';
 
-/** Defaults, in cm. A queen-ish double: ~161 x 220, headboard ~120 tall. */
+/**
+ * Defaults, in cm. A queen-ish double: ~161 x 220, headboard ~120 tall.
+ * `height` IS the headboard height (floor to its top) -- there is no
+ * separate headboardHeight param, so there is exactly one number to honour
+ * and no way for the two to drift apart.
+ */
 export const DEFAULTS = Object.freeze({
   width: 161,
   depth: 220,
-  height: 120,           // == headboardHeight at the default pose
-  headboardHeight: 120,  // floor to the top of the headboard
-  baseHeight: 32,        // floor to the top of the base (divan/box base)
+  height: 120,            // floor to the top of the headboard
+  baseHeight: 32,         // floor to the top of the base (divan/box base)
   mattressHeight: 28,
-  channelCount: 7,        // vertical flutes across the headboard width
-  channelDepth: 3.5,      // how far each flute stands proud, cm
+  channelCount: 7,        // vertical padded channels across the headboard width
+  channelDepth: 3.5,      // how far each channel stands proud at its centre, cm
   headboardColor: '#8d8f92',   // grey velvet
   baseColor: '#3a3a3d',
   mattressColor: '#f2efe8',
@@ -51,14 +59,28 @@ function resolveParams(params) {
 }
 
 /**
- * A single vertical channel-tufted flute: a half-round bolster running the
- * full height of the headboard, so an even row of them reads as continuous
- * vertical channel tufting.
+ * A single vertical padded channel: a WIDE, shallow-domed bolster running
+ * the full height of the headboard. Built as a half-ellipse cross-section
+ * (an elongated half-cylinder, scaled flat in its own depth axis) so a row
+ * of them can butt edge-to-edge -- each channel is nearly as wide as its own
+ * share of the headboard, with only a thin crease between neighbours, per
+ * the padded-vertical-channel look (as opposed to a row of thin poles with
+ * gaps between them).
  */
-function buildChannel(THREE, radius, height, seg) {
-  // Half-cylinder (open flat side glued to the headboard backing), capped at
-  // top and bottom so it never reads hollow from a 3/4 view.
-  const geo = new THREE.CylinderGeometry(radius, radius, height, seg, 1, false, 0, Math.PI);
+function buildChannel(THREE, halfWidth, proudDepth, height, seg) {
+  // A half-cylinder of radius `halfWidth`, capped top and bottom so it never
+  // reads hollow from a 3/4 view. BEFORE any rotation, a CylinderGeometry
+  // swept from thetaStart=0 for thetaLength=Pi has its cut face on the local
+  // X axis (spanning [0, halfWidth]) and its round bulge -- the full
+  // diameter -- on the local Z axis (spanning [-halfWidth, halfWidth]). So
+  // the DEPTH axis to compress is X (the half-arc), not Z: scale X down from
+  // halfWidth to proudDepth, giving a wide, shallow-domed channel instead of
+  // a narrow round pole. rotateY(-Pi/2) (applied by the caller) then swings
+  // this squashed X into the final Z (proud-of-backing depth) and the
+  // untouched Z (full width) into the final X (across the headboard).
+  const geo = new THREE.CylinderGeometry(halfWidth, halfWidth, height, seg, 1, false, 0, Math.PI);
+  const scaleX = Math.max(0.05, proudDepth / halfWidth);
+  geo.scale(scaleX, 1, 1);
   return geo;
 }
 
@@ -79,7 +101,7 @@ export function build(THREE, params, opts) {
   const depthM = p.depth * CM;
   const baseHM = p.baseHeight * CM;
   const mattHM = p.mattressHeight * CM;
-  const headboardHM = p.headboardHeight * CM;
+  const headboardHM = p.height * CM;
 
   const group = new THREE.Group();
   group.name = 'furniture:bed';
@@ -116,20 +138,22 @@ export function build(THREE, params, opts) {
   const headboardGeo = new THREE.BoxGeometry(widthM, headboardHM, backingDepthM);
   addMesh(headboardGeo, headboardMat, 0, headboardHM / 2, backingDepthM / 2);
 
-  // Vertical channel tufting: evenly spaced half-round flutes across the
-  // width, redistributing the remainder into the gap so the row starts and
-  // ends flush with the panel edges (same fitting approach as
-  // wall-panels.js's slat-panel).
+  // Vertical padded channels: wide, shallow-domed bolsters across the width,
+  // butted edge-to-edge with only a small crease gap between neighbours (a
+  // fraction of the channel's own width) -- redistributing the width evenly
+  // so the row starts and ends flush with the panel edges (same fitting
+  // approach as wall-panels.js's slat-panel).
   const n = Math.max(1, Math.round(p.channelCount));
   const seg = full ? 12 : 6;
   const channelDepthM = p.channelDepth * CM;
   const nominalW = widthM / n;
-  const radius = Math.min(channelDepthM, nominalW / 2 * 0.98);
-  const channelGeo = buildChannel(THREE, radius, headboardHM * 0.96, seg);
+  const creaseM = Math.min(0.012, nominalW * 0.06); // small crease between channels
+  const halfWidth = (nominalW - creaseM) / 2;
+  const channelGeo = buildChannel(THREE, halfWidth, channelDepthM, headboardHM * 0.98, seg);
   // CylinderGeometry is built along its own y axis by default; rotate its
-  // flat face to point toward -z (back) so the round face stands proud at +z.
+  // flat (cut) face to point toward -z (back) so the domed face stands proud
+  // at +z, in front of the backing panel.
   channelGeo.rotateY(-Math.PI / 2);
-  channelGeo.rotateZ(0);
   const startX = -widthM / 2 + nominalW / 2;
   for (let i = 0; i < n; i++) {
     const cx = startX + i * nominalW;
@@ -142,11 +166,15 @@ export function build(THREE, params, opts) {
   }
 
   // ---- pillows (dropped at low detail) --------------------------------------
+  // The headboard is at the BACK (z=0, per the furniture contract), so the
+  // head of the bed -- and the pillows -- belong at the SMALL-z end, resting
+  // on the mattress and up against the headboard. `pillowZ` is measured from
+  // z=0 (the headboard's own backing face), not from the foot.
   if (full) {
     const pillowW = widthM * 0.42, pillowH = 0.16, pillowD = 0.22;
     const pillowGeo = new THREE.BoxGeometry(pillowW, pillowH, pillowD);
     const pillowY = baseHM + mattHM + pillowH / 2;
-    const pillowZ = depthM - pillowD / 2 - 0.06;
+    const pillowZ = backingDepthM + pillowD / 2 + 0.03;
     addMesh(pillowGeo, pillowMat, -widthM * 0.22, pillowY, pillowZ);
     addMesh(pillowGeo, pillowMat, widthM * 0.22, pillowY, pillowZ);
   }

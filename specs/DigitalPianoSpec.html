@@ -108,6 +108,10 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "detail": "full"
 }/*EDITMODE-END*/;
 
+// Set by App below, right after mount -- see the note beside its use in
+// buildItemModel for why a plain window global would go stale here.
+let reportTriangles = null;
+
 // ============== Model: calls the REAL builder module ==============
 function buildItemModel(t, group, THREE, ctx) {
   const mod = window.__digitalPianoModule;
@@ -149,7 +153,13 @@ function buildItemModel(t, group, THREE, ctx) {
 
   let tris = 0;
   built.traverse(o => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
-  window.__itemTriangles = tris;
+  // buildItemModel runs inside ThreeView's OWN useEffect (spec-three.jsx),
+  // which fires after App has already committed -- writing a plain window
+  // global here and reading it from App's JSX (as the first cut of this page
+  // did) is stale, since nothing then tells App to re-render. Calling this
+  // setter (wired up in App below) is what actually gets the number on
+  // screen.
+  if (reportTriangles) reportTriangles(tris);
 
   const floor = new THREE.Mesh(new THREE.CircleGeometry(1.2, 32), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
   floor.rotation.x = -Math.PI / 2;
@@ -162,6 +172,16 @@ function buildItemModel(t, group, THREE, ctx) {
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [moduleReady, setModuleReady] = React.useState(!!window.__digitalPianoModule);
+  const [triangles, setTriangles] = React.useState(null);
+  // Set DURING RENDER, not in a useEffect: ThreeView is a CHILD of App, and
+  // React fires child effects before parent effects, so ThreeView's own
+  // build-on-mount effect (which calls buildItemModel, which calls
+  // reportTriangles) would otherwise run before an effect here ever got the
+  // chance to set it -- silently dropping the very first triangle count
+  // (the one that matters on a page nobody has tweaked yet) with nothing
+  // left to trigger a second build. Setting the module-level binding inline
+  // during render has no such ordering hazard.
+  reportTriangles = setTriangles;
 
   React.useEffect(() => {
     if (moduleReady) return;
@@ -237,7 +257,7 @@ function App() {
                 <tr><td>Height</td><td className="num">{t.pianoHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Keybed height</td><td className="num">{t.keybedHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Music rest height</td><td className="num">{t.restHeight.toFixed(0)}</td><td><b>Variable</b> — shares a fixed budget with the body above the keybed</td></tr>
-                <tr><td>Triangles</td><td className="num">{window.__itemTriangles || '—'}</td><td>{t.detail} detail</td></tr>
+                <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
               </tbody>
             </table>
           )}
@@ -249,7 +269,7 @@ function App() {
                 <tr><td>Depth</td><td className="num">{t.benchDepth.toFixed(0)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Height</td><td className="num">{t.benchHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Base style</td><td className="num">{t.baseStyle}</td><td><b>Variable</b> — x-frame or column</td></tr>
-                <tr><td>Triangles</td><td className="num">{window.__itemTriangles || '—'}</td><td>{t.detail} detail</td></tr>
+                <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
               </tbody>
             </table>
           )}
@@ -261,7 +281,7 @@ function App() {
                 <tr><td>Depth</td><td className="num">{t.ottomanDepth.toFixed(0)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Height</td><td className="num">{t.ottomanHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Channel count</td><td className="num">{t.channelCount.toFixed(0)}</td><td><b>Variable</b></td></tr>
-                <tr><td>Triangles</td><td className="num">{window.__itemTriangles || '—'}</td><td>{t.detail} detail</td></tr>
+                <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
               </tbody>
             </table>
           )}
