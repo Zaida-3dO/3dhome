@@ -174,6 +174,54 @@ excludes a chimney breast your polygon includes); the validator will warn if the
 two disagree by more than 2%, which is usually how you discover a polygon edit
 that nobody propagated.
 
+#### `footstepZone` — manually confining the presence footstep trail
+
+By default the engine derives where a room's presence-footstep trail walks
+entirely from the room polygon and its doors: the door with the longest clear
+run inside the room decides the start point and direction, and the walk turns
+once around a corner if the room is L-shaped. No configuration is needed for
+this, and most rooms should never need `footstepZone` at all.
+
+That automatic placement reads the polygon as empty floor, which a real,
+furnished room often is not. A kitchen's polygon says nothing about the run of
+counters along one wall or the table in the middle of the room; a hallway's
+polygon says nothing about which end reads as "the store" rather than "the
+hall". `footstepZone` gives the room a rectangle to confine the walk to instead
+of the full polygon, for exactly the rooms where the automatic placement looks
+wrong once you can see it rendered.
+
+```json
+{
+  "id": "kitchen",
+  "label": "Kitchen",
+  "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
+  "footstepZone": {
+    "from": [40, 40],
+    "to": [280, 140],
+    "relativeTo": "room"
+  }
+}
+```
+
+**Coordinates are relative to the room's own derived bounding-box min corner**
+(its smallest x and smallest y), not absolute plan coordinates — so a zone
+keeps working if the room's polygon is later nudged during authoring, and so
+you can write one by looking at the room in isolation without re-deriving the
+house's global origin. `from` and `to` are opposite corners; the engine sorts
+them, so `from` need not be the top-left one. `relativeTo` is required and
+must be the literal string `"room"` — the only anchoring this engine
+understands today — spelled out explicitly so a future zone anchored some
+other way (to a fixture, say) can never be confused with this one.
+
+**Treat the numbers as a starting point, not a computed answer.** Unlike
+everything else the loader derives, nobody gets a footstep zone right from
+measurements alone on the first try — it wants tuning by eye against the
+rendered scene. Pick an obviously wrong-looking rectangle to start from rather
+than a carefully measured one; you will be adjusting it anyway.
+
+A room with no `footstepZone` renders exactly as it did before the field
+existed — this is purely an opt-in override.
+
 ### Walls
 
 One entry per straight run, given as **centreline** endpoints plus a thickness:
@@ -884,7 +932,7 @@ spec list, and opened in a new tab.
 
 ```json
 "specPages": [
-  { "name": "BathroomSpec", "path": "specs/BathroomSpec.html" }
+  { "name": "BathroomSpec", "path": "specs/BathroomSpec.html", "group": "Home fittings" }
 ]
 ```
 
@@ -905,6 +953,15 @@ slash, no `..`, no absolute URL. An entry missing a field, or failing the path
 guard, is dropped with a console warning rather than failing the load — the same
 "warn and carry on" rule as everywhere else in this file, because a missing
 document must never cost you the building.
+
+**`group` is optional and purely presentational.** It decides which collapsible
+section of the Settings > Specs list the button renders under. The page
+recognises a fixed set of names — Doors & Windows, Home fittings, Living room,
+Kitchen, Bedroom, Home office, Hallway, Store — and buckets anything absent or
+unrecognised into an "Other" section at the end, so a typo in a group name can
+never hide a spec page; it just lands in the wrong bucket. The engine's own
+built-in specs (DoorSpec, WindowSpec, etc.) all declare `"group": "Doors &
+Windows"`.
 
 Unlike an overlay script, **nothing here executes in the page's origin**. A spec
 page is opened as an ordinary link, so it cannot read the page's state or act on

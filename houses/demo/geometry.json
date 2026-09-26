@@ -103,7 +103,12 @@
       ],
       "floorColor": "#cfc9bd",
       "floorMaterial": "tile",
-      "notes": "Galley layout; the two ambient strips are the under-cupboard runs."
+      "footstepZone": {
+        "from": [20, 15],
+        "to": [200, 90],
+        "relativeTo": "room"
+      },
+      "notes": "Galley layout; the two ambient strips are the under-cupboard runs. footstepZone is a demo-only illustration of the manual override (item 710a5fd8) -- confines the trail to the counter run at the NORTH end of the room, well away from the door's own automatic placement at the south wall, so the two are visibly different in a screenshot."
     },
     {
       "id": "study",

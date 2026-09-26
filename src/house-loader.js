@@ -647,6 +647,34 @@ export const HouseLoader = (() => {
         }
       }
 
+      // Optional manual footstep confinement (schema `footstepZone`). Authored
+      // relative to this room's OWN bbox min corner so it survives the polygon
+      // being nudged and so an author never has to re-derive the house's global
+      // origin -- resolved here, once, to absolute plan coordinates so the scene
+      // never has to know the field was relative at all. Anything malformed
+      // (missing corner, unrecognised relativeTo) is dropped with a warning and
+      // the room falls back to automatic placement, same as when the field is
+      // absent entirely -- consistent with every other 'warn and carry on' guard
+      // in this loader.
+      let footstepZone = null;
+      const fz = r.footstepZone;
+      if (fz) {
+        const validCorner = p => Array.isArray(p) && p.length === 2 &&
+          typeof p[0] === 'number' && typeof p[1] === 'number';
+        if (fz.relativeTo !== 'room') {
+          warn('room "' + r.id + '" footstepZone has relativeTo "' + fz.relativeTo + '", which this engine does not understand -- falling back to automatic placement');
+        } else if (!validCorner(fz.from) || !validCorner(fz.to)) {
+          warn('room "' + r.id + '" footstepZone is missing a valid from/to corner -- falling back to automatic placement');
+        } else {
+          const ax = b.x1 + fz.from[0], ay = b.y1 + fz.from[1];
+          const bx = b.x1 + fz.to[0], by = b.y1 + fz.to[1];
+          footstepZone = {
+            x1: Math.min(ax, bx), y1: Math.min(ay, by),
+            x2: Math.max(ax, bx), y2: Math.max(ay, by)
+          };
+        }
+      }
+
       rooms[r.id] = {
         id: r.id,
         name: r.label,
@@ -656,7 +684,11 @@ export const HouseLoader = (() => {
         areaSqm: areaSqm,
         floor: hexToInt(r.floorColor, 0x9E8B72),
         floorMaterial: r.floorMaterial || 'tile',
-        rug: rug
+        rug: rug,
+        // Absolute plan-coordinate rectangle, or null for automatic placement.
+        // See src/home3d-scene.js's footstep section for how this overrides the
+        // polygon-derived walk.
+        footstepZone: footstepZone
       };
       roomOrder.push(r.id);
     });
@@ -864,7 +896,17 @@ export const HouseLoader = (() => {
         }
         return true;
       })
-      .map(function (sp) { return { name: sp.name, path: sp.path, url: dir + sp.path }; });
+      .map(function (sp) {
+        return {
+          name: sp.name,
+          path: sp.path,
+          url: dir + sp.path,
+          // Optional presentational grouping (Settings > Specs sections). Passed
+          // through as-is, including when absent or unrecognised -- the page
+          // decides how to bucket an unknown group name, not the loader.
+          group: typeof sp.group === 'string' ? sp.group : undefined
+        };
+      });
 
     const centre = Array.isArray(geo.viewCentre) && geo.viewCentre.length === 2
       ? [geo.viewCentre[0], geo.viewCentre[1]]

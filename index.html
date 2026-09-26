@@ -292,6 +292,22 @@
     .spec-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); }
     .spec-btn .spec-ext { opacity: 0.35; }
 
+    /* Spec groups — collapsible sections within the Specs list. Each group
+       header toggles its own body; state lives in JS (specGroupsOpen) so it
+       survives a renderPanel() re-render triggered by something unrelated. */
+    .spec-group { display: flex; flex-direction: column; }
+    .spec-group-header {
+      display: flex; align-items: center; justify-content: space-between;
+      width: 100%; padding: 8px 4px; border: none; background: transparent;
+      color: #fff; font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
+      opacity: 0.75; cursor: pointer; text-align: left;
+    }
+    .spec-group-header:hover { opacity: 1; }
+    .spec-group-caret { transition: transform 0.15s; opacity: 0.6; }
+    .spec-group-caret.open { transform: rotate(90deg); }
+    .spec-group-body { display: flex; flex-direction: column; gap: 6px; }
+    .spec-group-body.collapsed { display: none; }
+
     /* Wide screen: panel always open, no close/lights button */
     @media (min-width: 1500px) {
       .panel { transform: translateX(0) !important; }
@@ -850,17 +866,39 @@
       let panelView = 'controls'; // 'controls' | 'settings'
 
       // Specs section — growable list. Each entry becomes a button in Settings
-      // that opens the spec page in a new tab. Add more { name, path } here as
-      // specs are built; no other change needed. Paths are fixed/known even for
-      // specs still on an unmerged branch — such a link simply 404s harmlessly
-      // until that branch merges, at which point it resolves with no code change.
+      // that opens the spec page in a new tab. Add more { name, path, group }
+      // here as specs are built; no other change needed. Paths are fixed/known
+      // even for specs still on an unmerged branch — such a link simply 404s
+      // harmlessly until that branch merges, at which point it resolves with no
+      // code change.
+      //
+      // `group` is optional and purely presentational: it decides which
+      // collapsible section of the Specs list a button renders under (see
+      // SPEC_GROUP_ORDER below). An entry with no group, or a group name not in
+      // SPEC_GROUP_ORDER, falls into "Other" rather than being dropped — a typo
+      // in a group name must never hide a spec page.
       const SPEC_PAGES = [
-        { name: 'DoorSpec',             path: 'specs/DoorSpec.html' },
-        { name: 'WindowSpec',           path: 'specs/WindowSpec.html' },
-        { name: 'MainEntranceDoorSpec', path: 'specs/MainEntranceDoorSpec.html' },
-        { name: 'BalconyWindowSpec',    path: 'specs/BalconyWindowSpec.html' },
-        { name: 'CurtainSpec',          path: 'specs/CurtainSpec.html' },
+        { name: 'DoorSpec',             path: 'specs/DoorSpec.html',             group: 'Doors & Windows' },
+        { name: 'WindowSpec',           path: 'specs/WindowSpec.html',           group: 'Doors & Windows' },
+        { name: 'MainEntranceDoorSpec', path: 'specs/MainEntranceDoorSpec.html', group: 'Doors & Windows' },
+        { name: 'BalconyWindowSpec',    path: 'specs/BalconyWindowSpec.html',    group: 'Doors & Windows' },
+        { name: 'CurtainSpec',          path: 'specs/CurtainSpec.html',          group: 'Doors & Windows' },
       ];
+
+      // Fixed display order for known groups. "Other" is always last and is
+      // never listed here explicitly — it is the catch-all for an absent or
+      // unrecognised group name, appended after every named section.
+      const SPEC_GROUP_ORDER = [
+        'Doors & Windows',
+        'Home fittings',
+        'Living room',
+        'Kitchen',
+        'Bedroom',
+        'Home office',
+        'Hallway',
+        'Store',
+      ];
+      const SPEC_GROUP_OTHER = 'Other';
 
       // The loaded house profile may ship spec pages of its own (geometry.json
       // `specPages`), resolved by HouseLoader to profile-relative URLs. They are
@@ -869,7 +907,29 @@
       // this repository, the same argument `extraOverlays` makes for scripts.
       function allSpecPages() {
         const own = (Home3DScene.HOUSE && Home3DScene.HOUSE.specPages) || [];
-        return SPEC_PAGES.concat(own.map(sp => ({ name: sp.name, path: sp.url })));
+        return SPEC_PAGES.concat(own.map(sp => ({ name: sp.name, path: sp.url, group: sp.group })));
+      }
+
+      // Bucket allSpecPages() into { groupName: [entries] }, in SPEC_GROUP_ORDER
+      // followed by "Other" — and only for groups that actually have entries, so
+      // an empty section never renders.
+      function groupedSpecPages() {
+        const buckets = new Map();
+        allSpecPages().forEach(sp => {
+          const g = (sp.group && SPEC_GROUP_ORDER.includes(sp.group)) ? sp.group : SPEC_GROUP_OTHER;
+          if (!buckets.has(g)) buckets.set(g, []);
+          buckets.get(g).push(sp);
+        });
+        const order = SPEC_GROUP_ORDER.concat(SPEC_GROUP_OTHER);
+        return order.filter(g => buckets.has(g)).map(g => ({ name: g, items: buckets.get(g) }));
+      }
+
+      // Which spec groups are expanded. Keyed by group name, default open — a
+      // house with few specs should not make someone click to see any of them.
+      // Lives outside renderPanel() so a toggle survives the next re-render.
+      const specGroupsOpen = {};
+      function isSpecGroupOpen(name) {
+        return specGroupsOpen[name] !== false;
       }
       const haStatusEl = document.getElementById('ha-status');
       const haStatusDot = document.getElementById('ha-status-dot');
@@ -1796,18 +1856,38 @@
               .forEach(c => { html += overlayToggleRow(c, true); });
           });
 
-          // Specs section — buttons that open each spec page in a new tab.
+          // Specs section — grouped into collapsible sections so the list stays
+          // navigable as house-specific specs (bathrooms, kitchen fittings) pile
+          // up alongside the engine's own built-ins. Each button still just
+          // opens its spec page in a new tab; grouping is presentation only.
           html += '<div class="panel-section-title">Specs</div>';
-          html += '<div class="spec-list">' +
-            allSpecPages().map(sp =>
-              '<a class="spec-btn" href="' + sp.path + '" target="_blank" rel="noopener">' +
-              '<span>' + sp.name + '</span>' +
-              '<svg class="spec-ext" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' +
-              '</a>'
-            ).join('') +
-            '</div>';
+          html += groupedSpecPages().map(function (grp) {
+            const open = isSpecGroupOpen(grp.name);
+            return '<div class="spec-group">' +
+              '<button class="spec-group-header" data-spec-group="' + grp.name + '">' +
+              '<span>' + grp.name + '</span>' +
+              '<svg class="spec-group-caret' + (open ? ' open' : '') + '" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 6 15 12 9 18"/></svg>' +
+              '</button>' +
+              '<div class="spec-group-body spec-list' + (open ? '' : ' collapsed') + '">' +
+              grp.items.map(sp =>
+                '<a class="spec-btn" href="' + sp.path + '" target="_blank" rel="noopener">' +
+                '<span>' + sp.name + '</span>' +
+                '<svg class="spec-ext" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' +
+                '</a>'
+              ).join('') +
+              '</div>' +
+              '</div>';
+          }).join('');
 
           panelBody.innerHTML = html;
+
+          panelBody.querySelectorAll('[data-spec-group]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+              const name = btn.getAttribute('data-spec-group');
+              specGroupsOpen[name] = !isSpecGroupOpen(name);
+              renderPanel();
+            });
+          });
 
           const panelSunToggle = document.getElementById('panel-sun-toggle');
           if (panelSunToggle) {

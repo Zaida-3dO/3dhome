@@ -181,6 +181,33 @@
           },
           "additionalProperties": false
         },
+        "footstepZone": {
+          "type": "object",
+          "title": "Manual footstep-trail confinement",
+          "description": "OPTIONAL override for where the presence footstep trail walks in this room. Absent (the default for every room today): the engine derives placement automatically from the room polygon and its doors -- the door with the longest clear run decides the start point and direction, and the walk turns once around an L-shaped corner. That automatic placement can still look wrong for a real, furnished room the polygon alone does not describe (a counter run, a dining table, a doorway that leads toward a smaller side room), which is exactly what this field is for: a rectangle, in the room's own coordinates, that the walk is confined to instead of the full polygon.\n\nCOORDINATES ARE RELATIVE TO THE ROOM'S BOUNDING-BOX MIN CORNER (x1,y1), not absolute plan coordinates -- so a zone survives the room polygon being nudged during authoring, and so it can be written by looking at the room in isolation without re-deriving the house's global origin. The engine adds the room's derived bbox min corner back on before using it.\n\nThis is a STARTING value for the room owner to tune by eye against the rendered result, not a computed placement -- unlike everything else the loader derives, nobody can get this right on the first guess from measurements alone.",
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/point2d",
+              "description": "One corner of the confinement rectangle, in centimetres relative to the room's bbox min corner. Paired with `to`; the engine sorts them, so `from` need not be the top-left corner."
+            },
+            "to": {
+              "$ref": "#/$defs/point2d",
+              "description": "The opposite corner of the confinement rectangle, same coordinate space as `from`."
+            },
+            "relativeTo": {
+              "type": "string",
+              "const": "room",
+              "default": "room",
+              "description": "Named explicitly (rather than left implicit) so a future zone anchored some other way -- to a fixture, say -- cannot be confused with this one by an engine version that predates it. Today \"room\" (the bbox min corner) is the only value the engine understands; anything else is ignored with a warning and the room falls back to automatic placement, the same 'absent' behaviour as when the field is omitted entirely."
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "relativeTo"
+          ],
+          "additionalProperties": false
+        },
         "notes": {
           "type": "string",
           "description": "Free-text note for whoever edits this profile next. Never rendered."
@@ -854,6 +881,11 @@
                 "type": "string",
                 "description": "A profile-relative path to an .html file inside this house's own directory, e.g. \"specs/BathroomSpec.html\". Same path rule as textures and overlays: no leading slash, no '..', no absolute URL. An entry that breaks the rule is dropped with a console warning rather than failing the load.",
                 "pattern": "^(?!/)(?!.*\\.\\.)(?!https?:)[^\\\\]+\\.html?$"
+              },
+              "group": {
+                "type": "string",
+                "minLength": 1,
+                "description": "OPTIONAL section heading this spec button renders under in the Settings panel, e.g. \"Home fittings\". Purely presentational: the page recognises a fixed set of names (Doors & Windows, Home fittings, Living room, Kitchen, Bedroom, Home office, Hallway, Store) and buckets anything absent or unrecognised into an \"Other\" section, so a typo here can never hide a spec page — it just lands in the wrong bucket."
               }
             }
           },
