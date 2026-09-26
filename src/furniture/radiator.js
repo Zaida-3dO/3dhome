@@ -89,6 +89,8 @@ export const TYPE = 'radiator';
 export const VALVE_CORNERS = ['bottom-left', 'bottom-right', 'top-left', 'top-right'];
 export const COVERS = ['none', 'shelf', 'box'];
 const SHELF_T_CM = 2;          // 2cm shelf thickness
+const PANEL_THICK_CM = 1.2;    // box side/front panel material thickness (kept in sync with panelThick below, in metres)
+const CLEARANCE_CM = 1;        // a small real air gap on every side the body must clear the cover's own interior surfaces by
 // Real clear air gap between the body's own front face and the box cover's
 // BACKING PANEL (not the slats' outer/visible face — the backing sits
 // ~1.6cm further back than the envelope's own front, at
@@ -120,21 +122,55 @@ export const DEFAULTS = Object.freeze({
  * The RADIATOR BODY's own size, in cm, resolved from `o` (DEFAULTS merged
  * with params): `{ width, height, depth }`. Each of bodyWidth/bodyHeight/
  * bodyDepth is independently optional, defaulting to a snug fit against the
- * OUTER ENVELOPE (width/height/depth) when omitted. A body value LARGER
- * than its envelope counterpart is clamped DOWN — a body cannot be bigger
- * than the box that encloses it. When `cover` is a box/shelf, `depth` is
- * additionally clamped so the body's own front face leaves at least
- * COVER_CLEARANCE_CM of real clear air before the cover's interior surface
- * (its slats/backing on a box, or simply "the shelf's underside" — depth
- * clearance only matters for a box's slats, but is applied uniformly since
- * a shelf has no interior depth surface to clear).
+ * OUTER ENVELOPE (width/height/depth) when omitted.
+ *
+ * The body is ALWAYS clamped to fit STRICTLY INSIDE the cover's own inner
+ * volume, never merely inside the outer envelope — an explicit, oversized
+ * body* param is clamped exactly the same way the snug default is, so there
+ * is only one code path and no way to bypass it:
+ *   height  <= the shelf's own underside (height - SHELF_T_CM), minus a
+ *              small real clearance, whenever a cover (shelf or box) exists
+ *              — otherwise the panel's top face is coplanar with (or
+ *              through) the shelf.
+ *   width   <= inside the box's own side panels (width - 2*PANEL_THICK_CM),
+ *              minus clearance, when cover is 'box' — otherwise the panel's
+ *              end faces are coplanar with (or through) the side panels.
+ *   depth   <= clear of the box's own backing panel by a real air gap
+ *              (COVER_CLEARANCE_CM, which already accounts for the
+ *              backing's material offset — see its own comment), when
+ *              cover is 'box'; clear of the SHELF's own fascia lip front
+ *              face by a small clearance, when cover is 'shelf' (the lip
+ *              is a purely decorative front face with no backing behind
+ *              it, so it only needs a small margin, not the box's full
+ *              COVER_CLEARANCE_CM).
+ * With no cover, none of this applies and the body is simply clamped to the
+ * envelope (unchanged from before) — this is the "no cover" contract case.
  */
 export function bodyEnvelope(o) {
-  const w = Math.min(o.width, o.bodyWidth != null ? o.bodyWidth : o.width);
-  const h = Math.min(o.height, o.bodyHeight != null ? o.bodyHeight : o.height);
+  let w = Math.min(o.width, o.bodyWidth != null ? o.bodyWidth : o.width);
+  let h = Math.min(o.height, o.bodyHeight != null ? o.bodyHeight : o.height);
   let d = Math.min(o.depth, o.bodyDepth != null ? o.bodyDepth : o.depth);
+
+  if (o.cover === 'shelf' || o.cover === 'box') {
+    // Below the shelf, with a real clearance gap — applies to BOTH cover
+    // kinds, since a shelf sits above the body either way.
+    h = Math.min(h, Math.max(0, o.height - SHELF_T_CM - CLEARANCE_CM));
+  }
   if (o.cover === 'box') {
+    // Inside the side panels, with a real clearance gap.
+    w = Math.min(w, Math.max(0, o.width - 2 * PANEL_THICK_CM - 2 * CLEARANCE_CM));
+    // Clear of the backing panel by a real air gap (COVER_CLEARANCE_CM
+    // already folds in the backing's own fixed material offset).
     d = Math.min(d, Math.max(0, o.depth - COVER_CLEARANCE_CM));
+  } else if (o.cover === 'shelf') {
+    // Clear of the fascia lip's own front face by a small real margin — the
+    // lip has no backing to protect (it is a decorative front face only),
+    // so this is a much smaller clamp than the box's COVER_CLEARANCE_CM,
+    // but without it the body's own front face can end up level with or
+    // AHEAD of the lip, burying the lip behind the radiator instead of it
+    // hanging visibly in front.
+    const FASCIA_CLEARANCE_CM = 1.5;
+    d = Math.min(d, Math.max(0, o.depth - FASCIA_CLEARANCE_CM));
   }
   return { width: w, height: h, depth: d };
 }
@@ -259,6 +295,15 @@ export function build(THREE, params, opts) {
   // Both body and envelope are centred on x=0.
   const bodyOffsetX = 0;
 
+  // Box-cover interior geometry constants, computed once here so the valve
+  // budget (below) and the cover build (further below) always agree on
+  // exactly where the backing panel's inner (wall-facing) face sits —
+  // duplicating this arithmetic in two places is what let the valve clamp
+  // and the backing's real position drift apart before.
+  const panelThickM = PANEL_THICK_CM * CM;
+  const backingThickM = 0.008;
+  const boxBackingInnerZ = cover === 'box' ? (ENV_D - panelThickM - backingThickM) : null;
+
   const group = new THREE.Group();
   group.name = 'radiator';
 
@@ -334,19 +379,21 @@ export function build(THREE, params, opts) {
       const frontZ = GAP + T;
       // The valve stem + body + tail-radius + LED epsilon must ALL stay
       // INSIDE the OUTER ENVELOPE (never push the bbox past z=depth, and
-      // never poke through a shallower cover than the body's own depth):
-      // the whole assembly's outer-face budget is capped by whatever room
-      // remains between the panel's front face and the envelope's outer
-      // face — never more, even when that room is zero (a tight wall gap,
-      // or a snug cover, flush-mounts the valve).
-      const roomLeft = Math.max(0, ENV_D - frontZ);
+      // never poke through a shallower cover than the body's own depth) —
+      // AND, on a box cover, never pierce the backing panel either (the
+      // backing's own inner face, not the envelope's outer face, is the
+      // real ceiling for a box; the envelope depth is still correct for a
+      // bare radiator or a shelf, where there is no backing to clear).
+      const ceilingZ = boxBackingInnerZ != null ? Math.min(ENV_D, boxBackingInnerZ) : ENV_D;
+      const roomLeft = Math.max(0, ceilingZ - frontZ);
       // The ENTIRE valve assembly's outermost point — including the tail's
       // own radius (it hangs vertically, so its radius sticks out in Z) and
-      // the LED's tiny standoff — must land at or before z=ENV_D (=depth).
+      // the LED's tiny standoff — must land at or before z=ceilingZ (the
+      // envelope depth, or the box backing's inner face if that's closer).
       // Everything below is sized as a FRACTION of `budget`, so nothing can
       // ever overflow it: with zero room the whole assembly (stem, body,
       // tail radius, LED) collapses toward zero rather than pushing past
-      // the envelope.
+      // the ceiling.
       const budget = roomLeft;
       const tailRadius = budget * 0.12;
       const ledEpsilon = budget * 0.01;
@@ -379,9 +426,9 @@ export function build(THREE, params, opts) {
       // The pipe tail's Z position is where its FACE sits (it hangs
       // vertically, so its own radius sticks out in Z on both sides) — this
       // lands tailRadius short of frontZ+budget, which is exactly what the
-      // reserve above was budgeted for, so tailZ+tailRadius <= ENV_D always.
+      // reserve above was budgeted for, so tailZ+tailRadius <= ceilingZ always.
       const tailTopY = p.y;
-      const tailZ = Math.min(frontZ + stemLen + bodyLen, ENV_D - tailRadius - ledEpsilon);
+      const tailZ = Math.min(frontZ + stemLen + bodyLen, ceilingZ - tailRadius - ledEpsilon);
       const tailMat = finishMaterial(THREE, 'metal', 0xb9bdc2);
       const tail = new THREE.Mesh(new THREE.CylinderGeometry(Math.max(0.001, tailRadius), Math.max(0.001, tailRadius), tailTopY, segs), tailMat);
       tail.name = 'tail';
@@ -407,7 +454,7 @@ export function build(THREE, params, opts) {
         // exactly "outward" here, so NO rotation is needed (a rotation
         // around Y or X would turn its flat disc edge-on into Z, which is
         // what silently blew the envelope budget before an earlier fix).
-        led.position.set(p.x, p.y, Math.min(tailZ + ledEpsilon, ENV_D));
+        led.position.set(p.x, p.y, Math.min(tailZ + ledEpsilon, ceilingZ));
         g.add(led);
       }
 
@@ -457,7 +504,7 @@ export function build(THREE, params, opts) {
       // unless coverColor was explicitly set away from the shelf default.
       const enclosureColorHex = (o.coverColor && o.coverColor !== DEFAULTS.coverColor)
         ? new THREE.Color(o.coverColor).getHex() : 0xffffff;
-      const panelThick = 0.012;
+      const panelThick = panelThickM; // shared with the valve-budget/bodyEnvelope() constants above
 
       // side panels: full envelope depth, full enclosure height, at each
       // end of the envelope's own width.
@@ -472,16 +519,16 @@ export function build(THREE, params, opts) {
       // layer, spanning the full envelope width/height, so the gaps between
       // slats show painted MDF (the reference photo's clean, solid-reading
       // front) rather than the radiator's metal fins behind. Sits right
-      // behind the slats' own inner face. The real clearance from the
-      // BODY's front face is guaranteed upstream, by bodyEnvelope()'s
-      // COVER_CLEARANCE_CM clamp — that clamp accounts for the slat/backing
-      // material thickness too (see its own comment), so by the time
-      // `body.depth` reaches here it is already small enough that this
-      // fixed "just behind the slats" position always lands a real margin
-      // ahead of the body, for any width/height/depth/bodyDepth the caller
-      // passes.
-      const backingThick = 0.008;
-      const backingZ = ENV_D - panelThick - backingThick / 2;
+      // behind the slats' own inner face, at boxBackingInnerZ (computed
+      // once, above, and shared with the valve-budget ceiling so the two
+      // can never drift apart). The real clearance from the BODY's front
+      // face is guaranteed upstream, by bodyEnvelope()'s COVER_CLEARANCE_CM
+      // clamp — that clamp accounts for the slat/backing material thickness
+      // too (see its own comment), so by the time `body.depth` reaches here
+      // it is already small enough that this fixed "just behind the slats"
+      // position always lands a real margin ahead of the body.
+      const backingThick = backingThickM;
+      const backingZ = boxBackingInnerZ + backingThick / 2;
       const backingMat = finishMaterial(THREE, 'matte', enclosureColorHex);
       const backing = new THREE.Mesh(new THREE.BoxGeometry(ENV_W - panelThick * 2, shelfY, backingThick), backingMat);
       backing.position.set(0, shelfY / 2, backingZ);

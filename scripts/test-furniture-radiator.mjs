@@ -351,14 +351,24 @@ for (const c of R.VALVE_CORNERS) {
       shelfWidthCm: (sb.max.x - sb.min.x) / CM, expected: shelfParams.width,
     });
   }
-  let fascia = null;
-  gShelf.traverse(o => { if (o.name === 'coverFascia') fascia = o; });
+  let fascia = null, shelfPanel = null;
+  gShelf.traverse(o => { if (o.name === 'coverFascia') fascia = o; if (o.name === 'radiatorPanel') shelfPanel = o; });
   check('shelf has a downward fascia lip', !!fascia);
   check('shelf is NOT a full enclosure (no side/slat meshes)', (() => {
     let found = false;
     gShelf.traverse(o => { if (/^coverSide|^coverSlat/.test(o.name)) found = true; });
     return !found;
   })());
+  // The fascia lip must hang measurably IN FRONT of the body's own front
+  // face, never buried behind it — otherwise the lip is invisible (the
+  // exact "shelf has lost its lip" regression from round 3).
+  if (fascia && shelfPanel) {
+    const fasciaBox = new THREE.Box3().setFromObject(fascia);
+    const panelBox = new THREE.Box3().setFromObject(shelfPanel);
+    check('shelf: fascia lip front face sits measurably AHEAD of the body\'s own front face',
+      (fasciaBox.max.z - panelBox.max.z) / CM > 0.5,
+      { fasciaFrontCm: fasciaBox.max.z / CM, panelFrontCm: panelBox.max.z / CM });
+  }
 
   // 'box': full enclosure, bbox still matches the declared envelope, sides
   // present.
@@ -394,6 +404,133 @@ for (const c of R.VALVE_CORNERS) {
   const tbBox = new THREE.Box3().setFromObject(tightBacking);
   check('a box cover clears the body by a real margin even when depth == bodyDepth was requested',
     (tbBox.min.z - tpBox.max.z) / CM >= 2.5, { panelFrontCm: tpBox.max.z / CM, backingBackCm: tbBox.min.z / CM });
+}
+
+// ---- 9a. MEDIUM (round 3): the body must sit STRICTLY INSIDE the cover's
+// own inner volume — never coplanar with, let alone through, the shelf
+// underside, the side panels, or the fascia/backing plane. Round 2 asked
+// for exactly this ("bodyHeight should default to height - 2 when there is
+// a cover") and it was never actually enforced in bodyEnvelope(); this is
+// the sweep the round-3 review asked for: every cover preset, plus a width
+// sweep with the snug (all-default) body, at both 'full' and 'low' detail.
+{
+  function panelWorldBox(g) {
+    g.updateMatrixWorld(true);
+    let panel = null;
+    g.traverse(o => { if (o.name === 'radiatorPanel') panel = o; });
+    return panel && new THREE.Box3().setFromObject(panel);
+  }
+
+  // Every cover preset, at both detail levels: the body panel's own world
+  // bbox must sit strictly inside (a) the shelf's underside, in Y and (b),
+  // for a box, inside the side panels in X and behind the backing in Z.
+  const coverPresets = R.PRESETS.filter(p => p.params.cover !== 'none');
+  check('at least one preset actually exercises a cover (sanity)', coverPresets.length > 0, coverPresets.length);
+  for (const preset of coverPresets) {
+    for (const detail of ['full', 'low']) {
+      const g = R.build(THREE, preset.params, { detail });
+      const panelBox = panelWorldBox(g);
+      check(`${preset.name} (${detail}): body panel exists`, !!panelBox);
+      if (!panelBox) continue;
+
+      let shelfMesh = null, sideL = null, sideR = null, backing = null;
+      g.traverse(o => {
+        if (o.name === 'coverShelf') shelfMesh = o;
+        if (o.name === 'coverSide_L') sideL = o;
+        if (o.name === 'coverSide_R') sideR = o;
+        if (o.name === 'coverBacking') backing = o;
+      });
+      if (shelfMesh) {
+        const shelfBox = new THREE.Box3().setFromObject(shelfMesh);
+        check(`${preset.name} (${detail}): body top is STRICTLY below the shelf underside (no coplanar/through)`,
+          panelBox.max.y < shelfBox.min.y - 1e-6, { panelTop: panelBox.max.y, shelfBottom: shelfBox.min.y });
+      }
+      if (sideL && sideR) {
+        const slBox = new THREE.Box3().setFromObject(sideL);
+        const srBox = new THREE.Box3().setFromObject(sideR);
+        check(`${preset.name} (${detail}): body is STRICTLY inside both side panels in X`,
+          panelBox.min.x > slBox.max.x + 1e-6 && panelBox.max.x < srBox.min.x - 1e-6,
+          { panelMin: panelBox.min.x, panelMax: panelBox.max.x, sideLMax: slBox.max.x, sideRMin: srBox.min.x });
+      }
+      if (backing) {
+        const bkBox = new THREE.Box3().setFromObject(backing);
+        check(`${preset.name} (${detail}): body front is STRICTLY behind the backing's own back face`,
+          panelBox.max.z < bkBox.min.z - 1e-6, { panelFront: panelBox.max.z, backingBack: bkBox.min.z });
+      }
+    }
+  }
+
+  // A width sweep with the SNUG (all-default body) case for both cover
+  // kinds — the exact regression named in the round-3 review: with no
+  // explicit bodyWidth/bodyHeight, the body must still land inside.
+  for (const cover of ['shelf', 'box']) {
+    for (const width of [40, 60, 80, 100, 140]) {
+      const params = { width, height: 62, depth: cover === 'box' ? 16 : 12, cover };
+      const g = R.build(THREE, params, {});
+      const panelBox = panelWorldBox(g);
+      let shelfMesh = null, sideL = null, sideR = null;
+      g.traverse(o => {
+        if (o.name === 'coverShelf') shelfMesh = o;
+        if (o.name === 'coverSide_L') sideL = o;
+        if (o.name === 'coverSide_R') sideR = o;
+      });
+      if (shelfMesh) {
+        const shelfBox = new THREE.Box3().setFromObject(shelfMesh);
+        check(`snug ${cover} width=${width}: body strictly below the shelf`, panelBox.max.y < shelfBox.min.y - 1e-6,
+          { panelTop: panelBox.max.y, shelfBottom: shelfBox.min.y });
+      }
+      if (sideL && sideR) {
+        const slBox = new THREE.Box3().setFromObject(sideL);
+        const srBox = new THREE.Box3().setFromObject(sideR);
+        check(`snug ${cover} width=${width}: body strictly inside the side panels`,
+          panelBox.min.x > slBox.max.x + 1e-6 && panelBox.max.x < srBox.min.x - 1e-6);
+      }
+    }
+  }
+
+  // At DEFAULTS (no cover params passed at all) plus cover:'shelf'/'box':
+  // the exact "shelf built 62 tall against a 60 height" style regression.
+  for (const cover of ['shelf', 'box']) {
+    const g = R.build(THREE, { cover }, {});
+    const panelBox = panelWorldBox(g);
+    let shelfMesh = null;
+    g.traverse(o => { if (o.name === 'coverShelf') shelfMesh = o; });
+    const shelfBox = new THREE.Box3().setFromObject(shelfMesh);
+    check(`DEFAULTS + cover:'${cover}': body strictly below the shelf, no explicit body params needed`,
+      panelBox.max.y < shelfBox.min.y - 1e-6, { panelTop: panelBox.max.y, shelfBottom: shelfBox.min.y });
+  }
+}
+
+// ---- 9b. LOW (round 3): guard the two round-2 fixes that mutation testing
+// found were NOT actually covered — a fascia setback of 0 must be
+// detectable, and a shelf sized to the body (instead of the envelope) must
+// be detectable.
+{
+  // The fascia lip's own front face must sit measurably behind the
+  // envelope's own front face (z=depth) — if the "setback" were ever
+  // reverted to 0, this specific check is what must fail.
+  const params = { width: 80, height: 62, depth: 12, cover: 'shelf' };
+  const g = R.build(THREE, params, {});
+  g.updateMatrixWorld(true);
+  let fascia = null;
+  g.traverse(o => { if (o.name === 'coverFascia') fascia = o; });
+  const fBox = new THREE.Box3().setFromObject(fascia);
+  const envFrontZ = params.depth * CM;
+  check('fascia front face sits measurably BEHIND the envelope front face (setback > 0, catches setback=0)',
+    (envFrontZ - fBox.max.z) > 0.001, { fasciaFrontCm: fBox.max.z / CM, envelopeFrontCm: envFrontZ / CM });
+
+  // The shelf must span the ENVELOPE's own width, not the body's — on a
+  // preset where body width is explicitly smaller than the envelope, a
+  // shelf sized to the body (a regression) would be narrower than this.
+  const hallway = { width: 75, height: 92, depth: 19, cover: 'box', bodyWidth: 50, bodyHeight: 60, bodyDepth: 12, thickness: 10 };
+  const gHall = R.build(THREE, hallway, {});
+  gHall.updateMatrixWorld(true);
+  let hallShelf = null;
+  gHall.traverse(o => { if (o.name === 'coverShelf') hallShelf = o; });
+  const hsBox = new THREE.Box3().setFromObject(hallShelf);
+  check('shelf spans the ENVELOPE width (75), not the smaller body width (50) — catches "shelf sized to body"',
+    Math.abs((hsBox.max.x - hsBox.min.x) / CM - 75) <= 0.5 && (hsBox.max.x - hsBox.min.x) / CM > 60,
+    { shelfWidthCm: (hsBox.max.x - hsBox.min.x) / CM });
 }
 
 // ---- 10. FIX 444c3a1e, round 2 — no fin/panel visible through ANY box

@@ -202,8 +202,15 @@ function FrontElevation({ t }) {
     const ex1 = px(-width / 2), ex2 = px(width / 2);
     const ey1 = py(t.elevation), ey2 = py(t.elevation + height);
     if (hasCover) {
-      const coverFill = t.cover === 'box' ? (t.coverColor || '#ffffff') : '#f4f1ec';
-      rect(ex1, ey1, ex2, ey2, { fill: coverFill, stroke: '#8a6a1a', sw: 1.5, rx: 3 });
+      // Match the 3D builder's own default exactly: a 'box' enclosure is
+      // WHITE unless coverColor was explicitly moved away from the shelf
+      // default (#c8a878) — a 'shelf' (open-sided, no enclosure) keeps the
+      // page's neutral card background so it doesn't read as a solid box.
+      const DEFAULT_COVER_COLOR = '#c8a878';
+      const boxFill = (t.coverColor && t.coverColor !== DEFAULT_COVER_COLOR) ? t.coverColor : '#ffffff';
+      const coverFill = t.cover === 'box' ? boxFill : '#f4f1ec';
+      const coverStroke = t.cover === 'box' ? '#999' : '#8a6a1a';
+      rect(ex1, ey1, ex2, ey2, { fill: coverFill, stroke: coverStroke, sw: 1.5, rx: 3 });
       // vertical slats for a 'box' cover, so the diagram reads as an
       // enclosure rather than a plain rectangle.
       if (t.cover === 'box') {
@@ -213,10 +220,12 @@ function FrontElevation({ t }) {
           line(sx, ey1 + 4, sx, ey2 - 4, '#ddd', 1);
         }
       }
-      // the shelf top + fascia lip, ~2cm below the cover's own top edge.
+      // the shelf top + fascia lip, ~2cm below the cover's own top edge —
+      // the shelf/fascia itself is always the (default oak) coverColor,
+      // regardless of the box enclosure's own colour.
       const shelfLineY = py(t.elevation + height - 2);
       line(ex1, shelfLineY, ex2, shelfLineY, '#8a6a1a', 1);
-      txt(ex2 + 4, (ey1 + shelfLineY) / 2, 'cover', { size: '8', color: '#8a6a1a' });
+      txt(ex2 + 4, (ey1 + shelfLineY) / 2, 'cover', { size: '8', color: coverStroke });
     }
 
     // BODY (the radiator itself) — bodyWidth/bodyHeight/bodyDepth, centred
@@ -383,7 +392,12 @@ function PresetButtons({ setTweak }) {
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const bodyEnv = window.FurnitureRadiator ? window.FurnitureRadiator.bodyEnvelope(t) : { width: t.width, height: t.height, depth: t.depth };
-  const wallGap = window.FurnitureRadiator ? window.FurnitureRadiator.wallGapOf(bodyEnv.depth, t.thickness) : (bodyEnv.depth - t.thickness);
+  // Rounded to 1 decimal place for display only — the raw subtraction can
+  // carry ordinary floating-point noise (e.g. 1.4000000000000004 on a
+  // clamped box cover), which is not a real fractional wall gap, just an
+  // artefact of the arithmetic.
+  const wallGapRaw = window.FurnitureRadiator ? window.FurnitureRadiator.wallGapOf(bodyEnv.depth, t.thickness) : (bodyEnv.depth - t.thickness);
+  const wallGap = Math.round(wallGapRaw * 10) / 10;
   return (
     <>
       <h1>Radiator Spec</h1>
