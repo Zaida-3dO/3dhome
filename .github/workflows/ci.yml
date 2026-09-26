@@ -273,6 +273,11 @@ jobs:
         run: node scripts/test-wall-side.mjs
       - name: Furniture drift (registry, schema params blocks, builder DEFAULTS)
         run: node scripts/test-furniture-defaults.mjs
+      - name: Kitchen builders (corner, sink, LEDs, draw budget)
+        # What the generic contract cannot see: runs beyond DEFAULTS, the L's
+        # worktops meeting without overlap or gap, LED strips continuous round
+        # the corner, the four-draw budget, and Copy JSON's diff.
+        run: node scripts/test-furniture-kitchen.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail
