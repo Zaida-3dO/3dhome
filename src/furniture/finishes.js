@@ -19,6 +19,9 @@ export const FINISH_PARAMS = Object.freeze({
   // Fabric, wood, painted and plastic surfaces.
   matte: Object.freeze({ roughness: 0.8, metalness: 0 }),
   gloss: Object.freeze({ roughness: 0.25, metalness: 0 }),
+  // Leather and faux-leather (PU): a soft sheen on the curves with no sharp
+  // specular hotspot -- between matte (reads as fabric) and gloss (wet plastic).
+  satin: Object.freeze({ roughness: 0.6, metalness: 0 }),
   metal: Object.freeze({ roughness: 0.35, metalness: 0.9 }),
   glass: Object.freeze({ roughness: 0.05, metalness: 0, transparent: true, opacity: 0.25, depthWrite: false }),
   // There is no environment map in the live scene, so a "mirror" is a very

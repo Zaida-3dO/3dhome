@@ -235,8 +235,8 @@ for (const deg of [90, 110, 135, 155]) {
   });
   check('every mesh has a finish from the set', meshes > 0 && unfinished.length === 0, unfinished);
   check('no textures anywhere', textured === 0, textured);
-  check('leather is gloss, the back is matte, the gas lift is metal',
-    find(g, 'seatCushion').userData.finish === 'gloss' && find(g, 'backrestBack').userData.finish === 'matte'
+  check('leather is satin, the back is matte, the gas lift is metal',
+    find(g, 'seatCushion').userData.finish === 'satin' && find(g, 'backrestBack').userData.finish === 'matte'
     && find(g, 'gasLift').userData.finish === 'metal', [...finishes]);
   for (const n of ['backrestLogo', 'backrestWordmark', 'pillowWordmark']) {
     check(`${n} is kept separate`, find(g, n).userData.keep === true);

@@ -242,13 +242,15 @@ const compileF = furniture => quietly(() => HouseLoader.compile(house(furniture)
     check('finish ' + name + ': stamped', m.userData.finish === name, m.userData);
     check('finish ' + name + ': MeshStandardMaterial', m.isMeshStandardMaterial === true);
   });
-  check('palette is the six finishes', JSON.stringify(Fin.FINISHES) ===
-    JSON.stringify(['matte', 'gloss', 'metal', 'glass', 'mirror', 'emissive']), Fin.FINISHES);
+  check('palette is the seven finishes', JSON.stringify(Fin.FINISHES) ===
+    JSON.stringify(['matte', 'gloss', 'satin', 'metal', 'glass', 'mirror', 'emissive']), Fin.FINISHES);
   const matte = Fin.makeFinish(THREE, 'matte', '#336699');
   check('matte: roughness 0.8, metalness 0', matte.roughness === 0.8 && matte.metalness === 0);
   check('colour from hex string', matte.color.getHex() === 0x336699, matte.color.getHex());
   const gloss = Fin.makeFinish(THREE, 'gloss', 0x112233);
   check('gloss: roughness 0.25; colour from int', gloss.roughness === 0.25 && gloss.color.getHex() === 0x112233);
+  const satin = Fin.makeFinish(THREE, 'satin', '#445566');
+  check('satin: roughness 0.6, metalness 0', satin.roughness === 0.6 && satin.metalness === 0);
   const metal = Fin.makeFinish(THREE, 'metal');
   check('metal: roughness 0.35, metalness 0.9', metal.roughness === 0.35 && metal.metalness === 0.9);
   const glass = Fin.makeFinish(THREE, 'glass', '#ffffff');
@@ -264,7 +266,7 @@ const compileF = furniture => quietly(() => HouseLoader.compile(house(furniture)
   check('unknown finish falls back to matte, stamped matte', bad.userData.finish === 'matte' && bad.roughness === 0.8);
   check('unknown finish warns', warnings.some(w => /unknown finish "shiny"/.test(w)), warnings);
   check('kept finishes: glass, mirror, emissive', ['glass', 'mirror', 'emissive'].every(Fin.isKeptFinish) &&
-    !['matte', 'gloss', 'metal'].some(Fin.isKeptFinish));
+    !['matte', 'gloss', 'satin', 'metal'].some(Fin.isKeptFinish));
 }
 
 // ---- 6b. the tag readers: mesh OR material, agreeing when both ---------------

@@ -808,6 +808,7 @@
       "enum": [
         "matte",
         "gloss",
+        "satin",
         "metal",
         "glass",
         "mirror",
