@@ -41,6 +41,8 @@ export const REGISTRY = Object.freeze({
 
   'gaming-chair': { path: 'gaming-chair.js', key: null, spec: 'GamingChairSpec' },
 
+  'hex-panel-cluster': { path: 'wall-panels.js', key: 'hex-panel-cluster', spec: 'WallPanelSpec' },
+
   'kitchen-base-run': { path: 'kitchen.js', key: 'kitchen-base-run', spec: 'KitchenSpec' },
 
   'kitchen-wall-run': { path: 'kitchen.js', key: 'kitchen-wall-run', spec: 'KitchenSpec' },
@@ -57,7 +59,7 @@ export const REGISTRY = Object.freeze({
 
   'shelf': { path: 'small-items.js', key: 'shelf', spec: 'SmallItemsSpec' },
 
-  'slat-panel': { path: 'slat-panel.js', key: null, spec: 'SlatPanelSpec' },
+  'slat-panel': { path: 'wall-panels.js', key: 'slat-panel', spec: 'WallPanelSpec' },
 
   'sofa': { path: 'sofa.js', key: null, spec: 'SofaSpec' },
 

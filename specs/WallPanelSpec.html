@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Wall Panel Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .note { font-size:11px; opacity:0.7; margin-top:10px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<!-- The actual builder module (src/furniture/wall-panels.js) is loaded as a
+     real ES module, dynamically, from the classic/Babel script below — this
+     is deliberate: this page is a spec for the REAL furniture builder, not a
+     reimplementation of its geometry. `window.THREE` (the UMD build the
+     scripts above already share) is passed in as the injected THREE the
+     builder contract requires; both this build and the one behind the `three`
+     import map are r160, so the classes the builder constructs (THREE.Group,
+     THREE.Mesh, THREE.BoxGeometry, THREE.ExtrudeGeometry, THREE.Shape) behave
+     identically regardless of which namespace created them. -->
+<script type="module">
+  import * as WallPanels from '../src/furniture/wall-panels.js';
+  window.__wallPanelsModule = WallPanels;
+  window.dispatchEvent(new Event('__wall_panels_module_ready'));
+</script>
+
+<script type="text/babel">
+/* =====================================================================
+   WALL PANEL SPEC   ·   slat panelling + hexagon acoustic panel clusters
+
+   Plan of record: plan-furniture-system-r2.md (PR10). Builder module:
+   src/furniture/wall-panels.js, multi-type (`slat-panel`, `hex-panel-cluster`).
+
+   Two independent panel types, switched with a segmented control:
+
+     SLAT PANEL — vertical wood/black slats over a felt backing. Ported
+     visually from the acoustic-panel look in src/home3d-scene.js
+     (buildAcousticPanelWall25 / buildAcousticPanelLivingRoomWall1Wall3),
+     READ-ONLY — this page never imports or calls that code.
+       Presets:
+         "Black slats" — dark charcoal slats, near-black backing.
+         "Oak slats"   — the bedroom headboard wall: light oak slats on a
+                         black felt backing.
+
+     HEX PANEL CLUSTER — a honeycomb of regular hexagon felt panels, one
+     merged geometry, cheap to draw. The living-room default is 29 hexes
+     (rows 3,4,5,4,4,4,3,2), 18cm side, matching the photo reference named
+     in the plan (living-room-hex-wall-tv.jpg): pointy-top hexes, stacked
+     in an offset honeycomb, each row centred by default.
+
+   Both types are built by calling the REAL builder
+   (window.__wallPanelsModule.TYPES[type].build), not a page-local copy —
+   so this page can never drift from what the house loader actually draws.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "panelType": "slat-panel",
+  "slatPreset": "black",
+  "slatWidthCm": 240,
+  "slatHeightCm": 250,
+  "slatWidth": 5.6,
+  "pitch": 7.5,
+  "slatDepth": 1.2,
+  "backingDepth": 0.9,
+  "hexSide": 18,
+  "hexThickness": 1,
+  "hexColor": "#1c1815"
+}/*EDITMODE-END*/;
+
+const SLAT_PRESETS = {
+  black: { label: 'Black slats', slatColor: '#322e29', backingColor: '#0e0b09' },
+  oak:   { label: 'Oak slats',   slatColor: '#c9a06a', backingColor: '#1c1815' }
+};
+
+// The living-room default cluster (29 hexes). Matches
+// wall-panels.js's own HEX_DEFAULT_ROWS — kept as a literal here (rather
+// than reached into the module) so the preset reads clearly as "the real
+// house use", independent of internal module names.
+const HEX_LIVING_ROOM_ROWS = [3, 4, 5, 4, 4, 4, 3, 2];
+
+function countHexes(rows) { return rows.reduce((s, n) => s + n, 0); }
+
+// ============== Model: calls the REAL builder module ==============
+function buildPanel(t, group, THREE, ctx) {
+  const mod = window.__wallPanelsModule;
+  if (!mod) return; // module still loading; the effect below re-fires once it's ready
+
+  if (t.panelType === 'slat-panel') {
+    const preset = SLAT_PRESETS[t.slatPreset] || SLAT_PRESETS.black;
+    const impl = mod.TYPES['slat-panel'];
+    const params = Object.assign({}, impl.DEFAULTS, {
+      width: t.slatWidthCm,
+      height: t.slatHeightCm,
+      slatWidth: t.slatWidth,
+      pitch: t.pitch,
+      slatDepth: t.slatDepth,
+      backingDepth: t.backingDepth,
+      slatColor: preset.slatColor,
+      backingColor: preset.backingColor
+    });
+    const built = impl.build(THREE, params, { detail: 'full' });
+    group.add(built);
+    ctx.heightM = params.height / 100;
+  } else {
+    const impl = mod.TYPES['hex-panel-cluster'];
+    const params = Object.assign({}, impl.DEFAULTS, {
+      side: t.hexSide,
+      rows: HEX_LIVING_ROOM_ROWS,
+      offsets: null,
+      thickness: t.hexThickness,
+      color: t.hexColor
+    });
+    const built = impl.build(THREE, params, { detail: 'full' });
+    group.add(built);
+    // heightOf needs the ACTUAL derived bbox height, not a DEFAULTS guess —
+    // recompute it the same way the builder does (side + rows -> bbox).
+    const sideM = t.hexSide / 100;
+    ctx.heightM = (HEX_LIVING_ROOM_ROWS.length - 1) * 1.5 * sideM + 2 * sideM;
+  }
+}
+
+// ============== App ==============
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [moduleReady, setModuleReady] = React.useState(!!window.__wallPanelsModule);
+
+  React.useEffect(() => {
+    if (moduleReady) return;
+    const onReady = () => setModuleReady(true);
+    window.addEventListener('__wall_panels_module_ready', onReady);
+    return () => window.removeEventListener('__wall_panels_module_ready', onReady);
+  }, [moduleReady]);
+
+  const isSlat = t.panelType === 'slat-panel';
+  const preset = SLAT_PRESETS[t.slatPreset] || SLAT_PRESETS.black;
+  const hexCount = countHexes(HEX_LIVING_ROOM_ROWS);
+
+  return (
+    <>
+      <h1>Wall Panel Spec</h1>
+      <div className="sub">All units cm. Two independent panel types built by the real furniture module (src/furniture/wall-panels.js) — not a page-local reimplementation. Use the Tweaks panel to switch type and preset.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Panel type</h2>
+          <div className="row" style={{ marginTop: 0 }}>
+            <button className={isSlat ? 'btn active' : 'btn'} onClick={() => setTweak('panelType', 'slat-panel')}>Slat panel</button>
+            <button className={!isSlat ? 'btn active' : 'btn'} onClick={() => setTweak('panelType', 'hex-panel-cluster')}>Hex panel cluster</button>
+          </div>
+          {isSlat ? (
+            <>
+              <div className="row">
+                {Object.entries(SLAT_PRESETS).map(([key, p]) => (
+                  <button key={key} className={t.slatPreset === key ? 'btn active' : 'btn'}
+                    onClick={() => setTweak('slatPreset', key)}>{p.label}</button>
+                ))}
+              </div>
+              <div className="note">{preset.label}: slat {preset.slatColor}, backing {preset.backingColor}. The oak preset is the bedroom headboard wall — light oak slats on a black felt backing.</div>
+            </>
+          ) : (
+            <div className="note">Living-room default: side {t.hexSide} cm, rows {HEX_LIVING_ROOM_ROWS.join(',')} = {hexCount} hexes, black felt, ~{t.hexThickness} cm thick. Pointy-top, offset honeycomb, each row centred.</div>
+          )}
+          {!moduleReady && <div className="note">Loading src/furniture/wall-panels.js…</div>}
+        </div>
+
+        <div className="card">
+          <h2>Numbers</h2>
+          {isSlat ? (
+            <table>
+              <tbody>
+                <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+                <tr><td>Panel width</td><td className="num">{t.slatWidthCm.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Panel height</td><td className="num">{t.slatHeightCm.toFixed(0)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Slat width</td><td className="num">{t.slatWidth.toFixed(1)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Nominal pitch</td><td className="num">{t.pitch.toFixed(1)}</td><td><b>Variable</b> — adjusted to fit a whole number of slats</td></tr>
+                <tr><td>Slat depth (protrusion)</td><td className="num">{t.slatDepth.toFixed(1)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Backing depth</td><td className="num">{t.backingDepth.toFixed(1)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Total depth</td><td className="num">{(t.slatDepth + t.backingDepth).toFixed(1)}</td><td>Derived</td></tr>
+              </tbody>
+            </table>
+          ) : (
+            <table>
+              <tbody>
+                <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+                <tr><td>Hex side</td><td className="num">{t.hexSide.toFixed(1)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Panel thickness</td><td className="num">{t.hexThickness.toFixed(1)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Row counts</td><td className="num">{HEX_LIVING_ROOM_ROWS.join('-')}</td><td>Fixed (living-room preset)</td></tr>
+                <tr><td>Hex count</td><td className="num">{hexCount}</td><td>Derived from rows</td></tr>
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="card full">
+          <h2>3D — {isSlat ? preset.label : 'Hex cluster (living room preset)'}</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildPanel}
+            heightOf={tt => (tt.panelType === 'slat-panel' ? tt.slatHeightCm * 0.01 : (HEX_LIVING_ROOM_ROWS.length - 1) * 1.5 * (tt.hexSide * 0.01) + 2 * (tt.hexSide * 0.01))}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Panel type" />
+        <TweakRadio label="Type" value={t.panelType}
+          options={[{ value: 'slat-panel', label: 'Slat' }, { value: 'hex-panel-cluster', label: 'Hex cluster' }]}
+          onChange={v => setTweak('panelType', v)} />
+
+        {isSlat && (
+          <>
+            <TweakSection label="Slat preset" />
+            <TweakRadio label="Preset" value={t.slatPreset}
+              options={[{ value: 'black', label: 'Black' }, { value: 'oak', label: 'Oak' }]}
+              onChange={v => setTweak('slatPreset', v)} />
+
+            <TweakSection label="Size" />
+            <TweakSlider label="Width" value={t.slatWidthCm} min={60} max={400} step={1} unit="cm"
+              onChange={v => setTweak('slatWidthCm', v)} />
+            <TweakSlider label="Height" value={t.slatHeightCm} min={100} max={300} step={1} unit="cm"
+              onChange={v => setTweak('slatHeightCm', v)} />
+
+            <TweakSection label="Slats" />
+            <TweakSlider label="Slat width" value={t.slatWidth} min={2} max={15} step={0.1} unit="cm"
+              onChange={v => setTweak('slatWidth', v)} />
+            <TweakSlider label="Pitch" value={t.pitch} min={t.slatWidth} max={20} step={0.1} unit="cm"
+              onChange={v => setTweak('pitch', v)} />
+            <TweakSlider label="Slat depth" value={t.slatDepth} min={0.5} max={4} step={0.1} unit="cm"
+              onChange={v => setTweak('slatDepth', v)} />
+            <TweakSlider label="Backing depth" value={t.backingDepth} min={0.3} max={3} step={0.1} unit="cm"
+              onChange={v => setTweak('backingDepth', v)} />
+          </>
+        )}
+
+        {!isSlat && (
+          <>
+            <TweakSection label="Hex cluster" />
+            <TweakSlider label="Hex side" value={t.hexSide} min={8} max={30} step={0.5} unit="cm"
+              onChange={v => setTweak('hexSide', v)} />
+            <TweakSlider label="Thickness" value={t.hexThickness} min={0.5} max={4} step={0.1} unit="cm"
+              onChange={v => setTweak('hexThickness', v)} />
+            <TweakColor label="Felt colour" value={t.hexColor}
+              onChange={v => setTweak('hexColor', v)} />
+          </>
+        )}
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// Self-post it so the panel is visible when there's no host driving it.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>
