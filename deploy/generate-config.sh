@@ -270,4 +270,53 @@ else
   log "note: $ROOT/index.html not found; skipped version stamping"
 fi
 
+# ---------------------------------------------------------------------------
+# Stamp every RELATIVE ES-module import with the same version.
+#
+# WHY. index.html busts the cache for the entry modules it names, but those
+# modules import their dependencies by bare relative paths ('./wall-fittings.js').
+# nginx caches src/ hard, so a browser that already held a dependency kept the
+# OLD copy under the unchanged URL while loading the NEW entry module - and a
+# release that added an export to a dependency then failed at link time for
+# every returning client ("does not provide an export named ..."). Every
+# module URL has to change per release, so no module graph can mix versions.
+#
+# WHAT. In src/**/*.js, specs/*.html, specs/*.jsx and index.html, every quoted
+# specifier starting ./ or ../ that follows `from`, `import` or `import(` gets
+# ?v=<version>, replacing any query it already had. Idempotent, and a restart
+# with a different APP_VERSION restamps cleanly. Bare specifiers ('three') and
+# computed import(url) calls are left alone; src/furniture/registry.js stamps
+# its own computed URLs from the ?v= it was itself loaded with.
+#
+# Only those paths are touched on purpose: in a standalone deploy ROOT may be a
+# checkout, and scripts/ and vendor/ are not ours to rewrite.
+#
+# Line-based: an import whose specifier sits on a different line from its
+# `from`/`import(` is NOT stamped. scripts/test-import-stamping.mjs scans the
+# stamped tree across lines and fails CI on exactly that.
+# ---------------------------------------------------------------------------
+STAMP_SED="s@((from|import)[[:space:]]*[(]?[[:space:]]*)(['\"])([.][.]?/[^'\"?#]*)([?][^'\"]*)?(['\"])@\\1\\3\\4?v=${SAFE_VERSION}\\6@g"
+stamped_files=0
+for f in $(find "$ROOT/src" -type f -name '*.js' 2>/dev/null) \
+         $(find "$ROOT/specs" -maxdepth 1 -type f \( -name '*.html' -o -name '*.jsx' \) 2>/dev/null) \
+         "$ROOT/index.html"
+do
+  [ -f "$f" ] || continue
+  IMPORT_TMP="$f.stamp.$$"
+  if sed -E "$STAMP_SED" "$f" > "$IMPORT_TMP"; then
+    if cmp -s "$f" "$IMPORT_TMP"; then
+      rm -f "$IMPORT_TMP"
+    else
+      cat "$IMPORT_TMP" > "$f" && rm -f "$IMPORT_TMP"
+      stamped_files=$((stamped_files + 1))
+    fi
+  else
+    rm -f "$IMPORT_TMP"
+    # Not fatal, matching index.html above: unstamped modules are served
+    # no-cache by nginx.conf, so the app still loads current code.
+    log "WARN: could not stamp relative imports in $f; left unchanged."
+  fi
+done
+log "stamped relative imports with ?v=$SAFE_VERSION in $stamped_files file(s)"
+
 exit 0

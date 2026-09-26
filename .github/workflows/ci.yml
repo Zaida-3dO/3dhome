@@ -30,6 +30,8 @@ jobs:
               - 'deploy/**'
               - 'docker-compose.yml'
               - '.github/workflows/release.yml'
+              - '.github/workflows/ci.yml'
+              - 'scripts/test-import-stamping.mjs'
 
   # --- Workflow linting (path-gated) ---------------------------------------
 
@@ -116,6 +118,8 @@ jobs:
             node --check "$f"
           done < <(find src scripts -type f -name '*.js' -not -path '*/vendor/*' -print0 2>/dev/null)
           echo "Checked $found JS file(s)."
+      - name: Every relative ES-module import is stamped with ?v= at deploy
+        run: node scripts/test-import-stamping.mjs
       - name: Config-loader behaviour tests
         run: |
           # Asserts the ?house= path-traversal guard and the ?haUrl= semantics
@@ -467,8 +471,45 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: home3d:ci
           build-args: |
             APP_VERSION=ci-dry-run
+      - uses: actions/setup-node@v6
+        if: steps.dockerfile.outputs.present == 'true'
+        with:
+          node-version: 24
+      - name: Run the image, check cache headers and import stamping
+        if: steps.dockerfile.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          docker run -d --name home3d-ci -p 8080:80 home3d:ci
+          trap 'docker logs home3d-ci || true; docker rm -f home3d-ci >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          # Every relative import in the SERVED tree carries ?v=<version>.
+          docker cp home3d-ci:/usr/share/nginx/html ./built
+          node scripts/test-import-stamping.mjs --scan ./built ci-dry-run
+          # Cache policy: only ?v= URLs are immutable.
+          cc() { curl -fsSI "http://127.0.0.1:8080$1" | tr -d '\r' | grep -i '^cache-control:' | cut -d' ' -f2-; }
+          expect() {
+            got=$(cc "$1")
+            echo "$1 -> Cache-Control: $got"
+            [ "$got" = "$2" ] || { echo "::error::$1 expected Cache-Control '$2', got '$got'"; exit 1; }
+          }
+          expect '/src/wall-fittings.js'               'no-cache'
+          expect '/src/wall-fittings.js?v=ci-dry-run'  'public, max-age=31536000, immutable'
+          expect '/specs/spec-three.jsx'               'no-cache'
+          expect '/specs/BedSpec.html'                 'no-cache'
+          expect '/'                                   'no-cache'
+          expect '/houses/demo/geometry.json'          'no-cache'
+          expect '/houses/demo/geometry.json?v=x'      'no-cache'
+          expect '/vendor/three-r160/three.module.min.js?v=ci-dry-run' 'public, max-age=31536000, immutable'
+          # Exactly one Cache-Control header (no stray one from `expires`).
+          n=$(curl -fsSI 'http://127.0.0.1:8080/src/wall-fittings.js' | grep -ci '^cache-control:')
+          [ "$n" = 1 ] || { echo "::error::expected one Cache-Control header, got $n"; exit 1; }
 
   docker-dry-run-gate:
     name: Docker dry run (required)
