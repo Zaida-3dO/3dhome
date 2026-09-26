@@ -2215,8 +2215,60 @@
 
     "furnitureParams_radiator": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `radiator`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `radiator` (src/furniture/radiator.js): a panel radiator with a smart TRV valve on a chosen corner and an optional shelf/full slatted cover. `depth` is the OUTER envelope (wall to outermost front face) INCLUDING any cover; `wallGap` is not a field here -- it is always derived as depth - thickness. Each `default` equals radiator.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 80,
+          "description": "cm, along the wall / the item's local x. Outer envelope, including any cover."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 60,
+          "description": "cm, floor (or `elevation`) to top. Outer envelope, including any cover."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 12,
+          "description": "cm, back to front -- the OUTER envelope from the wall face to the outermost front face, including any cover. wallGap (the wall-to-body-back air gap) is derived as depth - thickness, never authored."
+        },
+        "thickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 10,
+          "description": "cm, the radiator body's own depth (not including the wall gap or any cover)."
+        },
+        "elevation": {
+          "type": "number",
+          "minimum": 0,
+          "default": 17,
+          "description": "cm, floor to the item's bottom edge. Applied by the placer, not baked into the builder's own local frame."
+        },
+        "valveCorner": {
+          "type": "string",
+          "enum": ["bottom-left", "bottom-right", "top-left", "top-right"],
+          "default": "bottom-right",
+          "description": "Which corner of the radiator body carries the smart TRV valve head. The lockshield valve is always drawn on the diagonally opposite corner."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f2f2ef"
+        },
+        "cover": {
+          "type": "string",
+          "enum": ["none", "shelf", "box"],
+          "default": "none",
+          "description": "`shelf` = a wooden shelf on top with a short downward fascia lip, sides open. `box` = a full slatted enclosure (top shelf plus front and side panels with vertical slats). When not 'none', width/height/depth describe the OUTER ENVELOPE including the cover."
+        },
+        "coverColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#c8a878"
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_shelf": {
