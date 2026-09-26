@@ -1,65 +1,65 @@
 /**
  * plant.js - procedural potted/wall-mounted plants.
  *
- * Two kinds:
+ * THE BUILDER CONTRACT (every src/furniture/<type>.js follows it):
+ *   - Pure ESM, THREE injected; no `import 'three'`.
+ *   - Exports TYPE, DEFAULTS (frozen, cm, includes width/depth/height) and
+ *     build(THREE, params, { detail: 'full' | 'low' }) -> THREE.Group.
+ *   - Local frame in METRES: y = 0 is the item's bottom, x is centred along
+ *     the width, the BACK face is at z = 0 and the front faces +z.
+ *   - Every material comes from makeFinish() (./finishes.js).
+ *   - bbox == params.width/depth/height within 0.5 cm (see
+ *     scripts/test-furniture-core.mjs's checkContract()).
+ * See docs/house-profile.md, "Furniture".
+ *
+ * Two kinds (params.kind):
  *   'corn-plant'   a potted Dracaena fragrans (corn plant): a woven/ribbed
  *                  tapered pot, several staggered-height canes, each topped
  *                  with a strap-leaf rosette. Free-standing (item 889bf6ce,
- *                  the plant between the two home-office desks).
+ *                  the plant between the two home-office desks). DEFAULT.
  *   'wall-planter' a hanging faceted ceramic planter (inverted diamond/
  *                  prism) with a thin gold/brass wire frame outlining its
  *                  edges, holding spiky sansevieria-style leaves. Wall-
- *                  mounted (bedroom wall planters, three of them).
+ *                  mounted (bedroom wall planters).
  *
- * Pure builder, same convention as wall-fittings.js / standing-desk.js: THREE
- * is passed in rather than imported (no bare `import 'three'`), so this
- * module has no import-map dependency and can be loaded by a plain Node test
- * or a spec page.
- *
- * LOCAL FRAME (metres):
- *   corn-plant:   x across (centred on 0), y up (0 = pot bottom), z depth
- *                 with the pot's BACK edge at z=0 (free-standing, sits
- *                 against/near a wall, plant leans toward +z).
- *   wall-planter: x across (centred on 0), y up (0 = the planter's lowest
- *                 point), z depth with the planter's BACK (the wall-
- *                 mounted face) at z=0, facing +z into the room. Elevation
- *                 on the wall is applied by the placer, not this module.
+ * FITTING THE ENVELOPE EXACTLY: procedural leaves (seeded, varying in
+ * length/angle/droop) make it impractical to hand-derive geometry that lands
+ * on an exact width/depth/height every time a param changes. Instead each
+ * kind is built once in a natural local frame, its raw bbox is measured, and
+ * a single corrective transform (a per-axis scale + translate) is applied to
+ * every vertex so the FINAL bbox matches params.width/depth/height/back-at-
+ * z=0/bottom-at-y=0 exactly (to float precision, comfortably inside the
+ * contract's 0.5 cm tolerance) regardless of seed, leaf count or any other
+ * random variation. See fitToEnvelope() below.
  *
  * PROCEDURAL LEAVES are driven entirely by `seed` via a small deterministic
  * PRNG (mulberry32) so the SAME seed always lays out the SAME leaves -- no
  * Math.random anywhere in this module.
  *
- * MERGE FIDELITY (the live renderer merges meshes by finish): every mesh
- * this module creates carries `userData.finish`, one of 'matte' | 'gloss' |
- * 'metal' | 'glass' | 'mirror' | 'emissive' -- flat colours only, no
- * textures. Per-leaf colour variation (where used) rides vertex colours
- * instead of separate materials, since vertex colours survive a merge and
- * separate materials would defeat it. Neither kind built here uses glass or
- * emissive meshes, so nothing needs `userData.keep = true` yet -- but any
- * future kind that adds one (a glazed pot, a grow-light) MUST set it, since
- * those two finishes are excluded from the merge.
- *
  * @param {object} THREE  the three.js module (or a THREE-shaped test double)
  * @param {object} params
  * @param {string} [params.kind] 'corn-plant' (default) | 'wall-planter'
+ * @param {number} [params.width]   footprint width, cm -- the envelope every
+ *                                  builder contract requires; also the knob
+ *                                  a caller uses to resize the whole plant
+ * @param {number} [params.depth]   footprint depth, cm (back at z=0, +z front)
+ * @param {number} [params.height]  total height, cm (bottom at y=0)
  *
- * corn-plant params:
+ * corn-plant params (proportion the interior detail; width/depth/height above
+ * still win as the final envelope):
  * @param {number} [params.potHeight]      pot height, cm (default 56)
  * @param {number} [params.potTopDiameter] pot opening diameter, cm (default 30)
- * @param {number|string} [params.potColor] pot colour (default tan 0x9c7c4a)
+ * @param {number|string} [params.potColor] pot colour (default tan)
  * @param {number} [params.plantHeight]    vase-top to top-of-foliage, cm (default 110)
  * @param {number} [params.stemCount]      number of canes (default 3)
  * @param {number} [params.spread]         widest leaf spread, cm (default 40)
- * @param {number|string} [params.leafColor] leaf colour (default deep green 0x3a5a2e)
+ * @param {number|string} [params.leafColor] leaf colour (default deep green)
  *
  * wall-planter params:
- * @param {number} [params.width]          planter width, cm (default 25 = large)
- * @param {number} [params.depth]          planter projection off the wall, cm (default ~0.7*width)
- * @param {number} [params.plantHeight]    tallest leaf tip above the rim, cm (default 30)
  * @param {number} [params.leafCount]      number of spiky leaves (default 5)
- * @param {number|string} [params.potColor] ceramic colour (default white 0xf2efe8)
- * @param {number|string} [params.frameColor] wire-frame colour (default brass 0xb8945a)
- * @param {number|string} [params.leafColor] leaf colour (default deep green 0x2f4a28)
+ * @param {number|string} [params.potColor] ceramic colour (default white)
+ * @param {number|string} [params.frameColor] wire-frame colour (default brass)
+ * @param {number|string} [params.leafColor] leaf colour (default deep green)
  *
  * common params:
  * @param {number} [params.seed]           deterministic layout seed (default 1)
@@ -68,38 +68,34 @@
  *                                         (mobile); default 'full'
  * @returns {THREE.Group}
  */
+import { makeFinish } from './finishes.js';
+
 export const TYPE = 'plant';
 
-// width/height/depth are the DEFAULT KIND's (corn-plant) bounding envelope,
-// cm, required by every furniture builder's drift test (PR #30): width/depth
-// are the footprint (the larger of spread/potTopDiameter -- spread wins for
-// the corn-plant defaults), height is the total height, pot included
-// (potHeight + plantHeight). A wall-planter build overrides `width` (its own
-// footprint width) via its params/preset same as any other field -- these
-// three keys are DEFAULTS' fallback for an unspecified param, not a kind
-// switch, so there is no collision: PRESETS['wall-planter-*'] supplies its
-// own `width` explicitly, same as it already did before this contract.
+// width/depth/height are the frozen DEFAULTS' bounding envelope, cm, required
+// by every furniture builder's drift test: width/depth are the footprint
+// (the larger of spread/potTopDiameter for the default corn-plant kind =
+// max(40, 30) = 40), height is the total height including the pot
+// (potHeight + plantHeight = 56 + 110 = 166). A caller resizes the whole
+// plant by overriding width/depth/height directly -- fitToEnvelope() (below)
+// is what makes that exact rather than approximate.
 export const DEFAULTS = Object.freeze({
   kind: 'corn-plant',
-  // corn-plant
-  potHeight: 56,
-  potTopDiameter: 30,
-  potColor: 0x9c7c4a,
-  plantHeight: 110,
-  stemCount: 3,
-  spread: 40,
-  leafColor: 0x3a5a2e,
-  // wall-planter (leafCount/frameColor only apply to this kind; plantHeight
-  // and leafColor are shared but re-defaulted per kind in build())
-  leafCount: 5,
-  frameColor: 0xb8945a,
-  seed: 1,
-  // required drift-test envelope (see comment above) -- corn-plant defaults:
-  // width/depth = max(spread, potTopDiameter) = max(40, 30) = 40;
-  // height = potHeight + plantHeight = 56 + 110 = 166
   width: 40,
   depth: 40,
   height: 166,
+  // corn-plant proportioning (interior detail; the envelope above wins)
+  potHeight: 56,
+  potTopDiameter: 30,
+  potColor: '#9c7c4a',
+  plantHeight: 110,
+  stemCount: 3,
+  spread: 40,
+  leafColor: '#33502a',
+  // wall-planter proportioning
+  leafCount: 5,
+  frameColor: '#b8945a',
+  seed: 1,
 });
 
 const CM = 0.01;
@@ -115,17 +111,46 @@ function mulberry32(seed) {
   };
 }
 
-/** Apply a single flat vertex colour to every vertex of a geometry (used
- * where per-leaf colour variation is wanted without a second material --
- * vertex colours survive the renderer's by-finish mesh merge). */
-function paintVertexColors(THREE, geometry, hexColor) {
-  const c = new THREE.Color(hexColor);
-  const count = geometry.attributes.position.count;
-  const colors = new Float32Array(count * 3);
-  for (let i = 0; i < count; i++) {
-    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+/**
+ * Rescale + translate every vertex in `group` so its world-space bbox
+ * becomes EXACTLY [x: -width/2..width/2, y: 0..height, z: 0..depth] (metres
+ * in, metres out). Per-axis scale factors independently correct each
+ * dimension, so a group that is naturally wider than tall is not distorted
+ * across axes -- only stretched/shrunk along the one it is being corrected
+ * on. Degenerate axes (a raw span of ~0) fall back to scale 1 rather than
+ * dividing by zero. This is what lets procedural, seed-varying leaf geometry
+ * still land on an EXACT contract bbox every time.
+ */
+function fitToEnvelope(THREE, group, widthM, depthM, heightM) {
+  group.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(group);
+  const rawW = box.max.x - box.min.x;
+  const rawD = box.max.z - box.min.z;
+  const rawH = box.max.y - box.min.y;
+  const EPS = 1e-9;
+  const sx = rawW > EPS ? widthM / rawW : 1;
+  const sy = rawH > EPS ? heightM / rawH : 1;
+  const sz = rawD > EPS ? depthM / rawD : 1;
+  const cx = (box.min.x + box.max.x) / 2;
+
+  const wrapper = new THREE.Group();
+  wrapper.name = group.name;
+  wrapper.userData = group.userData;
+  // Reparent every child of `group` into `wrapper`, applying the correction
+  // as a transform on each (rather than mutating raw geometry): centre x,
+  // pin the bottom/back to 0, then scale per axis about that anchor.
+  const children = group.children.slice();
+  for (const child of children) {
+    child.position.x -= cx;
+    child.position.x *= sx;
+    child.position.y *= sy;
+    child.position.z *= sz;
+    child.scale.x *= sx;
+    child.scale.y *= sy;
+    child.scale.z *= sz;
+    wrapper.add(child);
   }
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return wrapper;
 }
 
 export function build(THREE, params, opts) {
@@ -133,14 +158,18 @@ export function build(THREE, params, opts) {
   const o = opts || {};
   const detail = o.detail === 'low' ? 'low' : 'full';
   const kind = p.kind || 'corn-plant';
-  if (kind === 'wall-planter') return buildWallPlanter(THREE, p, detail);
-  return buildCornPlant(THREE, p, detail);
+  const raw = kind === 'wall-planter'
+    ? buildWallPlanterRaw(THREE, p, detail)
+    : buildCornPlantRaw(THREE, p, detail);
+  return fitToEnvelope(THREE, raw, p.width * CM, p.depth * CM, p.height * CM);
 }
 
 // =====================================================================
-// CORN PLANT (Dracaena fragrans) -- potted, free-standing
+// CORN PLANT (Dracaena fragrans) -- potted, free-standing. Built in a
+// natural local frame; build() above rescales the result onto the exact
+// width/depth/height envelope.
 // =====================================================================
-function buildCornPlant(THREE, p, detail) {
+function buildCornPlantRaw(THREE, p, detail) {
   const potHeight = p.potHeight * CM;
   const potTopR = (p.potTopDiameter * CM) / 2;
   const potBotR = potTopR * 0.72;                 // tapers inward toward the base
@@ -150,18 +179,13 @@ function buildCornPlant(THREE, p, detail) {
 
   const rand = mulberry32((p.seed | 0) || 1);
 
-  const potMat = new THREE.MeshStandardMaterial({ color: p.potColor, roughness: 0.85 });
-  const caneMat = new THREE.MeshStandardMaterial({ color: 0x8a7a52, roughness: 0.8 });
-  // vertexColors multiplies against material.color -- leave color WHITE so
-  // the per-leaf vertex tint (built from p.leafColor + jitter) is the only
-  // thing that reaches the screen, not p.leafColor squared into near-black.
-  const leafMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff, roughness: 0.55, side: THREE.DoubleSide, vertexColors: true,
-  });
-  const soilMat = new THREE.MeshStandardMaterial({ color: 0x3a2c1e, roughness: 1 });
+  const potMat = makeFinish(THREE, 'matte', p.potColor);
+  const caneMat = makeFinish(THREE, 'matte', '#8a7a52');
+  const leafMat = makeFinish(THREE, 'matte', p.leafColor);
+  const soilMat = makeFinish(THREE, 'matte', '#3a2c1e');
 
   const group = new THREE.Group();
-  group.name = 'plant';
+  group.name = 'furniture:plant';
   group.userData.type = TYPE;
   group.userData.kind = 'corn-plant';
 
@@ -176,7 +200,7 @@ function buildCornPlant(THREE, p, detail) {
   );
   potBody.name = 'potBody';
   potBody.userData.finish = 'matte';
-  potBody.position.set(0, potHeight / 2, potTopR * 0.6); // back edge lands near z=0
+  potBody.position.set(0, potHeight / 2, potTopR); // back edge (radius) lands at z=0
   potBody.castShadow = true; potBody.receiveShadow = true;
   group.add(potBody);
 
@@ -193,7 +217,7 @@ function buildCornPlant(THREE, p, detail) {
       rib.position.set(
         Math.cos(a) * rMid,
         potHeight / 2,
-        potTopR * 0.6 + Math.sin(a) * rMid
+        potTopR + Math.sin(a) * rMid
       );
       rib.name = 'potRib';
       rib.userData.finish = 'matte';
@@ -208,7 +232,7 @@ function buildCornPlant(THREE, p, detail) {
   );
   soil.name = 'soil';
   soil.userData.finish = 'matte';
-  soil.position.set(0, potHeight - (potHeight * 0.015), potTopR * 0.6);
+  soil.position.set(0, potHeight - (potHeight * 0.015), potTopR);
   group.add(soil);
 
   // ---- canes: staggered heights, each topped with a leaf rosette ----------
@@ -219,10 +243,9 @@ function buildCornPlant(THREE, p, detail) {
   const caneRadial = detail === 'low' ? 5 : 8;
   const caneR = Math.max(0.006, potTopR * 0.06);
   const potBaseY = potHeight;
-  const potCenterZ = potTopR * 0.6;
+  const potCenterZ = potTopR;
 
   const leavesPerRosette = detail === 'low' ? 5 : 9;
-  let maxTopY = 0;
 
   for (let s = 0; s < stemCount; s++) {
     // Staggered heights: the tallest cane (index 0) reaches plantHeight;
@@ -252,12 +275,13 @@ function buildCornPlant(THREE, p, detail) {
     group.add(cane);
 
     const topY = potBaseY + caneH;
-    maxTopY = Math.max(maxTopY, topY);
 
     // ---- rosette: strap-like leaves fanning outward from the cane top,
     // arching over and down (fountain shape) -- never reaching HIGHER than
-    // the cane top itself, so the plant's total height stays potHeight +
-    // plantHeight (the acceptance bound) regardless of leaf count/spread.
+    // the cane top itself. Built as individual leaf meshes parented to a
+    // rosette group for authoring convenience; build() flattens everything
+    // to world space before measuring, so this nesting has no effect on the
+    // final envelope fit.
     const rosette = new THREE.Group();
     rosette.name = 'rosette';
     rosette.position.set(cx, topY, cz);
@@ -269,12 +293,8 @@ function buildCornPlant(THREE, p, detail) {
       const lenFrac = 0.65 + rand() * 0.35;         // leaf length vs. spread/2
       const leafLen = (spread / 2) * lenFrac;
       const leafW = Math.max(0.012, leafLen * 0.16);
-      // subtle per-leaf tint via vertex colour, not a second material
-      const tint = new THREE.Color(p.leafColor);
-      tint.offsetHSL(0, 0, (rand() - 0.5) * 0.12);
 
       const blade = buildLeafBlade(THREE, { ang, leafLen, leafW, droopFrac, bladeSegs: detail === 'low' ? 1 : 3 });
-      paintVertexColors(THREE, blade, tint.getHex());
 
       const leaf = new THREE.Mesh(blade, leafMat);
       leaf.name = 'leaf';
@@ -284,7 +304,6 @@ function buildCornPlant(THREE, p, detail) {
     }
   }
 
-  group.userData.topY = maxTopY;
   return group;
 }
 
@@ -292,10 +311,8 @@ function buildCornPlant(THREE, p, detail) {
  * `t` (0=base pinned at the attach point, 1=tip) maps to an outward run plus
  * a vertical drop that is MONOTONIC and NEVER positive --
  * `dropY(t) = -leafLen * droopFrac * t^1.3`. Since dropY(0)=0 and dropY<=0
- * everywhere, no vertex can rise above the attach point -- this is what
- * pins a rosette's (or wall-planter leaf cluster's) highest point exactly at
- * its attachment height, independent of leaf count/length/spread. Shared by
- * both plant kinds. */
+ * everywhere, no vertex can rise above the attach point. Shared by both
+ * plant kinds. */
 function buildLeafBlade(THREE, { ang, leafLen, leafW, droopFrac, bladeSegs, tipTaper = 0 }) {
   const dirX = Math.sin(ang), dirZ = Math.cos(ang); // outward direction (unit, in XZ)
   const rows = bladeSegs + 1;
@@ -336,31 +353,24 @@ function buildLeafBlade(THREE, { ang, leafLen, leafW, droopFrac, bladeSegs, tipT
 
 // =====================================================================
 // WALL PLANTER -- hanging faceted ceramic diamond, spiky sansevieria-style
-// leaves, thin gold/brass wire-frame edges. Wall-mounted: back at z=0,
-// the whole item's footprint kept at z>=0 (nothing behind the wall).
+// leaves, thin gold/brass wire-frame edges. Wall-mounted: built with its
+// back at z=0 and footprint at z>=0 in its own natural frame; build() above
+// rescales the result onto the exact width/depth/height envelope.
 // =====================================================================
-function buildWallPlanter(THREE, p, detail) {
-  const width = (p.width != null ? p.width : 25) * CM;
-  const depth = (p.depth != null ? p.depth : width * 0.7);
-  const plantHeight = (p.plantHeight === DEFAULTS.plantHeight ? 30 : p.plantHeight) * CM;
+function buildWallPlanterRaw(THREE, p, detail) {
+  const width = p.width * CM;
+  const depth = p.depth * CM;
+  const plantHeight = p.plantHeight * CM;
   const leafCount = Math.max(1, Math.round(p.leafCount != null ? p.leafCount : 5));
-  const potColor = p.potColor != null && p.potColor !== DEFAULTS.potColor ? p.potColor : 0xf2efe8;
-  const frameColor = p.frameColor != null ? p.frameColor : 0xb8945a;
-  const leafColor = p.leafColor != null && p.leafColor !== DEFAULTS.leafColor ? p.leafColor : 0x2f4a28;
 
   const rand = mulberry32((p.seed | 0) || 1);
 
-  const ceramicMat = new THREE.MeshStandardMaterial({ color: potColor, roughness: 0.35 });
-  const frameMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.3, metalness: 0.85 });
-  // Same reasoning as buildCornPlant's leafMat: vertexColors multiplies
-  // against material.color, so this stays white and the vertex tint alone
-  // carries leafColor -- otherwise the colour would be squared into near-black.
-  const leafMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff, roughness: 0.5, side: THREE.DoubleSide, vertexColors: true,
-  });
+  const ceramicMat = makeFinish(THREE, 'gloss', p.potColor);
+  const frameMat = makeFinish(THREE, 'metal', p.frameColor);
+  const leafMat = makeFinish(THREE, 'matte', p.leafColor);
 
   const group = new THREE.Group();
-  group.name = 'plant';
+  group.name = 'furniture:plant';
   group.userData.type = TYPE;
   group.userData.kind = 'wall-planter';
 
@@ -368,13 +378,12 @@ function buildWallPlanter(THREE, p, detail) {
   // few radial segments gives flat triangular facets rather than a smooth
   // cone, matching "an inverted faceted prism / diamond" in the brief. Kept
   // perfectly UPRIGHT (axis along y, no tilt) so its footprint never crosses
-  // behind the wall plane -- the cone's own radius (openR) is the only thing
-  // that can extend in z, and the whole body is positioned at z=openR so its
+  // behind the wall plane -- the whole body is positioned at z=openR so its
   // BACK-most point (the -z side of the rim) sits exactly at z=0.
   const facets = 6;
   const openR = width / 2;
   const bodyH = depth;
-  const bodyCenterZ = openR; // shifts the whole body forward so its back face touches z=0
+  const bodyCenterZ = openR;
 
   const body = new THREE.Mesh(
     new THREE.ConeGeometry(openR, bodyH, facets, 1, true),
@@ -479,10 +488,6 @@ function buildWallPlanter(THREE, p, detail) {
     blade.setIndex(indices);
     blade.computeVertexNormals();
 
-    const tint = new THREE.Color(leafColor);
-    tint.offsetHSL(0, 0, (rand() - 0.5) * 0.15);
-    paintVertexColors(THREE, blade, tint.getHex());
-
     const leaf = new THREE.Mesh(blade, leafMat);
     leaf.name = 'leaf';
     leaf.userData.finish = 'matte';
@@ -491,7 +496,6 @@ function buildWallPlanter(THREE, p, detail) {
     group.add(leaf);
   }
 
-  group.userData.topY = originY + plantHeight;
   return group;
 }
 
@@ -504,37 +508,43 @@ export function buildPlant(THREE, params, opts) {
 /** Named presets. Descriptive names only -- no real names of people or
  * places in a public repo. Dimensions are the real measurements from the
  * two source items (889bf6ce for the corn plant, the bedroom wall-planter
- * follow-up for the hanging planters). */
+ * follow-up for the hanging planters), expressed as the width/depth/height
+ * envelope plus proportioning params. */
 export const PRESETS = Object.freeze({
   'corn-plant-tall': Object.freeze({
     kind: 'corn-plant',
+    width: 40,
+    depth: 40,
+    height: 166,
     potHeight: 56,
     potTopDiameter: 30,
-    potColor: 0x9c7c4a,
+    potColor: '#9c7c4a',
     plantHeight: 110,
     stemCount: 3,
     spread: 40,
-    leafColor: 0x33502a,
+    leafColor: '#33502a',
     seed: 7,
   }),
   'wall-planter-large': Object.freeze({
     kind: 'wall-planter',
     width: 25,
-    plantHeight: 32,
+    depth: 18,
+    height: 32,
     leafCount: 6,
-    potColor: 0xf2efe8,
-    frameColor: 0xb8945a,
-    leafColor: 0x2f4a28,
+    potColor: '#f2efe8',
+    frameColor: '#b8945a',
+    leafColor: '#2f4a28',
     seed: 3,
   }),
   'wall-planter-small': Object.freeze({
     kind: 'wall-planter',
     width: 12,
-    plantHeight: 16,
+    depth: 9,
+    height: 16,
     leafCount: 4,
-    potColor: 0xf2efe8,
-    frameColor: 0xb8945a,
-    leafColor: 0x35502e,
+    potColor: '#f2efe8',
+    frameColor: '#b8945a',
+    leafColor: '#35502e',
     seed: 4,
   }),
 });
