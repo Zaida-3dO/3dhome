@@ -177,18 +177,34 @@
     .slider.temp {
       background: linear-gradient(to right, #ffaa55, #fff, #aaccff);
     }
-    /* A slider whose door is following its Home Assistant sensor. Dimmed and
-       not-allowed so it reads as "disconnected, not broken" — the checkbox
-       above it is the control that hands it back. */
+    /* A slider with nothing it can safely command (device unavailable, a
+       thermostat that is off). Dimmed and not-allowed so it reads as
+       "disconnected, not broken". */
     .slider:disabled { opacity: 0.35; cursor: not-allowed; }
     .slider:disabled::-webkit-slider-thumb { cursor: not-allowed; }
 
-    /* "Use real value" — shown only for a door with a sensor bound. */
-    .sensor-toggle-row {
-      display: flex; align-items: center; gap: 7px;
-      font-size: 11px; opacity: 0.75; margin-bottom: 7px; cursor: pointer;
+    /* Status-only rows (door, motion): one line, no controls. */
+    .control-group.status-row { margin-bottom: 14px; }
+    .status-row .control-header { margin-bottom: 0; }
+    .status-text { font-size: 12px; font-weight: 600; opacity: 0.85; }
+    .status-text.status-unavailable { opacity: 0.45; font-weight: 500; }
+    .status-sub { font-size: 11px; opacity: 0.5; }
+    .status-tag {
+      font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 10px;
+      background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7);
     }
-    .sensor-toggle-row input { cursor: pointer; margin: 0; accent-color: #4a9eff; }
+    .status-tag-on { background: rgba(74,158,255,0.22); color: #9cc8ff; }
+    .status-tag-unavailable { opacity: 0.55; }
+
+    /* Small action buttons in a row header (curtain Open / Close). */
+    .row-btns { display: flex; gap: 6px; }
+    .row-btn {
+      font-size: 11px; font-weight: 600; padding: 5px 11px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.06);
+      color: #fff; cursor: pointer;
+    }
+    .row-btn:hover { background: rgba(255,255,255,0.12); }
+    .row-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
     /* Color swatches */
     .color-swatches { display: flex; gap: 5px; flex-wrap: wrap; }
@@ -709,6 +725,8 @@
     import { HouseLoader }    from './src/house-loader.js?v=__VERSION__';
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
+    import { createDragSender, curtainSliderCommand, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml }
+                              from './src/room-panel.js?v=__VERSION__';
     // Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
     // Shift+D, or the Settings sidebar "Wall numbers" switch).
     import { WallDebugOverlay } from './src/overlays/wall-debug-overlay.js?v=__VERSION__';
@@ -965,19 +983,10 @@
       // ---- Door sensor binding state ----
       //
       // doorSensorIds: the set of door ids that rooms.json binds a contact
-      // sensor to, read from the profile. Binding alone is NOT enough to show
-      // the "Use real value" checkbox -- that also requires a reading to have
-      // arrived (see doorSensorOpen.has() at the render site). A door bound in
-      // the profile but never heard from shows a plain manual slider.
+      // sensor to. The 3D door follows its sensor; the sidebar shows a
+      // STATUS row ("Door: open / closed / unavailable") for each bound door
+      // in the room -- there is no door slider any more (sidebar v2).
       const doorSensorIds = new Set();
-      // Door ids the user has taken manual control of by UNCHECKING that
-      // checkbox. Default (absent) means "follow the sensor", so a fresh load
-      // tracks Home Assistant, which is the useful default.
-      const doorManualOverride = new Set();
-      // Last known sensor reading per door id, kept so re-CHECKING the box can
-      // snap the door straight back to what the sensor currently says instead
-      // of waiting for that sensor to happen to change again.
-      const doorSensorOpen = new Map();
 
       // How far a door driven by its contact sensor swings. A contact sensor
       // is binary and tells us only that a door is off the latch — it cannot
@@ -999,15 +1008,14 @@
       // or malformed rooms.json disables HA rather than throwing - the house
       // still renders, just without live light state.
       let rooms = null;
-      // Non-light bindings (presence sensors, door contacts) from the same
-      // file. Read into its own variable rather than folded into `rooms`:
-      // `rooms` is specifically room -> LIGHT channel -> entities and is
-      // joined to the geometry's lights[].fixtures[].channel, which a presence
-      // or door sensor has no part in. Kept OUTSIDE the `cfg.enabled` branch
-      // below, because the door panel needs to know which doors have a sensor
-      // bound at all. Note the checkbox needs MORE than this: a reading must
-      // also have arrived, so a bound-but-never-heard-from door gets a plain
-      // manual slider.
+      // Non-light bindings (presence sensors, door contacts, covers, climate)
+      // from the same file. Read into its own variable rather than folded
+      // into `rooms`: `rooms` is specifically room -> LIGHT channel ->
+      // entities and is joined to the geometry's lights[].fixtures[].channel,
+      // which none of these has any part in. Kept OUTSIDE the `cfg.enabled`
+      // branch below, because which sidebar rows a room HAS is a property of
+      // the binding, not of whether HA is connected (a bound row with no
+      // reading shows "unavailable").
       let sensors = null;
       try {
         const roomsResp = await fetch('houses/' + cfg.house + '/rooms.json', { cache: 'no-store' });
@@ -1099,7 +1107,7 @@
       const curtainMeta = new Map(); // curtainId -> { label, room }
       (house.curtains || []).forEach(cu => curtainMeta.set(cu.id, { label: cu.name || cu.id, room: cu.room }));
       const roomCurtains = {}; // roomId -> [{ id, label, entities }]
-      const curtainEntities = new Map(); // curtainId -> [entity_id, ...] (for sendCurtainToHA)
+      const curtainEntities = new Map(); // curtainId -> [entity_id, ...] (for curtainSender)
       Object.keys((sensors && sensors.curtains) || {}).forEach(curtainId => {
         const meta = curtainMeta.get(curtainId);
         if (!meta) {
@@ -1113,38 +1121,46 @@
         curtainEntities.set(curtainId, entities);
       });
 
-      // Curtain ids the user is actively dragging: a live onCurtainChange /
-      // onCurtainAvailabilityChange arriving mid-drag must not repaint the
-      // panel and yank the slider out from under the pointer. Added on the
-      // slider's first 'input'. Cleared on 'change' (release), on
-      // 'pointercancel'/'blur' (a drag that ends without 'change' ever
-      // firing), and UNCONDITIONALLY at the top of every room-detail
-      // renderPanel() call, right before the innerHTML replace that builds
-      // the new panel: if a re-render happens mid-drag for an unrelated
-      // reason -- another light or door changing, or the OTHER curtain in
-      // this room reporting -- the slider element the lock refers to is
-      // about to be destroyed, so 'change' can never fire on it and the id
-      // used to stay locked forever (code review finding, PR #40 round 1).
-      // Clearing the whole set on every render is safe because the render
-      // itself is what makes the lock's job moot: the fresh markup it
-      // produces always reads home.getCurtainOpen() at build time, so it is
-      // never stale regardless of drag state.
-      const curtainDragging = new Set();
-      // Position actually SENT to HA per curtain id during the CURRENT drag
-      // (not the slider's displayed value, and reset at the start of every
-      // new drag -- see the 'input' handler below): guards against sending
-      // the same position twice within one drag-then-release, which matters
-      // most on 'change' immediately after an 'input' already sent that
-      // exact value (a keyboard nudge, or a release that lands squarely on
-      // the last debounced value). Deliberately NOT a cross-drag cache: a
-      // curtain HA reports at position X at some earlier, unrelated time
-      // (a physical remote, or a previous drag's settled value) must not
-      // suppress a genuine new command to move it back to X later.
-      const curtainLastSent = new Map();
+      // The curtain slider's write path: drag lock, per-drag dedupe, and the
+      // debounced-then-immediate send all live in createDragSender
+      // (src/room-panel.js, unit-tested in scripts/test-room-panel.mjs), so
+      // the rules are the same object the tests exercise rather than a copy
+      // of them inline here. Keyed by curtain id; dispatched through
+      // ha.callServiceDebounced under 'curtain-<id>', so a button press on
+      // the same curtain cancels a slider send still pending.
+      //
+      // Availability is checked THREE times, each covering a different gap:
+      // build() refuses while the curtain is not confirmed available (as the
+      // Open / Close buttons do); the guard re-checks when a debounced send
+      // actually fires; and applyCurtainAvailable cancels a pending send the
+      // moment the cover drops off.
+      const curtainSender = createDragSender({
+        build: (curtainId, pct) => curtainSliderCommand(HAClient.coverPositionCommand, pct,
+          curtainEntities.get(curtainId), curtainIsAvailable(curtainId)),
+        dispatch: (cmd, curtainId, delayMs) => {
+          if (!ha) return;
+          ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target, 'curtain-' + curtainId, delayMs,
+            () => curtainIsAvailable(curtainId));
+        },
+        cancel: curtainId => { if (ha) ha.cancelDebounced('curtain-' + curtainId); },
+        // A reading held back by the drag lock is painted once it releases.
+        // Deferred a tick: pointerup precedes the range input's 'change', and
+        // replacing the element first could cost that event.
+        onRelease: (curtainId, wasDirty) => {
+          if (wasDirty) setTimeout(() => refreshRoomRow('curtain:' + curtainId), 0);
+        }
+      });
+      // Last position HA REPORTED (or the user dragged to) per curtain. The
+      // row paints this, not home.getCurtainOpen(), which is the animated
+      // value and still reads the pre-move position when the row repaints
+      // at the START of a move.
+      const curtainTarget = new Map();
+      function curtainShownPct(curtainId) {
+        return curtainTarget.has(curtainId) ? curtainTarget.get(curtainId) : home.getCurtainOpen(curtainId);
+      }
       // Last resolved availability per curtain id, mirrored from
       // ha.onCurtainAvailabilityChange (or the __home3dSensors.curtainAvailable
-      // test seam, which drives this exact map -- same idiom as doorSensorOpen
-      // above for door contacts). Available only once a reading has actually
+      // test seam, which drives this exact map). Available only once a reading has actually
       // arrived: a curtain bound in rooms.json but never heard from (HA off,
       // or the entity has not published yet) defaults to unavailable rather
       // than claiming a working slider with nothing behind it.
@@ -1152,6 +1168,58 @@
       function curtainIsAvailable(curtainId) {
         return curtainAvailableState.get(curtainId) === true;
       }
+
+      // ---- Room -> door / motion / temperature rows (sidebar v2) ----
+      //
+      // Every row is data-driven from rooms.json and HIDDEN for a room that
+      // binds no entity of that kind:
+      //   door:        one status row per door in this room (geometry
+      //                door.room) that sensors.doors binds a contact to.
+      //   motion:      sensors.presence[room] -- OR across all its sensors.
+      //   temperature: sensors.climate[room] -- ONE entity id per room, so
+      //                choosing which thermostat drives a room is a data
+      //                edit only.
+      // Status starts null (never heard from), which every row renders as
+      // "unavailable" -- honest before HA connects, and with HA off.
+      const roomDoorRows = {}; // roomId -> [{ id, name }]
+      (house.doors || []).forEach(d => {
+        if (!d.room || !doorSensorIds.has(d.id)) return;
+        (roomDoorRows[d.room] || (roomDoorRows[d.room] = [])).push({ id: d.id, name: d.name || d.id });
+      });
+      const roomHasMotion = roomId => !!(sensors && sensors.presence &&
+        Array.isArray(sensors.presence[roomId]) && sensors.presence[roomId].length);
+      const climateEntityForRoom = roomId => {
+        const eid = sensors && sensors.climate ? sensors.climate[roomId] : null;
+        return typeof eid === 'string' && eid ? eid : null;
+      };
+      const motionStatus = new Map();   // roomId -> 'on'|'off'|'unavailable'
+      const doorStatus = new Map();     // doorId -> 'on'|'off'|'unavailable'
+      const climateReading = new Map(); // roomId -> HAClient.parseClimate() reading
+
+      // Temperature slider write path: same sender, same rules as the
+      // curtains. build() refuses (returns null) unless the room's CURRENT
+      // reading is available with a real target -- the disabled slider is
+      // not the only guard between a stray event and a thermostat.
+      const climateCanTakeTarget = roomId => {
+        const r = climateReading.get(roomId);
+        return !!(r && r.available && !r.off);
+      };
+      const climateSender = createDragSender({
+        build: (roomId, value) => HAClient.climateTargetCommand(
+          value, climateEntityForRoom(roomId), climateReading.get(roomId)),
+        // The guard re-reads the LIVE reading when a debounced send fires:
+        // a target queued before the thermostat went off is dropped (some
+        // integrations turn heating back on for a set_temperature while off).
+        dispatch: (cmd, roomId, delayMs) => {
+          if (!ha) return;
+          ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target, 'climate-' + roomId, delayMs,
+            () => climateCanTakeTarget(roomId));
+        },
+        cancel: roomId => { if (ha) ha.cancelDebounced('climate-' + roomId); },
+        onRelease: (roomId, wasDirty) => {
+          if (wasDirty && selectedRoom === roomId) setTimeout(() => refreshRoomRow('climate'), 0);
+        }
+      });
 
       // ---- Create scene with correct initial light state ----
 
@@ -1203,19 +1271,31 @@
       // not a public API, and a public deployment should not hand every visitor
       // the ability to drive sensor state.
       if (new URLSearchParams(location.search).get('debug') === '1') window.__home3dSensors = {
-        presence: (roomId, occupied) => home.setPresence(roomId, occupied),
+        // Presence and door drive BOTH the 3D scene and the sidebar row,
+        // exactly as the live onPresenceChange/onDoorChange +
+        // onSensorStatusChange pair does. motionStatus/doorStatus set a raw
+        // status, for 'unavailable':
+        //   __home3dSensors.motionStatus('lounge', 'unavailable')
+        //   __home3dSensors.doorStatus('store_door', 'unavailable')
+        presence: (roomId, occupied) => {
+          home.setPresence(roomId, occupied);
+          applySensorStatus('presence', roomId, occupied ? 'on' : 'off');
+        },
         door: (doorId, open) => {
-          // Mirrors the live onDoorChange path exactly, including the
-          // first-reading repaint, so testing exercises what ships.
-          const firstReading = !doorSensorOpen.has(doorId);
-          doorSensorOpen.set(doorId, open);
-          if (doorManualOverride.has(doorId)) {
-            if (firstReading) renderPanel();
-            return;
-          }
           home.setDoorOpenById(doorId, open ? DOOR_SENSOR_OPEN_PCT : 0);
-          renderPanel();
-          followDoorSwing(doorId);
+          applySensorStatus('door', doorId, open ? 'on' : 'off');
+        },
+        motionStatus: (roomId, status) => applySensorStatus('presence', roomId, status),
+        doorStatus: (doorId, status) => applySensorStatus('door', doorId, status),
+        // A climate entity's full HA state, through the same parser the live
+        // path uses:
+        //   __home3dSensors.climate('lounge', { state: 'heat',
+        //     attributes: { current_temperature: 21.3, temperature: 21.5,
+        //                   min_temp: 5, max_temp: 30, target_temp_step: 0.5 } })
+        climate: (roomId, haState) => applyClimate(roomId, HAClient.parseClimate(haState)),
+        getClimateSliderDisabled: () => {
+          const el = panelBody.querySelector('[data-action="climate-target"]');
+          return el ? el.disabled : null;
         },
         getPresence: roomId => home.getPresence(roomId),
         getDoorOpenById: doorId => home.getDoorOpenById(doorId),
@@ -1225,7 +1305,7 @@
         //   __home3dSensors.curtain('lounge_curtain', 40, 'opening')
         //   __home3dSensors.cornice('lounge_curtain', false)
         //   __home3dSensors.daylight()   // per-window transmission + light
-        curtain: (curtainId, pct, moving) => home.setCurtainOpen(curtainId, pct, moving || null),
+        curtain: (curtainId, pct, moving) => applyCurtainReading(curtainId, pct, moving || null),
         cornice: (curtainId, on, bri, color) =>
           home.setCorniceLight(curtainId, { on: !!on, bri: bri != null ? bri : 100, color: color || null }),
         getCurtainOpen: curtainId => home.getCurtainOpen(curtainId),
@@ -1234,10 +1314,7 @@
         // not scene state, since "can this slider send a command" depends on
         // whether ha exists and has a reading, not on the 3D curtain itself.
         //   __home3dSensors.curtainAvailable('lounge_curtain', true)
-        curtainAvailable: (curtainId, available) => {
-          curtainAvailableState.set(curtainId, !!available);
-          renderPanel();
-        },
+        curtainAvailable: (curtainId, available) => applyCurtainAvailable(curtainId, !!available),
         getCurtainSliderAvailable: curtainId => curtainIsAvailable(curtainId),
         corniceGlows: curtainId => home.getCorniceGlowDebug(curtainId),
         orbit: (th, ph, r, target) => home.setOrbit(th, ph, r, target),
@@ -1780,7 +1857,10 @@
           if (state.temp !== undefined && group === 'main') ls[group].temp = state.temp;
           if (state.color !== undefined && group === 'ambient') ls[group].color = state.color;
           home.updateLights();
-          renderPanel();
+          // Repaint only what shows this light: its own row when its room is
+          // open, or the room list (whose dots summarise every room's lights).
+          if (selectedRoom === roomId) refreshRoomRow(group);
+          else if (!selectedRoom && panelView === 'controls') renderPanel();
         });
 
         // Presence -> footsteps on that room's floor. The client fires this
@@ -1790,43 +1870,27 @@
           home.setPresence(roomId, occupied);
         });
 
-        // Door contact -> swing the matching door. Same guarantee.
+        // Door contact -> swing the matching 3D door. Same guarantee. The
+        // sidebar has no door slider (v2): the door simply follows its sensor.
         ha.onDoorChange((doorId, open) => {
-          const firstReading = !doorSensorOpen.has(doorId);
-          doorSensorOpen.set(doorId, open);
-          // A door the user has taken manual control of keeps tracking its
-          // sensor in doorSensorOpen above, but is not moved by it. Re-checking
-          // "Use real value" snaps it back to the reading we kept here.
-          if (doorManualOverride.has(doorId)) {
-            // The FIRST reading is what makes the checkbox appear at all, so
-            // the panel must repaint even when the door itself does not move --
-            // otherwise an overridden door that has just been heard from keeps
-            // showing a bare slider until something else happens to repaint.
-            if (firstReading) renderPanel();
-            return;
-          }
           home.setDoorOpenById(doorId, open ? DOOR_SENSOR_OPEN_PCT : 0);
-          renderPanel();
-          followDoorSwing(doorId);
         });
+
+        // The sidebar's motion tag and door text. A separate signal from the
+        // two above because it also has to say "unavailable".
+        ha.onSensorStatusChange((kind, targetId, status) => applySensorStatus(kind, targetId, status));
+
+        // Temperature row. Fired only when the parsed reading changes.
+        ha.onClimateChange((roomId, reading) => applyClimate(roomId, reading));
 
         // Cover -> animate that curtain (and, through it, the room's
         // daylight). Cornice light -> that curtain's cornice strip. Both fire
         // only on a real change, like the sensor callbacks above.
-        ha.onCurtainChange((curtainId, st) => {
-          home.setCurtainOpen(curtainId, st.pct, st.moving);
-          // Don't fight the user mid-drag: a live reading still updates the
-          // 3D curtain above, but repainting the panel here would yank the
-          // slider to the last-reported position out from under the pointer.
-          if (!curtainDragging.has(curtainId)) renderPanel();
-        });
+        ha.onCurtainChange((curtainId, st) => applyCurtainReading(curtainId, st.pct, st.moving));
         ha.onCorniceChange((curtainId, st) => {
           home.setCorniceLight(curtainId, st);
         });
-        ha.onCurtainAvailabilityChange((curtainId, available) => {
-          curtainAvailableState.set(curtainId, available);
-          if (!curtainDragging.has(curtainId)) renderPanel();
-        });
+        ha.onCurtainAvailabilityChange((curtainId, available) => applyCurtainAvailable(curtainId, available));
 
         ha.connect();
       }
@@ -1854,28 +1918,41 @@
         }
       }
 
-      // Curtain slider -> HA. Fans out to every motor bound to this curtain
-      // (HAClient.coverPositionCommand handles the single-vs-multi-motor
-      // target shape, the clamp/round, and refusing a non-numeric position --
-      // see its unit tests in scripts/test-curtain-slider-command.mjs) via the
-      // same debounced-send idiom as sendToHA above, keyed per curtain so two
-      // curtains' drags never cancel each other's pending timer.
-      //
-      // De-duped against curtainLastSent on the RESOLVED position (post
-      // clamp/round, i.e. what would actually reach the motor): a release
-      // that lands exactly on the value the debounced 'input' send already
-      // queued must send that command ONCE, not twice. callServiceDebounced
-      // itself now also clears its own pending timer before an immediate
-      // send (see ha-client.js), which is the other half of this fix -- this
-      // half stops a redundant send from being scheduled at all when the
-      // value genuinely has not changed.
-      function sendCurtainToHA(curtainId, pct, debounceMs) {
-        if (!ha) return;
-        const cmd = HAClient.coverPositionCommand(pct, curtainEntities.get(curtainId));
-        if (!cmd) return;
-        if (curtainLastSent.get(curtainId) === cmd.data.position) return;
-        curtainLastSent.set(curtainId, cmd.data.position);
-        ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target, 'curtain-' + curtainId, debounceMs || 0);
+      // Sidebar status rows <- HA (or the debug seam). Each touches ONLY its
+      // own row, and only when that row's room is the one open.
+      function applySensorStatus(kind, targetId, status) {
+        if (kind === 'presence') {
+          motionStatus.set(targetId, status);
+          if (selectedRoom === targetId) refreshRoomRow('motion');
+        } else if (kind === 'door') {
+          doorStatus.set(targetId, status);
+          refreshRoomRow('door:' + targetId);
+        }
+      }
+      function applyClimate(roomId, reading) {
+        climateReading.set(roomId, reading);
+        // Off / null target / unavailable: drop any target still queued.
+        if (!climateCanTakeTarget(roomId)) climateSender.cancel(roomId);
+        // Same drag lock as the curtains: a reading arriving mid-drag (HA
+        // echoing the debounced target, a current-temp tick) must not
+        // replace the slider under the pointer -- it is painted on release.
+        if (climateSender.isDragging(roomId)) climateSender.markDirty(roomId);
+        else if (selectedRoom === roomId) refreshRoomRow('climate');
+      }
+      // Cover position (HA or the debug seam) -> 3D curtain + its row.
+      function applyCurtainReading(curtainId, pct, moving) {
+        home.setCurtainOpen(curtainId, pct, moving);
+        curtainTarget.set(curtainId, pct);
+        // Mid-drag the 3D curtain still follows; the row is repainted when
+        // the drag releases, never under the pointer.
+        if (curtainSender.isDragging(curtainId)) curtainSender.markDirty(curtainId);
+        else refreshRoomRow('curtain:' + curtainId);
+      }
+      function applyCurtainAvailable(curtainId, available) {
+        curtainAvailableState.set(curtainId, available);
+        if (!available) curtainSender.cancel(curtainId);
+        if (curtainSender.isDragging(curtainId)) curtainSender.markDirty(curtainId);
+        else refreshRoomRow('curtain:' + curtainId);
       }
 
       // Renders the "Strip positions" list for an accent channel group.
@@ -1912,37 +1989,6 @@
       //   3. Room       (selectedRoom set)                 — per-room light controls
       // The old "All On / All Off" footer buttons were removed; the footer now
       // holds the single Settings button (shown only on the Controls page).
-
-      // A sensor-driven swing animates over ~400ms, but renderPanel() reads the
-      // door's CURRENT angle, so calling it once at the start of the swing paints
-      // the pre-swing value and then never updates -- the label and slider freeze
-      // at a stale number while the door visibly moves. Track the swing until the
-      // scene reports it settled, refreshing just the label and slider in place
-      // (same idiom as the manual drag handler) rather than re-rendering the panel.
-      const DOOR_SWING_FOLLOW_MS = 700; // swing is ~400ms; tail covers easing + a slow frame
-      let doorFollowRaf = 0;
-      function followDoorSwing(doorId) {
-        cancelAnimationFrame(doorFollowRaf);
-        // Run for the swing's full duration plus a small tail rather than
-        // stopping on a repeated reading: easing makes the first frames of a
-        // swing round to the same integer, so a repeat-detector exits before
-        // the door has moved at all. Wall-clock bound, so it always terminates.
-        const until = performance.now() + DOOR_SWING_FOLLOW_MS;
-        const step = () => {
-          const pct = home.getDoorOpenById(doorId);
-          if (pct === null || pct === undefined) return;
-          const rounded = Math.round(pct);
-          const el = panelBody.querySelector('[data-action="door-open"]');
-          if (el) {
-            el.value = String(rounded);
-            const label = el.previousElementSibling;
-            if (label) label.textContent = `Open: ${rounded}%`;
-          }
-          if (performance.now() >= until) return;
-          doorFollowRaf = requestAnimationFrame(step);
-        };
-        doorFollowRaf = requestAnimationFrame(step);
-      }
 
       function renderPanel() {
         panelReady = true; // reached here => all panel deps are declared; safe
@@ -2127,18 +2173,54 @@
           });
         } else {
           const rm = Home3DScene.ROOMS[selectedRoom];
-          const lc = Home3DScene.LIGHTS[selectedRoom];
-          const s = home.lightState[selectedRoom];
           const rid = selectedRoom;
           panelTitle.textContent = rm?.name || selectedRoom;
           panelArea.textContent = rm?.area || '';
           panelBack.style.display = '';
           panelFooter.style.display = 'none'; // no Settings button inside a room
 
-          let html = '<div class="control-section">';
+          const html = '<div class="control-section">' +
+            roomRowKeys(rid).map(key => roomRowHtml(key, rid)).join('') +
+            '</div>';
+          // Every slider a drag lock refers to is about to be destroyed by
+          // the innerHTML replace below, so no lock can be meaningful past
+          // this point (PR #40 round-1 finding: a lock that outlived its
+          // element stuck forever).
+          curtainSender.clear();
+          climateSender.clear();
+          panelBody.innerHTML = html;
+          wireRoomControls(panelBody, rid);
+        }
+      }
 
-          // Main light
-          html += `<div class="control-group">
+      // ---- Room panel rows ----
+      //
+      // The room view is a list of independent rows, each a `.control-group`
+      // with a `data-row` key. A Home Assistant event repaints ONLY the row
+      // it affects (refreshRoomRow) -- never the whole panel, and never per
+      // frame. Order follows the spec: lights, ambient (+ galaxy), door(s),
+      // motion, curtains, temperature. A row whose entity the room lacks is
+      // simply absent from this list.
+      function roomRowKeys(rid) {
+        const s = home.lightState[rid] || {};
+        const keys = [];
+        if (s.main) keys.push('main');
+        if (s.ambient) keys.push('ambient');
+        if (s.galaxy) keys.push('galaxy');
+        (roomDoorRows[rid] || []).forEach(d => keys.push('door:' + d.id));
+        if (roomHasMotion(rid)) keys.push('motion');
+        (roomCurtains[rid] || []).forEach(cu => {
+          if (home.getCurtainOpen(cu.id) !== null) keys.push('curtain:' + cu.id); // null: not in this house's 3D geometry
+        });
+        if (climateEntityForRoom(rid)) keys.push('climate');
+        return keys;
+      }
+
+      function roomRowHtml(key, rid) {
+        const s = home.lightState[rid];
+        const lc = Home3DScene.LIGHTS[rid];
+        if (key === 'main') {
+          let h = `<div class="control-group" data-row="main">
             <div class="control-header">
               <span class="control-label">MAIN LIGHT</span>
               <button class="toggle ${s.main.on ? 'on' : ''}" data-action="toggle-main">
@@ -2146,7 +2228,7 @@
               </button>
             </div>`;
           if (s.main.on) {
-            html += `<div class="slider-row">
+            h += `<div class="slider-row">
               <div class="slider-label">Brightness: ${s.main.bri}%</div>
               <input type="range" class="slider" min="5" max="100" value="${s.main.bri}" data-action="bri-main">
             </div>
@@ -2155,254 +2237,181 @@
               <input type="range" class="slider temp" min="2700" max="6500" step="100" value="${s.main.temp}" data-action="temp-main">
             </div>`;
           }
-          html += '</div>';
-
-          // Ambient
-          if (s.ambient) {
-            html += `<div class="control-group">
-              <div class="control-header">
-                <span class="control-label">${lc.ambient.name.toUpperCase()}</span>
-                <button class="toggle ${s.ambient.on ? 'on' : ''}" data-action="toggle-ambient">
-                  <div class="toggle-knob"></div>
-                </button>
-              </div>`;
-            if (s.ambient.on) {
-              const colors = ["#ff3300","#ff6600","#ffaa00","#ff0066","#cc00ff","#6600ff","#0066ff","#00ccff","#00ff66","#ffffff"];
-              html += `<div class="slider-row">
-                <div class="slider-label">Brightness: ${s.ambient.bri}%</div>
-                <input type="range" class="slider" min="5" max="100" value="${s.ambient.bri}" data-action="bri-ambient">
-              </div>
-              <div class="slider-row">
-                <div class="slider-label">Color</div>
-                <div class="color-swatches">
-                  ${colors.map(c => `<button class="color-swatch ${s.ambient.color === c ? 'selected' : ''}" style="background:${c}" data-action="color-ambient" data-color="${c}"></button>`).join('')}
-                </div>
-                <input type="color" class="color-input" value="${s.ambient.color}" data-action="color-input-ambient">
-              </div>
-              ${stripInfoHtml(lc.ambient)}`;
-            }
-            html += '</div>';
-          }
-
-          // Curtains: one slider per curtain BOUND to a real cover in this
-          // room (roomCurtains, built from rooms.json + the house profile
-          // above) -- a curtain the geometry draws but rooms.json does not
-          // bind gets no slider, matching the main/ambient lights which are
-          // likewise only ever the profile's bound channels. 0 = closed,
-          // 100 = open, same convention as HA's current_position. This does
-          // NOT add a light toggle: the one-ambience-switch-per-room rule
-          // stands untouched (still exactly the toggle-main/toggle-ambient/
-          // toggle-galaxy handlers below) -- a curtain is a cover, not a
-          // light, and that rule only ever governed ambience/accent lighting.
-          const curtainsForRoom = roomCurtains[rid] || [];
-          curtainsForRoom.forEach(cu => {
-            const pct = home.getCurtainOpen(cu.id);
-            if (pct === null) return; // curtain not in this house's 3D geometry
-            const available = curtainIsAvailable(cu.id);
-            const shown = Math.round(pct);
-            html += `<div class="control-group">
-              <div class="control-header">
-                <span class="control-label">${esc(cu.label.toUpperCase())}</span>
-              </div>
-              <div class="slider-row">
-                <div class="slider-label">${available ? ('Open: ' + shown + '%') : 'Unavailable'}</div>
-                <input type="range" class="slider" min="0" max="100" value="${shown}"
-                  data-action="curtain-open" data-curtain="${esc(cu.id)}"${available ? '' : ' disabled'}>
-              </div>
-            </div>`;
-          });
-
-          // Door openness (UI-only slider — not wired to HA). 0 = fully closed,
-          // 100 = fully open at the door's collision-solved max angle, always in
-          // its fixed single swing direction. Rooms without a door (living room)
-          // get no section. The hallway's door is the front door.
-          const doorPct = home.getDoorOpen(rid);
-          if (doorPct !== null) {
-            const doorLabel = rid === 'hallway' ? 'FRONT DOOR' : 'DOOR';
-            // A door with a contact sensor bound in rooms.json gets a "Use
-            // real value" checkbox. Checked (the default) it follows Home
-            // Assistant and the slider is disabled; unchecked it hands control
-            // back to the slider so the door can still be swung by hand.
-            // A door with NO sensor gets no checkbox and behaves exactly as
-            // it always has.
-            const doorId = home.getDoorIdForRoom(rid);
-            // NO checkbox unless the door actually has a Home Assistant value.
-            // Being bound in the profile is not enough -- a checkbox
-            // offering to "use the real value" when no real value has ever
-            // arrived is a control that cannot do what it says, and re-checking
-            // it read `undefined` as "closed" and slammed the door shut.
-            // So gate on a RECEIVED READING, not on the binding.
-            const hasSensor = doorId !== null && doorSensorIds.has(doorId)
-              && doorSensorOpen.has(doorId);
-            const following = hasSensor && !doorManualOverride.has(doorId);
-            html += `<div class="control-group">
-              <div class="control-header">
-                <span class="control-label">${doorLabel}</span>
-              </div>`;
-            if (hasSensor) {
-              html += `<label class="sensor-toggle-row">
-                <input type="checkbox" data-action="door-use-sensor" ${following ? 'checked' : ''}>
-                <span>Use real value</span>
-              </label>`;
-            }
-            html += `<div class="slider-row">
-                <div class="slider-label">Open: ${Math.round(doorPct)}%</div>
-                <input type="range" class="slider" min="0" max="100" value="${Math.round(doorPct)}" data-action="door-open"${following ? ' disabled' : ''}>
-              </div>
-            </div>`;
-          }
-
-          // Galaxy
-          if (s.galaxy) {
-            html += `<div class="control-group">
-              <div class="control-header">
-                <span class="control-label">GALAXY PROJECTOR</span>
-                <button class="toggle galaxy ${s.galaxy.on ? 'on' : ''}" data-action="toggle-galaxy">
-                  <div class="toggle-knob"></div>
-                </button>
-              </div>`;
-            if (s.galaxy.on) {
-              html += `<div class="slider-row">
-                <div class="slider-label">Brightness: ${s.galaxy.bri}%</div>
-                <input type="range" class="slider" min="5" max="100" value="${s.galaxy.bri}" data-action="bri-galaxy">
-              </div>`;
-            }
-            html += '</div>';
-          }
-
-          html += '</div>';
-          // The elements any in-progress curtain drag was locking against are
-          // about to be destroyed by the innerHTML replace below, so the lock
-          // can only ever be stale past this point -- clear it here rather
-          // than relying solely on 'change' (mouse-up), which never fires
-          // when a re-render (an unrelated light/door change, or the OTHER
-          // curtain in this room reporting) replaces the slider out from
-          // under an active pointer drag. This was the leak the code review
-          // found in round 1: the lock stuck forever and that curtain's
-          // position/availability updates silently stopped repainting.
-          curtainDragging.clear();
-          panelBody.innerHTML = html;
-
-          // Wire up controls with HA integration
-          panelBody.querySelectorAll('[data-action]').forEach(el => {
-            const action = el.dataset.action;
-
-            if (action === 'toggle-main') el.addEventListener('click', () => {
-              s.main.on = !s.main.on; home.updateLights(); sendToHA(rid, 'main', s.main, 0); renderPanel();
-            });
-            if (action === 'toggle-ambient') el.addEventListener('click', () => {
-              s.ambient.on = !s.ambient.on; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 0); renderPanel();
-            });
-            if (action === 'toggle-galaxy') el.addEventListener('click', () => {
-              s.galaxy.on = !s.galaxy.on; home.updateLights(); sendToHA(rid, 'galaxy', s.galaxy, 0); renderPanel();
-            });
-            if (action === 'bri-main') el.addEventListener('input', e => {
-              s.main.bri = +e.target.value; home.updateLights();
-              el.previousElementSibling.textContent = `Brightness: ${s.main.bri}%`;
-              sendToHA(rid, 'main', s.main, 200);
-            });
-            if (action === 'temp-main') el.addEventListener('input', e => {
-              s.main.temp = +e.target.value; home.updateLights();
-              const t = s.main.temp; el.previousElementSibling.textContent = `Temperature: ${t}K ${t<3200?'Warm':t>5000?'Cool':'Neutral'}`;
-              sendToHA(rid, 'main', s.main, 200);
-            });
-            if (action === 'bri-ambient') el.addEventListener('input', e => {
-              s.ambient.bri = +e.target.value; home.updateLights();
-              el.previousElementSibling.textContent = `Brightness: ${s.ambient.bri}%`;
-              sendToHA(rid, 'ambient', s.ambient, 200);
-            });
-            if (action === 'color-ambient') el.addEventListener('click', () => {
-              s.ambient.color = el.dataset.color; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 0); renderPanel();
-            });
-            if (action === 'color-input-ambient') el.addEventListener('input', e => {
-              s.ambient.color = e.target.value; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 200); renderPanel();
-            });
-            if (action === 'curtain-open') {
-              const curtainId = el.dataset.curtain;
-              el.addEventListener('input', e => {
-                const pct = +e.target.value;
-                if (!curtainDragging.has(curtainId)) {
-                  // First 'input' of a NEW drag: forget whatever this curtain
-                  // last sent. curtainLastSent must only dedupe WITHIN one
-                  // drag-then-release (the double-send this fixes) -- it must
-                  // never suppress a send because HA reported the curtain
-                  // sitting at this position at some earlier, unrelated time
-                  // (a physical remote, or last drag's settled value), which
-                  // would silently drop a genuine new command to a physical
-                  // motor.
-                  curtainLastSent.delete(curtainId);
-                  curtainDragging.add(curtainId); // don't let a live reading yank this slider mid-drag
-                }
-                home.setCurtainOpen(curtainId, pct, null);
-                el.previousElementSibling.textContent = `Open: ${pct}%`;
-                sendCurtainToHA(curtainId, pct, 200);
-              });
-              // 'change' fires once on release (mouse-up / key commit), which
-              // is also where the debounced 'input' send above will settle in
-              // the common case -- but a drag that ends in the last 200ms
-              // window needs its OWN send so the final value is never dropped,
-              // and this is also the signal to let onCurtainChange repaint the
-              // slider again. sendCurtainToHA no-ops if this exact position was
-              // already sent (curtainLastSent), so the common case where the
-              // debounced 'input' send already landed this value costs one
-              // Map lookup and nothing else -- never a second motor command
-              // for the same release.
-              const endDrag = () => curtainDragging.delete(curtainId);
-              el.addEventListener('change', e => {
-                sendCurtainToHA(curtainId, +e.target.value, 0);
-                endDrag();
-              });
-              // Belt-and-braces beyond the innerHTML-replace clear above: a
-              // drag can end without 'change' ever firing at all (pointer
-              // released outside the window, captured then cancelled, or the
-              // tab loses focus mid-drag), and none of those replace this
-              // element. Each still leaves the lock exactly where 'change'
-              // would have -- released, nothing sent (there is no committed
-              // new value to send on a cancel/blur).
-              el.addEventListener('pointercancel', endDrag);
-              el.addEventListener('blur', endDrag);
-            }
-            if (action === 'door-open') el.addEventListener('input', e => {
-              const pct = +e.target.value;
-              home.setDoorOpen(rid, pct);
-              el.previousElementSibling.textContent = `Open: ${pct}%`;
-            });
-            if (action === 'door-use-sensor') el.addEventListener('change', e => {
-              const doorId = home.getDoorIdForRoom(rid);
-              if (!doorId) return;
-              let restoring = null;
-              if (e.target.checked) {
-                // Back under sensor control. Snap to the last reading we have
-                // rather than waiting for the sensor to change again — a door
-                // that stayed put while the user fiddled would otherwise keep
-                // whatever angle they left it at while claiming to be live.
-                doorManualOverride.delete(doorId);
-                // The checkbox only exists once a reading has arrived, so
-                // `get` is never undefined here -- guard anyway rather than
-                // rely on that coupling holding through a future edit.
-                if (doorSensorOpen.has(doorId)) {
-                  home.setDoorOpenById(doorId, doorSensorOpen.get(doorId) ? DOOR_SENSOR_OPEN_PCT : 0);
-                  restoring = doorId;
-                }
-              } else {
-                doorManualOverride.add(doorId);
-              }
-              // Re-render so the slider's disabled state matches the checkbox.
-              renderPanel();
-              // setDoorOpenById only STARTS the swing, so the renderPanel()
-              // above paints the pre-swing value and never updates. This was
-              // the only one of the three call sites missing the catch-up the
-              // other two already do. It must run AFTER renderPanel(), which
-              // replaces the very nodes the follow loop writes to.
-              if (restoring) followDoorSwing(restoring);
-            });
-            if (action === 'bri-galaxy') el.addEventListener('input', e => {
-              s.galaxy.bri = +e.target.value; home.updateLights();
-              el.previousElementSibling.textContent = `Brightness: ${s.galaxy.bri}%`;
-              sendToHA(rid, 'galaxy', s.galaxy, 200);
-            });
-          });
+          return h + '</div>';
         }
+        if (key === 'ambient') {
+          // Exactly ONE ambience switch per room: the room's single ambient
+          // group, never a switch per fixture.
+          let h = `<div class="control-group" data-row="ambient">
+            <div class="control-header">
+              <span class="control-label">${esc(lc.ambient.name.toUpperCase())}</span>
+              <button class="toggle ${s.ambient.on ? 'on' : ''}" data-action="toggle-ambient">
+                <div class="toggle-knob"></div>
+              </button>
+            </div>`;
+          if (s.ambient.on) {
+            const colors = ["#ff3300","#ff6600","#ffaa00","#ff0066","#cc00ff","#6600ff","#0066ff","#00ccff","#00ff66","#ffffff"];
+            h += `<div class="slider-row">
+              <div class="slider-label">Brightness: ${s.ambient.bri}%</div>
+              <input type="range" class="slider" min="5" max="100" value="${s.ambient.bri}" data-action="bri-ambient">
+            </div>
+            <div class="slider-row">
+              <div class="slider-label">Color</div>
+              <div class="color-swatches">
+                ${colors.map(c => `<button class="color-swatch ${s.ambient.color === c ? 'selected' : ''}" style="background:${c}" data-action="color-ambient" data-color="${c}"></button>`).join('')}
+              </div>
+              <input type="color" class="color-input" value="${s.ambient.color}" data-action="color-input-ambient">
+            </div>
+            ${stripInfoHtml(lc.ambient)}`;
+          }
+          return h + '</div>';
+        }
+        if (key === 'galaxy') {
+          let h = `<div class="control-group" data-row="galaxy">
+            <div class="control-header">
+              <span class="control-label">GALAXY PROJECTOR</span>
+              <button class="toggle galaxy ${s.galaxy.on ? 'on' : ''}" data-action="toggle-galaxy">
+                <div class="toggle-knob"></div>
+              </button>
+            </div>`;
+          if (s.galaxy.on) {
+            h += `<div class="slider-row">
+              <div class="slider-label">Brightness: ${s.galaxy.bri}%</div>
+              <input type="range" class="slider" min="5" max="100" value="${s.galaxy.bri}" data-action="bri-galaxy">
+            </div>`;
+          }
+          return h + '</div>';
+        }
+        if (key.startsWith('door:')) {
+          const doors = roomDoorRows[rid] || [];
+          const door = doors.find(d => 'door:' + d.id === key);
+          if (!door) return '';
+          // Name the door only when the room has several bound, so the
+          // common case reads exactly "Door: open".
+          return doorRowHtml(door, doorStatus.get(door.id) || null, doors.length > 1);
+        }
+        if (key === 'motion') return motionRowHtml(motionStatus.get(rid) || null);
+        if (key.startsWith('curtain:')) {
+          const cu = (roomCurtains[rid] || []).find(c => 'curtain:' + c.id === key);
+          if (!cu) return '';
+          const pct = curtainShownPct(cu.id);
+          if (pct === null || pct === undefined) return '';
+          return curtainRowHtml(cu, pct, curtainIsAvailable(cu.id));
+        }
+        if (key === 'climate') return climateRowHtml(climateReading.get(rid) || null);
+        return '';
+      }
+
+      // Repaint ONE row of the open room in place. A no-op when no room is
+      // open or the row is not in the open room -- so HA handlers can call
+      // it unconditionally and pay one querySelector for a row not on screen.
+      function refreshRoomRow(key) {
+        if (!selectedRoom || !panelReady) return;
+        const old = panelBody.querySelector('[data-row="' + esc(key) + '"]');
+        if (!old) return;
+        // The element any drag lock on this row refers to is being replaced.
+        if (key.startsWith('curtain:')) curtainSender.forget(key.slice(8));
+        if (key === 'climate') climateSender.forget(selectedRoom);
+        const tmp = document.createElement('div');
+        tmp.innerHTML = roomRowHtml(key, selectedRoom).trim();
+        const fresh = tmp.firstElementChild;
+        if (!fresh) { old.remove(); return; }
+        old.replaceWith(fresh);
+        wireRoomControls(fresh, selectedRoom);
+      }
+
+      // Wire every control inside `root` (the whole panel, or one repainted
+      // row). Commands to HA are sent ONLY from these user-event handlers.
+      function wireRoomControls(root, rid) {
+        const s = home.lightState[rid];
+        root.querySelectorAll('[data-action]').forEach(el => {
+          const action = el.dataset.action;
+
+          if (action === 'toggle-main') el.addEventListener('click', () => {
+            s.main.on = !s.main.on; home.updateLights(); sendToHA(rid, 'main', s.main, 0); refreshRoomRow('main');
+          });
+          if (action === 'toggle-ambient') el.addEventListener('click', () => {
+            s.ambient.on = !s.ambient.on; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 0); refreshRoomRow('ambient');
+          });
+          if (action === 'toggle-galaxy') el.addEventListener('click', () => {
+            s.galaxy.on = !s.galaxy.on; home.updateLights(); sendToHA(rid, 'galaxy', s.galaxy, 0); refreshRoomRow('galaxy');
+          });
+          if (action === 'bri-main') el.addEventListener('input', e => {
+            s.main.bri = +e.target.value; home.updateLights();
+            el.previousElementSibling.textContent = `Brightness: ${s.main.bri}%`;
+            sendToHA(rid, 'main', s.main, 200);
+          });
+          if (action === 'temp-main') el.addEventListener('input', e => {
+            s.main.temp = +e.target.value; home.updateLights();
+            const t = s.main.temp; el.previousElementSibling.textContent = `Temperature: ${t}K ${t<3200?'Warm':t>5000?'Cool':'Neutral'}`;
+            sendToHA(rid, 'main', s.main, 200);
+          });
+          if (action === 'bri-ambient') el.addEventListener('input', e => {
+            s.ambient.bri = +e.target.value; home.updateLights();
+            el.previousElementSibling.textContent = `Brightness: ${s.ambient.bri}%`;
+            sendToHA(rid, 'ambient', s.ambient, 200);
+          });
+          if (action === 'color-ambient') el.addEventListener('click', () => {
+            s.ambient.color = el.dataset.color; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 0); refreshRoomRow('ambient');
+          });
+          if (action === 'color-input-ambient') el.addEventListener('input', e => {
+            s.ambient.color = e.target.value; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 200); refreshRoomRow('ambient');
+          });
+          if (action === 'bri-galaxy') el.addEventListener('input', e => {
+            s.galaxy.bri = +e.target.value; home.updateLights();
+            el.previousElementSibling.textContent = `Brightness: ${s.galaxy.bri}%`;
+            sendToHA(rid, 'galaxy', s.galaxy, 200);
+          });
+
+          // Curtain slider. input: debounced send (and the first one starts
+          // the drag + lock); change (release / key commit): immediate send,
+          // deduped against what this drag already sent. pointerup releases
+          // the lock too, because a drag that ends back on its start value
+          // fires no 'change' at all (b2d7f49a) -- pointercancel and blur
+          // cover a drag that ends without either.
+          if (action === 'curtain-open') {
+            const curtainId = el.dataset.curtain;
+            el.addEventListener('input', e => {
+              const pct = +e.target.value;
+              home.setCurtainOpen(curtainId, pct, null);
+              curtainTarget.set(curtainId, pct);
+              el.previousElementSibling.textContent = `Open: ${pct}%`;
+              curtainSender.input(curtainId, pct);
+            });
+            el.addEventListener('change', e => curtainSender.commit(curtainId, +e.target.value));
+            const endDrag = () => curtainSender.end(curtainId);
+            el.addEventListener('pointerup', endDrag);
+            el.addEventListener('pointercancel', endDrag);
+            el.addEventListener('blur', endDrag);
+          }
+          // Curtain Open / Close buttons: one press, one command, to every
+          // bound motor. The 3D curtain then follows HA's own reports.
+          if (action === 'curtain-cmd') {
+            const curtainId = el.dataset.curtain;
+            el.addEventListener('click', () => {
+              if (!curtainIsAvailable(curtainId)) return; // belt-and-braces with `disabled`
+              curtainSender.press(curtainId,
+                HAClient.coverOpenCloseCommand(el.dataset.cmd, curtainEntities.get(curtainId)));
+            });
+          }
+          // Temperature target slider: the curtain slider's exact rules,
+          // through its own sender (keyed by room). climateTargetCommand
+          // snaps to the entity's step and clamps to its min/max, and sends
+          // nothing while the reading is unavailable, off, or null-target.
+          if (action === 'climate-target') {
+            const label = el.previousElementSibling;
+            el.addEventListener('input', e => {
+              const cmd = climateSender.input(rid, +e.target.value);
+              const shown = cmd ? cmd.data.temperature : +e.target.value;
+              if (label && isFinite(shown)) label.textContent = `Target: ${shown.toFixed(1)}°C`;
+            });
+            el.addEventListener('change', e => climateSender.commit(rid, +e.target.value));
+            const endDrag = () => climateSender.end(rid);
+            el.addEventListener('pointerup', endDrag);
+            el.addEventListener('pointercancel', endDrag);
+            el.addEventListener('blur', endDrag);
+          }
+        });
       }
     })().catch((e) => {
       // Boot failed before the scene ever reached onReady. Without this the

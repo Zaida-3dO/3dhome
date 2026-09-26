@@ -824,6 +824,30 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
             )
 
     check_curtain_binding(rooms_doc, geo, sensors, (major, minor), report)
+    check_climate_binding(rooms_doc, sensors, geo_room_ids, (major, minor), report)
+
+
+def check_climate_binding(rooms_doc, sensors, geo_room_ids, version, report):
+    """`sensors.climate`: room id -> ONE climate entity for the sidebar's
+    temperature row. A binding to a room that does not exist can never be
+    shown, so it is an error, like presence. The schema already enforces the
+    single-string shape and the `climate.` domain.
+    """
+    climate = sensors.get("climate") or {}
+    if not climate:
+        return
+    if version < (1, 3):
+        report.warn(
+            "rooms.json/schemaVersion",
+            "`sensors.climate` needs schemaVersion 1.3 or newer, but this profile "
+            f"declares '{rooms_doc.get('schemaVersion')}' -- bump it; nothing else enforces this coupling",
+        )
+    for rid in climate:
+        if rid not in geo_room_ids:
+            report.error(
+                f"rooms.json/sensors/climate/{rid}",
+                f"climate entity bound to room '{rid}', which has no matching room in geometry.json",
+            )
 
 
 def check_curtain_binding(rooms_doc, geo, sensors, version, report):
