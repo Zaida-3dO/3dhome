@@ -91,6 +91,7 @@ export const COVERS = ['none', 'shelf', 'box'];
 const SHELF_T_CM = 2;          // 2cm shelf thickness
 const PANEL_THICK_CM = 1.2;    // box side/front panel material thickness (kept in sync with panelThick below, in metres)
 const CLEARANCE_CM = 1;        // a small real air gap on every side the body must clear the cover's own interior surfaces by
+const FASCIA_SETBACK_CM = 0.4; // the fascia lip's own setback behind the envelope's front face (kept in sync with fasciaSetback below, in metres)
 // Real clear air gap between the body's own front face and the box cover's
 // BACKING PANEL (not the slats' outer/visible face — the backing sits
 // ~1.6cm further back than the envelope's own front, at
@@ -168,8 +169,11 @@ export function bodyEnvelope(o) {
     // so this is a much smaller clamp than the box's COVER_CLEARANCE_CM,
     // but without it the body's own front face can end up level with or
     // AHEAD of the lip, burying the lip behind the radiator instead of it
-    // hanging visibly in front.
-    const FASCIA_CLEARANCE_CM = 1.5;
+    // hanging visibly in front. Includes the lip's own 0.4cm fasciaSetback
+    // (follow-up d9fb9d55b) plus its 0.75cm depth-half offset, so this
+    // clamp always matches the lip's ACTUAL front face rather than an
+    // independent estimate of it.
+    const FASCIA_CLEARANCE_CM = 1.5 + FASCIA_SETBACK_CM;
     d = Math.min(d, Math.max(0, o.depth - FASCIA_CLEARANCE_CM));
   }
   return { width: w, height: h, depth: d };
@@ -485,11 +489,16 @@ export function build(THREE, params, opts) {
     // (toward the wall) from the envelope's own front face by a hair so it
     // never shares a z-plane with the slat tops / front panel face —
     // low-severity fix for the reported z-fight between the oak fascia and
-    // the white slat tops.
+    // the white slat tops. Narrower than the full envelope width — inset an
+    // extra hair PAST the side panels' own inner faces (not merely flush
+    // with their outer faces, which would still be coplanar) — so its own
+    // ends are not coplanar with the box's side panels either (follow-up
+    // d9fb9d55a).
     const lipH = 0.04;
-    const fasciaSetback = 0.004; // 4mm behind the envelope's own front face
+    const fasciaSetback = FASCIA_SETBACK_CM * CM; // kept in sync with the FASCIA_SETBACK_CM constant used by bodyEnvelope()'s own clamp
+    const lipW = cover === 'box' ? ENV_W - 2 * panelThickM - 0.01 : ENV_W;
     const lipMat = finishMaterial(THREE, 'matte', shelfColorHex);
-    const lip = new THREE.Mesh(new THREE.BoxGeometry(ENV_W, lipH, 0.015), lipMat);
+    const lip = new THREE.Mesh(new THREE.BoxGeometry(lipW, lipH, 0.015), lipMat);
     lip.position.set(0, shelfY - lipH / 2, ENV_D - 0.0075 - fasciaSetback);
     add(lip, 'coverFascia', 'matte', lipMat);
 
