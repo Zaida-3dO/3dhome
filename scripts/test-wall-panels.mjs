@@ -177,7 +177,7 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   check('hex-panel-cluster: DEFAULTS.columnOffsets shifts only column 5 (index 4) down half a hex',
     JSON.stringify(D.columnOffsets) === JSON.stringify([0, 0, 0, 0, 1, 0, 0, 0]), D.columnOffsets);
   check('hex-panel-cluster: DEFAULTS.side is 18cm', D.side === 18);
-  check('hex-panel-cluster: DEFAULTS.color is the dark green felt', D.color === '#1e3228', D.color);
+  check('hex-panel-cluster: DEFAULTS.color is the dark green felt', D.color === '#0a2515', D.color);
 
   const g = build(THREE, Object.assign({}, D), { detail: 'full' });
   const hexMeshes = [];
@@ -204,6 +204,91 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   check('hex-panel-cluster: flat-top (local width > local height)', wLocal > hLocal, { wLocal, hLocal });
   check('hex-panel-cluster: flat-top ratio width/height ~= 2/sqrt(3)',
     near(wLocal / hLocal, 2 / Math.sqrt(3), 0.01), wLocal / hLocal);
+
+  // ---- chamfered bevel (review round 3) ------------------------------------
+  // The 'full' geometry's own local bbox must match the flat (no-bevel)
+  // hex's bbox exactly -- the footprint and layout pitch (both keyed to
+  // `side` alone) must be UNAFFECTED by bevelWidth/bevelDepth. Read
+  // straight off geometry.attributes.position rather than trusting
+  // computeBoundingBox() to catch a mistake in the geometry itself.
+  {
+    check('hex-panel-cluster: DEFAULTS.bevelWidth is 0.9cm', D.bevelWidth === 0.9, D.bevelWidth);
+    check('hex-panel-cluster: DEFAULTS.bevelDepth is 0.5cm (half the 1cm thickness)', D.bevelDepth === 0.5, D.bevelDepth);
+
+    const sideM = D.side / 100, thicknessM = D.thickness / 100;
+    const pos = hexGeo.attributes.position;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      minX = Math.min(minX, pos.getX(i)); maxX = Math.max(maxX, pos.getX(i));
+      minY = Math.min(minY, pos.getY(i)); maxY = Math.max(maxY, pos.getY(i));
+      minZ = Math.min(minZ, pos.getZ(i)); maxZ = Math.max(maxZ, pos.getZ(i));
+    }
+    // Flat-top hex's own outer half-extents: x = side, y = side*sqrt(3)/2.
+    check('hex-panel-cluster: beveled hex footprint (x) matches the plain flat hex exactly',
+      near(maxX - minX, 2 * sideM, 1e-6) && near(minX, -sideM, 1e-6) && near(maxX, sideM, 1e-6),
+      { minX, maxX, expectedHalf: sideM });
+    check('hex-panel-cluster: beveled hex footprint (y) matches the plain flat hex exactly',
+      near(maxY - minY, Math.sqrt(3) * sideM, 1e-6), { minY, maxY, expected: Math.sqrt(3) * sideM });
+    check('hex-panel-cluster: beveled hex overall depth (z) still equals thickness',
+      near(minZ, 0, 1e-6) && near(maxZ, thicknessM, 1e-6), { minZ, maxZ, thicknessM });
+
+    // The front face (z == thickness) must be inset from the outer edge by
+    // bevelWidth: its own vertices' extent in x should be
+    // 2*(side - bevelWidth/(sqrt(3)/2)) -- narrower than the full footprint.
+    const bevelWidthM = D.bevelWidth / 100, bevelDepthM = D.bevelDepth / 100;
+    const innerSideM = sideM - bevelWidthM / (Math.sqrt(3) / 2);
+    let frontMinX = Infinity, frontMaxX = -Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      if (near(pos.getZ(i), thicknessM, 1e-6)) {
+        frontMinX = Math.min(frontMinX, pos.getX(i));
+        frontMaxX = Math.max(frontMaxX, pos.getX(i));
+      }
+    }
+    check('hex-panel-cluster: front plateau face is inset by bevelWidth (narrower than the outer footprint)',
+      (frontMaxX - frontMinX) < (maxX - minX) - 1e-6, { frontWidth: frontMaxX - frontMinX, outerWidth: maxX - minX });
+    check('hex-panel-cluster: front plateau face width matches the computed inner hex exactly',
+      near(frontMaxX - frontMinX, 2 * innerSideM, 1e-6), { frontMinX, frontMaxX, innerSideM });
+
+    // The rim (front plateau edge) is thinner than the centre: the straight
+    // side wall (full outer radius) only runs from z=0 to
+    // z=(thickness-bevelDepth), i.e. no vertex at the OUTER radius exists
+    // past that z -- so the material thickness at the very outer edge is
+    // (thickness - bevelDepth), strictly less than the full `thickness`.
+    let maxZAtOuterRadius = -Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      if (near(Math.abs(pos.getX(i)), sideM, 1e-6) || near(Math.abs(pos.getY(i)), Math.sqrt(3) / 2 * sideM, 1e-6)) {
+        maxZAtOuterRadius = Math.max(maxZAtOuterRadius, pos.getZ(i));
+      }
+    }
+    check('hex-panel-cluster: the rim (at the outer edge) is thinner than the centre thickness',
+      near(maxZAtOuterRadius, thicknessM - bevelDepthM, 1e-6) && maxZAtOuterRadius < thicknessM - 1e-6,
+      { maxZAtOuterRadius, thicknessM, bevelDepthM });
+
+    // Vertex/triangle count stays modest for a 29-hex cluster.
+    check('hex-panel-cluster: beveled hex geometry has a modest vertex count (<= 40)',
+      pos.count <= 40, pos.count);
+
+    // 'low' detail drops the bevel entirely: its geometry is the plain flat
+    // extrusion (60 vertices at curveSegments:1, no separate front-plateau
+    // ring), and its front face is flush with the outer footprint, NOT
+    // inset -- i.e. genuinely bevel-free, not just a relabelled full mesh.
+    const gLow = build(THREE, Object.assign({}, D), { detail: 'low' });
+    const lowMeshes = [];
+    gLow.traverse(o => { if (o.isMesh) lowMeshes.push(o); });
+    const lowGeo = lowMeshes[0].geometry;
+    const lowPos = lowGeo.attributes.position;
+    let lowFrontMinX = Infinity, lowFrontMaxX = -Infinity;
+    for (let i = 0; i < lowPos.count; i++) {
+      if (near(lowPos.getZ(i), thicknessM, 1e-4)) {
+        lowFrontMinX = Math.min(lowFrontMinX, lowPos.getX(i));
+        lowFrontMaxX = Math.max(lowFrontMaxX, lowPos.getX(i));
+      }
+    }
+    check('hex-panel-cluster: low-detail front face is flush with the outer footprint (bevel dropped)',
+      near(lowFrontMaxX - lowFrontMinX, 2 * sideM, 1e-4), { lowFrontMinX, lowFrontMaxX, expected: 2 * sideM });
+    check('hex-panel-cluster: low-detail geometry is a different (bevel-free) instance from full',
+      lowGeo !== hexGeo);
+  }
 
   // Overall bbox: back at z=0 (contract test already checks this for the
   // full group at DEFAULTS; re-derive it independently here from the raw

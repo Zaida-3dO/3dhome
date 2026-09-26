@@ -94,7 +94,9 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "backingDepth": 0.9,
   "hexSide": 18,
   "hexThickness": 1,
-  "hexColor": "#1e3228"
+  "hexColor": "#0a2515",
+  "hexBevelWidth": 0.9,
+  "hexBevelDepth": 0.5
 }/*EDITMODE-END*/;
 
 // Real Acupanel Contemporary Oak product spec (src/home3d-scene.js's
@@ -165,7 +167,9 @@ function buildPanel(t, group, THREE, ctx) {
       columns: HEX_LIVING_ROOM_COLUMNS,
       columnOffsets: HEX_LIVING_ROOM_COLUMN_OFFSETS,
       thickness: t.hexThickness,
-      color: t.hexColor
+      color: t.hexColor,
+      bevelWidth: t.hexBevelWidth,
+      bevelDepth: t.hexBevelDepth
     });
     const built = impl.build(THREE, params, { detail: 'full' });
     group.add(built);
@@ -215,7 +219,7 @@ function App() {
               <div className="note">{preset.label}: slat {preset.slatColor}, backing {preset.backingColor}. The oak preset is the bedroom headboard wall — light oak slats (with a subtle grain map) on a black felt backing; both presets share the real Acupanel geometry (slat 2.7cm wide, 4.0cm pitch, 1.0cm deep, 0.9cm backing).</div>
             </>
           ) : (
-            <div className="note">Living-room default: side {t.hexSide} cm, columns (left to right) {HEX_LIVING_ROOM_COLUMNS.join(',')} = {hexCount} hexes, dark green felt, ~{t.hexThickness} cm thick. Flat-top, offset honeycomb; each column centred except column 5, shifted down half a hex to interlock with columns 4 and 6.</div>
+            <div className="note">Living-room default: side {t.hexSide} cm, columns (left to right) {HEX_LIVING_ROOM_COLUMNS.join(',')} = {hexCount} hexes, dark green felt, ~{t.hexThickness} cm thick. Flat-top, offset honeycomb; each column centred except column 5, shifted down half a hex to interlock with columns 4 and 6. Each hex has a chamfered front edge (bevel width {t.hexBevelWidth} cm, bevel depth {t.hexBevelDepth} cm) -- full thickness in the centre, sloping to a thinner rim, so a V-groove line reads where two hexes meet.</div>
           )}
           {!moduleReady && <div className="note">Loading src/furniture/wall-panels.js…</div>}
         </div>
@@ -241,6 +245,8 @@ function App() {
                 <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
                 <tr><td>Hex side</td><td className="num">{t.hexSide.toFixed(1)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Panel thickness</td><td className="num">{t.hexThickness.toFixed(1)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Bevel width (front inset)</td><td className="num">{t.hexBevelWidth.toFixed(1)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Bevel depth (rim vs. centre)</td><td className="num">{t.hexBevelDepth.toFixed(2)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Column counts (left to right)</td><td className="num">{HEX_LIVING_ROOM_COLUMNS.join('-')}</td><td>Fixed (living-room preset)</td></tr>
                 <tr><td>Hex count</td><td className="num">{hexCount}</td><td>Derived from columns</td></tr>
               </tbody>
@@ -305,6 +311,10 @@ function App() {
               onChange={v => setTweak('hexThickness', v)} />
             <TweakColor label="Felt colour" value={t.hexColor}
               onChange={v => setTweak('hexColor', v)} />
+            <TweakSlider label="Bevel width" value={t.hexBevelWidth} min={0} max={3} step={0.1} unit="cm"
+              onChange={v => setTweak('hexBevelWidth', v)} />
+            <TweakSlider label="Bevel depth" value={t.hexBevelDepth} min={0} max={t.hexThickness} step={0.05} unit="cm"
+              onChange={v => setTweak('hexBevelDepth', v)} />
           </>
         )}
       </TweaksPanel>

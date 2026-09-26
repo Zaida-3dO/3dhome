@@ -207,8 +207,34 @@ const HEX_CLUSTER_DEFAULTS = Object.freeze({
   columns: HEX_DEFAULT_COLUMNS,
   columnOffsets: HEX_DEFAULT_COLUMN_OFFSETS,
   thickness: 1,
-  color: '#1e3228',
+  // #1e3228 (round-2 default) rendered too bright under the spec page's
+  // lights (~rgb(51,63,55) lit) against the real panels' near-black green
+  // (review round 3, 2026-09-26). Judged empirically on the spec page
+  // under its own lights (sampled actual rendered pixels, not raw swatches):
+  // the requested #14201a-#18251e range renders to ~rgb(50,62,52) -- almost
+  // unchanged from round 2 -- because the scene's ambient light (intensity
+  // 0.45, spec-three.jsx) adds a large near-flat floor to every channel
+  // regardless of the base colour; a near-black base like #050a07 crushes
+  // to ~rgb(38,38,35), which reads as plain black/neutral with no green at
+  // all. #0a2515 (outside the literal suggested range, deliberately: R
+  // pushed lower and G kept relatively high to fight the ambient floor's
+  // greying effect) renders to ~rgb(41,53,42) -- meaningfully darker than
+  // round 2 AND still clearly green (G noticeably above both R and B).
+  color: '#0a2515',
   finish: 'matte',
+  // Chamfered edge (review round 3, 2026-09-26): each real panel is
+  // full thickness in the centre, sloping down to a thinner rim, so two
+  // adjacent hexes form a visible V-groove where they meet. bevelWidth is
+  // how far in from the hex's own outer edge the slope starts (the front
+  // face is inset by this much on every side); bevelDepth is how much
+  // thinner the rim is than the centre (must be < thickness). Modelled as a
+  // custom inset-top prism, NOT THREE.ExtrudeGeometry's own bevelEnabled --
+  // that bevel grows the shape OUTWARD from the base outline (verified:
+  // bevelSize 0.9cm added 1cm to every side of the footprint in a probe),
+  // which would silently change the layout pitch this module guarantees
+  // stays fixed. See buildBeveledHexGeometry() below.
+  bevelWidth: 0.9,
+  bevelDepth: 0.5,
   // width/height/depth are DERIVED from side+columns (the cluster's bbox),
   // but the contract requires DEFAULTS to carry them so the drift test and
   // the schema `default`s can agree without running JS. Computed once below
@@ -217,6 +243,13 @@ const HEX_CLUSTER_DEFAULTS = Object.freeze({
   height: 0,
   depth: 0
 });
+
+// Flat-top hex geometry constant: sqrt(3) relates a flat-top hex's side to
+// its own apothem (side*sqrt(3)/2) and, further below, relates the honeycomb
+// column layout's vertical/horizontal pitch to `side`. Declared here (ahead
+// of hexPoints/buildBeveledHexGeometry, which both use it) rather than only
+// where layoutHexes needs it, since it is now a shared hex-geometry constant.
+const SQRT3 = Math.sqrt(3);
 
 /**
  * Flat-top regular hexagon centred at the origin, side length `s` (metres),
@@ -233,12 +266,102 @@ function hexPoints(s) {
   return pts;
 }
 
-// Flat-top hex geometry constants for a honeycomb laid out in vertical
-// columns: a flat-top hex is `2*s` tall corner-to-corner (vertical pitch
-// between hex centres stacked in the same column) and `sqrt(3)*s` wide
-// flat-to-flat, with columns spaced `1.5*s` apart horizontally (each
-// column's points nest into the previous column's notch).
-const SQRT3 = Math.sqrt(3);
+/**
+ * A flat-top hex panel with a chamfered front edge: full `thickness` in the
+ * centre, sloping down over `bevelWidth` (measured inward from the outer
+ * edge, in the same units as `side`) to a rim that is `bevelDepth` thinner
+ * than the centre. The BACK face and the OUTER footprint are exactly the
+ * plain flat hex's (hexPoints(side) at z=0) -- only the FRONT is affected,
+ * so the layout pitch (which is keyed to `side`) is untouched.
+ *
+ * Built as a custom BufferGeometry rather than THREE.ExtrudeGeometry's own
+ * bevelEnabled: that bevel grows the shape's footprint outward from the
+ * base outline by `bevelSize` on every side (verified empirically), which
+ * would silently widen the honeycomb's pitch. Four rings of vertices:
+ *   1. back face (outer hex, z=0, facing -z)
+ *   2. side wall: outer hex from z=0 to z=(thickness-bevelDepth), straight
+ *      (this is the "full thickness in the centre" region)
+ *   3. bevel ring: outer hex at z=(thickness-bevelDepth) sloping in to the
+ *      inner hex (radius reduced so its flat-to-flat apothem is inset by
+ *      bevelWidth) at z=thickness -- the visible chamfer
+ *   4. front (plateau) face: inner hex, z=thickness, facing +z
+ *
+ * A flat-top hex's apothem (centre-to-edge-midpoint distance) is
+ * `side*sqrt(3)/2`, so insetting the apothem by `bevelWidth` shrinks `side`
+ * by `bevelWidth / (sqrt(3)/2)`; `innerSide` is clamped to a small positive
+ * floor so a bevelWidth close to or exceeding `side` degrades to a thin
+ * ridge rather than a degenerate/negative-radius hex.
+ *
+ * @param {Object} THREE
+ * @param {number} side  hex side length (metres or cm; same unit as bevel params)
+ * @param {number} thickness  overall panel depth
+ * @param {number} bevelWidth  inward inset of the front plateau from the outer edge
+ * @param {number} bevelDepth  how much thinner the rim is than the centre (< thickness)
+ * @returns {THREE.BufferGeometry}
+ */
+function buildBeveledHexGeometry(THREE, side, thickness, bevelWidth, bevelDepth) {
+  const apothem = (SQRT3 / 2) * side;
+  const innerSide = Math.max(side - bevelWidth / (SQRT3 / 2), side * 0.05);
+  const outerPts = hexPoints(side);
+  const innerPts = hexPoints(innerSide);
+  const zBack = 0;
+  const zPlateauFront = Math.max(0, thickness - bevelDepth);
+  const zFront = thickness;
+
+  const positions = [];
+  const indices = [];
+  let vi = 0;
+
+  function pushRingStrip(ringA, ringB, zA, zB) {
+    const n = ringA.length;
+    const base = vi;
+    for (let i = 0; i < n; i++) {
+      positions.push(ringA[i][0], ringA[i][1], zA);
+      positions.push(ringB[i][0], ringB[i][1], zB);
+    }
+    vi += n * 2;
+    for (let i = 0; i < n; i++) {
+      const i2 = (i + 1) % n;
+      const a0 = base + i * 2, a1 = base + i * 2 + 1;
+      const b0 = base + i2 * 2, b1 = base + i2 * 2 + 1;
+      indices.push(a0, b0, a1);
+      indices.push(a1, b0, b1);
+    }
+  }
+
+  function pushFan(ring, z, flip) {
+    const n = ring.length;
+    const centreIdx = vi;
+    positions.push(0, 0, z);
+    vi++;
+    const startIdx = vi;
+    for (let i = 0; i < n; i++) positions.push(ring[i][0], ring[i][1], z);
+    vi += n;
+    for (let i = 0; i < n; i++) {
+      const i2 = (i + 1) % n;
+      if (flip) indices.push(centreIdx, startIdx + i2, startIdx + i);
+      else indices.push(centreIdx, startIdx + i, startIdx + i2);
+    }
+  }
+
+  pushFan(outerPts, zBack, true);                            // back face
+  pushRingStrip(outerPts, outerPts, zBack, zPlateauFront);    // straight side wall
+  pushRingStrip(outerPts, innerPts, zPlateauFront, zFront);   // sloped bevel ring
+  pushFan(innerPts, zFront, false);                           // front plateau face
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  void apothem; // kept for documentation of the inset maths above
+  return geo;
+}
+
+// Honeycomb column layout: a flat-top hex is `2*s` tall corner-to-corner
+// (vertical pitch between hex centres stacked in the same column) and
+// `sqrt(3)*s` wide flat-to-flat, with columns spaced `1.5*s` apart
+// horizontally (each column's points nest into the previous column's
+// notch). SQRT3 itself is declared above, alongside hexPoints.
 
 /**
  * Lay out a honeycomb cluster in vertical columns and return
@@ -296,27 +419,36 @@ export const DEFAULTS_HEX_PANEL_CLUSTER = Object.freeze(Object.assign({}, HEX_CL
  * A honeycomb cluster of regular hexagon felt panels: 29 meshes (at the
  * living-room default) sharing ONE geometry instance and one material --
  * each hex is its own THREE.Mesh (so it can be independently positioned),
- * but all 29 reuse the same small ExtrudeGeometry and MeshStandardMaterial
- * rather than each allocating its own, which is what "cheap" means here
- * (low memory, a handful of triangles total) -- not a single merged
+ * but all 29 reuse the same small geometry and MeshStandardMaterial rather
+ * than each allocating its own, which is what "cheap" means here (low
+ * memory, a handful of triangles total) -- not a single merged
  * BufferGeometry / one draw call, which this does not attempt.
  *
  * @param {Object} THREE
  * @param {Object} [params]  overrides for DEFAULTS_HEX_PANEL_CLUSTER.
  *   `columns` is an array of per-column counts, left to right;
  *   `columnOffsets` an optional array of per-column half-hex shifts (same
- *   length as `columns`, or omitted to centre every column).
- * @param {{detail?: 'full'|'low'}} [opts]  'low' drops the bevel-free
- *   extrusion's curve segments (already 1; low reuses the same geometry, so
- *   it can never exceed 'full's triangle count)
+ *   length as `columns`, or omitted to centre every column); `bevelWidth`/
+ *   `bevelDepth` control the chamfered front edge (see
+ *   buildBeveledHexGeometry above), and the hex's own outer footprint and
+ *   the column/row pitch (both keyed to `side` alone) are unaffected by
+ *   either.
+ * @param {{detail?: 'full'|'low'}} [opts]  'low' drops the bevel entirely
+ *   (a flat bevel-free extrusion, 60 vertices/hex) since the chamfer is a
+ *   close-up-only detail; 'full' uses the custom beveled geometry (38
+ *   vertices/hex -- fewer than the flat extrusion, despite the extra front
+ *   ring, because it skips ExtrudeGeometry's own curve subdivision).
  * @returns {THREE.Group}
  */
 function buildHexPanelCluster(THREE, params, opts) { // eslint-disable-line no-unused-vars
   const p = Object.assign({}, DEFAULTS_HEX_PANEL_CLUSTER, params || {});
   const sideM = p.side / 100;
   const thicknessM = p.thickness / 100;
+  const bevelWidthM = p.bevelWidth / 100;
+  const bevelDepthM = p.bevelDepth / 100;
   const columns = Array.isArray(p.columns) && p.columns.length ? p.columns : HEX_DEFAULT_COLUMNS;
   const columnOffsets = Array.isArray(p.columnOffsets) ? p.columnOffsets : null;
+  const lowDetail = opts && opts.detail === 'low';
 
   const layout = layoutHexes(sideM, columns, columnOffsets);
   const widthM = layout.maxX - layout.minX;
@@ -325,15 +457,21 @@ function buildHexPanelCluster(THREE, params, opts) { // eslint-disable-line no-u
   const originX = (layout.minX + layout.maxX) / 2;
   const originY = layout.minY;
 
-  const shapePts = hexPoints(sideM);
-  const shape = new THREE.Shape();
-  shapePts.forEach(([x, y], i) => (i === 0 ? shape.moveTo(x, y) : shape.lineTo(x, y)));
-  shape.closePath();
-  const hexGeo = new THREE.ExtrudeGeometry(shape, { depth: thicknessM, bevelEnabled: false, curveSegments: 1 });
-  // ExtrudeGeometry extrudes 0..depth along +z from the shape's xy plane;
-  // rotate so that axis becomes the group's own +z (depth), and the shape's
-  // xy becomes the wall plane (x, y).
-  hexGeo.rotateX(0); // shape is already drawn in the panel's own x/y plane
+  let hexGeo;
+  if (lowDetail) {
+    // 'low': flat, bevel-free hex -- the chamfer is a close-up-only detail,
+    // not worth its extra vertices at low LOD.
+    const shapePts = hexPoints(sideM);
+    const shape = new THREE.Shape();
+    shapePts.forEach(([x, y], i) => (i === 0 ? shape.moveTo(x, y) : shape.lineTo(x, y)));
+    shape.closePath();
+    hexGeo = new THREE.ExtrudeGeometry(shape, { depth: thicknessM, bevelEnabled: false, curveSegments: 1 });
+    // ExtrudeGeometry extrudes 0..depth along +z from the shape's xy plane,
+    // which already matches this module's own (x, y, z=depth) frame -- no
+    // rotation needed.
+  } else {
+    hexGeo = buildBeveledHexGeometry(THREE, sideM, thicknessM, bevelWidthM, bevelDepthM);
+  }
 
   const mat = makeFinish(THREE, p.finish, p.color);
   const group = new THREE.Group();

@@ -1538,17 +1538,30 @@
         },
         "color": {
           "$ref": "#/$defs/hexColor",
-          "default": "#1e3228"
+          "default": "#0a2515",
+          "description": "Dark green felt. Darkened from an earlier #1e3228 (review round 3, 2026-09-26): that shade read too bright under the spec page's lights against the real panels' near-black green. Verified empirically by sampling the spec page's own rendered pixels (not the raw hex swatch): a same-order lightness reduction alone barely changed the RENDERED colour, because the scene's ambient light adds a large near-flat floor to every channel; going near-black lost the green entirely. This value keeps R low relative to G/B so the LIT result still reads clearly green rather than neutral/black."
         },
         "finish": {
           "$ref": "#/$defs/furnitureFinish",
           "default": "matte"
         },
+        "bevelWidth": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.9,
+          "description": "cm, how far in from each hex's own outer edge the chamfer starts -- the front (plateau) face is inset by this much on every side. Modelled as a custom prism (NOT THREE.ExtrudeGeometry's own bevelEnabled, which grows the footprint outward): the hex's outer footprint and the column/row layout pitch, both keyed to `side` alone, are unaffected by this or `bevelDepth`."
+        },
+        "bevelDepth": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.5,
+          "description": "cm, how much thinner the rim is than the centre (must be < `thickness`) -- where two hexes meet, this is what forms the visible V-groove border line. About half of the default 1cm `thickness`."
+        },
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 225,
-          "description": "cm. DERIVED from `side` + `columns` (the cluster's bbox) -- do not set independently of them. Value shown is the default cluster's own bbox width."
+          "description": "cm. DERIVED from `side` + `columns` (the cluster's bbox) -- do not set independently of them. Value shown is the default cluster's own bbox width. Unaffected by bevelWidth/bevelDepth (the bevel insets the FRONT FACE only, never the outer footprint)."
         },
         "height": {
           "type": "number",
