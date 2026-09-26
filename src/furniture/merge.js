@@ -8,12 +8,17 @@
  *
  *   opaque parts (matte, gloss, metal)
  *       -> one vertex-coloured mesh per  room | finish | fadeWallId
- *          sharing ONE material per finish (cloned only for a fade bucket,
- *          whose opacity the wall-fade loop drives)
- *   kept parts (glass, mirror, emissive, or anything tagged keep)
- *       -> one mesh per  room | finish | colour | fadeWallId
- *          with a real material, so all the glass of one colour in a room is
- *          one draw and all its screens are one draw
+ *          sharing ONE material per finish and side (cloned only for a
+ *          fade bucket, whose opacity the wall-fade loop drives); a part's
+ *          own vertex colours are honoured (multiplied by its colour)
+ *   kept parts (glass, mirror, emissive, anything tagged keep, and any
+ *   part whose material is textured or translucent)
+ *       -> one mesh per  room | material signature | fadeWallId, drawn with
+ *          a clone of the BUILDER'S OWN material. Parts share a bucket only
+ *          when their materials are equivalent (same type, colour, opacity,
+ *          side, depthWrite, emissive, maps, ...), so a translucent beam
+ *          cone stays translucent and a double-sided globe keeps its back
+ *          faces, while all of a room's identical screens are still one draw
  *
  * Glass NEVER fades with a wall (plan amendment A3): the fade loop drives
  * opacity back to 1.0, which would make glass opaque. A glass part's
@@ -64,6 +69,43 @@ function hasTexture(mat) {
 
 function hex6(n) { return ('000000' + (n >>> 0).toString(16)).slice(-6); }
 
+// Material properties that change how a kept part LOOKS, and so decide which
+// parts may share one material. Anything not listed is either irrelevant to
+// the picture or covered by `type`.
+const SIGNATURE_PROPS = [
+  'type', 'opacity', 'transparent', 'side', 'depthWrite', 'depthTest', 'blending',
+  'alphaTest', 'vertexColors', 'flatShading', 'wireframe', 'toneMapped', 'fog',
+  'roughness', 'metalness', 'emissiveIntensity', 'transmission', 'thickness', 'ior',
+  'clearcoat', 'clearcoatRoughness', 'sheen', 'specularIntensity', 'reflectivity',
+  'envMapIntensity', 'polygonOffset', 'polygonOffsetFactor', 'polygonOffsetUnits',
+  'colorWrite', 'premultipliedAlpha', 'dithering', 'shininess'
+];
+const COLOR_PROPS = ['color', 'emissive', 'specular', 'specularColor', 'sheenColor', 'attenuationColor'];
+
+/**
+ * A string that is equal for two materials exactly when they would draw the
+ * same. Kept parts are bucketed by it, so equivalent materials merge and any
+ * difference -- a translucent beam against an opaque lens of the same colour,
+ * a double-sided globe against a front-sided one -- keeps them apart.
+ */
+export function materialSignature(mat) {
+  if (!mat) return 'none';
+  const out = [];
+  SIGNATURE_PROPS.forEach(k => {
+    const v = mat[k];
+    if (v !== undefined && typeof v !== 'object' && typeof v !== 'function') out.push(k + '=' + v);
+  });
+  COLOR_PROPS.forEach(k => {
+    const v = mat[k];
+    if (v && v.isColor) out.push(k + '=' + v.getHexString());
+  });
+  for (const k in mat) {
+    const v = mat[k];
+    if (v && v.isTexture) out.push(k + '@' + v.uuid);
+  }
+  return out.join(';');
+}
+
 /**
  * Flatten one placed group into world-space parts.
  *
@@ -108,12 +150,26 @@ export function flattenGroup(THREE, group, opts) {
       const k = partKeep(obj, mat);
       if (k.error) warnings.push((o.label ? o.label + ': ' : '') + k.error + ' -- keeping the part');
       const textured = hasTexture(mat);
-      const keep = !!k.keep || !!k.error || isKeptFinish(finish) || textured;
+      // A translucent part cannot go into an opaque vertex-coloured bucket
+      // (that bucket is opaque), whatever finish it claims.
+      const translucent = !!mat.transparent && mat.opacity < 1;
+      const keep = !!k.keep || !!k.error || isKeptFinish(finish) || textured || translucent;
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(
         new Float32Array(pos.array.slice(start * 3, (start + count) * 3)), 3));
       g.setAttribute('normal', new THREE.BufferAttribute(
         new Float32Array(nor.array.slice(start * 3, (start + count) * 3)), 3));
+      // The part's own vertex colours, when its material uses them.
+      let vcol = null;
+      const ca = src.attributes.color;
+      if (mat.vertexColors && ca && ca.itemSize >= 3) {
+        vcol = new Float32Array(count * 3);
+        for (let i = 0; i < count; i++) {
+          vcol[i * 3] = ca.getX(start + i);
+          vcol[i * 3 + 1] = ca.getY(start + i);
+          vcol[i * 3 + 2] = ca.getZ(start + i);
+        }
+      }
       if (textured && src.attributes.uv) {
         g.setAttribute('uv', new THREE.BufferAttribute(
           new Float32Array(src.attributes.uv.array.slice(start * 2, (start + count) * 2)), 2));
@@ -127,6 +183,9 @@ export function flattenGroup(THREE, group, opts) {
         // are read as linear, exactly as material.color is stored).
         rgb: mat.color ? [mat.color.r, mat.color.g, mat.color.b] : [0.6, 0.6, 0.6],
         emissive: mat.emissive ? mat.emissive.getHex() : 0,
+        side: mat.side || 0,
+        vcol: vcol,
+        signature: keep ? materialSignature(mat) : null,
         material: mat,
         textured: textured,
         triangles: count / 3
@@ -139,15 +198,15 @@ export function flattenGroup(THREE, group, opts) {
 
 /**
  * The bucket a part goes into.
- * Opaque: `room|finish|fade`. Kept: `room|finish|colour|emissive|fade`.
- * A textured part is its own bucket (it cannot share a material).
+ * Opaque: `room|finish[|side]|fade`. Kept: `room|finish|materialSignature|fade`
+ * (a textured part's signature carries its maps' uuids).
  * Glass never carries a fade wall (A3).
  */
 export function bucketKey(part, room, fadeWallId) {
-  const fade = part.finish === 'glass' || fadeWallId == null ? '-' : String(fadeWallId);
-  if (!part.keep) return room + '|' + part.finish + '|' + fade;
-  if (part.textured) return room + '|' + part.finish + '|tex:' + part.material.uuid + '|' + fade;
-  return room + '|' + part.finish + '|' + hex6(part.color) + '|' + hex6(part.emissive) + '|' + fade;
+  const fade = neverFades(part) || fadeWallId == null ? '-' : String(fadeWallId);
+  if (!part.keep) return room + '|' + part.finish + (part.side ? '|side' + part.side : '') + '|' + fade;
+  const sig = part.signature || (part.material ? materialSignature(part.material) : hex6(part.color) + '|' + hex6(part.emissive));
+  return room + '|' + part.finish + '|' + sig + '|' + fade;
 }
 
 /**
@@ -158,6 +217,10 @@ export function concatGeometries(THREE, parts, opts) {
   const withColor = !!(opts && opts.withColor);
   const withNormal = !(opts && opts.positionOnly);
   const withUv = !!(opts && opts.withUv);
+  // 'multiply': the part's vertex colours times its rgb (an opaque bucket
+  // carries the material colour per vertex). 'raw': the vertex colours as
+  // they are (a kept bucket whose cloned material multiplies by its colour).
+  const colorMode = (opts && opts.colorMode) || 'multiply';
   let n = 0;
   parts.forEach(p => { n += p.geometry.attributes.position.count; });
   const pos = new Float32Array(n * 3);
@@ -171,10 +234,15 @@ export function concatGeometries(THREE, parts, opts) {
     if (nor) nor.set(g.attributes.normal.array, off * 3);
     if (uv && g.attributes.uv) uv.set(g.attributes.uv.array, off * 2);
     if (col) {
-      const r = p.rgb[0], gg = p.rgb[1], b = p.rgb[2];
+      const r = colorMode === 'raw' ? 1 : p.rgb[0];
+      const gg = colorMode === 'raw' ? 1 : p.rgb[1];
+      const b = colorMode === 'raw' ? 1 : p.rgb[2];
       for (let i = 0; i < c; i++) {
         const j = (off + i) * 3;
-        col[j] = r; col[j + 1] = gg; col[j + 2] = b;
+        const v = p.vcol;
+        col[j] = r * (v ? v[i * 3] : 1);
+        col[j + 1] = gg * (v ? v[i * 3 + 1] : 1);
+        col[j + 2] = b * (v ? v[i * 3 + 2] : 1);
       }
     }
     off += c;
@@ -190,20 +258,40 @@ export function concatGeometries(THREE, parts, opts) {
 }
 
 /**
- * The materials the buckets draw with. One shared material per opaque finish
- * (vertex-coloured), one per kept finish+colour, and a CLONE per fade bucket
- * (the fade loop writes opacity and depthWrite on the material it is handed,
- * so a fade bucket must not share with a solid one or with another wall).
+ * A part that must never join a wall fade: glass (plan A3) and anything else
+ * translucent. The fade loop drives opacity back to 1.0, which would turn a
+ * 0.16 beam cone or a 0.55 globe solid.
+ */
+export function neverFades(part) {
+  if (!part) return false;
+  if (part.finish === 'glass') return true;
+  const m = part.material;
+  return !!(m && m.transparent && m.opacity < 1);
+}
+
+/**
+ * The materials the buckets draw with.
+ *
+ *   opaque  ONE shared vertex-coloured material per finish and side, from the
+ *           closed palette (FINISH_PARAMS).
+ *   kept    a CLONE OF THE BUILDER'S OWN MATERIAL, one per material
+ *           signature. Nothing is rebuilt from the palette: type, opacity,
+ *           transparent, side, depthWrite, emissive/emissiveIntensity and maps
+ *           all survive exactly as the builder set them.
+ *   fade    a clone per fade bucket (the fade loop writes opacity and
+ *           depthWrite on the material it is handed, so a fade bucket must not
+ *           share with a solid one or with another wall).
  */
 export function createMaterialSet(THREE) {
   const shared = new Map();
   const all = new Set();
   function track(m) { all.add(m); return m; }
-  function opaque(finish) {
-    const key = 'opaque|' + finish;
+  function opaque(finish, side) {
+    const key = 'opaque|' + finish + '|' + (side || 0);
     if (!shared.has(key)) {
       const m = new THREE.MeshStandardMaterial(Object.assign({ color: 0xffffff, vertexColors: true },
         FINISH_PARAMS[finish] || FINISH_PARAMS.matte));
+      if (side) m.side = side;
       m.userData.finish = finish;
       m.userData.furniture = true;
       shared.set(key, track(m));
@@ -211,18 +299,10 @@ export function createMaterialSet(THREE) {
     return shared.get(key);
   }
   function kept(part) {
-    if (part.textured) {
+    const key = 'kept|' + part.finish + '|' + (part.signature || materialSignature(part.material));
+    if (!shared.has(key)) {
       const m = part.material.clone();
       m.userData = Object.assign({}, m.userData, { finish: part.finish, furniture: true });
-      return track(m);
-    }
-    const key = 'kept|' + part.finish + '|' + hex6(part.color) + '|' + hex6(part.emissive);
-    if (!shared.has(key)) {
-      const params = Object.assign({ color: part.color }, FINISH_PARAMS[part.finish] || FINISH_PARAMS.matte);
-      if (part.emissive) params.emissive = part.emissive;
-      const m = new THREE.MeshStandardMaterial(params);
-      m.userData.finish = part.finish;
-      m.userData.furniture = true;
       shared.set(key, track(m));
     }
     return shared.get(key);
@@ -252,8 +332,8 @@ export function buildBuckets(THREE, tagged, materials) {
     const key = bucketKey(t.part, t.room, t.fadeWallId);
     let b = buckets.get(key);
     if (!b) {
-      b = { key, room: t.room, finish: t.part.finish, keep: t.part.keep,
-        fadeWallId: t.part.finish === 'glass' ? null : (t.fadeWallId == null ? null : t.fadeWallId),
+      b = { key, room: t.room, finish: t.part.finish, keep: t.part.keep, side: t.part.side,
+        fadeWallId: neverFades(t.part) ? null : (t.fadeWallId == null ? null : t.fadeWallId),
         first: t.part, parts: [] };
       buckets.set(key, b);
     }
@@ -261,19 +341,29 @@ export function buildBuckets(THREE, tagged, materials) {
   });
   const meshes = [];
   buckets.forEach(b => {
-    const geo = concatGeometries(THREE, b.parts, { withColor: !b.keep, withUv: b.first.textured });
-    let mat = b.keep ? materials.kept(b.first) : materials.opaque(b.finish);
+    // Opaque buckets always carry colour per vertex (material colour times
+    // any vertex colours). A kept bucket carries vertex colours only when its
+    // builder's material uses them, and then raw: the cloned material still
+    // multiplies by its own colour.
+    const keptVc = b.keep && !!b.first.material.vertexColors;
+    const geo = concatGeometries(THREE, b.parts, {
+      withColor: !b.keep || keptVc, colorMode: b.keep ? 'raw' : 'multiply', withUv: b.first.textured
+    });
+    let mat = b.keep ? materials.kept(b.first) : materials.opaque(b.finish, b.side);
     if (b.fadeWallId != null) mat = materials.forFade(mat);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = 'furniture:' + b.key;
     // Beauty meshes NEVER cast (plan A1): a caster draws in the sun pass and
     // in every room pass whose frustum it touches. The per-room proxy casts.
     mesh.castShadow = false;
-    mesh.receiveShadow = true;
+    const translucent = neverFades(b.first);
+    // A translucent part (a glass globe, a beam cone) would catch a shadow
+    // as a dark smear across its own surface; it receives none.
+    mesh.receiveShadow = !translucent;
     let tris = 0;
     b.parts.forEach(p => { tris += p.triangles; });
     mesh.userData = { furniture: 'beauty', room: b.room, finish: b.finish, keep: b.keep,
-      fadeWallId: b.fadeWallId, bucket: b.key, parts: b.parts.length, triangles: tris };
+      fadeWallId: b.fadeWallId, bucket: b.key, parts: b.parts.length, triangles: tris, translucent };
     meshes.push(mesh);
   });
   return meshes;

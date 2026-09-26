@@ -499,10 +499,14 @@ the vertical (plan rotation is clockwise, three.js's is anticlockwise).
 - **Opaque parts** (`matte`, `gloss`, `metal`) become one vertex-coloured mesh
   per room, finish and fade wall. All the matte furniture in a room is one draw
   whatever its colours.
-- **Kept parts** (`glass`, `mirror`, `emissive`, or anything marked `keep`)
-  become one mesh per room, finish, colour and fade wall, with a real
-  material. All of a room's glass of one colour is one draw, and so are all its
-  screens of one colour.
+- **Kept parts** (`glass`, `mirror`, `emissive`, anything marked `keep`, and
+  any part whose material is textured or translucent) keep **their builder's
+  own material**: type, opacity, `transparent`, `side`, `depthWrite`,
+  emissive intensity and maps all survive. They merge only with parts whose
+  material is equivalent, one mesh per room, material and fade wall. All of a
+  room's identical screens are still one draw.
+- Opaque parts keep their `side` (a double-sided part gets its own bucket)
+  and any vertex colours they carry.
 
 **Shadows.** Furniture meshes receive shadows but never cast them directly.
 Each furnished room instead gets one **shadow proxy**: a copy of the
@@ -515,9 +519,10 @@ the builders' `detail: 'low'` output instead. No proxies are built on the low
 GPU tier, or when the scene has no shadows at all.
 
 **Fade.** An item fades with **one** wall, chosen by `fade` (above). It fades
-exactly as the wall does. Glass never fades: the wall fade drives opacity back
-to fully opaque, which would turn glass solid, so glass keeps its own opacity,
-as window glass does.
+exactly as the wall does. Glass, and anything else translucent, never fades:
+the wall fade drives opacity back to fully opaque, which would turn it solid,
+so it keeps its own opacity, as window glass does. Translucent parts also
+receive and cast no shadow.
 
 **The low GPU tier** asks every builder for `detail: 'low'` and drops
 `priority: "minor"` items.

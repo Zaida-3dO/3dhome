@@ -27,7 +27,7 @@
  */
 import { loadBuilders } from './furniture/registry.js';
 import { resolvePlacement, footprintRect, pickFadeWall } from './furniture/place.js';
-import { flattenGroup, buildBuckets, createMaterialSet, concatGeometries } from './furniture/merge.js';
+import { flattenGroup, buildBuckets, createMaterialSet, concatGeometries, neverFades } from './furniture/merge.js';
 
 /** An item casts (through its room's proxy) when it stands on the floor and is tall enough to matter. */
 export const CASTER_MAX_ELEVATION = 30;   // cm: elevation must be BELOW this
@@ -185,7 +185,9 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
   let proxyMaterial = null;
   const extraDisposables = [];
   if (wantProxies && casters.size) {
-    const castParts = parts => parts.filter(p => p.finish !== 'glass');
+    // Glass and other translucent parts (a beam cone, a globe) cast no
+    // opaque shadow.
+    const castParts = parts => parts.filter(p => !neverFades(p));
     const triCount = parts => parts.reduce((s, p) => s + p.triangles, 0);
     const rooms = [];
     casters.forEach((entries, room) => {
@@ -211,7 +213,14 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
       r.low = true;
     };
     // Per-room cap: a room over it takes its proxy from a 'low' build.
-    rooms.forEach(r => { if (r.tris > roomCap) toLow(r); });
+    rooms.forEach(r => {
+      if (r.tris <= roomCap) return;
+      toLow(r);
+      if (r.tris > roomCap) {
+        warn('shadow proxy for room "' + r.room + '" is ' + r.tris + ' triangles even at low detail, over the ' +
+          roomCap + ' per-room cap -- its builders low detail is not low enough');
+      }
+    });
     // Total cap: drop the LARGEST remaining full-detail room to 'low' until
     // the total fits or every room is already low.
     let total = rooms.reduce((s, r) => s + r.tris, 0);
@@ -304,8 +313,8 @@ export async function buildFurniture(THREE, items, opts) {
 
 /**
  * The fade registrations the scene should make: every beauty bucket with a
- * fade wall, EXCEPT glass (plan A3 -- the fade loop would drive glass to
- * opacity 1). merge.js already never gives glass a fade wall; this is the
+ * fade wall, EXCEPT glass and anything translucent (plan A3 -- the fade loop
+ * would drive them to opacity 1). merge.js already never gives glass a fade wall; this is the
  * second lock, at the point of registration.
  * @returns {Array<{mesh, wallId}>}
  */
@@ -315,6 +324,7 @@ export function fadeRegistrations(result) {
     const wallId = mesh.userData.fadeWallId;
     if (wallId == null) return;
     if (mesh.userData.finish === 'glass') return;
+    if (mesh.userData.translucent) return;
     if (mesh.material && mesh.material.userData && mesh.material.userData.finish === 'glass') return;
     out.push({ mesh, wallId });
   });

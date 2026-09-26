@@ -226,7 +226,9 @@ const build = (h, quality, extra, opts) => quietly(() => F.buildFurnitureSync(TH
     { id: 'qtall', room: 'q', type: 'box', at: [700, 200], params: { height: 100 } }
   ]);
   const res = build(h);
-  check('beauty meshes never cast, always receive', res.beauty.every(m => m.castShadow === false && m.receiveShadow === true));
+  check('beauty meshes never cast', res.beauty.every(m => m.castShadow === false));
+  check('opaque beauty receives, translucent (glass) does not',
+    res.beauty.every(m => m.receiveShadow === !(m.userData.finish === 'glass')));
   check('one proxy per furnished room', res.shadowProxies.length === 2, res.shadowProxies.map(p => p.name));
   const pr = res.shadowProxies.find(p => p.userData.room === 'r');
   check('proxy casts, does not receive, is frustum-culled', pr && pr.castShadow && !pr.receiveShadow && pr.frustumCulled);
@@ -684,6 +686,117 @@ function sampleResult() {
   check('scene: a house with no furniture starts nothing',
     /if \(furnitureStarted \|\| !furnitureItems\.length\) return;/.test(src) &&
     /\(furnitureItems\.length && furnitureVisible\)\s*\n?\s*\? loadFurnitureModules/.test(src));
+}
+
+// ---- 12. kept parts keep their builder's material (review a6e3c7d8) ------------------------
+{
+  const Sconce = await imp('src/furniture/wall-sconce.js');
+  const PROPS = ['type', 'opacity', 'transparent', 'side', 'depthWrite', 'emissiveIntensity', 'roughness', 'metalness'];
+  const same = (a, b) => PROPS.every(k => a[k] === b[k]) &&
+    (!a.color || a.color.getHex() === b.color.getHex()) && (!a.emissive || a.emissive.getHex() === b.emissive.getHex());
+  const sconce = { DEFAULTS: Sconce.DEFAULTS, build: Sconce.build };
+  for (const kind of ['swing-arm-globe', 'up-down']) {
+    // The builder's own kept materials, as the builder made them.
+    const src = Sconce.build(THREE, Object.assign({}, Sconce.DEFAULTS, { kind }));
+    const keptSrc = [];
+    src.traverse(o => { if (o.isMesh && (o.userData.keep || (o.material.userData && o.material.userData.keep))) keptSrc.push(o.material); });
+    check(kind + ': fixture has kept parts', keptSrc.length >= 2, keptSrc.length);
+    const h = compile([
+      { id: 's1', room: 'r', type: 'sconce', wall: 3, centre: 200, elevation: 150, params: { kind } },
+      { id: 's2', room: 'r', type: 'sconce', wall: 3, centre: 300, elevation: 150, params: { kind } }
+    ]);
+    const res = build(h, ULTRA, { sconce });
+    const kept = res.beauty.filter(m => m.userData.keep);
+    check(kind + ': every builder kept material survives exactly (type, opacity, transparent, side, depthWrite, emissiveIntensity)',
+      keptSrc.every(sm => kept.some(m => same(sm, m.material))),
+      keptSrc.map(m => [m.type, m.opacity, m.transparent, m.side, m.depthWrite, m.emissiveIntensity]));
+    check(kind + ': no kept bucket has a material the builder did not make',
+      kept.every(m => keptSrc.some(sm => same(sm, m.material))),
+      kept.map(m => [m.material.type, m.material.opacity, m.material.side]));
+    check(kind + ': two identical sconces share their kept buckets', kept.every(m => m.userData.parts % 2 === 0),
+      kept.map(m => m.userData.parts));
+    check(kind + ': translucent kept parts never receive a shadow',
+      kept.filter(m => m.material.transparent && m.material.opacity < 1).every(m => m.receiveShadow === false));
+  }
+  // The up-down beam cones specifically: faint, double-sided, no depth write,
+  // and never faded even on an exterior wall.
+  {
+    const h = compile([{ id: 'u', room: 'r', type: 'sconce', wall: 1, centre: 200, elevation: 150, params: { kind: 'up-down' } }]);
+    const res = build(h, ULTRA, { sconce });
+    const beam = res.beauty.find(m => m.material.type === 'MeshBasicMaterial');
+    check('up-down beam stays a faint translucent MeshBasicMaterial', beam && beam.material.transparent &&
+      beam.material.opacity < 0.5 && beam.material.depthWrite === false && beam.material.side === THREE.DoubleSide,
+      beam && [beam.material.opacity, beam.material.depthWrite, beam.material.side]);
+    check('translucent beam never joins the fade', beam && beam.userData.fadeWallId === null &&
+      F.fadeRegistrations(res).every(r => r.mesh !== beam));
+    check('translucent parts are not in the shadow proxy', res.shadowProxies.length === 0);
+  }
+  // Glass and mirror parts from the palette (the cabinet/small-items shape).
+  const GM = { DEFAULTS: Object.freeze({ width: 60, depth: 30, height: 120 }), build(T) {
+    const g = new T.Group();
+    const glass = new T.Mesh(new T.BoxGeometry(0.5, 1, 0.01).translate(0, 0.6, 0.29), Fin.makeFinish(T, 'glass', '#cfe3ea'));
+    glass.material.side = T.DoubleSide;
+    const mirror = new T.Mesh(new T.BoxGeometry(0.5, 1, 0.01).translate(0, 0.6, 0.01), Fin.makeFinish(T, 'mirror'));
+    const body = new T.Mesh(new T.BoxGeometry(0.6, 1.2, 0.3).translate(0, 0.6, 0.15), Fin.makeFinish(T, 'matte', '#445566'));
+    g.add(glass); g.add(mirror); g.add(body);
+    return g;
+  } };
+  const srcGM = GM.build(THREE);
+  // Interior wall: nothing fades, so the materials can be compared as built.
+  const hg = compile([{ id: 'c', room: 'r', type: 'gm', wall: 3, centre: 200 }]);
+  const rg = build(hg, ULTRA, { gm: GM });
+  const g = rg.beauty.find(m => m.userData.finish === 'glass'), mi = rg.beauty.find(m => m.userData.finish === 'mirror');
+  check('glass keeps opacity, transparent, depthWrite and its DoubleSide', g && same(srcGM.children[0].material, g.material) &&
+    g.material.side === THREE.DoubleSide, g && [g.material.opacity, g.material.depthWrite, g.material.side]);
+  check('mirror keeps its metalness/roughness/colour', mi && same(srcGM.children[1].material, mi.material), rg.beauty.map(m => m.userData.bucket));
+}
+
+// ---- 13. opaque buckets: vertex colours and side (review 30d91c80) ---------------------------
+{
+  const VC = { DEFAULTS: Object.freeze({ width: 20, depth: 20, height: 20 }), build(T, p) {
+    const g = new T.Group();
+    const geo = new T.BoxGeometry(0.2, 0.2, 0.2).translate(0, 0.1, 0.1).toNonIndexed();
+    const n = geo.attributes.position.count, c = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { c[i * 3] = i < n / 2 ? 1 : 0; c[i * 3 + 1] = i < n / 2 ? 0 : 1; c[i * 3 + 2] = 0; }
+    geo.setAttribute('color', new T.BufferAttribute(c, 3));
+    const mat = Fin.makeFinish(T, 'matte', '#808080');
+    mat.vertexColors = true;
+    g.add(new T.Mesh(geo, mat));
+    if (p.double) {
+      const m2 = Fin.makeFinish(T, 'matte', '#808080');
+      m2.side = T.DoubleSide;
+      g.add(new T.Mesh(new T.PlaneGeometry(0.2, 0.2).translate(0, 0.1, 0.2), m2));
+    }
+    return g;
+  } };
+  const h = compile([{ id: 'v', room: 'r', type: 'vc', at: [200, 200], params: { double: true } }]);
+  const res = build(h, ULTRA, { vc: VC });
+  const single = res.beauty.find(m => m.userData.finish === 'matte' && m.material.side === THREE.FrontSide);
+  const dbl = res.beauty.find(m => m.userData.finish === 'matte' && m.material.side === THREE.DoubleSide);
+  check('opaque: a DoubleSide part gets its own DoubleSide bucket', single && dbl && res.beauty.length === 2,
+    res.beauty.map(m => m.userData.bucket));
+  const grey = new THREE.Color(0x808080).r;
+  const col = single && single.geometry.attributes.color;
+  let reds = 0, greens = 0;
+  if (col) for (let i = 0; i < col.count; i++) {
+    if (near(col.getX(i), grey) && near(col.getY(i), 0)) reds++;
+    if (near(col.getX(i), 0) && near(col.getY(i), grey)) greens++;
+  }
+  check('opaque: vertex colours honoured (times the material colour)', reds === 18 && greens === 18, { reds, greens });
+}
+
+// ---- 14. a room still over the cap at low detail says so -------------------------------------
+{
+  const Heavy = { DEFAULTS: Object.freeze({ width: 50, depth: 50, height: 80 }), build(T) {
+    const g = new T.Group();
+    g.add(new T.Mesh(new T.SphereGeometry(0.25, 40, 40).translate(0, 0.4, 0.25), Fin.makeFinish(T, 'matte')));
+    return g;   // no cheaper low build
+  } };
+  const h = compile([{ id: 'x', room: 'r', type: 'heavy', at: [200, 200] }]);
+  const res = build(h, ULTRA, { heavy: Heavy }, { roomTriCap: 100 });
+  check('over the cap even at low detail -> warned', res.warnings.some(w => /even at low detail/.test(w)), res.warnings);
+  const ok = build(h, ULTRA, { heavy: Heavy });
+  check('...and not warned when under the cap', !ok.warnings.some(w => /even at low detail/.test(w)));
 }
 
 // ---- 11. a builder that throws costs only its own item ------------------------------------
