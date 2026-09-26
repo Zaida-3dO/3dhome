@@ -141,19 +141,36 @@ export function build(THREE, params, opts) {
   // ---- depth layout: TWO LEVELS, back at z=0 ----
   // The outer frame is `depth` (D) deep, front at z=D -- the sign's frontmost
   // surface. The inner white-washed body/panel is the shallower `panelDepth`
-  // (PANEL_D): its own front face (carrying the text) sits at z=PANEL_D, so
-  // the frame projects forward past the panel by (D - PANEL_D). The panel's
-  // front face must stay visible from the front -- it is never buried behind
-  // or flush with an opaque backer, unlike the old single-rebate layout.
-  const panelZ = PANEL_D;
+  // (PANEL_D): the reviewed number is its BODY's front face position, so the
+  // backer box still runs from z=0 to z=PANEL_D. The frame projects forward
+  // past the panel by (D - PANEL_D).
+  //
+  // The text plane is a SEPARATE mesh from the backer box, not a texture
+  // painted on the backer's own front face -- so it cannot sit exactly on
+  // that face: two coincident, differently-shaded surfaces at the same depth
+  // z-fight (flicker into a moire of diagonal stripes that shifts with the
+  // camera angle, found in review). Nudge the text plane PANEL_GAP forward of
+  // the backer's face -- still to 1 decimal place of the reviewed 1.5cm
+  // panelDepth, and still short of the frame front (z=D) as long as PANEL_GAP
+  // < D - PANEL_D (true for the depth/panelDepth defaults and any sane
+  // override; PANEL_GAP is clamped below so it never crosses the frame front
+  // even if a caller sets panelDepth very close to depth).
+  const PANEL_GAP = Math.min(0.1 * CM, Math.max(0, (D - PANEL_D) / 2)); // 1mm, or less if the two depths are nearly equal
+  const backerFrontZ = PANEL_D;       // the reviewed "panel front" depth -- the body's own face
+  const panelZ = backerFrontZ + PANEL_GAP; // the TEXT PLANE sits just in front of that face
   const frameFrontZ = D; // frame's front face is the sign's overall front
 
-  // ---- panel body (fills the depth behind the panel's own front face,
-  // i.e. the "inner body" the spec calls out, from z=0 to z=PANEL_D) ----
-  const bodyDepth = Math.max(0.05 * CM, PANEL_D);
+  // ---- panel body (fills the depth behind the text plane, i.e. the "inner
+  // body" the spec calls out, from z=0 to z=backerFrontZ=PANEL_D) ----
+  const bodyDepth = Math.max(0.05 * CM, backerFrontZ);
   const body = new THREE.Mesh(new THREE.BoxGeometry(W, H, bodyDepth), backMat);
   body.position.set(0, H / 2, bodyDepth / 2);
   add(body).name = 'signBacker';
+  // The text plane sits just PANEL_GAP in front of this face (see above), so
+  // the backer never needs to receive a shadow cast from a mesh immediately
+  // in front of it -- turn that off (after add(), which defaults it on) to
+  // avoid the shadow-acne variant of the same z-fighting-shaped visual bug.
+  body.receiveShadow = false;
 
   // ---- frame: four flat matte members forming a rectangle-with-hole ring,
   // its front face flush with the sign's overall front (z=D), projecting
