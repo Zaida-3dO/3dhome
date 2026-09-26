@@ -15,8 +15,8 @@
  * of 4 m x 3.5 m rooms; the light fixture MIX (19 downlights, 3 bulbs, 2 spot
  * clusters, 9 accent strips, 3 lit cornices of which one is wide) is chosen to
  * give the same light COUNTS a typical furnished flat has, because light count
- * is what the tier budget is about. Types without a builder yet (sofa, bed,
- * piano, radiator) are stood in by `box` at a plausible size.
+ * is what the tier budget is about. A type without a builder yet (sofa, at
+ * the time of writing) is stood in by `box` at a plausible size.
  *
  * The output directory is under houses/, which .gitignore excludes (only
  * houses/demo is public), so a generated fixture is never committed. Load it
@@ -103,6 +103,7 @@ const FURNITURE = {
     ['tv', 'N', 0.5, { elevation: 90 }],
     ['box', 'N', 0.5, { params: { width: 180, depth: 40, height: 45, color: '#3b3b3b', finish: 'gloss' }, label: 'TV console' }],
     ['subwoofer', 'N', 0.2, {}],
+    ['radiator', 'E', 0.8, { elevation: 12 }],
     ['speaker', 'N', 0.12, { elevation: 150 }],
     ['speaker', 'N', 0.88, { elevation: 150 }],
     ['slat-panel', 'W', 0.5, { params: { height: 240 } }],
@@ -120,6 +121,7 @@ const FURNITURE = {
     ['box', 'at', [0.45, 0.8], { priority: 'minor', params: { width: 35, depth: 35, height: 65, color: '#222222' }, label: 'stool' }],
     ['box', 'at', [0.65, 0.8], { priority: 'minor', params: { width: 35, depth: 35, height: 65, color: '#222222' }, label: 'stool' }],
     ['wall-clock', 'S', 0.3, { elevation: 180 }],
+    ['radiator', 'S', 0.7, { elevation: 12, params: { width: 60 } }],
     ['shelf', 'S', 0.7, { elevation: 150 }],
     ['box', 'E', 0.7, { params: { width: 70, depth: 40, height: 180, color: '#cfe3ea', finish: 'glass' }, label: 'glass case' }]
   ],
@@ -147,7 +149,7 @@ const FURNITURE = {
     ['box', 'N', 0.2, { elevation: 100, params: { width: 40, depth: 3, height: 3, ...E('#40c0ff') }, label: 'LED edge' }]
   ],
   bedroom: [
-    ['box', 'at', [0.5, 0.5], { rotation: 180, params: { width: 160, depth: 210, height: 55, color: '#d8cfc0' }, label: 'bed stand-in' }],
+    ['bed', 'at', [0.5, 0.5], { rotation: 180 }],
     ['cabinet', 'E', 0.5, {}],
     ['cabinet', 'S', 0.25, { params: { width: 45, height: 50, depth: 40, shelfLights: true } }],
     ['cabinet', 'S', 0.75, { params: { width: 45, height: 50, depth: 40, shelfLights: true } }],
@@ -174,12 +176,13 @@ const FURNITURE = {
     ['box', 'at', [0.5, 0.75], { params: { width: 170, depth: 75, height: 58, color: '#f4f4f4', finish: 'gloss' }, label: 'bath' }],
     ['box', 'S', 0.2, { params: { width: 90, depth: 2, height: 180, color: '#d0e8f0', finish: 'glass' }, label: 'shower screen' }],
     ['shelf', 'E', 0.5, { elevation: 140 }],
+    ['radiator', 'W', 0.5, { elevation: 12, params: { width: 50, height: 80 } }],
     ['wall-sconce', 'N', 0.15, { elevation: 170, params: { kind: 'up-down' } }],
     ['plant', 'at', [0.1, 0.3], { priority: 'minor', params: { kind: 'wall-planter' } }],
     ['box', 'E', 0.3, { priority: 'minor', params: { width: 60, depth: 10, height: 80, color: '#7a8fa6' }, label: 'towel rail' }]
   ],
   guest: [
-    ['box', 'at', [0.5, 0.55], { rotation: 0, params: { width: 140, depth: 200, height: 55, color: '#c8c0b0' }, label: 'bed stand-in' }],
+    ['bed', 'at', [0.5, 0.55], { rotation: 0, params: { width: 141 } }],
     ['cabinet', 'W', 0.5, { params: { width: 120 } }],
     ['box', 'N', 0.7, { params: { width: 100, depth: 50, height: 75, color: '#9a7b5b' }, label: 'desk' }],
     ['tube-floor-lamp', 'at', [0.9, 0.2], {}],
@@ -204,7 +207,8 @@ const FURNITURE = {
     ['monitor', 'S', 0.5, { offset: 20, elevation: 76, params: { curved: true } }],
     ['gaming-chair', 'at', [0.5, 0.55], {}],
     ['pc-tower', 'S', 0.85, { params: { glassPanel: true } }],
-    ['box', 'W', 0.5, { params: { width: 140, depth: 35, height: 90, color: '#1a1a1a', finish: 'gloss' }, label: 'piano stand-in' }],
+    ['digital-piano', 'W', 0.5, {}],
+    ['piano-bench', 'at', [0.2, 0.5], { rotation: 270 }],
     ['shelf', 'E', 0.5, { elevation: 170 }],
     ['speaker', 'S', 0.2, { elevation: 120 }],
     ['tv', 'N', 0.5, { elevation: 110 }],
