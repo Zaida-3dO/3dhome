@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.2"`: `1.1` added the optional `sensors` block and `1.2` its `curtains`/`corniceLights` keys. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.3"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys and `1.3` its `climate` key. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -821,6 +821,7 @@ renders exactly as it did before — both features simply stay dark.
 | `doors` | **door id**, from the geometry's `doors[].id` | The door swings open while the contact reads open |
 | `curtains` | **curtain id**, from the geometry's `curtains[].id` | The curtain follows the `cover.*` entity's `current_position` (0 closed, 100 open), and the window's daylight with it |
 | `corniceLights` | **curtain id** | The curtain's cornice strip follows the light entity: on/off, brightness and colour |
+| `climate` | **room id** | ONE `climate.*` entity (a string, not a list) for the room panel's temperature row |
 
 Several entities on one target are OR-ed: any one of them reading `on` means
 occupied, or open. `unavailable` and `unknown` count as `off`, so a sensor that
@@ -838,11 +839,27 @@ rather than flying fully open — the sensor reports only that the door is off t
 latch, never how far, so rendering it wide open would be inventing detail the
 sensor does not carry.
 
-A door with a sensor bound gets a **"Use real value"** checkbox in the room
-panel, checked by default. While it is checked the door follows Home Assistant
-and the openness slider is disabled; unchecking it hands the slider back so the
-door can still be swung by hand. A door with no sensor bound shows no checkbox
-and behaves exactly as before.
+#### What the room panel shows
+
+Each room panel is built from these bindings, and a row whose entity the room
+lacks is simply not shown:
+
+- **Door** — a status line, `Door: open`, `Door: closed` or `Door: unavailable`,
+  for each door in the room (the geometry's `door.room`) that `doors` binds. There
+  is no door slider: the 3D door follows its sensor. A door with no sensor rests
+  closed.
+- **Motion** — `Motion detected` when ANY of the room's `presence` sensors is
+  `on`, `No motion` otherwise, and `Unavailable` only when every one of them is
+  `unavailable`/`unknown` (or has never reported).
+- **Curtains** — per bound curtain, Open and Close buttons (`cover.open_cover` /
+  `cover.close_cover`) and a 0–100 % position slider (`cover.set_cover_position`).
+- **Temperature** — the `climate` entity's current and target temperature, and a
+  target slider (`climate.set_temperature`) whose limits come from the entity's
+  `min_temp`, `max_temp` and `target_temp_step` (step defaults to `0.5`). A
+  thermostat that is `off`, or reports no target, shows "off" with the slider
+  disabled.
+
+Every control that sends a command is disabled while its entity is unavailable.
 
 Presence room ids and door ids are both checked against the paired geometry, and
 a binding that names something the geometry does not have is an **error** — a
@@ -875,6 +892,19 @@ that channel in `geometry.json`, so each light is drawn and driven exactly once.
 
 `curtains` and `corniceLights` need `schemaVersion` `"1.2"`: an engine older
 than that rejects the unknown keys, so upgrade the engine before the profile.
+
+#### Climate
+
+```json
+"sensors": {
+  "climate": { "lounge": "climate.example_lounge_thermostat" }
+}
+```
+
+Deliberately **one string per room**. A room with two climate devices — a room
+thermostat and a radiator valve, say — names the one its panel row drives here,
+so switching between them is a one-value edit. `climate` needs `schemaVersion`
+`"1.3"`.
 
 Leave `url` and `fallbackUrl` out of a committed profile. A hostname in a
 tracked file discloses infrastructure; supply them through runtime config
@@ -1022,6 +1052,8 @@ that a JSON Schema cannot express:
   geometry, a cornice light bound only to a curtain with a lit cornice, a
   warning when that cornice is ALSO listed as a strip under a light channel, and
   both appearing only in a profile that declares `schemaVersion` 1.2+
+- `sensors.climate` room ids resolving against the geometry, each value a single
+  `climate.*` id, and appearing only in a profile that declares `schemaVersion` 1.3+
 - a `site.latitude` precise enough to locate a building rather than a city
 - which side of its wall each window, curtain and wall-anchored item faces,
   using the same probe the engine uses: **error** if the room is on neither
