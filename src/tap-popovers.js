@@ -278,6 +278,7 @@ export function attachTapPopovers(o) {
   let pop = null;          // { el, target, x, y, camSnap, refresh }
   function close() {
     if (!pop) return;
+    clearInterval(pop.timer);
     if (pop.el.parentNode) pop.el.parentNode.removeChild(pop.el);
     pop = null;
   }
@@ -315,6 +316,11 @@ export function attachTapPopovers(o) {
     document.body.appendChild(el);
     const view = VIEWS[target.kind](target, el);
     pop = { el, target, x, y, camSnap: camSnapshot(), refresh: view.refresh || (() => {}) };
+    // Most live changes repaint the scene and so reach onRender below, but a
+    // sensor reading that moves nothing (a door reported closed that already
+    // is) requests no frame. A slow DOM-only tick covers that without ever
+    // asking the scene to render.
+    pop.timer = setInterval(() => { try { pop && pop.refresh(); } catch (e) { /* ignore */ } }, 1000);
     position(el, x, y);
     home.requestRender();
   }
@@ -323,7 +329,8 @@ export function attachTapPopovers(o) {
   const roomName = id => ((Home3DScene.ROOMS || {})[id] || {}).name || id;
   const channelName = (roomId, ch) => {
     const lc = ((Home3DScene.LIGHTS || {})[roomId] || {})[ch];
-    if (lc && lc.name) return lc.name;
+    // A profile may name the main channel after the room; do not repeat it.
+    if (lc && lc.name && lc.name !== roomName(roomId)) return lc.name;
     return ch === 'main' ? 'Main light' : ch.charAt(0).toUpperCase() + ch.slice(1);
   };
   const offlineNote = () => (ha() ? '' : '<div class="tp-note">Home Assistant offline &middot; preview only</div>');
@@ -538,7 +545,14 @@ export function attachTapPopovers(o) {
       if (!r) return null;
       if (r.target) return { kind: r.target.kind, id: r.target.id, fuzzy: !!r.fuzzy };
       const ob = r.occludedBy;
-      return { occludedBy: (ob && (ob.name || ob.type)) || 'mesh', occluderOpacity: ob ? materialOpacity(ob.material) : null };
+      let size = null;
+      if (ob && ob.geometry) {
+        ob.geometry.computeBoundingBox();
+        const s = ob.geometry.boundingBox.getSize(new THREE.Vector3());
+        size = [+s.x.toFixed(2), +s.y.toFixed(2), +s.z.toFixed(2)];
+      }
+      return { occludedBy: (ob && (ob.name || (ob.parent && ob.parent.name) || ob.geometry && ob.geometry.type)) || 'mesh',
+        occluderSize: size, occluderOpacity: ob ? materialOpacity(ob.material) : null };
     },
     /** Open a popover without a tap (debug seam; the only route to climate on main). */
     openAt(kind, id, x, y, extra) {
