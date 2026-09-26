@@ -75,12 +75,27 @@
  * so the fins can never be in the same plane as (or ahead of) the backing
  * regardless of what the caller passes.
  *
+ * ELEVATION — deliberately NOT a param here. It never was one in practice:
+ * this module's own y=0 is the item's bottom, and the PLACER (src/house-
+ * loader.js, src/furniture/place.js, scripts/validate-house.py) reads only
+ * the furniture ITEM's own top-level `elevation` field (schema
+ * $defs/furnitureItem.elevation, default 0) to position it — never
+ * `params.elevation`. An earlier version of this module and its schema
+ * block both carried a `params.elevation` default of 17 that nothing ever
+ * read, which silently drew every radiator on the floor unless the
+ * item-level field was also set (fixed per item 2bc314c9, option (a): drop
+ * the dead param rather than have the loader read a second, redundant
+ * elevation field). To place a radiator off the floor, set the ITEM's own
+ * `elevation`, not a params key — the spec page's own Elevation slider is a
+ * SPEC-PAGE-ONLY preview control (it plays the placer role for its 3D
+ * preview) and does not correspond to an authorable param.
+ *
  * ── DIMENSIONS ARE ILLUSTRATIVE, EXCEPT DEFAULTS ────────────────────────
  * DEFAULTS below are the standard house radiator: 80w x 60h, thickness 10,
- * depth 12 (a 2cm wall gap), elevation 17 (applied by the placer, so the
- * top sits at 77cm), no cover. Other rooms vary (remodel.sh3d: living room
- * 95cm, hallway typically a smaller radiator inside a larger slatted cover,
- * bedroom 95cm) — pass those as `params`, never by editing DEFAULTS.
+ * depth 12 (a 2cm wall gap), no cover. Other rooms vary (remodel.sh3d:
+ * living room 95cm, hallway typically a smaller radiator inside a larger
+ * slatted cover, bedroom 95cm) — pass those as `params`, never by editing
+ * DEFAULTS.
  * ─────────────────────────────────────────────────────────────────────
  */
 
@@ -108,7 +123,9 @@ export const DEFAULTS = Object.freeze({
   height: 60,       // cm, the OUTER ENVELOPE's height
   depth: 12,        // cm, the OUTER ENVELOPE's wall-to-front distance
   thickness: 10,    // cm, the radiator BODY's own slab depth (wallGap is derived: bodyDepth - thickness)
-  elevation: 17,    // cm, floor to the item's bottom edge (applied by the placer)
+  // elevation is intentionally ABSENT — it is dead as a params field (see
+  // the module doc comment above). Use the furniture ITEM's own top-level
+  // `elevation` instead.
   valveCorner: 'bottom-right',
   color: '#f2f2ef',
   cover: 'none',
@@ -164,16 +181,21 @@ export function bodyEnvelope(o) {
     // already folds in the backing's own fixed material offset).
     d = Math.min(d, Math.max(0, o.depth - COVER_CLEARANCE_CM));
   } else if (o.cover === 'shelf') {
-    // Clear of the fascia lip's own front face by a small real margin — the
-    // lip has no backing to protect (it is a decorative front face only),
-    // so this is a much smaller clamp than the box's COVER_CLEARANCE_CM,
-    // but without it the body's own front face can end up level with or
-    // AHEAD of the lip, burying the lip behind the radiator instead of it
-    // hanging visibly in front. Includes the lip's own 0.4cm fasciaSetback
-    // (follow-up d9fb9d55b) plus its 0.75cm depth-half offset, so this
-    // clamp always matches the lip's ACTUAL front face rather than an
-    // independent estimate of it.
-    const FASCIA_CLEARANCE_CM = 1.5 + FASCIA_SETBACK_CM;
+    // Clear of the fascia lip's own BACK face (not merely its front face)
+    // by a small real margin — the lip has no backing to protect (it is a
+    // decorative front face only), so this is a much smaller clamp than
+    // the box's COVER_CLEARANCE_CM, but without it the body's own front
+    // face can end up level with or AHEAD of the lip, burying the lip
+    // behind the radiator instead of it hanging visibly in front. The lip
+    // itself is 1.5cm thick and sits fasciaSetback (0.4cm) behind the
+    // envelope's own front face, so its BACK face is at
+    // `depth - 1.5 - fasciaSetback`; FASCIA_MARGIN_CM (0.5cm) is added on
+    // top so the clamp lands the body STRICTLY before that back face, not
+    // exactly coplanar with it (round-4 nit: 1.5 + fasciaSetback alone
+    // ties exactly with the lip's back face, which a strict `<` test
+    // correctly flags as failing).
+    const FASCIA_MARGIN_CM = 0.5;
+    const FASCIA_CLEARANCE_CM = 1.5 + FASCIA_SETBACK_CM + FASCIA_MARGIN_CM;
     d = Math.min(d, Math.max(0, o.depth - FASCIA_CLEARANCE_CM));
   }
   return { width: w, height: h, depth: d };
@@ -191,11 +213,22 @@ export function wallGapOf(bodyDepthCm, thicknessCm) {
  * is public). Each is a partial params object layered onto DEFAULTS; width
  * is a param in every case, per room.
  */
+// Preset depths for 'shelf'/'box' covers are chosen so the DEFAULT wall gap
+// (thickness 10) comes out to the house-standard 2cm, exactly like the
+// no-cover preset — not whatever a snug-fit clamp happens to leave over.
+// Round-4 nit (d9fb9d55, item 5): with the OLD depths (12 for shelf, 16 for
+// box), the snug body clamp left only a 0.5cm/1.4cm gap, so a "standard"
+// preset radiator read as sitting almost flush with the wall. Grown here:
+//   shelf: depth 12 -> 14.4 (bodyDepth clamps to exactly 12, gap = 2)
+//   box:   depth 16 -> 16.6 (bodyDepth clamps to exactly 12, gap = 2)
+// Heights are grown by the same 2.4/0.6cm the depths grew by, purely so the
+// presets keep their original visual proportions -- the height clamp itself
+// is independent of this fix and was already correct.
 export const PRESETS = Object.freeze([
   { name: '80 wide, no cover, valve bottom-right', params: Object.freeze({ width: 80, height: 60, depth: 12, cover: 'none', valveCorner: 'bottom-right' }) },
-  { name: '120 wide, shelf top, valve bottom-left', params: Object.freeze({ width: 120, height: 62, depth: 12, cover: 'shelf', valveCorner: 'bottom-left' }) },
-  { name: '95 wide, shelf top', params: Object.freeze({ width: 95, height: 62, depth: 12, cover: 'shelf' }) },
-  { name: '80 wide, full slatted cover', params: Object.freeze({ width: 80, height: 62, depth: 16, cover: 'box' }) },
+  { name: '120 wide, shelf top, valve bottom-left', params: Object.freeze({ width: 120, height: 62, depth: 14.4, cover: 'shelf', valveCorner: 'bottom-left' }) },
+  { name: '95 wide, shelf top', params: Object.freeze({ width: 95, height: 62, depth: 14.4, cover: 'shelf' }) },
+  { name: '80 wide, full slatted cover', params: Object.freeze({ width: 80, height: 62, depth: 16.6, cover: 'box' }) },
   { name: '75x92 slatted cover, 50 wide radiator', params: Object.freeze({
     width: 75, height: 92, depth: 19, cover: 'box',
     bodyWidth: 50, bodyHeight: 60, bodyDepth: 12, thickness: 10,
@@ -358,10 +391,23 @@ export function build(THREE, params, opts) {
 
   // ---- wall brackets: two, set roughly a fifth of the BODY's own width
   // from each end, BRIDGING the gap exactly — from the wall face (z=0) to
-  // the body's back (z=GAP).
+  // the body's back (z=GAP). Never DEEPER than GAP itself: a bracket needs
+  // a minimum real thickness to read as a solid part (0.4cm), but when the
+  // derived GAP is smaller than that (a tight wall gap), a fixed 0.4cm
+  // minimum used to push the bracket's own front face PAST z=GAP and into
+  // the panel it is supposed to only bridge up to — coplanar with, and
+  // slightly piercing, the panel's own back face (round-4 nit: hidden
+  // against the wall in practice, but a real overlap). Capped to GAP so the
+  // bracket only ever THINS as the gap narrows, never overshoots it.
   const bracketInset = Math.min(BODY_W * 0.22, 0.18);
   const bracketW = 0.03, bracketH = H * 0.5;
-  const bracketD = Math.max(GAP, 0.004);
+  // Spans exactly 0..GAP, same as the "bridging the gap exactly" contract
+  // always intended — GAP itself is the correct depth for a wide gap and
+  // was already used unclamped in that case (Math.max(GAP, 0.004) reduces
+  // to GAP whenever GAP >= 0.004). Only the near-zero-gap case needs a
+  // floor, and that floor must never exceed GAP itself, or the bracket
+  // pierces the panel it is meant to only reach up to.
+  const bracketD = GAP > 0 ? GAP : 0.0001;
   for (const sx of [-1, 1]) {
     const bx = bodyOffsetX + sx * (BODY_W / 2 - bracketInset);
     const brMat = finishMaterial(THREE, 'metal', 0x3a3a3e);

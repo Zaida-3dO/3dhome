@@ -2215,7 +2215,7 @@
 
     "furnitureParams_radiator": {
       "type": "object",
-      "description": "Params for `radiator` (src/furniture/radiator.js): a panel radiator with a smart TRV valve on a chosen corner and an optional shelf/full slatted cover. width/height/depth ALWAYS describe the OUTER ENVELOPE -- including any cover -- because scripts/validate-house.py's footprint/overlap/ceiling checks and src/furniture/place.js both read these three params with no idea a body/cover split exists; a smaller number here than what actually gets built would validate a placement that then collides with a wall or another item. The optional bodyWidth/bodyHeight/bodyDepth describe the RADIATOR BODY itself, defaulting to a snug fit against the envelope (== no cover) when omitted, and clamped DOWN if given bigger than the envelope. Each `default` equals radiator.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `radiator` (src/furniture/radiator.js): a panel radiator with a smart TRV valve on a chosen corner and an optional shelf/full slatted cover. width/height/depth ALWAYS describe the OUTER ENVELOPE -- including any cover -- because scripts/validate-house.py's footprint/overlap/ceiling checks and src/furniture/place.js both read these three params with no idea a body/cover split exists; a smaller number here than what actually gets built would validate a placement that then collides with a wall or another item. The optional bodyWidth/bodyHeight/bodyDepth describe the RADIATOR BODY itself, defaulting to a snug fit against the envelope (== no cover) when omitted, and clamped STRICTLY INSIDE the cover's own interior when a cover is present -- below the shelf, inside the box's side panels, and clear of the box backing / shelf fascia lip by a real air gap -- not merely inside the outer envelope. There is no `elevation` param here: use the furniture ITEM's own top-level `elevation` field ($defs/furnitureItem.elevation) instead -- an earlier `params.elevation` was dead (nothing in the loader, placer or validator ever read it) and was removed rather than wired up, per item 2bc314c9. Each `default` equals radiator.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": {
           "type": "number",
@@ -2227,7 +2227,7 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 60,
-          "description": "cm, the OUTER ENVELOPE's height (always -- includes any cover), floor (or `elevation`) to top."
+          "description": "cm, the OUTER ENVELOPE's height (always -- includes any cover), from the item's own local floor (y=0) to its top. Use the furniture item's own top-level `elevation` field to raise it off the room floor -- there is no params.elevation here."
         },
         "depth": {
           "type": "number",
@@ -2238,29 +2238,23 @@
         "bodyWidth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "cm, the RADIATOR BODY's own width. Optional: defaults to a snug fit == `width` when omitted (the no-cover case). Clamped DOWN to `width` if given bigger -- the body cannot exceed the envelope."
+          "description": "cm, the RADIATOR BODY's own width. Optional: defaults to a snug fit == `width` when omitted (the no-cover case). Clamped DOWN to fit strictly inside the cover's own interior (inside the box's side panels, with a real air gap) whenever a cover is present, and to `width` regardless -- the body cannot exceed the envelope."
         },
         "bodyHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "cm, the RADIATOR BODY's own height. Optional: defaults to a snug fit == `height` when omitted. Clamped DOWN to `height` if given bigger."
+          "description": "cm, the RADIATOR BODY's own height. Optional: defaults to a snug fit == `height` when omitted. Clamped DOWN to fit strictly below the shelf (with a real air gap) whenever any cover is present, and to `height` regardless."
         },
         "bodyDepth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "cm, the RADIATOR BODY's own wall-to-front distance. Optional: defaults to a snug fit == `depth` when omitted. Clamped DOWN to `depth`, and further clamped down on a 'box' cover so the body's own front face always clears the cover's interior slats/backing by a real air gap (never level with or ahead of them)."
+          "description": "cm, the RADIATOR BODY's own wall-to-front distance. Optional: defaults to a snug fit == `depth` when omitted. Clamped DOWN to `depth`, and further clamped down whenever a cover is present so the body's own front face always clears the cover's interior by a real air gap: the box's backing panel for a 'box' cover, or the shelf's own fascia lip for a 'shelf' cover (never level with or ahead of either)."
         },
         "thickness": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 10,
           "description": "cm, the radiator body's own slab depth (not including the wall gap). wallGap is derived as bodyDepth - thickness, never authored; thickness is itself clamped down to bodyDepth if given bigger."
-        },
-        "elevation": {
-          "type": "number",
-          "minimum": 0,
-          "default": 17,
-          "description": "cm, floor to the item's bottom edge. Applied by the placer, not baked into the builder's own local frame."
         },
         "valveCorner": {
           "type": "string",

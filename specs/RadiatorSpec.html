@@ -70,26 +70,32 @@
    cover — because the house validator and the live-scene placer both read
    these three params directly, with no idea a body/cover split exists: 80 x
    60, thickness 10, depth 12 (a 2cm wall gap, derived as bodyDepth -
-   thickness), elevation 17 (top sits at 77cm), no cover. Other rooms vary
-   (remodel.sh3d: living room 95cm, bedroom 95cm; a hallway radiator is often
-   SMALLER than its slatted cover) — drive those from this Tweaks panel per
-   room, not by editing the module's defaults. An optional cover ('shelf' or
-   'box', a full slatted enclosure) can sit inside the envelope; the
-   RADIATOR BODY's own size is the independent, optional bodyWidth/
-   bodyHeight/bodyDepth, defaulting to a snug fit against the envelope (==
-   no cover) and clamped DOWN if given bigger than the envelope.
+   thickness), no cover. Other rooms vary (remodel.sh3d: living room 95cm,
+   bedroom 95cm; a hallway radiator is often SMALLER than its slatted cover)
+   — drive those from this Tweaks panel per room, not by editing the
+   module's defaults. An optional cover ('shelf' or 'box', a full slatted
+   enclosure) can sit inside the envelope; the RADIATOR BODY's own size is
+   the independent, optional bodyWidth/bodyHeight/bodyDepth, defaulting to a
+   snug fit against the envelope (== no cover) and clamped DOWN if given
+   bigger than the envelope.
    ────────────────────────────────────────────────────────────────────────
 
    The geometry builder itself lives in src/furniture/radiator.js (a plain,
    pure ESM function, `build(THREE, params, opts)` / `buildRadiator` alias,
    following the shared src/furniture/* contract) so the furniture placer
    (item 78f2b614) imports the exact same module this page tweaks. That
-   module's own frame puts y=0 at the radiator's BOTTOM (not the floor) and
-   leaves `elevation` for the PLACER to apply — this page plays that placer
-   role for its own 3D preview, adding `t.elevation` when it positions the
-   built group. This file is the tweakable harness around the module: the
-   Tweaks panel, the 2x2 corner-picker diagram, the numbers table, and the
-   "Copy as furniture JSON" button.
+   module's own frame puts y=0 at the radiator's BOTTOM (not the floor).
+   `elevation` is deliberately NOT a `params` field or a DEFAULTS key (fixed
+   per item 2bc314c9: an earlier `params.elevation` was dead — nothing in
+   the loader/placer/validator ever read it) — a real placement sets the
+   furniture ITEM's own top-level `elevation` field instead. The Elevation
+   slider on this page is a SPEC-PAGE-ONLY preview control: it plays the
+   placer role for this page's own 3D preview (adding `t.elevation` when it
+   positions the built group), and "Copy as furniture JSON" correctly never
+   emits it, since it is not a key of the module's own DEFAULTS. This file
+   is the tweakable harness around the module: the Tweaks panel, the 2x2
+   corner-picker diagram, the numbers table, and the "Copy as furniture
+   JSON" button.
 
    Harness: tweaks-panel.jsx (controls) + spec-three.jsx (ThreeView).
    ===================================================================== */
@@ -392,12 +398,19 @@ function PresetButtons({ setTweak }) {
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const bodyEnv = window.FurnitureRadiator ? window.FurnitureRadiator.bodyEnvelope(t) : { width: t.width, height: t.height, depth: t.depth };
+  // The TRUE BUILT thickness and wall gap — matching build()'s own internal
+  // clamp exactly (round-4 nit: this table used to show the raw slider's
+  // thickness and an unclamped, possibly-negative wall gap, disagreeing
+  // with what actually got built once a tight cover clamped bodyEnv.depth
+  // below the requested thickness). thickness can never exceed the body's
+  // own depth it has to fit inside; the gap is never negative.
+  const builtThickness = Math.min(t.thickness, bodyEnv.depth);
+  const wallGapRaw = window.FurnitureRadiator ? window.FurnitureRadiator.wallGapOf(bodyEnv.depth, builtThickness) : (bodyEnv.depth - builtThickness);
   // Rounded to 1 decimal place for display only — the raw subtraction can
   // carry ordinary floating-point noise (e.g. 1.4000000000000004 on a
   // clamped box cover), which is not a real fractional wall gap, just an
   // artefact of the arithmetic.
-  const wallGapRaw = window.FurnitureRadiator ? window.FurnitureRadiator.wallGapOf(bodyEnv.depth, t.thickness) : (bodyEnv.depth - t.thickness);
-  const wallGap = Math.round(wallGapRaw * 10) / 10;
+  const wallGap = Math.round(Math.max(0, wallGapRaw) * 10) / 10;
   return (
     <>
       <h1>Radiator Spec</h1>
@@ -421,9 +434,9 @@ function App() {
               <tr><td>Height (outer envelope)</td><td className="num">{t.height}</td><td>Per room; includes any cover</td></tr>
               <tr><td>Depth (outer envelope)</td><td className="num">{t.depth}</td><td>Wall face to the outermost front face; includes any cover</td></tr>
               <tr><td>Body width / height / depth</td><td className="num">{bodyEnv.width} × {bodyEnv.height} × {bodyEnv.depth}</td><td><b>Variable</b> — the radiator itself; snug-fits the envelope by default</td></tr>
-              <tr><td>Thickness (body slab depth)</td><td className="num">{t.thickness}</td><td>The radiator's own slab depth</td></tr>
+              <tr><td>Thickness (body slab depth, as built)</td><td className="num">{builtThickness}</td><td>{builtThickness !== t.thickness ? `Clamped down from the requested ${t.thickness}cm — the body's own depth can't fit more` : "The radiator's own slab depth"}</td></tr>
               <tr><td>Wall gap (derived)</td><td className="num">{wallGap}</td><td>= body depth − thickness</td></tr>
-              <tr><td>Elevation (floor to bottom edge)</td><td className="num">{t.elevation}</td><td>17cm default, per remodel.sh3d</td></tr>
+              <tr><td>Elevation (floor to bottom edge)</td><td className="num">{t.elevation}</td><td>Spec-page preview only — not an authorable param; a real placement sets the furniture item's own `elevation` field</td></tr>
               <tr><td>Valve corner</td><td className="num">{CORNER_LABEL[t.valveCorner]}</td><td><b>Variable</b> — one of 4 corners, visual picker</td></tr>
               <tr><td>Colour</td><td className="num"><span style={{ display:'inline-block', width:11, height:11, borderRadius:2, background:t.color, border:'1px solid rgba(0,0,0,.2)', verticalAlign:'middle' }}></span></td><td>Default white</td></tr>
               <tr><td>Cover</td><td className="num">{COVER_LABEL[t.cover]}</td><td><b>Variable</b> — none, shelf, or full slatted enclosure</td></tr>
@@ -481,7 +494,7 @@ function App() {
           <span style={{ fontSize: 11 }}>{wallGap} cm</span>
         </TweakRow>
 
-        <TweakSection label="Position" />
+        <TweakSection label="Position (preview only — not an authorable param)" />
         <TweakSlider label="Elevation (floor to bottom edge)" value={t.elevation} min={0} max={60} step={1} unit="cm"
           onChange={v => setTweak('elevation', v)} />
 
