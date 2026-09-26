@@ -153,6 +153,16 @@ jobs:
           # direction actually changes. See the script's header.
           set -euo pipefail
           node scripts/test-footstep-turn.mjs
+      - name: Footstep zone confinement (manual override)
+        run: |
+          # Asserts rooms[].footstepZone: house-loader resolves from/to (authored
+          # relative to the room's own bbox min corner) to absolute plan
+          # coordinates with corners sorted, falls back to null on a malformed
+          # zone rather than throwing, and a zone genuinely confines the walk to
+          # its rectangle rather than the room's full polygon. See the script's
+          # header.
+          set -euo pipefail
+          node scripts/test-footstep-zone.mjs
       - name: Windows and curtains compile and place correctly
         run: |
           # Asserts the loader pass-through for windows[]/curtains[], the

@@ -2384,7 +2384,20 @@ export const Home3DScene = (() => {
       };
 
       Object.entries(ROOMS).forEach(([id, rm]) => {
-        const poly = rm.poly;
+        // A room may override automatic placement with a manual footstepZone
+        // (schema `rooms[].footstepZone`, resolved to absolute plan coordinates
+        // by house-loader.js). When present, walk the RECTANGLE instead of the
+        // room's actual polygon -- for every purpose below: door-approach
+        // probing, area, and the walk itself. This is deliberately a full
+        // substitution rather than an extra clip on top of the polygon, because
+        // the whole point is to let a room owner confine the trail to floor the
+        // polygon alone does not describe as clear (the gap between a kitchen's
+        // counters and its table, say). Absent -> today's behaviour exactly,
+        // unchanged: `poly` stays the room's own polygon.
+        const zone = rm.footstepZone;
+        const poly = zone
+          ? [[zone.x1, zone.y1], [zone.x2, zone.y1], [zone.x2, zone.y2], [zone.x1, zone.y2]]
+          : rm.poly;
         // Stride constants live with the walk itself, so this file and the
         // test cannot drift to two different ideas of a stride.
         const { STEP_CM, STRIDE_CM, PRINT_CM, PAD_CM } = WALK_DEFAULTS;
@@ -2413,6 +2426,15 @@ export const Home3DScene = (() => {
           return a.id < b.id ? -1 : 1;
         });
 
+        // Bounding box to fall back on when no door approach lands inside
+        // `poly`. Ordinarily the room's own derived bbox; when a footstepZone
+        // is active it must be the ZONE's bbox instead, or a room with a zone
+        // but no reachable door approach would silently fall back to wandering
+        // the whole room again -- defeating the very confinement the zone asks
+        // for.
+        const bx1 = zone ? zone.x1 : rm.x1, by1 = zone ? zone.y1 : rm.y1;
+        const bx2 = zone ? zone.x2 : rm.x2, by2 = zone ? zone.y2 : rm.y2;
+
         let sx, sy, ux, uy, run;
         if (approaches.length) {
           const a = approaches[0];
@@ -2423,19 +2445,19 @@ export const Home3DScene = (() => {
           // of the bounding box — but seeded from a point PROVEN to be inside
           // the room. An L-shaped polygon's bbox centre can lie in the notch,
           // i.e. outside the room entirely, so it is never trusted blind.
-          let cx = (rm.x1 + rm.x2) / 2, cy = (rm.y1 + rm.y2) / 2;
+          let cx = (bx1 + bx2) / 2, cy = (by1 + by2) / 2;
           if (poly && !insidePoly(poly, cx, cy)) {
             let found = false;
             for (let i = 1; i < 24 && !found; i++) {
               for (let j = 1; j < 24 && !found; j++) {
-                const qx = rm.x1 + (rm.x2 - rm.x1) * i / 24;
-                const qy = rm.y1 + (rm.y2 - rm.y1) * j / 24;
+                const qx = bx1 + (bx2 - bx1) * i / 24;
+                const qy = by1 + (by2 - by1) * j / 24;
                 if (insidePoly(poly, qx, qy)) { cx = qx; cy = qy; found = true; }
               }
             }
             if (!found) return;   // degenerate polygon: no floor to stand on
           }
-          const w = rm.x2 - rm.x1, h = rm.y2 - rm.y1;
+          const w = bx2 - bx1, h = by2 - by1;
           ux = (w >= h) ? 1 : 0; uy = (w >= h) ? 0 : 1;
           // Back up along the axis so the trail straddles the room rather than
           // starting at its middle, then measure forward from there.
@@ -2456,7 +2478,7 @@ export const Home3DScene = (() => {
         // src/footstep-walk.js, including the turn-at-the-corner rule.
         const { prints } = walkFootsteps({
           poly,
-          bounds: { x1: rm.x1, y1: rm.y1, x2: rm.x2, y2: rm.y2 },
+          bounds: { x1: bx1, y1: by1, x2: bx2, y2: by2 },
           sx, sy, ux, uy, nPrints,
           stepCm: STEP_CM, strideCm: STRIDE_CM,
         });
