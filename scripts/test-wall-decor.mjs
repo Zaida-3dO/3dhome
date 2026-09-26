@@ -158,9 +158,68 @@ function checkBboxMatchesDefaults(tag, group, defaults) {
   const trisLow = triCount(Sign.build(THREE, {}, { detail: 'low' }));
   check('sign: detail low has no more triangles than full', trisLow <= trisFull, { trisFull, trisLow });
 
-  // generic placeholder text, not real-house wording (privacy)
-  check('sign: default line1 is a generic placeholder', Sign.DEFAULTS.line1 === 'HOME');
-  check('sign: default line2 is a generic placeholder', Sign.DEFAULTS.line2 === 'sweet home');
+  // stock retail sign phrase, not real-house wording (privacy)
+  check('sign: default line1 is the stock phrase', Sign.DEFAULTS.line1 === 'GIVE IT TO GOD');
+  check('sign: default line2 is the stock phrase', Sign.DEFAULTS.line2 === 'and go to sleep');
+
+  // two-level depth: outer frame (depth, default 3cm) projects forward past
+  // the inner panel/body (panelDepth, default 1.5cm) by their difference.
+  check('sign: DEFAULTS.depth is 3 (outer frame)', Sign.DEFAULTS.depth === 3, Sign.DEFAULTS.depth);
+  check('sign: DEFAULTS.panelDepth is 1.5 (inner body)', Sign.DEFAULTS.panelDepth === 1.5, Sign.DEFAULTS.panelDepth);
+  check('sign: DEFAULTS.frameThickness is 2 (member width)', Sign.DEFAULTS.frameThickness === 2, Sign.DEFAULTS.frameThickness);
+
+  // Round-2 review finding: the text plane and the backer's front face were
+  // COPLANAR (both at z=panelDepth), which z-fights into a moire of diagonal
+  // stripes that shifts with the camera angle. The fix nudges the text plane
+  // a small, explicit gap in front of the backer's own face, so "panel front
+  // sits at panelDepth" is now checked to within 1mm (0.1cm) -- the
+  // reviewed tolerance -- rather than the tighter 0.5mm used before the two
+  // surfaces were deliberately separated. The coplanarity check below is the
+  // one that actually guards the regression: it fails if the gap collapses
+  // back to (near) zero, independent of the tolerance on the nominal number.
+  const meshesDepth = meshesByName(g);
+  const frameFrontZCm = new THREE.Box3().setFromObject(meshesDepth.signFrameTop).max.z * 100;
+  const panelFrontZCm = meshesDepth.signTextPanel.position.z * 100;
+  const bodyFrontZCm = new THREE.Box3().setFromObject(meshesDepth.signBacker).max.z * 100;
+  // The reviewed tolerance is "within 1mm" of the nominal number, and the
+  // deliberate anti-z-fight nudge (PANEL_GAP in wall-sign.js) is ITSELF up to
+  // 1mm -- so the panel-front/frame-projection checks use 0.15cm (1.5mm) to
+  // comfortably cover a full 1mm nudge without sitting exactly on a
+  // floating-point boundary (0.1cm eps against an exact 0.1cm offset flaked
+  // on IEEE-754 rounding: 1.6 - 1.5 = 0.10000000000000009 > 0.1).
+  const DEPTH_TOL_CM = 0.1; // 1mm, the reviewed tolerance -- for numbers with no deliberate offset
+  const PANEL_NUDGE_TOL_CM = 0.15; // 1.5mm -- covers the reviewed 1mm tolerance plus the up-to-1mm anti-z-fight nudge
+  check('sign: frame front sits at depth (3cm)', near(frameFrontZCm, 3, DEPTH_TOL_CM), frameFrontZCm);
+  check('sign: panel/text front sits at panelDepth, within the reviewed tolerance (1.5cm)', near(panelFrontZCm, 1.5, PANEL_NUDGE_TOL_CM), panelFrontZCm);
+  check('sign: panel body front matches panelDepth, within 1mm (1.5cm)', near(bodyFrontZCm, 1.5, DEPTH_TOL_CM), bodyFrontZCm);
+  check('sign: frame projects forward past the panel by roughly depth - panelDepth (1.5cm)',
+    near(frameFrontZCm - panelFrontZCm, 1.5, PANEL_NUDGE_TOL_CM), { frameFrontZCm, panelFrontZCm });
+  check('sign: panel/backer front face is not hidden behind or past the frame front',
+    panelFrontZCm < frameFrontZCm, { panelFrontZCm, frameFrontZCm });
+
+  // THE REGRESSION GUARD: the text plane and the backer's own front face
+  // must NOT be coplanar -- that is exactly the z-fighting setup review
+  // found (a moire that shifts with viewing angle). Require a real,
+  // measurable gap between them (more than a floating-point sliver).
+  const MIN_GAP_CM = 0.02; // 0.2mm -- comfortably above float noise, well below the 1mm nudge
+  check('sign: text plane is NOT coplanar with the backer front face (no z-fighting)',
+    Math.abs(panelFrontZCm - bodyFrontZCm) >= MIN_GAP_CM,
+    { panelFrontZCm, bodyFrontZCm, gap: panelFrontZCm - bodyFrontZCm });
+  check('sign: text plane sits IN FRONT OF the backer face (not behind it, not buried)',
+    panelFrontZCm > bodyFrontZCm, { panelFrontZCm, bodyFrontZCm });
+
+  // Shadow-acne mitigation: the backer no longer receives a shadow, since the
+  // text plane sits immediately in front of it (self-shadowing at near-zero
+  // separation is the other common cause of the same flickering-stripes
+  // symptom). The text plane itself already does not cast one.
+  check('sign: backer does not receive shadows (avoids acne from the text plane in front of it)',
+    meshesDepth.signBacker.receiveShadow === false, meshesDepth.signBacker.receiveShadow);
+  check('sign: text plane does not cast a shadow onto the backer immediately behind it',
+    meshesDepth.signTextPanel.castShadow === false, meshesDepth.signTextPanel.castShadow);
+
+  // frame colour is black, panel stays white-washed
+  check('sign: default frameColor is black', Sign.DEFAULTS.frameColor.toLowerCase() === '#151515', Sign.DEFAULTS.frameColor);
+  check('sign: default panelColor is still white-washed', Sign.DEFAULTS.panelColor === '#f2ede2', Sign.DEFAULTS.panelColor);
 
   // WITH a stubbed canvas (the createCanvas injection point, or a global
   // `document`): the text panel becomes the one textured mesh.

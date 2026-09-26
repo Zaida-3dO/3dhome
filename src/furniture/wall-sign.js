@@ -29,9 +29,11 @@
  * geometry and bbox fully testable in Node while the browser/spec page path
  * (which always has one of the two) is unaffected.
  *
- * PRIVACY: the public repo must not carry any real household's sign wording.
- * DEFAULTS below are generic placeholder text; real wording, if any, lives
- * only in a private overlay outside this repo.
+ * TEXT: line1/line2 default to a stock retail sign phrase ("GIVE IT TO GOD" /
+ * "and go to sleep") -- a common wall-decor sentiment, not any real
+ * household's private wording, so it is fine as this public repo's default.
+ * A real house's own wording, if different, lives only in a private overlay
+ * outside this repo.
  */
 import { makeFinish } from './finishes.js';
 
@@ -40,12 +42,16 @@ export const TYPE = 'wall-sign';
 export const DEFAULTS = Object.freeze({
   width: 110,             // cm, overall frame width (landscape)
   height: 45,             // cm, overall frame height
-  depth: 3,               // cm, frame depth (front to back)
-  frameThickness: 4,      // cm, width of the frame member around the panel
-  frameColor: '#2b2620',  // thin dark frame
+  depth: 3,               // cm, OUTER FRAME depth (front to back), back at z=0
+  panelDepth: 1.5,        // cm, inner panel/body depth -- its front (text) face
+                           // sits at z=panelDepth, `depth` - `panelDepth` short
+                           // of the frame's own front, so the frame projects
+                           // forward past the panel by that difference.
+  frameThickness: 2,      // cm, width of the frame member around the panel
+  frameColor: '#151515',  // black frame
   panelColor: '#f2ede2',  // white-washed wood panel
-  line1: 'HOME',          // serif caps, generic placeholder (privacy)
-  line2: 'sweet home',    // script, generic placeholder (privacy)
+  line1: 'GIVE IT TO GOD',  // serif caps
+  line2: 'and go to sleep', // script
   textColor: '#1a1a1a'
 });
 
@@ -115,7 +121,8 @@ export function build(THREE, params, opts) {
 
   const W = p.width * CM;
   const H = p.height * CM;
-  const D = p.depth * CM;
+  const D = p.depth * CM;                                    // outer frame depth
+  const PANEL_D = Math.min(D, Math.max(0, p.panelDepth * CM)); // inner panel/body depth, clamped to [0, D]
   const FT = Math.max(0.5 * CM, p.frameThickness * CM);
 
   const group = new THREE.Group();
@@ -131,29 +138,46 @@ export function build(THREE, params, opts) {
     return mesh;
   };
 
-  // ---- depth layout (back at z=0, overall front at z=D) ----
-  // The frame's front face is the sign's frontmost surface (z=D). The panel
-  // sits in a shallow rebate just behind it, and the backer fills the rest of
-  // the depth behind the panel -- so the backer's OWN front face must stop
-  // short of the panel, never reach or pass it (that would bury the panel
-  // inside an opaque box, which is invisible from the front no matter how
-  // bright the panel's own material is).
-  const REBATE = Math.min(D * 0.3, 0.4 * CM); // how far the panel sits behind the frame's front face
-  const panelZ = D - REBATE;
-  const backerDepth = Math.max(0.1 * CM, panelZ - 0.05 * CM); // stop just short of the panel
-  const frameDepth = Math.min(D, Math.max(FT * 0.5, D * 0.6));
-  const frameFrontZ = D; // frame's front face is the sign's front
+  // ---- depth layout: TWO LEVELS, back at z=0 ----
+  // The outer frame is `depth` (D) deep, front at z=D -- the sign's frontmost
+  // surface. The inner white-washed body/panel is the shallower `panelDepth`
+  // (PANEL_D): the reviewed number is its BODY's front face position, so the
+  // backer box still runs from z=0 to z=PANEL_D. The frame projects forward
+  // past the panel by (D - PANEL_D).
+  //
+  // The text plane is a SEPARATE mesh from the backer box, not a texture
+  // painted on the backer's own front face -- so it cannot sit exactly on
+  // that face: two coincident, differently-shaded surfaces at the same depth
+  // z-fight (flicker into a moire of diagonal stripes that shifts with the
+  // camera angle, found in review). Nudge the text plane PANEL_GAP forward of
+  // the backer's face -- still to 1 decimal place of the reviewed 1.5cm
+  // panelDepth, and still short of the frame front (z=D) as long as PANEL_GAP
+  // < D - PANEL_D (true for the depth/panelDepth defaults and any sane
+  // override; PANEL_GAP is clamped below so it never crosses the frame front
+  // even if a caller sets panelDepth very close to depth).
+  const PANEL_GAP = Math.min(0.1 * CM, Math.max(0, (D - PANEL_D) / 2)); // 1mm, or less if the two depths are nearly equal
+  const backerFrontZ = PANEL_D;       // the reviewed "panel front" depth -- the body's own face
+  const panelZ = backerFrontZ + PANEL_GAP; // the TEXT PLANE sits just in front of that face
+  const frameFrontZ = D; // frame's front face is the sign's overall front
 
-  // ---- backer board (fills the depth behind the panel) ----
-  const backer = new THREE.Mesh(new THREE.BoxGeometry(W, H, backerDepth), backMat);
-  backer.position.set(0, H / 2, backerDepth / 2);
-  add(backer).name = 'signBacker';
+  // ---- panel body (fills the depth behind the text plane, i.e. the "inner
+  // body" the spec calls out, from z=0 to z=backerFrontZ=PANEL_D) ----
+  const bodyDepth = Math.max(0.05 * CM, backerFrontZ);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(W, H, bodyDepth), backMat);
+  body.position.set(0, H / 2, bodyDepth / 2);
+  add(body).name = 'signBacker';
+  // The text plane sits just PANEL_GAP in front of this face (see above), so
+  // the backer never needs to receive a shadow cast from a mesh immediately
+  // in front of it -- turn that off (after add(), which defaults it on) to
+  // avoid the shadow-acne variant of the same z-fighting-shaped visual bug.
+  body.receiveShadow = false;
 
   // ---- frame: four flat matte members forming a rectangle-with-hole ring,
-  // its front face flush with the sign's overall front (z=D), proud of the
-  // panel so the panel sits in a shallow rebate. ----
+  // its front face flush with the sign's overall front (z=D), projecting
+  // forward past the panel's own front face (z=PANEL_D) by (D - PANEL_D). ----
   const innerW = W - 2 * FT;
   const innerH = H - 2 * FT;
+  const frameDepth = D; // the outer frame spans its full depth, back (z=0) to front (z=D)
 
   const topBar = new THREE.Mesh(new THREE.BoxGeometry(W, FT, frameDepth), frameMat);
   topBar.position.set(0, H - FT / 2, frameFrontZ - frameDepth / 2);
