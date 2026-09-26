@@ -17,6 +17,10 @@ import {
   WINDOW_REVEAL_CM, windowVerticals, placeOnWall, buildWindow, buildCurtain,
   windowDaylight
 } from './wall-fittings.js';
+import {
+  loadFurnitureModules, buildFurnitureSync, scheduleFurnitureAttach, fadeRegistrations,
+  disposeFurniture
+} from './furniture.js';
 
 export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------
@@ -2835,7 +2839,7 @@ export const Home3DScene = (() => {
       wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true });
     });
 
-    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight };
+    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight };
   }
 
   /**
@@ -2991,6 +2995,8 @@ export const Home3DScene = (() => {
    * @param {boolean} opts.autoRotate   - slow auto-rotation (preview mode)
    * @param {number}  opts.pixelRatio   - override devicePixelRatio
    * @param {Function} opts.onRoomClick - callback(roomId) when a room is clicked
+   * @param {boolean} opts.furniture   - false = build no furniture until
+   *          setFurnitureVisible(true) (the page's ?furniture=0). Default true.
    * @returns {Object|Promise<Object>} the instance, or a Promise of it when
    *          `houseId` was given.
    */
@@ -3226,7 +3232,15 @@ export const Home3DScene = (() => {
     ren.domElement.style.touchAction = 'none';
     container.appendChild(ren.domElement);
 
-    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight } = buildScene(scene, quality);
+    // Furniture builders start loading NOW, in parallel with the scene build
+    // and its precompile (plan amendment A2). Nothing is built until both are
+    // done -- see the furniture block after the precompile below.
+    const furnitureItems = Array.isArray(HOUSE.furniture) ? HOUSE.furniture : [];
+    let furnitureVisible = opts.furniture !== false;
+    let furnitureModules = (furnitureItems.length && furnitureVisible)
+      ? loadFurnitureModules(furnitureItems) : null;
+
+    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight } = buildScene(scene, quality);
 
     // ── On-demand render requests ──────────────────────────────────────────
     // A NON-auto-rotating scene (the #3d popup) only changes when the user moves
@@ -3623,6 +3637,10 @@ export const Home3DScene = (() => {
     // no-compileAsync ones — a caller hiding an overlay here must never be
     // left waiting on a callback that cannot arrive.
     let readyFired = false;
+    // The scene's own precompile, AFTER its catch and shadowMap restore, so it
+    // always resolves and resolves only once the house's programs exist. The
+    // furniture waits on this (review nit 2), never on the raw compileAsync.
+    let precompileDone = Promise.resolve();
     function fireReady() {
       if (readyFired) return;
       readyFired = true;
@@ -3643,7 +3661,7 @@ export const Home3DScene = (() => {
       if (typeof onCompileStart === 'function') {
         try { onCompileStart(); } catch (e) { /* advisory only */ }
       }
-      Promise.resolve(ren.compileAsync(scene, cam))
+      precompileDone = Promise.resolve(ren.compileAsync(scene, cam))
         .catch((e) => console.warn('[Home3DScene] shader precompile failed; ' +
           'falling back to compiling on first render.', e))
         .then(() => {
@@ -3671,6 +3689,60 @@ export const Home3DScene = (() => {
       requestRender();
       fireReady();
     }
+
+    // ── Furniture (plan PR1b; src/furniture.js) ─────────────────────────────
+    // Attached AFTER the house's own precompile, already compiled, one render
+    // later -- it never delays onReady, and never adds a program that would
+    // compile synchronously on a later draw (the multi-second stall in
+    // docs/perf-cold-start.md). ?furniture=0 (create opt `furniture: false`)
+    // builds nothing at all until setFurnitureVisible(true) asks for it.
+    let furnitureResult = null;
+    let furnitureStarted = false;
+    const furnitureTimeline = { start: null, buildStart: null, buildEnd: null, attachedAt: null, stats: null };
+    function attachFurniture(result) {
+      furnitureResult = result;
+      result.root.visible = furnitureVisible;
+      scene.add(result.root);
+      // Fade buckets join the wall fade with their host wall's DERIVED outward
+      // normal, exactly as window and curtain fittings do. Glass is never
+      // registered (plan A3): fadeRegistrations() leaves it out.
+      fadeRegistrations(result).forEach(({ mesh, wallId }) => {
+        const host = wallEntryById[wallId];
+        if (!host || !host.outer) return;
+        wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true });
+      });
+      furnitureTimeline.attachedAt = performance.now();
+      furnitureTimeline.stats = result.stats;
+      // MOVES GEOMETRY (new casters) -> shadows must refresh once.
+      invalidateShadows();
+      requestRender();
+    }
+    function startFurniture() {
+      if (furnitureStarted || !furnitureItems.length) return;
+      furnitureStarted = true;
+      furnitureTimeline.start = performance.now();
+      if (!furnitureModules) furnitureModules = loadFurnitureModules(furnitureItems);
+      scheduleFurnitureAttach({
+        precompileDone,
+        modulesLoaded: furnitureModules,
+        isDisposed: () => _disposed,
+        build: builders => {
+          furnitureTimeline.buildStart = performance.now();
+          const result = buildFurnitureSync(THREE, furnitureItems, builders, {
+            tx, tz, quality, walls: WALLS
+          });
+          furnitureTimeline.buildEnd = performance.now();
+          return result;
+        },
+        renderer: ren,
+        camera: cam,
+        scene,
+        wantShadows,
+        makeRenderTarget: () => new THREE.WebGLRenderTarget(1, 1),
+        attach: attachFurniture
+      });
+    }
+    if (furnitureVisible) startFurniture();
 
     // Light state — one entry per room, one sub-entry per channel the profile
     // declares for it. A room with no 'main' channel still gets a main entry so
@@ -4598,6 +4670,39 @@ export const Home3DScene = (() => {
       // shadow keeps describing the old position. The existing debug overlays
       // do not need it — they toggle label visibility, and labels do not cast.
       invalidateShadows() { invalidateShadows(); },
+      // Show or hide every piece of furniture: its beauty meshes AND its
+      // shadow proxies (an invisible object also skips the shadow pass), so
+      // the shadows are invalidated too. Showing furniture that was never
+      // built (?furniture=0) builds it now, off the critical path as usual.
+      setFurnitureVisible(visible) {
+        furnitureVisible = !!visible;
+        if (furnitureResult) {
+          furnitureResult.root.visible = furnitureVisible;
+          invalidateShadows();
+          requestRender();
+        } else if (furnitureVisible) {
+          startFurniture();
+        }
+      },
+      getFurnitureVisible() { return furnitureVisible; },
+      // Diagnostics for the perf measurement and the visual review: what was
+      // built (draws, triangles, which rooms' proxies dropped to low detail)
+      // and when it attached, on the performance.now() clock.
+      getFurnitureInfo() {
+        return {
+          items: furnitureItems.length,
+          started: furnitureStarted,
+          attached: !!furnitureResult,
+          visible: furnitureVisible,
+          startedAt: furnitureTimeline.start,
+          buildStart: furnitureTimeline.buildStart,
+          buildEnd: furnitureTimeline.buildEnd,
+          attachedAt: furnitureTimeline.attachedAt,
+          stats: furnitureTimeline.stats,
+          programs: ren.info && ren.info.programs ? ren.info.programs.length : null,
+          warnings: furnitureResult ? furnitureResult.warnings.slice() : []
+        };
+      },
       // The live orbit camera — external overlays that project world points into
       // screen space (e.g. the compass rose) read this each frame. Returned by
       // reference; callers must not mutate it.
@@ -4658,6 +4763,11 @@ export const Home3DScene = (() => {
       dispose() {
         if (_disposed) return;
         _disposed = true;
+        // Before the traverse below: the furniture owns materials the scene
+        // graph cannot reach (a proxy's customDepthMaterial, the depth
+        // precompile material). A still-pending attach sees _disposed and
+        // frees its own build instead of attaching it.
+        if (furnitureResult) { disposeFurniture(furnitureResult); furnitureResult = null; }
 
         cancelAnimationFrame(animId);
         handlers.forEach(([el, ev, fn, o]) => el.removeEventListener(ev, fn, o));
@@ -4779,6 +4889,8 @@ export const Home3DScene = (() => {
     api.LIGHTS = LIGHTS;
     api.WALL_HEIGHT = WH;
     api.HOUSE = activeHouse;
+    // The compiled furniture placements (house-loader compileFurniture).
+    api.FURNITURE = (HOUSE && HOUSE.furniture) || [];
   }
 
   // The stable public object. Built once; refreshExports() reassigns the
@@ -4790,6 +4902,7 @@ export const Home3DScene = (() => {
     ROOMS: {},
     LIGHTS: {},
     HOUSE: null,
+    FURNITURE: [],
     WALL_HEIGHT: 2.5,
     WALL_SEGMENTS_WORLD: [],
     DOOR_LABELS_WORLD: [],

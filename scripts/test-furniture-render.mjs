@@ -1,0 +1,815 @@
+#!/usr/bin/env node
+/**
+ * Furniture renderer (plan PR1b): src/furniture.js + src/furniture/merge.js.
+ * No framework, no install: `node scripts/test-furniture-render.mjs`.
+ *
+ * WHAT THIS GUARDS
+ *
+ *   1. World placement in all four orientations, for BOTH anchor forms,
+ *      checked on a marker part at the item's front-right corner. A sign
+ *      error in group.rotation.y mirrors that marker at 90 and 270 degrees.
+ *   2. Merge buckets: same-room opaque parts of one finish are ONE mesh;
+ *      kept finishes stay separate (glass is one mesh per room and colour);
+ *      finish tags are read through partFinish/partKeep.
+ *   3. Shadows (plan A1): beauty meshes never cast; one proxy per furnished
+ *      room, built from exactly the casters' beauty geometry, writing neither
+ *      colour nor depth. A stub-WebGL r160 renderer then shows the proxy IS
+ *      drawn with the depth material in the shadow pass and is drawn in the
+ *      beauty pass only with colour and depth writes off.
+ *   4. The proxy caps (A1, review nit 4): an over-cap room drops to a 'low'
+ *      build with an RGBA-packed polygon-offset customDepthMaterial; over the
+ *      TOTAL cap, the LARGEST rooms drop first.
+ *   5. The low tier: builders get detail 'low', minor items are skipped, no
+ *      proxies are built.
+ *   6. The fade (§2.5, A3): host wall / pickFadeWall / override / never /
+ *      the height rule / the corner owner -- and glass is never registered.
+ *   7. The attach sequence (A2, nits 2 and 3): compileAsync(root, cam, scene)
+ *      runs before the attach; a dispose before or during it attaches nothing
+ *      and frees the build; shadowMap.enabled is restored; a failure anywhere
+ *      is a warning, never an unhandled rejection.
+ *   8. The shadow DEPTH program is precompiled: after the precompile, a real
+ *      shadow render (stub WebGL) creates no new program.
+ *   9. Room clicks: furniture is never clickable, and the scene's click
+ *      handler still finds the room catcher underneath it.
+ *
+ * Builds real three.js geometry from the vendored r160 module.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const imp = rel => import(pathToFileURL(path.join(root, rel)).href);
+const THREE = await imp('vendor/three-r160/three.module.min.js');
+const F = await imp('src/furniture.js');
+const M = await imp('src/furniture/merge.js');
+const Box = await imp('src/furniture/box.js');
+const Fin = await imp('src/furniture/finishes.js');
+const { HouseLoader } = await imp('src/house-loader.js');
+
+let failures = 0, passes = 0;
+function check(name, cond, detail) {
+  if (cond) { passes++; return; }
+  failures++;
+  console.error('FAIL ' + name + (detail !== undefined ? ' -- ' + JSON.stringify(detail) : ''));
+}
+const near = (a, b, eps = 1e-4) => Math.abs(a - b) <= eps;
+function quietly(fn) {
+  const w = console.warn, warnings = [];
+  console.warn = (...a) => warnings.push(a.map(String).join(' '));
+  try { return { value: fn(), warnings }; } finally { console.warn = w; }
+}
+async function quietlyAsync(fn) {
+  const w = console.warn, warnings = [];
+  console.warn = (...a) => warnings.push(a.map(String).join(' '));
+  try { return { value: await fn(), warnings }; } finally { console.warn = w; }
+}
+
+const tx = x => x * 0.01, tz = y => y * 0.01;
+const ULTRA = { tier: 'ultra', sunShadow: true, roomShadowLights: true };
+const MID = { tier: 'mid', sunShadow: true, roomShadowLights: false };
+const LOW = { tier: 'low', sunShadow: false, roomShadowLights: false };
+
+// A marker builder: a matte body plus a small GLOSS cube at the item's
+// FRONT-RIGHT corner (local +x, +z), so it lands in its own bucket and its
+// world position shows which way the item faces AND which side is its right.
+const Marker = {
+  DEFAULTS: Object.freeze({ width: 60, depth: 20, height: 50 }),
+  build(T, p) {
+    const g = new T.Group();
+    const w = p.width / 100, d = p.depth / 100, h = p.height / 100;
+    const body = new T.Mesh(new T.BoxGeometry(w, h, d).translate(0, h / 2, d / 2), Fin.makeFinish(T, 'matte', '#888888'));
+    const mk = new T.Mesh(new T.BoxGeometry(0.02, 0.02, 0.02).translate(w / 2 - 0.01, h / 2, d - 0.01),
+      Fin.makeFinish(T, 'gloss', '#ff0000'));
+    g.add(body); g.add(mk);
+    return g;
+  }
+};
+const builders = extra => new Map(Object.entries(Object.assign({
+  box: { DEFAULTS: Box.DEFAULTS, build: Box.build },
+  marker: Marker
+}, extra || {})));
+
+function bboxOf(mesh) {
+  mesh.geometry.computeBoundingBox();
+  return mesh.geometry.boundingBox;
+}
+function centreOf(mesh) {
+  const c = new THREE.Vector3();
+  bboxOf(mesh).getCenter(c);
+  return c;
+}
+
+// A 400 x 300 room (x 100..500, y 100..400) inside four 10 cm walls; walls 1
+// and 2 exterior. Same fixture shape as test-furniture-core.mjs.
+function house(furniture) {
+  return {
+    kind: 'geometry', schemaVersion: '1.2', id: 't', name: 't', units: 'cm',
+    coordinateTransform: { originX: 0, originY: 0, scale: 0.01 },
+    defaults: { wallHeight: 250, wallThickness: 10 },
+    walls: { segments: [
+      { id: 1, start: [95, 95], end: [505, 95], exterior: true },
+      { id: 2, start: [95, 405], end: [505, 405], exterior: true },
+      { id: 3, start: [95, 95], end: [95, 405] },
+      { id: 4, start: [505, 95], end: [505, 405], exterior: true }
+    ] },
+    rooms: [
+      { id: 'r', label: 'R', polygon: [[100, 100], [500, 100], [500, 400], [100, 400]] },
+      { id: 'q', label: 'Q', polygon: [[600, 100], [900, 100], [900, 400], [600, 400]] }
+    ],
+    furniture: furniture
+  };
+}
+const compile = furniture => quietly(() => HouseLoader.compile(house(furniture), '')).value;
+const build = (h, quality, extra, opts) => quietly(() => F.buildFurnitureSync(THREE, h.furniture,
+  builders(extra), Object.assign({ tx, tz, quality: quality || ULTRA, walls: h.walls }, opts || {}))).value;
+
+// ---- 1. placement: four orientations, both anchor forms ---------------------
+{
+  // Expected front (f) and right (u) plan vectors for each rotation.
+  const FR = { 0: [[0, 1], [1, 0]], 90: [[-1, 0], [0, 1]], 180: [[0, -1], [-1, 0]], 270: [[1, 0], [0, -1]] };
+  const cases = [
+    // wall anchors: north wall faces south (0), south faces north (180),
+    // west faces east (270), east faces west (90).
+    { item: { id: 'n', room: 'r', type: 'marker', wall: 1, centre: 200, offset: 3, elevation: 17 }, back: [200, 103], rot: 0 },
+    { item: { id: 's', room: 'r', type: 'marker', wall: 2, centre: 250 }, back: [250, 400], rot: 180 },
+    { item: { id: 'w', room: 'r', type: 'marker', wall: 3, centre: 150 }, back: [100, 150], rot: 270 },
+    { item: { id: 'e', room: 'r', type: 'marker', wall: 4, centre: 350 }, back: [500, 350], rot: 90 },
+    // free anchors: `at` is the footprint centre, back = at - front * depth/2.
+    { item: { id: 'f0', room: 'r', type: 'marker', at: [300, 250] }, back: [300, 240], rot: 0 },
+    { item: { id: 'f90', room: 'r', type: 'marker', at: [300, 250], rotation: 90 }, back: [310, 250], rot: 90 },
+    { item: { id: 'f180', room: 'r', type: 'marker', at: [300, 250], rotation: 180 }, back: [300, 260], rot: 180 },
+    { item: { id: 'f270', room: 'r', type: 'marker', at: [300, 250], rotation: 270 }, back: [290, 250], rot: 270 }
+  ];
+  cases.forEach(c => {
+    const h = compile([c.item]);
+    const res = build(h);
+    const body = res.beauty.find(m => m.userData.finish === 'matte');
+    const mark = res.beauty.find(m => m.userData.finish === 'gloss');
+    check(c.item.id + ': two buckets (body, marker)', res.beauty.length === 2 && body && mark, res.beauty.map(m => m.userData.bucket));
+    if (!body || !mark) return;
+    const [f, u] = FR[c.rot];
+    // Marker centre: back + u*(w/2 - 1) + f*(d - 1), at mid-height.
+    const ex = c.back[0] + u[0] * 29 + f[0] * 19, ey = c.back[1] + u[1] * 29 + f[1] * 19;
+    const mc = centreOf(mark);
+    const elev = (c.item.elevation || 0) / 100;
+    check(c.item.id + ': marker at the front-right corner', near(mc.x, tx(ex)) && near(mc.z, tz(ey)) && near(mc.y, elev + 0.25),
+      { got: mc.toArray(), want: [tx(ex), elev + 0.25, tz(ey)] });
+    // Body: the footprint spans the back point to depth d along the front.
+    const bb = bboxOf(body);
+    const fx = [c.back[0], c.back[0] + f[0] * 20].map(tx), fz = [c.back[1], c.back[1] + f[1] * 20].map(tz);
+    const wantMinX = Math.min(...fx) - Math.abs(u[0]) * 0.30, wantMaxX = Math.max(...fx) + Math.abs(u[0]) * 0.30;
+    const wantMinZ = Math.min(...fz) - Math.abs(u[1]) * 0.30, wantMaxZ = Math.max(...fz) + Math.abs(u[1]) * 0.30;
+    check(c.item.id + ': body footprint', near(bb.min.x, wantMinX) && near(bb.max.x, wantMaxX) &&
+      near(bb.min.z, wantMinZ) && near(bb.max.z, wantMaxZ) && near(bb.min.y, elev) && near(bb.max.y, elev + 0.5),
+      { got: [bb.min.toArray(), bb.max.toArray()], want: [[wantMinX, elev, wantMinZ], [wantMaxX, elev + 0.5, wantMaxZ]] });
+  });
+}
+
+// ---- 2. merge buckets --------------------------------------------------------
+{
+  const h = compile([
+    { id: 'a', room: 'r', type: 'box', at: [200, 200], params: { color: '#aa0000' } },
+    { id: 'b', room: 'r', type: 'box', at: [300, 300], params: { color: '#00aa00' } },
+    { id: 'g1', room: 'r', type: 'box', at: [250, 250], params: { finish: 'glass', color: '#ccddee' } },
+    { id: 'g2', room: 'r', type: 'box', at: [350, 250], params: { finish: 'glass', color: '#ccddee' } },
+    { id: 'g3', room: 'r', type: 'box', at: [400, 250], params: { finish: 'glass', color: '#112233' } },
+    { id: 'gq', room: 'q', type: 'box', at: [700, 250], params: { finish: 'glass', color: '#ccddee' } },
+    { id: 's1', room: 'r', type: 'box', at: [150, 350], params: { finish: 'emissive', color: '#3366ff' } },
+    { id: 's2', room: 'r', type: 'box', at: [180, 350], params: { finish: 'emissive', color: '#3366ff' } },
+    { id: 'm', room: 'q', type: 'box', at: [800, 250] }
+  ]);
+  const res = build(h);
+  const by = (room, finish) => res.beauty.filter(m => m.userData.room === room && m.userData.finish === finish);
+  check('two same-room matte items -> ONE mesh', by('r', 'matte').length === 1 && by('r', 'matte')[0].userData.parts === 2,
+    by('r', 'matte').map(m => m.userData.bucket));
+  check('matte bucket is vertex-coloured, both colours present', (() => {
+    const m = by('r', 'matte')[0]; if (!m) return false;
+    const col = m.geometry.attributes.color; if (!col || !m.material.vertexColors) return false;
+    const reds = new Set(); for (let i = 0; i < col.count; i++) reds.add(col.getX(i) > col.getY(i) ? 'r' : 'g');
+    return reds.size === 2;
+  })());
+  check('glass: one mesh per room and colour', by('r', 'glass').length === 2 && by('q', 'glass').length === 1,
+    res.beauty.map(m => m.userData.bucket));
+  check('glass same colour merged', by('r', 'glass').some(m => m.userData.parts === 2));
+  check('glass keeps a real transparent material', by('r', 'glass').every(m => m.material.transparent && !m.material.vertexColors && m.material.opacity < 0.5));
+  check('screens: one emissive mesh for one colour', by('r', 'emissive').length === 1 && by('r', 'emissive')[0].userData.parts === 2);
+  check('other room is its own bucket', by('q', 'matte').length === 1);
+  check('one shared material per opaque finish across rooms', by('r', 'matte')[0].material === by('q', 'matte')[0].material);
+  check('total draws', res.beauty.length === 6, res.beauty.map(m => m.userData.bucket));
+  // The tag is read through partFinish: a finish on the MESH only is honoured.
+  const g = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial());
+  mesh.userData.finish = 'metal';
+  g.add(mesh);
+  const flat = M.flattenGroup(THREE, g);
+  check('finish on the mesh is read (partFinish)', flat.parts[0].finish === 'metal' && flat.warnings.length === 0, flat.warnings);
+  const g2 = new THREE.Group();
+  g2.add(new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ metalness: 0.9, roughness: 0.3 })));
+  const flat2 = M.flattenGroup(THREE, g2);
+  check('untagged part is quantised, with a warning', flat2.parts[0].finish === 'metal' && flat2.warnings.length === 1, flat2);
+  const g3 = new THREE.Group();
+  const kept = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), Fin.makeFinish(THREE, 'matte'));
+  kept.userData.keep = true;
+  g3.add(kept);
+  check('keep flag (partKeep) keeps a matte part', M.flattenGroup(THREE, g3).parts[0].keep === true);
+}
+
+// ---- 3. shadows: beauty never casts, one proxy per room -----------------------
+{
+  const h = compile([
+    { id: 'tall', room: 'r', type: 'box', at: [200, 200], params: { height: 80 } },
+    { id: 'tall2', room: 'r', type: 'box', at: [300, 200], params: { height: 40 } },
+    { id: 'short', room: 'r', type: 'box', at: [400, 200], params: { height: 39 } },
+    { id: 'hung', room: 'r', type: 'box', wall: 1, centre: 300, elevation: 30, params: { height: 80 } },
+    { id: 'glass', room: 'r', type: 'box', at: [200, 300], params: { height: 80, finish: 'glass' } },
+    { id: 'qtall', room: 'q', type: 'box', at: [700, 200], params: { height: 100 } }
+  ]);
+  const res = build(h);
+  check('beauty meshes never cast', res.beauty.every(m => m.castShadow === false));
+  check('opaque beauty receives, translucent (glass) does not',
+    res.beauty.every(m => m.receiveShadow === !(m.userData.finish === 'glass')));
+  check('one proxy per furnished room', res.shadowProxies.length === 2, res.shadowProxies.map(p => p.name));
+  const pr = res.shadowProxies.find(p => p.userData.room === 'r');
+  check('proxy casts, does not receive, is frustum-culled', pr && pr.castShadow && !pr.receiveShadow && pr.frustumCulled);
+  check('proxy writes neither colour nor depth', pr && pr.material.colorWrite === false && pr.material.depthWrite === false);
+  check('proxy is position-only', pr && Object.keys(pr.geometry.attributes).join() === 'position');
+  check('proxy has a bounding sphere', pr && pr.geometry.boundingSphere && pr.geometry.boundingSphere.radius > 0);
+  // Casters: elevation < 30 and height >= 40, glass excluded. A box is 12
+  // triangles, so 'tall' + 'tall2' only = 24 triangles = 72 vertices.
+  check('proxy = exactly the two casters (height 40 in, 39 out, elevation 30 out, glass out)',
+    pr && pr.geometry.attributes.position.count === 72, pr && pr.geometry.attributes.position.count);
+  // Identical vertices to the beauty geometry: every proxy vertex is a vertex
+  // of the room's matte bucket.
+  const matte = res.beauty.find(m => m.userData.room === 'r' && m.userData.finish === 'matte');
+  const key = (a, i) => a.getX(i).toFixed(5) + ',' + a.getY(i).toFixed(5) + ',' + a.getZ(i).toFixed(5);
+  const beautyVerts = new Set();
+  for (let i = 0; i < matte.geometry.attributes.position.count; i++) beautyVerts.add(key(matte.geometry.attributes.position, i));
+  let allIn = true;
+  for (let i = 0; i < pr.geometry.attributes.position.count; i++) if (!beautyVerts.has(key(pr.geometry.attributes.position, i))) allIn = false;
+  check('proxy vertices are the beauty vertices (no self-shadow offset)', allIn);
+  check('full-detail proxy has no customDepthMaterial', pr && pr.customDepthMaterial === undefined);
+  check('depth precompile mesh built, not in the root', res.depthPrecompile && !res.depthPrecompile.parent &&
+    res.depthPrecompile.material.isMeshDepthMaterial && res.depthPrecompile.material.side === THREE.BackSide &&
+    res.depthPrecompile.material.depthPacking === THREE.RGBADepthPacking);
+  const noShadows = build(h, { tier: 'ultra', sunShadow: false, roomShadowLights: false });
+  check('no shadows at all -> no proxies', noShadows.shadowProxies.length === 0 && noShadows.depthPrecompile === null);
+  check('mid tier (sun only) still gets proxies', build(h, MID).shadowProxies.length === 2);
+}
+
+// ---- 3b. r160 actually draws the proxy in the shadow pass only -----------------
+// A stub WebGL2 context lets the real WebGLRenderer run its render() and
+// WebGLShadowMap without a GPU. renderBufferDirect is the one call both passes
+// make per draw, so wrapping it logs every draw with the render target that
+// was bound (a shadow map) or not (the screen).
+function stubGL() {
+  const consts = new Map(), names = new Map();
+  let next = 0x9000;
+  const params = { VERSION: 'WebGL 2.0 (stub)', SHADING_LANGUAGE_VERSION: 'WebGL GLSL ES 3.00',
+    VENDOR: 'stub', RENDERER: 'stub', SCISSOR_BOX: [0, 0, 1, 1], VIEWPORT: [0, 0, 1, 1] };
+  class WebGL2RenderingContext {}
+  globalThis.WebGL2RenderingContext = WebGL2RenderingContext;
+  const t = {
+    constructor: WebGL2RenderingContext,
+    canvas: { width: 1, height: 1, style: {}, addEventListener() {}, removeEventListener() {} },
+    drawingBufferWidth: 1, drawingBufferHeight: 1,
+    getContextAttributes: () => ({ alpha: true, antialias: false, depth: true, stencil: false, premultipliedAlpha: true, preserveDrawingBuffer: false }),
+    // Present so compileAsync polls program readiness rather than warning.
+    getExtension: name => (name === 'KHR_parallel_shader_compile' ? {} : null),
+    getSupportedExtensions: () => [],
+    getShaderPrecisionFormat: () => ({ precision: 23, rangeMin: 127, rangeMax: 127 }),
+    getParameter: p => { const n = names.get(p); if (n in params) return params[n]; return n && n.startsWith('MAX_') ? 4096 : 0; },
+    getProgramParameter: (prog, pname) => (/^ACTIVE_/.test(names.get(pname) || '') ? 0 : true),
+    getShaderParameter: () => true,
+    getProgramInfoLog: () => '', getShaderInfoLog: () => '', getShaderSource: () => '',
+    getActiveUniform: () => null, getActiveAttrib: () => null, getAttribLocation: () => -1,
+    getUniformLocation: () => null, checkFramebufferStatus: () => 0, getError: () => 0
+  };
+  const gl = new Proxy(t, {
+    get(target, prop) {
+      if (typeof prop !== 'string') return undefined;
+      if (prop in target) return target[prop];
+      if (/^[A-Z0-9_]+$/.test(prop)) {
+        if (!consts.has(prop)) { consts.set(prop, next); names.set(next, prop); next++; }
+        return consts.get(prop);
+      }
+      if (/^create/.test(prop)) return () => ({});
+      if (/^is/.test(prop)) return () => true;
+      return () => undefined;
+    }
+  });
+  t.canvas.getContext = () => gl;
+  return gl;
+}
+function stubRenderer() {
+  const gl = stubGL();
+  const ren = quietly(() => new THREE.WebGLRenderer({ canvas: gl.canvas, context: gl })).value;
+  ren.shadowMap.enabled = true;
+  return ren;
+}
+function lightScene() {
+  const scene = new THREE.Scene();
+  const spot = new THREE.SpotLight(0xffffff, 10);
+  spot.position.set(3, 3, 2.5); spot.target.position.set(3, 0, 2.5);
+  spot.castShadow = true;
+  scene.add(spot); scene.add(spot.target);
+  const sun = new THREE.DirectionalLight(0xffffff, 1);
+  sun.position.set(10, 18, -5); sun.castShadow = true;
+  sun.shadow.camera.left = -15; sun.shadow.camera.right = 15; sun.shadow.camera.top = 15; sun.shadow.camera.bottom = -15;
+  scene.add(sun);
+  const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+  cam.position.set(3, 6, 10); cam.lookAt(3, 0, 2.5);
+  return { scene, cam };
+}
+{
+  const h = compile([
+    { id: 'tall', room: 'r', type: 'box', at: [300, 250], params: { height: 80 } },
+    { id: 'hung', room: 'r', type: 'box', wall: 1, centre: 300, elevation: 150, params: { height: 50, finish: 'gloss' } }
+  ]);
+  const res = build(h);
+  const ren = stubRenderer();
+  const { scene, cam } = lightScene();
+  scene.add(res.root);
+  const log = [];
+  ren.renderBufferDirect = (camera, sc, geometry, material, object) => {
+    log.push({ shadow: !!ren.getRenderTarget(), object, material });
+  };
+  quietly(() => ren.render(scene, cam));
+  const proxy = res.shadowProxies[0];
+  const inShadow = log.filter(l => l.shadow && l.object === proxy);
+  const inBeauty = log.filter(l => !l.shadow && l.object === proxy);
+  check('r160: proxy drawn in the shadow passes with a depth material',
+    inShadow.length >= 2 && inShadow.every(l => l.material.isMeshDepthMaterial), inShadow.length);
+  check('r160: proxy in the beauty pass only with colour AND depth writes off',
+    inBeauty.length === 1 && inBeauty.every(l => l.material.colorWrite === false && l.material.depthWrite === false));
+  check('r160: no beauty furniture mesh is drawn in any shadow pass',
+    log.filter(l => l.shadow && res.beauty.indexOf(l.object) !== -1).length === 0);
+  check('r160: beauty furniture drawn in the beauty pass', log.filter(l => !l.shadow && res.beauty.indexOf(l.object) !== -1).length === res.beauty.length);
+  // Hidden furniture: nothing furniture-owned is drawn in any pass.
+  log.length = 0;
+  res.root.visible = false;
+  quietly(() => ren.render(scene, cam));
+  check('hidden furniture: no draws in any pass (proxy shadow too)',
+    log.filter(l => l.object === proxy || res.beauty.indexOf(l.object) !== -1).length === 0);
+}
+
+// ---- 4. proxy caps --------------------------------------------------------------
+{
+  // A builder whose full build is a dense sphere and whose low build is a box.
+  const Dense = {
+    DEFAULTS: Object.freeze({ width: 50, depth: 50, height: 80, segs: 64 }),
+    build(T, p, o) {
+      const g = new T.Group();
+      const geo = o && o.detail === 'low'
+        ? new T.BoxGeometry(0.5, 0.8, 0.5).translate(0, 0.4, 0.25)
+        : new T.SphereGeometry(0.25, p.segs, p.segs).translate(0, 0.4, 0.25);
+      g.add(new T.Mesh(geo, Fin.makeFinish(T, 'matte')));
+      return g;
+    }
+  };
+  // sphere(64,64) = 64*62*2 + 64*2 = 8064 triangles (r160 drops the pole caps' degenerate halves).
+  const tri = segs => { const s = new THREE.SphereGeometry(0.25, segs, segs); const n = s.index.count / 3; s.dispose(); return n; };
+  const t64 = tri(64);
+  const h = compile([
+    { id: 'a1', room: 'r', type: 'dense', at: [200, 200] },
+    { id: 'a2', room: 'r', type: 'dense', at: [300, 200] },   // room r: 2 * t64 > 15k
+    { id: 'b1', room: 'q', type: 'dense', at: [700, 200] }    // room q: t64 < 15k
+  ]);
+  const res = build(h, ULTRA, { dense: Dense });
+  const pr = room => res.shadowProxies.find(p => p.userData.room === room);
+  check('fixture: room r is over the per-room cap', 2 * t64 > F.PROXY_ROOM_TRI_CAP && t64 < F.PROXY_ROOM_TRI_CAP, t64);
+  check('over-cap room proxy comes from a low build', pr('r').userData.detail === 'low' && pr('r').userData.triangles === 24,
+    pr('r').userData);
+  check('over-cap proxy: customDepthMaterial with RGBA packing and polygon offset (nit 1)',
+    pr('r').customDepthMaterial && pr('r').customDepthMaterial.isMeshDepthMaterial &&
+    pr('r').customDepthMaterial.depthPacking === THREE.RGBADepthPacking &&
+    pr('r').customDepthMaterial.polygonOffset === true && pr('r').customDepthMaterial.polygonOffsetFactor === 2 &&
+    pr('r').customDepthMaterial.polygonOffsetUnits === 2);
+  check('under-cap room stays full detail', pr('q').userData.detail === 'full' && pr('q').userData.triangles === t64);
+  check('beauty is still full detail in the over-cap room',
+    res.beauty.find(m => m.userData.room === 'r').userData.triangles === 2 * t64);
+  check('stats name the capped rooms', res.stats.proxyLowRooms.join() === 'r');
+  // Total cap: three rooms each under the room cap, over a lowered total.
+  // Room sizes differ; the LARGEST must drop first, and only as many as needed.
+  const h2 = { furniture: [
+    { id: 'x', room: 'big', type: 'dense', origin: 'centre', x: 200, y: 200, rotationDeg: 0, elevation: 0, params: { segs: 48 }, fade: 'never', priority: 'normal' },
+    { id: 'y', room: 'mid', type: 'dense', origin: 'centre', x: 400, y: 200, rotationDeg: 0, elevation: 0, params: { segs: 40 }, fade: 'never', priority: 'normal' },
+    { id: 'z', room: 'small', type: 'dense', origin: 'centre', x: 600, y: 200, rotationDeg: 0, elevation: 0, params: { segs: 32 }, fade: 'never', priority: 'normal' }
+  ], walls: [] };
+  const tBig = tri(48), tMid = tri(40), tSmall = tri(32);
+  // Cap between (mid + small + 12) and (big + mid + small): exactly the
+  // largest room must drop.
+  const cap = tMid + tSmall + 12 + 1;
+  const r2 = build(h2, ULTRA, { dense: Dense }, { totalTriCap: cap });
+  const d = room => r2.shadowProxies.find(p => p.userData.room === room).userData.detail;
+  check('total cap: largest room drops first, only it', d('big') === 'low' && d('mid') === 'full' && d('small') === 'full',
+    { big: d('big'), mid: d('mid'), small: d('small'), tBig, tMid, tSmall, cap });
+  const r3 = build(h2, ULTRA, { dense: Dense }, { totalTriCap: tSmall + 24 + 1 });
+  const d3 = room => r3.shadowProxies.find(p => p.userData.room === room).userData.detail;
+  check('total cap: then the next largest', d3('big') === 'low' && d3('mid') === 'low' && d3('small') === 'full');
+}
+
+// ---- 5. low tier ---------------------------------------------------------------
+{
+  const seen = [];
+  const Spy = { DEFAULTS: Box.DEFAULTS, build(T, p, o) { seen.push(o && o.detail); return Box.build(T, p, o); } };
+  const h = compile([
+    { id: 'a', room: 'r', type: 'spy', at: [200, 200], params: { height: 80 } },
+    { id: 'm', room: 'r', type: 'spy', at: [300, 200], priority: 'minor' }
+  ]);
+  const res = build(h, LOW, { spy: Spy });
+  check('low tier: builder gets detail low', seen.length === 1 && seen[0] === 'low', seen);
+  check('low tier: minor item skipped', !res.byId.m && res.byId.a && res.stats.skipped === 1);
+  check('low tier: no proxies', res.shadowProxies.length === 0 && res.depthPrecompile === null);
+  // Even if a low-tier scene were asked for shadows, the tier alone rules proxies out.
+  const lowAsked = build(h, { tier: 'low', sunShadow: true, roomShadowLights: true }, { spy: Spy });
+  check('low tier: no proxies even with shadow flags on', lowAsked.shadowProxies.length === 0);
+  seen.length = 0;
+  const hi = build(h, ULTRA, { spy: Spy });
+  check('ultra: builder gets detail full, minor item kept', seen.join() === 'full,full' && hi.byId.m);
+}
+
+// ---- 6. fade --------------------------------------------------------------------
+{
+  const h = compile([
+    { id: 'host', room: 'r', type: 'box', wall: 1, centre: 200, params: { height: 150 } },
+    { id: 'hostShort', room: 'r', type: 'box', wall: 1, centre: 300, params: { height: 100 } },
+    { id: 'hostHigh', room: 'r', type: 'box', wall: 1, centre: 400, elevation: 60, params: { height: 50 } },
+    { id: 'interior', room: 'r', type: 'box', wall: 3, centre: 200, params: { height: 150 } },
+    { id: 'never', room: 'r', type: 'box', wall: 1, centre: 450, fade: 'never', params: { height: 150 } },
+    { id: 'override', room: 'r', type: 'box', at: [300, 250], fade: { wall: 2 }, params: { height: 20 } },
+    { id: 'freeTall', room: 'r', type: 'box', at: [470, 250], rotation: 90, params: { width: 100, depth: 50, height: 200 } },
+    { id: 'freeMid', room: 'r', type: 'box', at: [300, 250], params: { height: 200 } },
+    // Corner unit: anchored to north wall 1 (its run), tucked into the corner
+    // with EAST wall 4 (also exterior) -- it fades with its run's wall, 1.
+    { id: 'corner', room: 'r', type: 'box', wall: 1, centre: 470, params: { width: 60, depth: 60, height: 150 } }
+  ]);
+  const res = build(h);
+  const fw = id => res.byId[id].fadeWallId;
+  check('wall anchor, tall, exterior host -> host wall', fw('host') === 1, fw('host'));
+  check('top exactly 100 -> no fade', fw('hostShort') === null);
+  check('elevation counts toward the top', fw('hostHigh') === 1);
+  check('interior host -> no fade', fw('interior') === null);
+  check('fade never -> none', fw('never') === null);
+  check('explicit override wins, whatever the height', fw('override') === 2);
+  check('free tall item beside the shell -> pickFadeWall', fw('freeTall') === 4, fw('freeTall'));
+  check('free tall item mid-room -> none', fw('freeMid') === null);
+  check('corner unit fades with its own run, not the side wall', fw('corner') === 1);
+  // Fade buckets get their own transparent material clone.
+  const fading = res.beauty.filter(m => m.userData.fadeWallId === 1);
+  check('fade bucket per wall, own transparent material', fading.length === 1 && fading[0].material.transparent &&
+    fading[0].material !== res.beauty.find(m => m.userData.fadeWallId == null && m.userData.finish === 'matte').material);
+  // Glass never fades (A3), even tall on an exterior host wall.
+  const hg = compile([
+    { id: 'gcase', room: 'r', type: 'box', wall: 1, centre: 200, params: { height: 180, finish: 'glass' } },
+    { id: 'body', room: 'r', type: 'box', wall: 1, centre: 300, params: { height: 180 } }
+  ]);
+  const rg = build(hg);
+  const glass = rg.beauty.filter(m => m.userData.finish === 'glass');
+  check('A3: glass bucket carries no fade wall', glass.length === 1 && glass[0].userData.fadeWallId === null);
+  const regs = F.fadeRegistrations(rg);
+  check('A3: no glass mesh is ever registered for the fade', regs.length === 1 &&
+    regs.every(r => r.mesh.userData.finish !== 'glass' && r.mesh.material.userData.finish !== 'glass'));
+  // The second lock: even a glass mesh that somehow carries a fade wall is refused.
+  const forged = { beauty: [Object.assign(new THREE.Mesh(new THREE.BufferGeometry(), Fin.makeFinish(THREE, 'glass')),
+    { userData: { fadeWallId: 1, finish: 'glass' } })] };
+  check('A3: fadeRegistrations refuses a forged glass fade', F.fadeRegistrations(forged).length === 0);
+  // Each lock on its own: the bucket tag, and the material's finish.
+  const byTag = { beauty: [Object.assign(new THREE.Mesh(new THREE.BufferGeometry(), Fin.makeFinish(THREE, 'matte')),
+    { userData: { fadeWallId: 1, finish: 'glass' } })] };
+  const byMat = { beauty: [Object.assign(new THREE.Mesh(new THREE.BufferGeometry(), Fin.makeFinish(THREE, 'glass')),
+    { userData: { fadeWallId: 1, finish: 'matte' } })] };
+  check('A3: refused by the bucket tag alone', F.fadeRegistrations(byTag).length === 0);
+  check('A3: refused by the material finish alone', F.fadeRegistrations(byMat).length === 0);
+  const gp = { finish: 'glass', keep: true, color: 0xccddee, emissive: 0, textured: false };
+  check('A3: a glass bucket key never names a fade wall', /\|-$/.test(M.bucketKey(gp, 'r', 1)), M.bucketKey(gp, 'r', 1));
+  check('...while a matte one does', /\|1$/.test(M.bucketKey(Object.assign({}, gp, { finish: 'matte', keep: false }), 'r', 1)));
+  // The scene registers exactly fadeRegistrations() and nothing else.
+  const sceneSrc = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+  check('scene registers furniture fades through fadeRegistrations only',
+    /fadeRegistrations\(result\)\.forEach/.test(sceneSrc) && !/furnitureResult\.beauty[^\n]*wallMeshes/.test(sceneSrc));
+}
+
+// ---- 7. the attach sequence (A2) --------------------------------------------------
+function fakeRenderer(opts) {
+  const o = opts || {};
+  const calls = [];
+  const ren = {
+    shadowMap: { enabled: false },
+    rt: null,
+    getRenderTarget() { return this.rt; },
+    setRenderTarget(rt) { calls.push(['setRenderTarget', rt ? 'rt' : null]); this.rt = rt; },
+    compileAsync(obj, cam, scene) {
+      calls.push(['compileAsync', obj, cam, scene, this.shadowMap.enabled, this.rt ? 'rt' : null]);
+      if (o.onCompile) o.onCompile(obj);
+      return o.reject ? Promise.reject(new Error('boom')) : Promise.resolve(obj);
+    }
+  };
+  return { ren, calls };
+}
+function sampleResult() {
+  const h = compile([{ id: 'a', room: 'r', type: 'box', at: [200, 200], params: { height: 80 } }]);
+  return build(h);
+}
+{
+  const { ren, calls } = fakeRenderer();
+  const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera();
+  let attached = null, disposed = false;
+  const res = sampleResult();
+  ren.shadowMap.enabled = false;
+  const out = await F.scheduleFurnitureAttach({
+    precompileDone: Promise.resolve(), modulesLoaded: Promise.resolve(new Map()),
+    isDisposed: () => disposed, build: () => res, renderer: ren, camera: cam, scene, wantShadows: true,
+    makeRenderTarget: () => ({ dispose() { calls.push(['rtDispose']); } }),
+    attach: r => { calls.push(['attach']); attached = r; scene.add(r.root); }
+  });
+  const iCompile = calls.findIndex(c => c[0] === 'compileAsync' && c[1] === res.root);
+  const iAttach = calls.findIndex(c => c[0] === 'attach');
+  check('A2: compileAsync(root, cam, scene) before the attach', iCompile !== -1 && iAttach > iCompile &&
+    calls[iCompile][2] === cam && calls[iCompile][3] === scene, calls.map(c => c[0]));
+  check('A2: compiled with shadowMap.enabled = wantShadows (nit 3)', calls[iCompile][4] === true);
+  check('nit 3: shadowMap.enabled restored afterwards', ren.shadowMap.enabled === false);
+  const dc = calls.find(c => c[0] === 'compileAsync' && c[1] === res.depthPrecompile);
+  check('nit 1: depth program compiled with a render target bound', dc && dc[5] === 'rt' && dc[3] === scene);
+  check('nit 1: render target restored and freed', ren.rt === null && calls.some(c => c[0] === 'rtDispose'));
+  check('A2: resolves to the attached result', out === res && attached === res && res.root.parent === scene);
+}
+{
+  // Disposed BEFORE the modules resolve: build never runs, nothing attaches.
+  const { ren, calls } = fakeRenderer();
+  let disposed = false, built = 0, resolveModules;
+  const modulesLoaded = new Promise(r => { resolveModules = r; });
+  const p = F.scheduleFurnitureAttach({
+    precompileDone: Promise.resolve(), modulesLoaded, isDisposed: () => disposed,
+    build: () => { built++; return sampleResult(); }, renderer: ren, camera: {}, scene: {}, wantShadows: true,
+    attach: () => calls.push(['attach'])
+  });
+  disposed = true;
+  resolveModules(new Map());
+  const out = await p;
+  check('A2: dispose before modules resolve -> no build, no attach, no compile',
+    out === null && built === 0 && !calls.some(c => c[0] === 'attach' || c[0] === 'compileAsync'));
+}
+{
+  // Disposed DURING the compile: the build is freed, not attached.
+  let disposed = false;
+  const res = sampleResult();
+  const geos = new Set();
+  res.root.traverse(o => { if (o.geometry) geos.add(o.geometry); });
+  let freed = 0;
+  geos.forEach(g => g.addEventListener('dispose', () => { freed++; }));
+  const matsFreed = [];
+  res.materials.forEach(m => m.addEventListener('dispose', () => matsFreed.push(m)));
+  const { ren, calls } = fakeRenderer({ onCompile: () => { disposed = true; } });
+  const out = await F.scheduleFurnitureAttach({
+    precompileDone: Promise.resolve(), modulesLoaded: Promise.resolve(new Map()), isDisposed: () => disposed,
+    build: () => res, renderer: ren, camera: {}, scene: {}, wantShadows: false,
+    attach: () => calls.push(['attach'])
+  });
+  check('A2: dispose during compile -> not attached', out === null && !calls.some(c => c[0] === 'attach'));
+  check('A2: ... and every furniture geometry and material freed', freed === geos.size && geos.size > 0 &&
+    matsFreed.length === res.materials.size, { freed, geos: geos.size });
+  check('wantShadows false: no depth precompile', !calls.some(c => c[0] === 'compileAsync' && c[1] === res.depthPrecompile));
+}
+{
+  // A failing precompile still attaches (compiles on first draw), with a warning.
+  const { ren, calls } = fakeRenderer({ reject: true });
+  const res = sampleResult();
+  const { value: out, warnings } = await quietlyAsync(() => F.scheduleFurnitureAttach({
+    precompileDone: Promise.resolve(), modulesLoaded: Promise.resolve(new Map()), isDisposed: () => false,
+    build: () => res, renderer: ren, camera: {}, scene: {}, wantShadows: true,
+    attach: () => calls.push(['attach'])
+  }));
+  check('A2: rejected precompile -> warn and still attach', out === res && calls.some(c => c[0] === 'attach') &&
+    warnings.some(w => /precompile failed/.test(w)));
+  // A throwing build: the terminal catch warns and resolves null.
+  const r2 = await quietlyAsync(() => F.scheduleFurnitureAttach({
+    precompileDone: Promise.resolve(), modulesLoaded: Promise.resolve(new Map()), isDisposed: () => false,
+    build: () => { throw new Error('bad builder'); }, renderer: ren, camera: {}, scene: {}, wantShadows: true,
+    attach: () => {}
+  }));
+  check('nit 2: terminal catch warns, never rejects', r2.value === null && r2.warnings.some(w => /could not be built/.test(w)));
+  // No compileAsync on the renderer: attach straight away.
+  const plain = { shadowMap: { enabled: true } };
+  let att = 0;
+  await F.scheduleFurnitureAttach({
+    precompileDone: Promise.resolve(), modulesLoaded: Promise.resolve(new Map()), isDisposed: () => false,
+    build: () => sampleResult(), renderer: plain, camera: {}, scene: {}, wantShadows: true, attach: () => { att++; }
+  });
+  check('no compileAsync -> attaches anyway', att === 1);
+  // The scene hands scheduleFurnitureAttach the precompile chain AFTER its
+  // catch/restore (nit 2), not the raw compileAsync promise.
+  const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+  check('nit 2: precompileDone is the caught/restored chain',
+    /precompileDone = Promise\.resolve\(ren\.compileAsync\(scene, cam\)\)\s*\n\s*\.catch\(/.test(src) &&
+    /\.then\(\(\) => \{\s*\n\s*ren\.shadowMap\.enabled = shadowWasEnabled;/.test(src));
+}
+
+// ---- 8. the depth program really is precompiled (stub WebGL) ------------------------
+{
+  const run = async (precompileDepth, overCap) => {
+    const h = compile([
+      { id: 'a', room: 'r', type: 'box', at: [300, 250], params: { height: 80 } },
+      { id: 'b', room: 'r', type: 'box', at: [200, 250], params: { height: 80 } }
+    ]);
+    const res = build(h, ULTRA, {}, overCap ? { roomTriCap: 1 } : {});
+    const ren = stubRenderer();
+    const { scene, cam } = lightScene();
+    // A house caster, drawn with the shadow map's own depth material.
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial());
+    wall.castShadow = true; wall.position.set(5, 0.5, 5);
+    scene.add(wall);
+    // The scene's own precompile. NO shadow frame yet: the depth program
+    // does not exist until something compiles it, which is the case the
+    // furniture precompile has to cover (it can attach before the house's
+    // first shadow frame has been drawn).
+    await ren.compileAsync(scene, cam);
+    await F.scheduleFurnitureAttach({
+      precompileDone: Promise.resolve(), modulesLoaded: Promise.resolve(new Map()), isDisposed: () => false,
+      build: () => res, renderer: ren, camera: cam, scene, wantShadows: true,
+      makeRenderTarget: precompileDepth ? () => new THREE.WebGLRenderTarget(1, 1) : undefined,
+      attach: r => scene.add(r.root)
+    });
+    const before = ren.info.programs.length;
+    ren.shadowMap.needsUpdate = true;
+    quietly(() => ren.render(scene, cam));
+    return { before, after: ren.info.programs.length, res };
+  };
+  const a = await run(true, false);
+  check('precompile: a shadow frame after attach compiles NO new program', a.after === a.before,
+    { before: a.before, after: a.after });
+  const b = await run(true, true);
+  check('precompile: ... also with an over-cap customDepthMaterial proxy', b.res.shadowProxies[0].customDepthMaterial &&
+    b.after === b.before, { before: b.before, after: b.after });
+  // Control: without the depth precompile the same frame DOES build a program,
+  // so the two checks above are measuring something.
+  const c = await run(false, false);
+  check('precompile control: without it, the shadow frame compiles one', c.after === c.before + 1,
+    { before: c.before, after: c.after });
+}
+
+// ---- 9. room clicks ----------------------------------------------------------------
+{
+  const h = compile([
+    { id: 'a', room: 'r', type: 'box', at: [300, 250], params: { width: 200, depth: 200, height: 80 } },
+    { id: 'g', room: 'r', type: 'box', at: [300, 250], elevation: 100, params: { width: 200, depth: 200, height: 2, finish: 'glass' } }
+  ]);
+  const res = build(h);
+  const scene = new THREE.Scene();
+  const catcher = new THREE.Mesh(new THREE.PlaneGeometry(4, 3), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 }));
+  catcher.rotation.x = -Math.PI / 2; catcher.position.set(3, 0.006, 2.5);
+  catcher.userData = { roomId: 'r', clickable: true };
+  scene.add(catcher);
+  scene.add(res.root);
+  scene.updateMatrixWorld(true);
+  const rc = new THREE.Raycaster(new THREE.Vector3(3, 5, 2.5), new THREE.Vector3(0, -1, 0));
+  const hits = rc.intersectObjects(scene.children, true);
+  check('fixture: the ray hits furniture before the floor', hits.length > 1 && hits[0].object !== catcher, hits.map(x => x.object.name));
+  // The scene's own predicate, read from the source so the test follows it.
+  const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+  check('the scene still resolves a click by the first clickable hit',
+    src.includes('rc.intersectObjects(scene.children, true).find(x => x.object.userData.clickable)'));
+  const h1 = hits.find(x => x.object.userData.clickable);
+  check('room click resolves through the furniture', h1 && h1.object === catcher && h1.object.userData.roomId === 'r');
+  let anyClickable = false;
+  res.root.traverse(o => { if (o.userData && o.userData.clickable) anyClickable = true; });
+  check('no furniture mesh is clickable', !anyClickable);
+}
+
+// ---- 10. no furniture = nothing built ------------------------------------------------
+{
+  const h = compile([]);
+  const res = build(h);
+  check('no furniture: empty root, no materials, no proxies',
+    res.root.children.length === 0 && res.materials.size === 0 && res.shadowProxies.length === 0 && res.depthPrecompile === null);
+  const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+  check('scene: a house with no furniture starts nothing',
+    /if \(furnitureStarted \|\| !furnitureItems\.length\) return;/.test(src) &&
+    /\(furnitureItems\.length && furnitureVisible\)\s*\n?\s*\? loadFurnitureModules/.test(src));
+}
+
+// ---- 12. kept parts keep their builder's material (review a6e3c7d8) ------------------------
+{
+  const Sconce = await imp('src/furniture/wall-sconce.js');
+  const PROPS = ['type', 'opacity', 'transparent', 'side', 'depthWrite', 'emissiveIntensity', 'roughness', 'metalness'];
+  const same = (a, b) => PROPS.every(k => a[k] === b[k]) &&
+    (!a.color || a.color.getHex() === b.color.getHex()) && (!a.emissive || a.emissive.getHex() === b.emissive.getHex());
+  const sconce = { DEFAULTS: Sconce.DEFAULTS, build: Sconce.build };
+  for (const kind of ['swing-arm-globe', 'up-down']) {
+    // The builder's own kept materials, as the builder made them.
+    const src = Sconce.build(THREE, Object.assign({}, Sconce.DEFAULTS, { kind }));
+    const keptSrc = [];
+    src.traverse(o => { if (o.isMesh && (o.userData.keep || (o.material.userData && o.material.userData.keep))) keptSrc.push(o.material); });
+    check(kind + ': fixture has kept parts', keptSrc.length >= 2, keptSrc.length);
+    const h = compile([
+      { id: 's1', room: 'r', type: 'sconce', wall: 3, centre: 200, elevation: 150, params: { kind } },
+      { id: 's2', room: 'r', type: 'sconce', wall: 3, centre: 300, elevation: 150, params: { kind } }
+    ]);
+    const res = build(h, ULTRA, { sconce });
+    const kept = res.beauty.filter(m => m.userData.keep);
+    check(kind + ': every builder kept material survives exactly (type, opacity, transparent, side, depthWrite, emissiveIntensity)',
+      keptSrc.every(sm => kept.some(m => same(sm, m.material))),
+      keptSrc.map(m => [m.type, m.opacity, m.transparent, m.side, m.depthWrite, m.emissiveIntensity]));
+    check(kind + ': no kept bucket has a material the builder did not make',
+      kept.every(m => keptSrc.some(sm => same(sm, m.material))),
+      kept.map(m => [m.material.type, m.material.opacity, m.material.side]));
+    check(kind + ': two identical sconces share their kept buckets', kept.every(m => m.userData.parts % 2 === 0),
+      kept.map(m => m.userData.parts));
+    check(kind + ': translucent kept parts never receive a shadow',
+      kept.filter(m => m.material.transparent && m.material.opacity < 1).every(m => m.receiveShadow === false));
+  }
+  // The up-down beam cones specifically: faint, double-sided, no depth write,
+  // and never faded even on an exterior wall.
+  {
+    const h = compile([{ id: 'u', room: 'r', type: 'sconce', wall: 1, centre: 200, elevation: 150, params: { kind: 'up-down' } }]);
+    const res = build(h, ULTRA, { sconce });
+    const beam = res.beauty.find(m => m.material.type === 'MeshBasicMaterial');
+    check('up-down beam stays a faint translucent MeshBasicMaterial', beam && beam.material.transparent &&
+      beam.material.opacity < 0.5 && beam.material.depthWrite === false && beam.material.side === THREE.DoubleSide,
+      beam && [beam.material.opacity, beam.material.depthWrite, beam.material.side]);
+    check('translucent beam never joins the fade', beam && beam.userData.fadeWallId === null &&
+      F.fadeRegistrations(res).every(r => r.mesh !== beam));
+    check('translucent parts are not in the shadow proxy', res.shadowProxies.length === 0);
+  }
+  // Glass and mirror parts from the palette (the cabinet/small-items shape).
+  const GM = { DEFAULTS: Object.freeze({ width: 60, depth: 30, height: 120 }), build(T) {
+    const g = new T.Group();
+    const glass = new T.Mesh(new T.BoxGeometry(0.5, 1, 0.01).translate(0, 0.6, 0.29), Fin.makeFinish(T, 'glass', '#cfe3ea'));
+    glass.material.side = T.DoubleSide;
+    const mirror = new T.Mesh(new T.BoxGeometry(0.5, 1, 0.01).translate(0, 0.6, 0.01), Fin.makeFinish(T, 'mirror'));
+    const body = new T.Mesh(new T.BoxGeometry(0.6, 1.2, 0.3).translate(0, 0.6, 0.15), Fin.makeFinish(T, 'matte', '#445566'));
+    g.add(glass); g.add(mirror); g.add(body);
+    return g;
+  } };
+  const srcGM = GM.build(THREE);
+  // Interior wall: nothing fades, so the materials can be compared as built.
+  const hg = compile([{ id: 'c', room: 'r', type: 'gm', wall: 3, centre: 200 }]);
+  const rg = build(hg, ULTRA, { gm: GM });
+  const g = rg.beauty.find(m => m.userData.finish === 'glass'), mi = rg.beauty.find(m => m.userData.finish === 'mirror');
+  check('glass keeps opacity, transparent, depthWrite and its DoubleSide', g && same(srcGM.children[0].material, g.material) &&
+    g.material.side === THREE.DoubleSide, g && [g.material.opacity, g.material.depthWrite, g.material.side]);
+  check('mirror keeps its metalness/roughness/colour', mi && same(srcGM.children[1].material, mi.material), rg.beauty.map(m => m.userData.bucket));
+}
+
+// ---- 13. opaque buckets: vertex colours and side (review 30d91c80) ---------------------------
+{
+  const VC = { DEFAULTS: Object.freeze({ width: 20, depth: 20, height: 20 }), build(T, p) {
+    const g = new T.Group();
+    const geo = new T.BoxGeometry(0.2, 0.2, 0.2).translate(0, 0.1, 0.1).toNonIndexed();
+    const n = geo.attributes.position.count, c = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { c[i * 3] = i < n / 2 ? 1 : 0; c[i * 3 + 1] = i < n / 2 ? 0 : 1; c[i * 3 + 2] = 0; }
+    geo.setAttribute('color', new T.BufferAttribute(c, 3));
+    const mat = Fin.makeFinish(T, 'matte', '#808080');
+    mat.vertexColors = true;
+    g.add(new T.Mesh(geo, mat));
+    if (p.double) {
+      const m2 = Fin.makeFinish(T, 'matte', '#808080');
+      m2.side = T.DoubleSide;
+      g.add(new T.Mesh(new T.PlaneGeometry(0.2, 0.2).translate(0, 0.1, 0.2), m2));
+    }
+    return g;
+  } };
+  const h = compile([{ id: 'v', room: 'r', type: 'vc', at: [200, 200], params: { double: true } }]);
+  const res = build(h, ULTRA, { vc: VC });
+  const single = res.beauty.find(m => m.userData.finish === 'matte' && m.material.side === THREE.FrontSide);
+  const dbl = res.beauty.find(m => m.userData.finish === 'matte' && m.material.side === THREE.DoubleSide);
+  check('opaque: a DoubleSide part gets its own DoubleSide bucket', single && dbl && res.beauty.length === 2,
+    res.beauty.map(m => m.userData.bucket));
+  const grey = new THREE.Color(0x808080).r;
+  const col = single && single.geometry.attributes.color;
+  let reds = 0, greens = 0;
+  if (col) for (let i = 0; i < col.count; i++) {
+    if (near(col.getX(i), grey) && near(col.getY(i), 0)) reds++;
+    if (near(col.getX(i), 0) && near(col.getY(i), grey)) greens++;
+  }
+  check('opaque: vertex colours honoured (times the material colour)', reds === 18 && greens === 18, { reds, greens });
+}
+
+// ---- 14. a room still over the cap at low detail says so -------------------------------------
+{
+  const Heavy = { DEFAULTS: Object.freeze({ width: 50, depth: 50, height: 80 }), build(T) {
+    const g = new T.Group();
+    g.add(new T.Mesh(new T.SphereGeometry(0.25, 40, 40).translate(0, 0.4, 0.25), Fin.makeFinish(T, 'matte')));
+    return g;   // no cheaper low build
+  } };
+  const h = compile([{ id: 'x', room: 'r', type: 'heavy', at: [200, 200] }]);
+  const res = build(h, ULTRA, { heavy: Heavy }, { roomTriCap: 100 });
+  check('over the cap even at low detail -> warned', res.warnings.some(w => /even at low detail/.test(w)), res.warnings);
+  const ok = build(h, ULTRA, { heavy: Heavy });
+  check('...and not warned when under the cap', !ok.warnings.some(w => /even at low detail/.test(w)));
+}
+
+// ---- 11. a builder that throws costs only its own item ------------------------------------
+{
+  const Bad = { DEFAULTS: Box.DEFAULTS, build() { throw new Error('nope'); } };
+  const h = compile([
+    { id: 'bad', room: 'r', type: 'bad', at: [200, 200] },
+    { id: 'ok', room: 'r', type: 'box', at: [300, 200] }
+  ]);
+  const res = build(h, ULTRA, { bad: Bad });
+  check('throwing builder: warned and skipped, others built', !res.byId.bad && res.byId.ok &&
+    res.warnings.some(w => /failed to build/.test(w)));
+}
+
+console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
+process.exit(failures ? 1 : 0);
