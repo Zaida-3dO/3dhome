@@ -289,6 +289,8 @@ jobs:
         # worktops meeting without overlap or gap, LED strips continuous round
         # the corner, the four-draw budget, and Copy JSON's diff.
         run: node scripts/test-furniture-kitchen.mjs
+      - name: Small items -- envelope, facing and finish tags per type x preset x detail
+        run: node scripts/test-small-items.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

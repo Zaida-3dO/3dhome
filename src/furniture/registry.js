@@ -33,7 +33,7 @@ export const REGISTRY = Object.freeze({
 
   'cabinet': { path: 'cabinet.js', key: null, spec: 'CabinetSpec' },
 
-  'clock': { path: 'small-items.js', key: 'clock', spec: 'SmallItemsSpec' },
+  'coat-rack': { path: 'small-items.js', key: 'coat-rack', spec: 'SmallItemsSpec' },
 
   'digital-piano': { path: 'digital-piano.js', key: null, spec: 'DigitalPianoSpec' },
 
@@ -57,6 +57,8 @@ export const REGISTRY = Object.freeze({
 
   'pc-tower': { path: 'small-items.js', key: 'pc-tower', spec: 'SmallItemsSpec' },
 
+  'photo-frame': { path: 'small-items.js', key: 'photo-frame', spec: 'SmallItemsSpec' },
+
   'plant': { path: 'plant.js', key: null, spec: 'PlantSpec' },
 
   'radiator': { path: 'radiator.js', key: null, spec: 'RadiatorSpec' },
@@ -71,15 +73,19 @@ export const REGISTRY = Object.freeze({
 
   'standing-desk': { path: 'standing-desk.js', key: null, spec: 'StandingDeskSpec' },
 
-  'tv': { path: 'small-items.js', key: 'tv', spec: 'SmallItemsSpec' },
+  'subwoofer': { path: 'small-items.js', key: 'subwoofer', spec: 'SmallItemsSpec' },
 
-  'wall-art': { path: 'small-items.js', key: 'wall-art', spec: 'SmallItemsSpec' },
+  'tube-floor-lamp': { path: 'small-items.js', key: 'tube-floor-lamp', spec: 'SmallItemsSpec' },
+
+  'tv': { path: 'small-items.js', key: 'tv', spec: 'SmallItemsSpec' },
 
   'wall-clock': { path: 'dining.js', key: 'wall-clock', spec: 'DiningSpec' },
 
   'wall-sconce': { path: 'wall-sconce.js', key: null, spec: 'WallDecorSpec' },
 
   'wall-sign': { path: 'wall-sign.js', key: null, spec: 'WallDecorSpec' },
+
+  'wire-shelf': { path: 'small-items.js', key: 'wire-shelf', spec: 'SmallItemsSpec' },
 
 });
 

@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Small Items Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  .type-picker { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px; }
+  .type-btn { padding:6px 12px; font:inherit; font-size:11px; background:#efeae0; color:#1a1a1a; border:1px solid #d8d3c8; border-radius:14px; cursor:pointer; }
+  .type-btn:hover { background:#e2dccd; }
+  .type-btn.active { background:#1a1a1c; color:#fff; border-color:#1a1a1c; }
+  .preset-picker { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .preset-btn { padding:4px 10px; font:inherit; font-size:10px; background:#fff; color:#1a1a1a; border:1px solid #d8d3c8; border-radius:12px; cursor:pointer; }
+  .preset-btn:hover { background:#f4f1ec; }
+  .preset-btn.active { background:#6b5d4a; color:#fff; border-color:#6b5d4a; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+<!-- The multi-type furniture builder itself. THREE is injected by this page
+     (window.THREE, published by ../vendor/three.js), never imported by the
+     module -- the same contract the live scene and the Node tests use. -->
+<script type="module">
+  import * as SmallItems from '../src/furniture/small-items.js';
+  window.SmallItems = SmallItems;
+  window.dispatchEvent(new Event('small-items-ready'));
+</script>
+
+<script type="text/babel">
+/* =====================================================================
+   SMALL ITEMS SPEC   ·  one page, one type picker, for every small
+   wall/floor fitting src/furniture/small-items.js builds.
+
+   Signed off here, in "as merged" mode where available
+   (PR1c), before a type is placed in a real house. This page never carries
+   real names, real images or real house measurements -- see
+   docs/house-profile.md, "Furniture" / privacy. Every preset below is a
+   GENERIC reference shape; a private house's furniture[].params carries
+   the real numbers.
+   ===================================================================== */
+
+const TYPE_ORDER = [
+  'tv', 'photo-frame', 'speaker', 'subwoofer', 'tube-floor-lamp',
+  'coat-rack', 'mirror', 'shelf', 'monitor', 'pc-tower', 'wire-shelf'
+];
+
+const TYPE_LABELS = {
+  'tv': 'TV', 'photo-frame': 'Photo frame', 'speaker': 'Speaker',
+  'subwoofer': 'Subwoofer', 'tube-floor-lamp': 'Tube floor lamp',
+  'coat-rack': 'Coat rack', 'mirror': 'Mirror', 'shelf': 'Shelf',
+  'monitor': 'Monitor', 'pc-tower': 'PC tower', 'wire-shelf': 'Wire shelf'
+};
+
+// Presets are DELTAS from DEFAULTS -- only the keys that differ. Every
+// preset uses a GENERIC name and GENERIC numbers (some drawn from real-
+// world reference dimensions, never a model or brand name).
+const PRESETS = {
+  'tv': {
+    'Flat, thin bezel': {},
+    'Flat, on pedestal stand': { stand: true },
+    'Picture-frame (art mode)': { bezelStyle: 'picture-frame' }
+  },
+  'photo-frame': {
+    'Single panel': {},
+    'Hallway pair (60x50)': { width: 60, height: 50 },
+    'Living-room 4-photo': { width: 140, height: 40, panels: 4 },
+    'Office 5-panel': { width: 250, height: 60, panels: 5 }
+  },
+  'speaker': {
+    'Wall (trapezoid)': {},
+    'Wall (box)': { boxShape: true },
+    'Floor-standing': { kind: 'floor-standing', width: 16.5, depth: 24, height: 90 },
+    'Floor-standing (white satin)': { kind: 'floor-standing', width: 16.5, depth: 24, height: 90, finish: 'gloss', color: '#f4f4f2' },
+    'Ceiling (Atmos, down-firing)': { kind: 'ceiling', width: 18.5, depth: 18.5, height: 31, firing: 'down' },
+    'Ceiling (Atmos, angled)': { kind: 'ceiling', width: 18.5, depth: 18.5, height: 31, firing: 'angled' },
+    'Centre channel': { kind: 'centre', width: 45, depth: 20, height: 16.5 }
+  },
+  'subwoofer': {
+    'Default': {}
+  },
+  'tube-floor-lamp': {
+    'Default (all-round glow)': {},
+    'One-sided glow': { oneSidedGlow: true }
+  },
+  'coat-rack': {
+    'Empty rail': {},
+    'One coat': { coats: 1 },
+    'Three coats': { coats: 3 }
+  },
+  'mirror': {
+    'Rectangle': {},
+    'Round': { shape: 'round' },
+    'Pebble': { shape: 'pebble' },
+    'Triangle (hallway)': { shape: 'triangle', width: 55, height: 70 }
+  },
+  'shelf': {
+    'Single': {},
+    'Single, LED edge': { led: true },
+    'Stacked set of 3 (store)': { levels: [30, 30] },
+    'Floating shelf with back panel': { width: 180, depth: 22, height: 20, backPanel: true }
+  },
+  'monitor': {
+    'Flat': {},
+    'Flat, on riser': { riser: true },
+    'Curved super-ultrawide': { curved: true },
+    'Curved, on riser': { curved: true, riser: true }
+  },
+  'pc-tower': {
+    'Glass side panel': {},
+    'No glass panel': { glassPanel: false }
+  },
+  'wire-shelf': {
+    'Default': {}
+  }
+};
+
+function typeDefaults(type) {
+  return window.SmallItems.TYPES[type].DEFAULTS;
+}
+
+function paramsFor(type, presetName) {
+  const delta = (PRESETS[type] && PRESETS[type][presetName]) || {};
+  return Object.assign({}, typeDefaults(type), delta);
+}
+
+/** Only the keys that differ from DEFAULTS -- what the placement JSON
+ * should actually carry (anything omitted falls back to the builder's own
+ * DEFAULTS, per the furniture contract). */
+function diffFromDefaults(type, params) {
+  const d = typeDefaults(type);
+  const out = {};
+  Object.keys(params).forEach(k => {
+    if (JSON.stringify(params[k]) !== JSON.stringify(d[k])) out[k] = params[k];
+  });
+  return out;
+}
+
+function buildItem(t, group, THREE, ctx) {
+  const impl = window.SmallItems.TYPES[t.type];
+  if (!impl) return;
+  const built = impl.build(THREE, t.params, { detail: t.detail || 'full' });
+  group.add(built);
+  ctx.builtType = t.type;
+}
+
+function heightOfItem(t) {
+  return (t.params.height || 100) / 100;
+}
+
+function App() {
+  const [ready, setReady] = React.useState(!!window.SmallItems);
+  React.useEffect(() => {
+    if (ready) return;
+    const onReady = () => setReady(true);
+    window.addEventListener('small-items-ready', onReady);
+    return () => window.removeEventListener('small-items-ready', onReady);
+  }, [ready]);
+
+  const [type, setType] = React.useState('tv');
+  const [presetName, setPresetName] = React.useState(null);
+  const [overrides, setOverrides] = React.useState({});
+  const [detail, setDetail] = React.useState('full');
+  const [copied, setCopied] = React.useState(false);
+
+  if (!ready) {
+    return <div className="sub">Loading src/furniture/small-items.js…</div>;
+  }
+
+  const presets = PRESETS[type] || {};
+  const presetNames = Object.keys(presets);
+  const activePreset = presetName && presets[presetName] ? presetName : presetNames[0];
+  const baseParams = paramsFor(type, activePreset);
+  const params = Object.assign({}, baseParams, overrides);
+  const t = { type, params, detail };
+
+  const selectType = (nt) => {
+    setType(nt);
+    setPresetName(null);
+    setOverrides({});
+  };
+  const selectPreset = (pn) => {
+    setPresetName(pn);
+    setOverrides({});
+  };
+  const setParam = (key, value) => {
+    setOverrides(prev => Object.assign({}, prev, { [key]: value }));
+  };
+
+  const copyJson = () => {
+    const diff = diffFromDefaults(type, params);
+    const json = JSON.stringify({ type, params: diff }, null, 2);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(json).catch(() => {});
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <>
+      <h1>Small Items Spec</h1>
+      <div className="sub">
+        One multi-type module (src/furniture/small-items.js) for the small wall/floor
+        fittings across every room: TVs, photo frames, speakers, a subwoofer, a tube
+        floor lamp, a coat rack, mirrors, shelves, monitors, a PC tower and a wire
+        shelf. Generic names and dimensions only — the private house's own params
+        carry the real numbers.
+      </div>
+
+      <div className="type-picker">
+        {TYPE_ORDER.map(tp => (
+          <button key={tp} className={'type-btn' + (tp === type ? ' active' : '')}
+            onClick={() => selectType(tp)}>{TYPE_LABELS[tp]}</button>
+        ))}
+      </div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>{TYPE_LABELS[type]} — presets</h2>
+          <div className="preset-picker">
+            {presetNames.map(pn => (
+              <button key={pn} className={'preset-btn' + (pn === activePreset ? ' active' : '')}
+                onClick={() => selectPreset(pn)}>{pn}</button>
+            ))}
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', marginTop: '10px' }}>
+            <tbody>
+              <tr><th style={{ textAlign: 'left', opacity: 0.6 }}>Param</th><th style={{ textAlign: 'right', opacity: 0.6 }}>Value</th></tr>
+              {Object.keys(params).sort().map(k => (
+                <tr key={k}>
+                  <td style={{ padding: '3px 6px 3px 0' }}>{k}</td>
+                  <td style={{ padding: '3px 0', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {typeof params[k] === 'object' ? JSON.stringify(params[k]) : String(params[k])}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="row">
+            <button className="btn" onClick={copyJson}>{copied ? 'Copied!' : 'Copy JSON'}</button>
+            <button className={'btn' + (detail === 'low' ? ' active' : '')}
+              onClick={() => setDetail(detail === 'low' ? 'full' : 'low')}>
+              {detail === 'low' ? 'detail: low' : 'detail: full'}
+            </button>
+          </div>
+          <div className="legend">
+            Copy JSON emits only the params that differ from this type's DEFAULTS —
+            exactly what a real placement's furniture[].params should carry.
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Numbers</h2>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+            <tbody>
+              <tr><th style={{ textAlign: 'left', opacity: 0.6 }}>Dimension</th><th style={{ textAlign: 'right', opacity: 0.6 }}>cm</th></tr>
+              <tr><td>Width</td><td style={{ textAlign: 'right' }}>{params.width}</td></tr>
+              <tr><td>Depth</td><td style={{ textAlign: 'right' }}>{params.depth}</td></tr>
+              <tr><td>Height</td><td style={{ textAlign: 'right' }}>{params.height}</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            Local frame: y=0 is the item's bottom, x is centred on width, the back
+            face is at z=0 and the front faces +z (docs/house-profile.md, "Furniture").
+          </div>
+        </div>
+
+        <div className="card full">
+          <h2>3D — {TYPE_LABELS[type]} ({activePreset})</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildItem}
+            heightOf={heightOfItem}
+          />
+        </div>
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
