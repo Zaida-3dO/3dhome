@@ -1003,10 +1003,10 @@
 
     "furnitureParams_coat-rack": {
       "type": "object",
-      "description": "Params for `coat-rack` (src/furniture/small-items.js, TYPES['coat-rack']): a wall hook rail with 0-3 simple draped coats. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `coat-rack` (src/furniture/small-items.js, TYPES['coat-rack']): a wall hook rail with 0-3 simple draped coats. `height` is the FULL assembly: the rail is a fixed-height band at the top of it, and any draped coats hang from the rail down toward y=0 within that same declared height -- never below it. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": { "type": "number", "exclusiveMinimum": 0, "default": 80, "description": "cm." },
-        "height": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm, the rail only." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm, the full assembly (rail band plus any draped coats' drop)." },
         "depth": { "type": "number", "exclusiveMinimum": 0, "default": 6, "description": "cm." },
         "color": { "$ref": "#/$defs/hexColor", "default": "#6b5a45" },
         "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
@@ -1016,7 +1016,7 @@
           "default": ["#3a3f4a", "#7a2e2e", "#2e4a3a"],
           "description": "Cycled across the coats, one per hook."
         },
-        "coatHeight": { "type": "number", "exclusiveMinimum": 0, "default": 55, "description": "cm, hangs below the rail -- does not add to the group's own height (the rack's `height` is the rail only)." }
+        "coatHeight": { "type": "number", "exclusiveMinimum": 0, "default": 55, "description": "cm, the coat's own drop below the rail, clamped to stay within the declared `height` (never crosses y=0)." }
       },
       "additionalProperties": false
     },
@@ -1832,19 +1832,19 @@
 
     "furnitureParams_monitor": {
       "type": "object",
-      "description": "Params for `monitor` (src/furniture/small-items.js, TYPES['monitor']): flat or curved super-ultrawide, with an optional riser. `height` is the full assembly (stand/riser + panel). Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `monitor` (src/furniture/small-items.js, TYPES['monitor']): flat or curved super-ultrawide, with an optional riser. `height` and `depth` are the FULL assembly: with `riser` enabled, set `height` to include the riser and stand below the panel, and set `depth` to at least `riserDepth` (the riser is typically the deepest part). Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": { "type": "number", "exclusiveMinimum": 0, "default": 85, "description": "cm." },
         "height": { "type": "number", "exclusiveMinimum": 0, "default": 35, "description": "cm, the full assembly including its own stand (and riser, if any)." },
-        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 8, "description": "cm." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 8, "description": "cm, the full assembly -- must be at least `riserDepth` when `riser` is set, or the riser is clamped to fit and reads shallower than requested." },
         "curved": { "type": "boolean", "default": false },
         "color": { "$ref": "#/$defs/hexColor", "default": "#181818" },
         "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
         "screenColor": { "$ref": "#/$defs/hexColor", "default": "#0d1520" },
         "riser": { "type": "boolean", "default": false },
-        "riserHeight": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm. Grows the assembly's real footprint beyond `height` when set -- see the builder contract note on optional add-ons." },
+        "riserHeight": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm." },
         "riserWidth": { "type": "number", "exclusiveMinimum": 0, "default": 40, "description": "cm." },
-        "riserDepth": { "type": "number", "exclusiveMinimum": 0, "default": 25, "description": "cm." }
+        "riserDepth": { "type": "number", "exclusiveMinimum": 0, "default": 25, "description": "cm, clamped to at most the declared `depth`." }
       },
       "additionalProperties": false
     },
@@ -1978,18 +1978,19 @@
 
     "furnitureParams_shelf": {
       "type": "object",
-      "description": "Params for `shelf` (src/furniture/small-items.js, TYPES['shelf']): a floating shelf, with an optional LED edge, an optional stacked `levels` set, and an optional `backPanel` L-section (a floating shelf with a back panel against the wall). `levels` growing the set, or `backPanel` on its own, both intentionally extend the assembly beyond a single slab's own `height` -- see the builder contract note on optional add-ons. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `shelf` (src/furniture/small-items.js, TYPES['shelf']): a floating shelf, with an optional LED edge, an optional stacked `levels` set, and an optional `backPanel` L-section (a floating shelf with a back panel against the wall). `height` is ALWAYS the full assembly: one slab's thickness with no `levels`, the WHOLE stack (every slab plus every gap) with `levels`, or the overall back-panel-to-shelf-top height with `backPanel`. Each slab's own thickness is the separate `shelfThickness` param. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": { "type": "number", "exclusiveMinimum": 0, "default": 80, "description": "cm." },
         "depth": { "type": "number", "exclusiveMinimum": 0, "default": 20, "description": "cm." },
-        "height": { "type": "number", "exclusiveMinimum": 0, "default": 5, "description": "cm, one slab's thickness (or, with `backPanel`, the overall assembly height)." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 5, "description": "cm, the FULL assembly -- see the block description for what that means per option." },
+        "shelfThickness": { "type": "number", "exclusiveMinimum": 0, "default": 5, "description": "cm, ONE slab's own thickness -- independent of `height`, which is always the overall envelope." },
         "color": { "$ref": "#/$defs/hexColor", "default": "#e7e2d6" },
         "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
         "led": { "type": "boolean", "default": false },
         "ledColor": { "$ref": "#/$defs/hexColor", "default": "#eaf6ff" },
         "levels": {
           "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 }, "default": [],
-          "description": "Explicit vertical gaps (cm) between stacked shelves, e.g. [30, 30] for a 3-shelf set. Empty = a single shelf."
+          "description": "Explicit vertical gaps (cm) between stacked shelves, e.g. [30, 30] for a 3-shelf set. Empty = a single shelf. Set `height` to the sum of every `shelfThickness` slab plus every gap."
         },
         "backPanel": { "type": "boolean", "default": false, "description": "An L-section: a vertical back panel against the wall plus the horizontal shelf slab. Applies to the bottom unit of a `levels` stack." },
         "backPanelHeight": { "type": "number", "exclusiveMinimum": 0, "default": 20, "description": "cm." },
@@ -2180,11 +2181,11 @@
 
     "furnitureParams_tv": {
       "type": "object",
-      "description": "Params for `tv` (src/furniture/small-items.js, TYPES['tv']): a wall TV. `bezelStyle: 'thin'` is a plain flat panel (optionally on a pedestal `stand` instead of wall-mounted); `'picture-frame'` is a wooden picture-frame bezel (Frame-TV look), wall-hung, with an optional `image` (a URL relative to the HOUSE dir) for its \"art mode\". Generic defaults only -- real dimensions come from a research note, never a model name, which never appears in this repo. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `tv` (src/furniture/small-items.js, TYPES['tv']): a wall TV. `bezelStyle: 'thin'` is a plain flat panel (optionally on a pedestal `stand` instead of wall-mounted); `'picture-frame'` is a wooden picture-frame bezel (Frame-TV look), wall-hung. \"Art mode\" imagery is not built yet. Generic defaults only -- real dimensions come from a research note, never a model name, which never appears in this repo. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": { "type": "number", "exclusiveMinimum": 0, "default": 167.1, "description": "cm." },
-        "height": { "type": "number", "exclusiveMinimum": 0, "default": 95.9, "description": "cm, the panel only (a pedestal `stand`, if enabled, extends the assembly below it)." },
-        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 5.4, "description": "cm." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 95.9, "description": "cm, the FULL assembly: with `stand` enabled this includes the pedestal below the panel." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 5.4, "description": "cm, the full assembly -- with `stand` enabled, set at least `standDepth` (the pedestal foot is typically the deepest part)." },
         "color": { "$ref": "#/$defs/hexColor", "default": "#111111" },
         "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
         "bezelStyle": { "type": "string", "enum": ["thin", "picture-frame"], "default": "thin" },
@@ -2194,12 +2195,7 @@
         "stand": { "type": "boolean", "default": false, "description": "thin style only: a central pedestal stand instead of wall-mounting." },
         "standHeight": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm." },
         "standWidth": { "type": "number", "exclusiveMinimum": 0, "default": 42, "description": "cm." },
-        "standDepth": { "type": "number", "exclusiveMinimum": 0, "default": 31.7, "description": "cm." },
-        "image": {
-          "anyOf": [{ "type": "string" }, { "type": "null" }],
-          "default": null,
-          "description": "picture-frame style's \"art mode\": a URL relative to the HOUSE dir. No leading slash, no `..`, no absolute URL."
-        }
+        "standDepth": { "type": "number", "exclusiveMinimum": 0, "default": 31.7, "description": "cm, clamped to at most the declared `depth`." }
       },
       "additionalProperties": false
     },

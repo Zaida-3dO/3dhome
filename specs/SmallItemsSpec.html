@@ -76,10 +76,21 @@ const TYPE_LABELS = {
 // Presets are DELTAS from DEFAULTS -- only the keys that differ. Every
 // preset uses a GENERIC name and GENERIC numbers (some drawn from real-
 // world reference dimensions, never a model or brand name).
+// `height`/`depth` are the FULL assembly (the shared envelope contract):
+// an add-on that grows the footprint below/behind the main body -- a TV's
+// pedestal, a monitor's riser, a stacked shelf set, a coat rack's draped
+// coats -- must be included in the preset's own height/depth, not layered
+// on top of the type's plain DEFAULTS. See src/furniture/small-items.js's
+// own per-type comments for exactly which params combine into the envelope.
 const PRESETS = {
   'tv': {
     'Flat, thin bezel': {},
-    'Flat, on pedestal stand': { stand: true },
+    // ENVELOPE: `stand` adds standHeight (10) below the panel and the
+    // pedestal foot is standDepth (31.7) deep, both deeper than the plain
+    // panel -- so height/depth here must include them, per the shared
+    // envelope contract (src/furniture/small-items.js's own TV_DEFAULTS:
+    // height 95.9 + standHeight 10 = 105.9; depth = standDepth 31.7).
+    'Flat, on pedestal stand': { stand: true, height: 105.9, depth: 31.7 },
     'Picture-frame (art mode)': { bezelStyle: 'picture-frame' }
   },
   'photo-frame': {
@@ -106,8 +117,11 @@ const PRESETS = {
   },
   'coat-rack': {
     'Empty rail': {},
-    'One coat': { coats: 1 },
-    'Three coats': { coats: 3 }
+    // ENVELOPE: the rail is a fixed 10cm band at the TOP of `height`; a
+    // draped coat hangs from the rail down toward y=0, so `height` must
+    // include the coat's own drop (coatHeight 55 + the 10cm rail band).
+    'One coat': { coats: 1, height: 10 + 55 },
+    'Three coats': { coats: 3, height: 10 + 55 }
   },
   'mirror': {
     'Rectangle': {},
@@ -118,14 +132,20 @@ const PRESETS = {
   'shelf': {
     'Single': {},
     'Single, LED edge': { led: true },
-    'Stacked set of 3 (store)': { levels: [30, 30] },
+    // ENVELOPE: `height` is the FULL stack (3 slabs of shelfThickness=5 plus
+    // 2 gaps of 30 each = 15 + 60 = 75), while shelfThickness stays the
+    // per-slab thickness independently.
+    'Stacked set of 3 (store)': { levels: [30, 30], height: 5 + 30 + 5 + 30 + 5 },
     'Floating shelf with back panel': { width: 180, depth: 22, height: 20, backPanel: true }
   },
   'monitor': {
     'Flat': {},
-    'Flat, on riser': { riser: true },
+    // ENVELOPE: the riser (riserDepth 25) is deeper than the plain panel
+    // (depth 8), so `depth` must be at least riserDepth for the riser to
+    // render at its full requested depth rather than being clamped to fit.
+    'Flat, on riser': { riser: true, depth: 25 },
     'Curved super-ultrawide': { curved: true },
-    'Curved, on riser': { curved: true, riser: true }
+    'Curved, on riser': { curved: true, riser: true, depth: 25 }
   },
   'pc-tower': {
     'Glass side panel': {},

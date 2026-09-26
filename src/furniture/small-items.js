@@ -3,11 +3,13 @@
  * across rooms: TVs, photo frames, speakers (wall,
  * floor-standing, ceiling and centre-channel), a subwoofer, a tube floor
  * lamp, a coat rack, mirrors, floating shelves (incl. a back-panel L-section
- * preset), monitors, a PC tower and a wire wall shelf. Also builds `clock`
- * and `wall-art`, pre-seeded in registry.js against this module by an
- * earlier plan revision but not part of this item's own type list -- kept
- * minimal so the shared contract gate stays green for anyone using this
- * file.
+ * preset), monitors, a PC tower and a wire wall shelf.
+ *
+ * `wall-clock` is a SEPARATE type owned by a different crew, not built here.
+ * `clock` (an earlier, different type name) and `wall-art` used to live in
+ * this module too; both were removed on review -- `clock` because
+ * `wall-clock` now owns that ground, and `wall-art` because it added no
+ * shape `photo-frame` (with `panels: 1`) does not already cover.
  *
  * THE BUILDER CONTRACT (every src/furniture/<type>.js follows it):
  *   - Pure ESM, THREE injected; no `import 'three'`.
@@ -50,7 +52,8 @@ function group(name) {
 //                  case), optionally on a central pedestal stand instead of
 //                  wall-mounted.
 //   'picture-frame' a wooden picture-frame bezel (Frame-TV look), wall-hung,
-//                  with an optional "art mode" image.
+//                  ("art mode" imagery is not built yet -- see `photo-frame`
+//                  for the injectable-texture pattern a later PR can reuse).
 // Generic defaults only -- real model dimensions (when a research note
 // supplies them) belong in a private house's furniture[].params, never here.
 // ============================================================================
@@ -71,33 +74,36 @@ const TV_DEFAULTS = Object.freeze({
   stand: false,
   standHeight: 10,
   standWidth: 42,
-  standDepth: 31.7,
-  // Optional "art mode" image, a URL relative to the HOUSE dir. Plain colour
-  // by default -- texture loading is optional and injectable (no DOM needed
-  // in Node).
-  image: null
+  standDepth: 31.7
 });
 
 function buildTv(THREE, params, opts) {
   const p = Object.assign({}, TV_DEFAULTS, params || {});
   const o = opts || {};
-  const w = m(p.width), h = m(p.height), d = m(p.depth);
+  const w = m(p.width), d = m(p.depth);
   const g = new THREE.Group();
   g.name = 'furniture:tv';
   const pictureFrame = p.bezelStyle === 'picture-frame';
+  const useStand = !pictureFrame && p.stand;
 
+  // ENVELOPE: `height` and `depth` are the FULL assembly. With `stand`
+  // enabled, the stand takes a slice off the bottom of the declared height,
+  // and its own depth is clamped to the declared depth -- never overflowing
+  // past what the params say the group occupies (no "deliberate breaks").
   let panelBottom = 0;
-  if (!pictureFrame && p.stand) {
+  if (useStand) {
     const standMat = makeFinish(THREE, 'matte', '#1c1c1c');
-    const standH = m(p.standHeight);
-    const baseW = m(p.standWidth), baseD = m(p.standDepth);
+    const standH = Math.min(m(p.standHeight), Math.max(m(p.height) - 0.05, 0.01));
+    const baseW = m(p.standWidth), baseD = Math.min(m(p.standDepth), d);
     // A slim neck plus a low wide foot, both centred under the panel.
     const neckW = Math.min(0.05, baseW * 0.15);
-    g.add(box(THREE, neckW, Math.min(baseD, d * 3), standH, standMat, 0, standH / 2, Math.min(baseD, d * 3) / 2));
+    const neckD = Math.min(baseD, d);
+    g.add(box(THREE, neckW, neckD, standH, standMat, 0, standH / 2, neckD / 2));
     const footH = Math.min(standH * 0.25, 0.02);
     g.add(box(THREE, baseW, baseD, footH, standMat, 0, footH / 2, baseD / 2));
     panelBottom = standH;
   }
+  const h = Math.max(m(p.height) - panelBottom, 0.01);
 
   const bodyMat = makeFinish(THREE, p.finish, p.color);
   const body = box(THREE, w, d, h, bodyMat, 0, panelBottom + h / 2, d / 2);
@@ -131,7 +137,15 @@ function buildTv(THREE, params, opts) {
       const right = box(THREE, fw, d, h - fw * 2, frameMat, w / 2 - fw / 2, h / 2, d / 2);
       g.add(top, bottom, left, right);
     } else {
-      const ring = box(THREE, w, h, d * 0.6, frameMat, 0, h / 2, d * 0.3);
+      // box(THREE, width, depth, height, ...) -- the low-detail ring must
+      // use the SAME slot order as the full-detail bars above: depth is
+      // `d` (the panel's own depth), height is the panel's `h`. A previous
+      // version swapped these, making the ring 95.9cm (the TV's `height`)
+      // DEEP instead of tall -- it would have poked straight through the
+      // wall behind a wall-mounted TV. Depth is clamped to at most `d` so
+      // the ring can never extend past the panel's own front/back faces.
+      const ringDepth = Math.min(d * 0.6, d);
+      const ring = box(THREE, w, ringDepth, h, frameMat, 0, panelBottom + h / 2, d - ringDepth / 2);
       g.add(ring);
     }
   }
@@ -179,10 +193,15 @@ function buildPhotoFrame(THREE, params, opts) {
   if (p.image && typeof p.textureLoader === 'function') {
     try { tex = p.textureLoader(p.image); } catch (e) { tex = null; }
   }
+  // A textured panel is tagged `matte` (the closest palette entry for a
+  // printed image) and marked keep=true explicitly -- the contract's "a
+  // textured part must be kept and is budgeted individually" rule, since a
+  // texture map can never be folded into the vertex-coloured merge.
   const panelMat = tex
     ? new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9 })
     : makeFinish(THREE, p.finish, p.color);
-  if (!tex) panelMat.userData.finish = p.finish;
+  panelMat.userData.finish = tex ? 'matte' : p.finish;
+  if (tex) panelMat.userData.keep = true;
 
   // The face panel sits flush with the frame's own front face (z = d), not
   // proud of it, so the group's overall depth stays exactly `depth`.
@@ -195,7 +214,6 @@ function buildPhotoFrame(THREE, params, opts) {
     const innerH = Math.max(h - fw * 2, 0.01);
     const panel = box(THREE, innerW, panelDepth, innerH, panelMat, cx, h / 2, d - panelDepth / 2);
     if (tex) panel.userData.keep = true;
-    else panel.userData.finish = p.finish;
     g.add(panel);
   }
   return g;
@@ -268,19 +286,25 @@ function buildSpeakerWallTrapezoid(THREE, p, opts) {
   } else {
     // Trapezoid in plan: back (z=0) is `width` wide (the widest edge, per
     // the bbox contract), front (z=d) is the narrower `frontWidth`.
+    //
+    // ExtrudeGeometry extrudes the shape's local XY plane (x, shape-y) along
+    // +Z (world height) by `depth` (here, `h`). Rotating -90 about X maps
+    // shape-y=0 to world z=+d and shape-y=d to world z=0 (VERIFIED: this is
+    // an inversion, not a straight relabelling -- rotating -90 about X sends
+    // +Y to +Z, but the geometry's own vertices at shape-y=0 land at the
+    // FAR end post-translate, confirmed by sampling vertex positions). So
+    // the shape is authored with the NARROW edge at shape-y=0 (which becomes
+    // the FAR face, world z=d) and the WIDE edge at shape-y=d (which becomes
+    // world z=0, the back) -- the opposite of what reads naturally from the
+    // frame's own name. Do not "simplify" this without re-verifying against
+    // built geometry; a previous attempt got exactly this backwards.
     const shape = new THREE.Shape();
-    shape.moveTo(-backW / 2, 0);
-    shape.lineTo(backW / 2, 0);
-    shape.lineTo(frontW / 2, d);
-    shape.lineTo(-frontW / 2, d);
-    shape.lineTo(-backW / 2, 0);
+    shape.moveTo(-frontW / 2, 0);
+    shape.lineTo(frontW / 2, 0);
+    shape.lineTo(backW / 2, d);
+    shape.lineTo(-backW / 2, d);
+    shape.lineTo(-frontW / 2, 0);
     const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false, curveSegments: 1 });
-    // ExtrudeGeometry extrudes the shape's local XY plane (x, plan-depth)
-    // along +Z (world height) by `depth` (here, `h`). Rotating -90 about X
-    // maps shape-Y (plan depth, currently 0..d) to world -Z (so it lands on
-    // -d..0) and the extrude axis (world Z pre-rotation) to world Y (0..h).
-    // Translate +d along Z afterward so the plan depth lands on 0..d, matching
-    // the shared frame (back at z=0, front at z=d).
     geo.rotateX(-Math.PI / 2);
     geo.translate(0, 0, d);
     g.add(new THREE.Mesh(geo, mat));
@@ -469,7 +493,15 @@ function buildTubeFloorLamp(THREE, params, opts) {
 }
 
 // ============================================================================
-// coat-rack - a wall hook rail with 0-3 simple draped coats
+// coat-rack - a wall hook rail with 0-3 simple draped coats.
+//
+// ENVELOPE: `height` is the FULL assembly. The rail itself is a fixed-height
+// band (min(height, 10cm)) at the TOP of the declared height; when `coats` is
+// nonzero the draped coats hang from the rail down to y=0, so a caller asking
+// for coats must set `height` to rail-band-height + the coats' own drop (the
+// DEFAULTS keep `coats: 0`, where the rail alone equals the declared height).
+// No part is ever placed below y=0 or beyond width/depth/height, regardless
+// of `coats`.
 // ============================================================================
 const COAT_RACK_DEFAULTS = Object.freeze({
   width: 80,
@@ -489,10 +521,15 @@ function buildCoatRack(THREE, params, opts) {
   const g = new THREE.Group();
   g.name = 'furniture:coat-rack';
 
+  // The rail is a fixed-height band (never taller than the declared
+  // envelope) sitting at the TOP of `height`, so coats can drop below it
+  // down to y=0 without ever leaving the envelope.
+  const railH = Math.min(m(10), h);
+  const railY = h - railH;
   const railMat = makeFinish(THREE, p.finish, p.color);
-  g.add(box(THREE, w, d, h, railMat, 0, h / 2, d / 2));
+  g.add(box(THREE, w, d, railH, railMat, 0, railY + railH / 2, d / 2));
 
-  // Hook knobs, evenly spaced.
+  // Hook knobs, evenly spaced, on the rail band.
   const hookMat = makeFinish(THREE, 'metal', '#888888');
   const hookCount = Math.max(coats, 3);
   const hookR = Math.min(0.012, w / (hookCount * 6));
@@ -502,20 +539,22 @@ function buildCoatRack(THREE, params, opts) {
     const geo = new THREE.SphereGeometry(hookR, segs, Math.max(4, segs / 2));
     // Flush with the rail's own front face (z = d), not proud of it, so the
     // group's overall depth stays exactly `depth`.
-    geo.translate(cx, h / 2, d - hookR);
+    geo.translate(cx, railY + railH / 2, d - hookR);
     g.add(new THREE.Mesh(geo, hookMat));
   }
 
-  // Simple draped coats: a rounded box "body" hanging below the rail.
-  const coatH = m(p.coatHeight);
+  // Simple draped coats: a rounded box "body" hanging from the rail's
+  // underside down toward y=0, clamped so it never crosses either bound --
+  // the requested coatHeight is honoured only as far as the envelope allows.
+  const coatH = Math.min(m(p.coatHeight), railY);
+  const coatD = Math.min(d * 1.3, d);
   for (let i = 0; i < coats; i++) {
     const cx = -w / 2 + w * (i + 0.5) / hookCount;
     const color = p.coatColors[i % p.coatColors.length];
     const coatMat = makeFinish(THREE, 'matte', color);
     const coatW = Math.min(0.22, w / hookCount * 0.8);
-    const coatD = d * 1.3;
     const geo = new THREE.BoxGeometry(coatW, coatH, coatD);
-    geo.translate(cx, h - coatH / 2, coatD / 2);
+    geo.translate(cx, railY - coatH / 2, coatD / 2);
     g.add(new THREE.Mesh(geo, coatMat));
   }
   return g;
@@ -621,19 +660,24 @@ function buildMirror(THREE, params, opts) {
 //              [30, 30] for a 3-shelf set. Empty/absent = a single shelf.
 //   backPanel  an L-section "floating shelf with back panel": a vertical
 //              panel of its own colour against the wall (z=0) plus the
-//              horizontal shelf slab in front of it. `height` here is the
-//              OVERALL height (back panel top to shelf underside included),
-//              and the group's own bbox still equals width/depth/height
-//              exactly. Real reference: 180w x ~22d x ~20h overall, a white
-//              ~20h back panel and an oak shelf slab -- generic defaults
-//              only, no brand kept anywhere.
-// levels and backPanel are independent: a stacked set may or may not have
-// a back panel on the bottom unit; a single shelf may or may not either.
+//              horizontal shelf slab in front of it. Real reference: 180w x
+//              ~22d x ~20h overall, a white ~20h back panel and an oak
+//              shelf slab -- generic defaults only, no brand kept anywhere.
+//
+// ENVELOPE: `height` is ALWAYS the full assembly -- one slab's thickness
+// with no `levels` and no `backPanel`; the WHOLE stack (every slab plus
+// every gap) with `levels`; the overall back-panel-to-shelf-top height with
+// `backPanel`. Each slab's own thickness is `shelfThickness`, a SEPARATE
+// param, so a `levels` stack's per-slab thickness never has to double as
+// the group's overall height. `levels` and `backPanel` are independent: a
+// stacked set may or may not have a back panel on the bottom unit; a single
+// shelf may or may not either.
 // ============================================================================
 const SHELF_DEFAULTS = Object.freeze({
   width: 80,
   depth: 20,
   height: 5,
+  shelfThickness: 5,
   color: '#e7e2d6',
   finish: 'matte',
   led: false,
@@ -651,11 +695,14 @@ function buildOneShelf(THREE, w, d, thickness, color, finish, led, ledColor, det
   g.add(box(THREE, w, d, thickness, mat, 0, thickness / 2, d / 2));
   if (led) {
     // Flush with the slab's own front edge (z = d), not proud of it, so the
-    // group's overall depth stays exactly `depth`.
-    const stripDepth = detail === 'low' ? Math.max(thickness * 0.15, 0.003) : Math.max(thickness * 0.15, 0.003);
+    // group's overall depth stays exactly `depth`. Flush with the slab's own
+    // UNDERSIDE too: the strip's top face touches the slab's bottom face
+    // (y = 0) exactly, not a gap below it.
+    const stripDepth = Math.max(thickness * 0.15, 0.003);
+    const stripH = Math.min(Math.max(thickness * 0.4, 0.004), thickness);
     const ledMat = makeFinish(THREE, 'emissive', ledColor);
-    const strip = box(THREE, w * 0.96, stripDepth, Math.max(thickness * 0.4, 0.004),
-      ledMat, 0, thickness * 0.08, d - stripDepth / 2);
+    const strip = box(THREE, w * 0.96, stripDepth, stripH,
+      ledMat, 0, stripH / 2, d - stripDepth / 2);
     strip.userData.keep = true;
     g.add(strip);
   }
@@ -678,10 +725,13 @@ function buildShelfWithBackPanel(THREE, w, d, totalH, shelfThickness, p, detail)
   g.add(box(THREE, w, d, shelfThickness, shelfMat, 0, shelfY + shelfThickness / 2, d / 2));
 
   if (p.led) {
+    // Flush with the shelf slab's own underside: the strip's bottom face
+    // touches the slab's own bottom face (y = shelfY) exactly.
     const stripDepth = Math.max(shelfThickness * 0.15, 0.003);
+    const stripH = Math.min(Math.max(shelfThickness * 0.4, 0.004), shelfThickness);
     const ledMat = makeFinish(THREE, 'emissive', p.ledColor);
-    const strip = box(THREE, w * 0.96, stripDepth, Math.max(shelfThickness * 0.4, 0.004),
-      ledMat, 0, shelfY + shelfThickness * 0.08, d - stripDepth / 2);
+    const strip = box(THREE, w * 0.96, stripDepth, stripH,
+      ledMat, 0, shelfY + stripH / 2, d - stripDepth / 2);
     strip.userData.keep = true;
     g.add(strip);
   }
@@ -690,28 +740,35 @@ function buildShelfWithBackPanel(THREE, w, d, totalH, shelfThickness, p, detail)
 
 function buildShelf(THREE, params, opts) {
   const p = Object.assign({}, SHELF_DEFAULTS, params || {});
-  const w = m(p.width), d = m(p.depth), thickness = m(p.height);
+  const w = m(p.width), d = m(p.depth);
   const g = new THREE.Group();
   g.name = 'furniture:shelf';
   const detail = opts && opts.detail;
   const levels = Array.isArray(p.levels) ? p.levels : [];
 
   if (levels.length === 0) {
+    // No stack: `height` is this one slab's own thickness (the envelope of
+    // a single item), matching `shelfThickness` in the DEFAULTS case.
+    const thickness = m(p.height);
     const one = p.backPanel
-      ? buildShelfWithBackPanel(THREE, w, d, thickness, Math.min(thickness, m(5)), p, detail)
+      ? buildShelfWithBackPanel(THREE, w, d, thickness, Math.min(thickness, m(p.shelfThickness)), p, detail)
       : buildOneShelf(THREE, w, d, thickness, p.color, p.finish, p.led, p.ledColor, detail);
     g.add(one);
     return g;
   }
 
-  // A stacked set: the bottom shelf sits at y = 0..thickness, then each
-  // subsequent shelf is offset upward by its own thickness plus the gap.
-  // A back panel, if asked for, applies to the bottom unit only.
+  // A stacked set: `height` is the FULL stack (every slab plus every gap),
+  // and each slab's own thickness is the SEPARATE `shelfThickness` param --
+  // it never has to double as the group's overall height. The bottom shelf
+  // sits at y = 0..shelfThickness, then each subsequent shelf is offset
+  // upward by its own thickness plus the gap. A back panel, if asked for,
+  // applies to the bottom unit only, using its slice of the stack's height.
+  const thickness = m(p.shelfThickness);
   let y = 0;
   const n = levels.length + 1;
   for (let i = 0; i < n; i++) {
     const one = (i === 0 && p.backPanel)
-      ? buildShelfWithBackPanel(THREE, w, d, thickness, Math.min(thickness, m(5)), p, detail)
+      ? buildShelfWithBackPanel(THREE, w, d, thickness, Math.min(thickness, m(p.shelfThickness)), p, detail)
       : buildOneShelf(THREE, w, d, thickness, p.color, p.finish, p.led, p.ledColor, detail);
     one.position.y = y;
     g.add(one);
@@ -743,16 +800,20 @@ function buildMonitor(THREE, params, opts) {
   g.name = 'furniture:monitor';
   const riserH = p.riser ? m(p.riserHeight) : 0;
 
-  if (p.riser) {
-    const riserMat = makeFinish(THREE, 'matte', '#2a2a2a');
-    const rw = m(p.riserWidth), rd = m(p.riserDepth);
-    g.add(box(THREE, rw, rd, riserH, riserMat, 0, riserH / 2, rd / 2));
-  }
-
   const w = m(p.width), d = m(p.depth);
   const bodyMat = makeFinish(THREE, p.finish, p.color);
   const screenMat = makeFinish(THREE, 'emissive', p.screenColor);
   const standD = Math.min(d, 0.06);
+
+  if (p.riser) {
+    // `depth` is the OVERALL envelope, and the riser is typically the
+    // deepest part of the assembly -- so the riser's own depth is clamped
+    // to never exceed the declared `depth` (never a silent overflow past
+    // what the params say the group occupies).
+    const riserMat = makeFinish(THREE, 'matte', '#2a2a2a');
+    const rw = m(p.riserWidth), rd = Math.min(m(p.riserDepth), d);
+    g.add(box(THREE, rw, rd, riserH, riserMat, 0, riserH / 2, rd / 2));
+  }
 
   // `height` is the FULL assembly: riser (if any) + stand + panel. The
   // stand takes a fixed slice off the bottom of the declared height so the
@@ -861,17 +922,17 @@ function buildWireShelf(THREE, params, opts) {
   const mat = makeFinish(THREE, p.finish, p.color);
 
   // Triangular plan: back edge (z=0) spans the full width, tapering to a
-  // point at z=d. A handful of thin wire "rails" approximate a wire shelf
-  // cheaply while a bounding box still matches width/depth/height exactly.
+  // point at z=d. As with the wall-trapezoid speaker, rotating -90 about X
+  // inverts shape-y against world-z: shape-y=0 becomes the FAR face
+  // (world z=d) and shape-y=d becomes the back (world z=0) -- VERIFIED by
+  // sampling built vertex positions, not assumed. So the shape is authored
+  // with the point at shape-y=0 and the wide edge at shape-y=d.
   const shape = new THREE.Shape();
-  shape.moveTo(-w / 2, 0);
-  shape.lineTo(w / 2, 0);
-  shape.lineTo(0, d);
-  shape.lineTo(-w / 2, 0);
+  shape.moveTo(0, 0);
+  shape.lineTo(w / 2, d);
+  shape.lineTo(-w / 2, d);
+  shape.lineTo(0, 0);
   const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false, curveSegments: 1 });
-  // Rotating -90 about X maps shape-Y (plan depth, 0..d) to world -Z
-  // (landing on -d..0) and the extrude axis to world Y (already 0..h, no
-  // translate needed there). Shift +d along Z so plan depth lands on 0..d.
   geo.rotateX(-Math.PI / 2);
   geo.translate(0, 0, d);
   const mesh = new THREE.Mesh(geo, mat);
@@ -890,74 +951,8 @@ function buildWireShelf(THREE, params, opts) {
   return g;
 }
 
-// ============================================================================
-// clock - a plain round wall clock. Pre-seeded in registry.js against this
-// module from an earlier plan revision; not in this item's own type list,
-// but built here anyway so the shared contract gate (which loads every
-// registered type whose module file exists) stays green for whoever uses
-// small-items.js next. Kept deliberately minimal.
-// ============================================================================
-const CLOCK_DEFAULTS = Object.freeze({
-  width: 30,
-  height: 30,
-  depth: 4,
-  color: '#f4f4f0',
-  finish: 'matte',
-  handColor: '#1a1a1a'
-});
-
-function buildClock(THREE, params, opts) {
-  const p = Object.assign({}, CLOCK_DEFAULTS, params || {});
-  const w = m(p.width), h = m(p.height), d = m(p.depth);
-  const r = Math.min(w, h) / 2;
-  const g = new THREE.Group();
-  g.name = 'furniture:clock';
-  const segs = opts && opts.detail === 'low' ? 12 : 32;
-
-  // Face runs the whole declared depth so the group's bbox equals `depth`
-  // exactly; the hands sit flush with the face's own front, not proud of it.
-  const faceMat = makeFinish(THREE, p.finish, p.color);
-  const faceGeo = new THREE.CylinderGeometry(r, r, d, segs);
-  faceGeo.rotateX(Math.PI / 2);
-  faceGeo.translate(0, h / 2, d / 2);
-  g.add(new THREE.Mesh(faceGeo, faceMat));
-
-  const handMat = makeFinish(THREE, 'matte', p.handColor);
-  const handZ = d - 0.001;
-  const minuteHand = box(THREE, r * 0.08, 0.002, r * 0.75, handMat, 0, h / 2 + r * 0.35, handZ);
-  const hourHand = box(THREE, r * 0.1, 0.002, r * 0.5, handMat, 0, h / 2 + r * 0.22, handZ);
-  g.add(minuteHand, hourHand);
-  return g;
-}
-
-// ============================================================================
-// wall-art - a single flat panel of wall art (colour + size only). Pre-seeded
-// in registry.js against this module from an earlier plan revision. Where
-// the item's own photo-frame type carries an image, this is the plain single-
-// panel case with no frame -- a canvas print, not a framed photo.
-// ============================================================================
-const WALL_ART_DEFAULTS = Object.freeze({
-  width: 60,
-  height: 80,
-  depth: 3,
-  color: '#8a7a63',
-  finish: 'matte'
-});
-
-function buildWallArt(THREE, params) {
-  const p = Object.assign({}, WALL_ART_DEFAULTS, params || {});
-  const w = m(p.width), h = m(p.height), d = m(p.depth);
-  const g = new THREE.Group();
-  g.name = 'furniture:wall-art';
-  const mat = makeFinish(THREE, p.finish, p.color);
-  g.add(box(THREE, w, d, h, mat, 0, h / 2, d / 2));
-  return g;
-}
-
 export const TYPES = {
   'tv': { TYPE: 'tv', DEFAULTS: TV_DEFAULTS, build: buildTv },
-  'clock': { TYPE: 'clock', DEFAULTS: CLOCK_DEFAULTS, build: buildClock },
-  'wall-art': { TYPE: 'wall-art', DEFAULTS: WALL_ART_DEFAULTS, build: buildWallArt },
   'photo-frame': { TYPE: 'photo-frame', DEFAULTS: PHOTO_FRAME_DEFAULTS, build: buildPhotoFrame },
   'speaker': { TYPE: 'speaker', DEFAULTS: SPEAKER_DEFAULTS, build: buildSpeaker },
   'subwoofer': { TYPE: 'subwoofer', DEFAULTS: SUBWOOFER_DEFAULTS, build: buildSubwoofer },
