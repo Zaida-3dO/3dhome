@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Standing Desk Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<!-- The desk geometry itself lives in src/standing-desk.js -- the SAME pure
+     builder module the house scene will call once desks are placed (item
+     78f2b614, out of scope here). Loaded as a real ES module (it's genuine
+     ESM, exported for a plain Node unit test too) and stashed on window so
+     the Babel-transpiled app below -- which targets the global `THREE` from
+     ../vendor/three.js, matching every other spec page -- can call it. Two
+     different THREE builds never meet: this module never touches THREE
+     itself, it only receives whichever build its caller passes in. -->
+<script type="module">
+  import { buildStandingDesk, clampHeight } from '../src/standing-desk.js';
+  window.__standingDesk = { buildStandingDesk, clampHeight };
+</script>
+
+<script type="text/babel">
+/* =====================================================================
+   STANDING DESK SPEC   ·   sit-stand desk: top + two T-foot telescoping legs
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT, not a survey. This is a design
+   reference for modelling a fixture, not a record of any particular
+   building: measure your own desk and drive the geometry from the Tweaks
+   panel.
+   ─────────────────────────────────────────────────────────────────────
+
+   Look: a white rectangular top (~2.5 cm thick) on a white T-foot frame --
+   each side is a single telescoping column (two visible stages) rising
+   from a flat foot bar that runs the full depth front-to-back, a
+   horizontal crossbar under the top between the two legs, and a small
+   control panel on the front edge. Illustrative default size 120 x 80 cm.
+   The height slider is constrained to [minHeight, maxHeight] and the
+   column visibly telescopes as it moves.
+
+   The geometry itself is NOT built here -- it lives in
+   src/standing-desk.js (buildStandingDesk), loaded above as a real ES
+   module and unit-tested by scripts/test-standing-desk.mjs. This page is a
+   thin harness: tweaks in, THREE.Group out, via the same reusable
+   ThreeView every other spec page uses.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "width": 120,
+  "depth": 80,
+  "height": 96,
+  "minHeight": 72,
+  "maxHeight": 120,
+  "topThickness": 2.5,
+  "topColor": "#f4f2ee",
+  "frameColor": "#f2f1ec"
+}/*EDITMODE-END*/;
+
+// ============== Desk model (delegates to the shared builder) ==============
+function buildDesk(t, group, THREE, ctx) {
+  const { buildStandingDesk } = window.__standingDesk;
+  const { group: deskGroup, clampedHeight } = buildStandingDesk(THREE, {
+    width: t.width,
+    depth: t.depth,
+    height: t.height,
+    minHeight: t.minHeight,
+    maxHeight: t.maxHeight,
+    topThickness: t.topThickness,
+    topColor: t.topColor,
+    frameColor: t.frameColor,
+  });
+  group.add(deskGroup);
+  ctx.clampedHeight = clampedHeight;
+}
+
+// ============== App ==============
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const { clampHeight } = window.__standingDesk;
+  const clamped = clampHeight(t.height, t.minHeight, t.maxHeight);
+  return (
+    <>
+      <h1>Standing Desk Spec</h1>
+      <div className="sub">All units cm. Sit-stand desk: rectangular top on two T-foot telescoping legs, crossbar between them, control panel on the front edge. Use the Tweaks panel's height slider to move between sit and stand.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Width</td><td className="num">{t.width.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Depth</td><td className="num">{t.depth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Height (requested)</td><td className="num">{t.height.toFixed(0)}</td><td><b>Variable</b> — sit/stand slider</td></tr>
+              <tr><td>Height (clamped)</td><td className="num">{clamped.toFixed(0)}</td><td>Clamped to [min, max]</td></tr>
+              <tr><td>Min height (sit)</td><td className="num">{t.minHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Max height (stand)</td><td className="num">{t.maxHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Top thickness</td><td className="num">{t.topThickness.toFixed(1)}</td><td><b>Variable</b></td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            The height requested from the slider is clamped into [minHeight, maxHeight] before it reaches the geometry
+            (buildStandingDesk / clampHeight in src/standing-desk.js) — the same clamp a Home Assistant height entity would be
+            subject to once the desk is placed in a room and bound (out of scope for this spec — see item 78f2b614).
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Look</h2>
+          <div className="legend">
+            White rectangular top on a white T-foot frame. Each leg is one telescoping column (two visible
+            stages: a fixed lower sleeve sized to the desk's lowest reach, and an upper stage that visibly
+            extends further out of it as the desk stands taller) rising from a flat foot bar that runs the
+            full depth, front to back. A horizontal crossbar sits under the top between the two legs, and a
+            small control panel sits on the front edge, centred.
+          </div>
+        </div>
+
+        <div className="card full">
+          <h2>3D — sit ↔ stand</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildDesk}
+            heightOf={tt => clampHeight(tt.height, tt.minHeight, tt.maxHeight) * 0.01 + tt.topThickness * 0.01}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Size" />
+        <TweakSlider label="Width" value={t.width} min={80} max={200} step={1} unit="cm"
+          onChange={v => setTweak('width', v)} />
+        <TweakSlider label="Depth" value={t.depth} min={50} max={120} step={1} unit="cm"
+          onChange={v => setTweak('depth', v)} />
+        <TweakSlider label="Top thickness" value={t.topThickness} min={1.5} max={5} step={0.1} unit="cm"
+          onChange={v => setTweak('topThickness', v)} />
+
+        <TweakSection label="Sit ↔ Stand" />
+        <TweakSlider label="Height" value={t.height} min={t.minHeight} max={t.maxHeight} step={1} unit="cm"
+          onChange={v => setTweak('height', v)} />
+        <TweakSlider label="Min height (sit)" value={t.minHeight} min={55} max={95} step={1} unit="cm"
+          onChange={v => setTweak('minHeight', v)} />
+        <TweakSlider label="Max height (stand)" value={t.maxHeight} min={100} max={140} step={1} unit="cm"
+          onChange={v => setTweak('maxHeight', v)} />
+
+        <TweakSection label="Colours" />
+        <TweakColor label="Top colour" value={t.topColor}
+          onChange={v => setTweak('topColor', v)} />
+        <TweakColor label="Frame colour" value={t.frameColor}
+          onChange={v => setTweak('frameColor', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// Self-post it so the panel is visible when there's no host driving it.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>
