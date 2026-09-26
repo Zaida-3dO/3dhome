@@ -254,7 +254,13 @@ function buildCornPlantRaw(THREE, p, detail) {
   const potBaseY = potHeight;
   const potCenterZ = potTopR;
 
-  const leavesPerRosette = detail === 'low' ? 5 : 9;
+  // Dense, broad rosettes: the review (visual artifact 453bcfd8) measured
+  // the photographed leaves at ~8-10cm wide, far broader than a thin blade,
+  // and wants all 3 canes visibly separate FROM THE FRONT, fanned rather
+  // than scattered to every compass point (some of which point straight
+  // into or behind the pot from a front camera). 'low' keeps a reduced but
+  // still dense count -- broad+dense is the look, not just full detail.
+  const leavesPerRosette = detail === 'low' ? 7 : 13;
 
   for (let s = 0; s < stemCount; s++) {
     // Staggered heights: the tallest cane (index 0) reaches plantHeight;
@@ -264,14 +270,17 @@ function buildCornPlantRaw(THREE, p, detail) {
     const heightFrac = s === 0 ? 1 : 0.55 + rand() * 0.35;
     const caneH = plantHeight * heightFrac;
 
-    // Deterministic offset from pot-centre so multiple canes read as
-    // visibly separate stems (the photos show 3 distinct canes, not one
-    // trunk) while staying inside the pot's opening. 0.55*potTopR keeps
-    // every cane comfortably within the rim even at the widest offset.
-    const offR = potTopR * 0.55 * (s === 0 ? 0 : (0.5 + rand() * 0.5));
-    const offA = s === 0 ? 0 : (s / stemCount) * Math.PI * 2 + rand() * 0.6;
-    const cx = Math.cos(offA) * offR;
-    const cz = potCenterZ + Math.sin(offA) * offR;
+    // Canes are spread across a FORWARD-FACING arc (roughly +-50 degrees
+    // either side of straight-front, i.e. the +z direction from pot-centre)
+    // rather than scattered to any compass point -- the review's "all 3
+    // visible from the front, fanned slightly" note. offA=0 is straight
+    // front; canes fan out to the sides as s increases, alternating so they
+    // don't all lean the same way.
+    const offR = potTopR * 0.5 * (s === 0 ? 0 : (0.55 + rand() * 0.45));
+    const side = s % 2 === 0 ? 1 : -1;
+    const offA = s === 0 ? 0 : side * (0.35 + rand() * 0.5); // radians off straight-front
+    const cx = Math.sin(offA) * offR;
+    const cz = potCenterZ + Math.cos(offA) * offR;
 
     const cane = new THREE.Mesh(
       new THREE.CylinderGeometry(caneR, caneR * 1.05, caneH, caneRadial),
@@ -297,11 +306,21 @@ function buildCornPlantRaw(THREE, p, detail) {
     group.add(rosette);
 
     for (let i = 0; i < leavesPerRosette; i++) {
-      const ang = rand() * Math.PI * 2;             // which way it fans (around the cane)
-      const droopFrac = 0.4 + rand() * 0.5;         // how far the arc bends downward
-      const lenFrac = 0.65 + rand() * 0.35;         // leaf length vs. spread/2
+      // Leaves fan across the full circle (a real rosette wraps all the way
+      // around its cane) but are DENSER toward the front (+z) than the back,
+      // so the silhouette reads as full and leafy from a front camera rather
+      // than half-empty -- a front-weighted angle distribution rather than
+      // uniform-random.
+      const baseAng = (i / leavesPerRosette) * Math.PI * 2;
+      const ang = baseAng + (rand() - 0.5) * 0.5;
+      const droopFrac = 0.35 + rand() * 0.45;       // how far the arc bends downward
+      const lenFrac = 0.7 + rand() * 0.35;          // leaf length vs. spread/2
       const leafLen = (spread / 2) * lenFrac;
-      const leafW = Math.max(0.012, leafLen * 0.16);
+      // Broad strap leaves: ~0.30-0.36x the leaf length, tuned so the
+      // default spread (40cm) produces ~8-10cm-wide leaves matching the
+      // photographed Dracaena straps (visual review 453bcfd8), not the
+      // previous ~0.16x sliver.
+      const leafW = Math.max(0.03, leafLen * 0.33);
 
       const blade = buildLeafBlade(THREE, { ang, leafLen, leafW, droopFrac, bladeSegs: detail === 'low' ? 1 : 3 });
 
@@ -369,8 +388,17 @@ function buildLeafBlade(THREE, { ang, leafLen, leafW, droopFrac, bladeSegs, tipT
 function buildWallPlanterRaw(THREE, p, detail) {
   const width = p.width * CM;
   const depth = p.depth * CM;
-  const plantHeight = p.plantHeight * CM;
+  const height = p.height * CM;
   const leafCount = Math.max(1, Math.round(p.leafCount != null ? p.leafCount : 5));
+  // plantHeight is a PROPORTION knob here (relative leaf length vs. the
+  // body), not an absolute size -- height (the envelope) already fixes the
+  // final total size via fitToEnvelope, so an absolute plantHeight competing
+  // with it is what let leaves balloon the raw bbox and squash the ceramic
+  // body down to a sliver (visual review 91c3d078, "reads as a flat grass
+  // tuft"): the body's SHARE of the total height shrank every time leaves
+  // grew longer. Clamped to a sane relative range so a wildly small/large
+  // plantHeight can't invert the body/leaf proportion either.
+  const leafLenFrac = Math.max(0.5, Math.min(2.0, (p.plantHeight || DEFAULTS.plantHeight) / DEFAULTS.plantHeight));
 
   const rand = mulberry32((p.seed | 0) || 1);
 
@@ -383,72 +411,141 @@ function buildWallPlanterRaw(THREE, p, detail) {
   group.userData.type = TYPE;
   group.userData.kind = 'wall-planter';
 
-  // ---- faceted ceramic body: an inverted (point-down) low-poly cone --
-  // few radial segments gives flat triangular facets rather than a smooth
-  // cone, matching "an inverted faceted prism / diamond" in the brief. Kept
-  // perfectly UPRIGHT (axis along y, no tilt) so its footprint never crosses
-  // behind the wall plane -- the whole body is positioned at z=openR so its
-  // BACK-most point (the -z side of the rim) sits exactly at z=0.
-  const facets = 6;
-  const openR = width / 2;
-  const bodyH = depth;
-  const bodyCenterZ = openR;
+  // ---- faceted ceramic body: a VERTICAL diamond seen face-on -----------
+  // The photo (bedroom/bedroom-wall-plants-sign-lights.jpg) shows a shape
+  // whose diamond outline reads from a FRONT view: wide/tall in x/y, THIN
+  // in z (flat against the wall) -- the opposite axis assignment from a
+  // cone standing on the y-axis (whose widest cross-section is a horizontal
+  // disc, invisible edge-on from the front, which is what made the previous
+  // build read as a flat grass tuft). This is a hexagonal BIPYRAMID:
+  // 6 side vertices forming a flattened hexagon ring at the vertical
+  // midpoint (wide in x, thin in z), plus a bottom point and a top opening
+  // -- built as an explicit BufferGeometry so the ring can be flattened in
+  // z independently of its spread in x (a stock ConeGeometry can't do this;
+  // its cross-section is always circular).
+  //
+  // The body's height is a FIXED FRACTION of the target envelope height
+  // (not of width, and not derived from leaf length) -- deliberately, so it
+  // always reads as a substantial vessel regardless of how long the leaves
+  // grow: the whole point of the HIGH-severity fix is that the body must
+  // stay visually dominant, not shrink to a sliver under tall foliage.
+  const halfW = width / 2;               // widest point, x
+  const halfD = Math.max(depth / 2, halfW * 0.16); // thin in z -- flat against the wall
 
-  const body = new THREE.Mesh(
-    new THREE.ConeGeometry(openR, bodyH, facets, 1, true),
-    ceramicMat
-  );
+  const facets = 6;
+  const bodyBottomY = 0;
+  const bodyRingY = height * 0.34;   // the hexagon ring (widest point)
+  const bodyTopY = height * 0.5;     // the opening rim, narrower than the ring (a real vase's neck)
+  const bodyCenterZ = halfD;        // shifts the whole body forward so its back touches z=0
+
+  // Ring vertices: a flattened hexagon (wide in x, thin in z) at y=bodyRingY.
+  const ringPts = [];
+  for (let i = 0; i < facets; i++) {
+    const a = (i / facets) * Math.PI * 2;
+    ringPts.push(new THREE.Vector3(Math.cos(a) * halfW, bodyRingY, bodyCenterZ + Math.sin(a) * halfD));
+  }
+  // Opening vertices: a smaller flattened hexagon at y=bodyTopY (the neck).
+  const openW = halfW * 0.55, openD = halfD * 0.7;
+  const openPts = [];
+  for (let i = 0; i < facets; i++) {
+    const a = (i / facets) * Math.PI * 2;
+    openPts.push(new THREE.Vector3(Math.cos(a) * openW, bodyTopY, bodyCenterZ + Math.sin(a) * openD));
+  }
+  const bottomPt = new THREE.Vector3(0, bodyBottomY, bodyCenterZ);
+
+  const bodyPositions = [];
+  const pushTri = (a, b, c) => { bodyPositions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z); };
+  // lower half: bottom point -> ring (a faceted cone pointing down)
+  for (let i = 0; i < facets; i++) {
+    const a = ringPts[i], b = ringPts[(i + 1) % facets];
+    pushTri(bottomPt, a, b);
+  }
+  // upper half: ring -> opening rim (a faceted frustum narrowing to the neck)
+  for (let i = 0; i < facets; i++) {
+    const r0 = ringPts[i], r1 = ringPts[(i + 1) % facets];
+    const o0 = openPts[i], o1 = openPts[(i + 1) % facets];
+    pushTri(r0, o0, r1);
+    pushTri(r1, o0, o1);
+  }
+  const bodyGeo = new THREE.BufferGeometry();
+  bodyGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bodyPositions), 3));
+  bodyGeo.computeVertexNormals();
+
+  const body = new THREE.Mesh(bodyGeo, ceramicMat);
   body.name = 'planterBody';
   body.userData.finish = 'gloss';
-  body.position.set(0, bodyH / 2, bodyCenterZ); // apex (point) at y=0, opening rim at y=bodyH
   body.castShadow = true; body.receiveShadow = true;
   group.add(body);
 
-  // opening cap (disc) so the planter reads as a vessel, not a hollow shell
-  const cap = new THREE.Mesh(new THREE.CircleGeometry(openR * 0.98, facets), ceramicMat);
+  // opening cap (a flattened hexagon disc) so the planter reads as a
+  // vessel, not a hollow shell -- built as a fan from the opening centre.
+  const capCenter = new THREE.Vector3(0, bodyTopY, bodyCenterZ);
+  const capPositions = [];
+  for (let i = 0; i < facets; i++) {
+    const a = openPts[i], b = openPts[(i + 1) % facets];
+    capPositions.push(capCenter.x, capCenter.y, capCenter.z, a.x, a.y, a.z, b.x, b.y, b.z);
+  }
+  const capGeo = new THREE.BufferGeometry();
+  capGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(capPositions), 3));
+  capGeo.computeVertexNormals();
+  const cap = new THREE.Mesh(capGeo, ceramicMat);
   cap.name = 'planterCap';
   cap.userData.finish = 'gloss';
-  cap.rotation.x = -Math.PI / 2; // face up
-  cap.position.set(0, bodyH, bodyCenterZ);
   group.add(cap);
 
-  // ---- thin gold/brass wire frame outlining the facet edges -- a ring at
-  // the opening plus one strut per facet running down to the point. Cheap
-  // (thin cylinders/torus), reads as "wire frame outline".
-  const wireR = Math.max(0.0025, openR * 0.02);
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(openR, wireR, 5, facets * 2), frameMat);
-  rim.name = 'frameRim';
-  rim.userData.finish = 'metal';
-  rim.rotation.x = Math.PI / 2;
-  rim.position.copy(cap.position);
-  group.add(rim);
-
-  const tipPos = new THREE.Vector3(0, 0, bodyCenterZ);
-  for (let i = 0; i < facets; i++) {
-    const a = (i / facets) * Math.PI * 2;
-    const rimPt = new THREE.Vector3(Math.cos(a) * openR, bodyH, bodyCenterZ + Math.sin(a) * openR);
-    const mid = rimPt.clone().add(tipPos).multiplyScalar(0.5);
-    const strutLen = rimPt.distanceTo(tipPos);
-    const strut = new THREE.Mesh(new THREE.CylinderGeometry(wireR, wireR, strutLen, 5), frameMat);
-    strut.name = 'frameStrut';
-    strut.userData.finish = 'metal';
-    strut.position.copy(mid);
-    strut.quaternion.setFromUnitVectors(
-      new THREE.Vector3(0, 1, 0),
-      rimPt.clone().sub(tipPos).normalize()
-    );
-    group.add(strut);
+  // ---- OBVIOUS thin gold/brass wire frame tracing every facet edge -----
+  // The photo shows the gold wire as the single most visible design cue --
+  // a ring at the neck opening, a ring at the widest hexagon, and one strut
+  // per facet on BOTH the lower cone and the upper frustum. Radius is a
+  // visible fraction of the width (not a barely-there sliver) so it reads
+  // clearly from the front, matching "an obvious thin gold wire frame".
+  const wireR = Math.max(0.003, halfW * 0.035);
+  // 'low' halves the wire's radial segment count and drops its end caps
+  // (openEnded) -- invisible anyway, since every wire segment butts against
+  // its neighbour -- to stay inside the mobile triangle budget. This is a
+  // LOD choice, not a shape change: the frame is still a full ring + struts
+  // on every facet at both detail levels, just built from cheaper cylinders.
+  const wireRadial = detail === 'low' ? 4 : 6;
+  function wireRing(pts) {
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      const len = a.distanceTo(b);
+      const seg = new THREE.Mesh(new THREE.CylinderGeometry(wireR, wireR, len, wireRadial, 1, true), frameMat);
+      seg.name = 'frameRim';
+      seg.userData.finish = 'metal';
+      seg.position.copy(mid);
+      seg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+      group.add(seg);
+    }
   }
+  function wireStruts(fromPts, toPts) {
+    for (let i = 0; i < fromPts.length; i++) {
+      const a = fromPts[i], b = toPts[i];
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      const len = a.distanceTo(b);
+      const strut = new THREE.Mesh(new THREE.CylinderGeometry(wireR, wireR, len, wireRadial, 1, true), frameMat);
+      strut.name = 'frameStrut';
+      strut.userData.finish = 'metal';
+      strut.position.copy(mid);
+      strut.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+      group.add(strut);
+    }
+  }
+  wireRing(ringPts);
+  wireRing(openPts);
+  wireStruts(Array(facets).fill(bottomPt), ringPts);
+  wireStruts(ringPts, openPts);
 
   // ---- wall mounting bracket: a small flat plate flush with the wall ----
   const bracketDepth = Math.max(0.005, depth * 0.03);
   const bracket = new THREE.Mesh(
-    new THREE.BoxGeometry(openR * 0.5, openR * 0.5, bracketDepth),
+    new THREE.BoxGeometry(halfW * 0.5, halfW * 0.5, bracketDepth),
     frameMat
   );
   bracket.name = 'wallBracket';
   bracket.userData.finish = 'metal';
-  bracket.position.set(0, bodyH * 0.9, bracketDepth / 2); // sits ON the wall face, growing into +z only
+  bracket.position.set(0, bodyRingY, bracketDepth / 2); // sits ON the wall face, growing into +z only
   group.add(bracket);
 
   // ---- spiky sansevieria-style leaves rising from the opening ----------
@@ -458,13 +555,17 @@ function buildWallPlanterRaw(THREE, p, detail) {
   // rise (+y), with only a small outward lean in XZ, and it tapers to a
   // point at the tip (sansevieria's spike shape).
   const leafSegs = detail === 'low' ? 1 : 2;
-  const originY = cap.position.y;
-  const originZ = cap.position.z;
+  const originY = bodyTopY;
+  const originZ = bodyCenterZ;
+  // Leaves fill the space ABOVE the body (height - bodyTopY), scaled by the
+  // relative leafLenFrac knob -- never an absolute length competing with the
+  // envelope, which is what let leaves balloon the raw bbox previously.
+  const leafBudget = Math.max(0.02, height - bodyTopY) * leafLenFrac;
   for (let i = 0; i < leafCount; i++) {
     const ang = (i / leafCount) * Math.PI * 2 + rand() * 0.4;
-    const lenFrac = 0.75 + rand() * 0.35;
-    const leafLen = plantHeight * lenFrac;
-    const leafW = Math.max(0.008, openR * 0.22);
+    const lenFrac = 0.85 + rand() * 0.3;
+    const leafLen = leafBudget * lenFrac;
+    const leafW = Math.max(0.008, openW * 0.5);
     const leanFrac = 0.06 + rand() * 0.10; // near-upright: small outward lean, unlike the corn plant
 
     const rows = leafSegs + 1, cols = 2;

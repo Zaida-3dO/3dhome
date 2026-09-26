@@ -9,7 +9,17 @@
   h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
   .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
   .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
-  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  /* A 1fr grid track still respects its content's min-content width unless
+     told otherwise, so a wide table cell (e.g. "final bbox width" in the
+     Numbers card) can force the whole grid past a narrow (390px) viewport --
+     visual review ba80c1c1. min-width:0 lets the track shrink below its
+     content's natural width, and the table's own overflow-x scrolls
+     internally instead of blowing out the page. Local to this page rather
+     than the shared spec-page CSS every other spec page copies verbatim
+     (WindowSpec/CurtainSpec/etc. have the same base .grid/.card rules) --
+     that shared drift is the "leave it to a follow-up" part of the finding. */
+  .grid > * { min-width: 0; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; overflow-x:auto; }
   .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
   svg { display:block; width:100%; height:auto; }
   #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
@@ -81,6 +91,11 @@
    ===================================================================== */
 const { DEFAULTS, PRESETS } = window.FurniturePlant;
 
+// Mirrors src/furniture/plant.js's DEFAULTS exactly (including leafCount:5)
+// so "Copy as furniture JSON" only ever emits a key that GENUINELY differs
+// from DEFAULTS -- a TWEAK_DEFAULTS/DEFAULTS mismatch here previously made
+// leafCount always show up in the corn-plant preset's JSON (it isn't even a
+// corn-plant param), which visual review flagged as an INFO finding.
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "preset": "corn-plant-tall",
   "kind": "corn-plant",
@@ -94,9 +109,10 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "stemCount": 3,
   "spread": 40,
   "leafColor": "#33502a",
-  "leafCount": 6,
+  "leafCount": 5,
   "frameColor": "#b8945a",
-  "seed": 7
+  "seed": 7,
+  "detail": "full"
 }/*EDITMODE-END*/;
 
 // Params object the builder actually wants, derived from tweak state. Colours
@@ -134,10 +150,13 @@ function diffFromDefaults(params) {
 }
 
 // ============== Plant model (delegates to the shared builder) ==============
+// opts.detail is threaded through from the tweak state -- previously this
+// page never passed opts at all, so 'low' detail was unreachable from the
+// spec page even though the builder supports it (visual review bc1cf6ac).
 function buildPlantModel(t, group, THREE, ctx) {
   const { build } = window.FurniturePlant;
   const params = paramsFromTweaks(t);
-  const plantGroup = build(THREE, params);
+  const plantGroup = build(THREE, params, { detail: t.detail === 'low' ? 'low' : 'full' });
   group.add(plantGroup);
   ctx.topY = plantGroup.userData.topY;
 }
@@ -288,6 +307,11 @@ function App() {
         <TweakSection label="Leaf layout" />
         <TweakSlider label="Seed" value={t.seed} min={1} max={999} step={1}
           onChange={v => setTweak('seed', v)} />
+
+        <TweakSection label="Detail (mobile budget)" />
+        <TweakRadio label="Detail" value={t.detail}
+          options={[{ value: 'full', label: 'Full' }, { value: 'low', label: 'Low' }]}
+          onChange={v => setTweak('detail', v)} />
       </TweaksPanel>
     </>
   );
