@@ -217,7 +217,7 @@ Assistant token; they are matched by their own exact-match `location` blocks,
 which beat the regex block in nginx, so they never pick up CORS.
 
 Responses also carry `Vary: Origin`, which is **required** here: the JSON is
-served `Cache-Control: public, max-age=300`, and without `Vary` a shared cache
+served `Cache-Control: no-cache` (which still lets a cache store it), and without `Vary` a shared cache
 could hand one origin's response (and its header) to a different origin.
 
 #### Why not just `*`?
@@ -319,11 +319,23 @@ another origin.
 Set `APP_VERSION` on every deployment — a release tag, a build number, anything
 that changes when the files change.
 
-It is stamped at container start into the visible badge and into every `?v=`
-cache-busting query string in `index.html`, from a single value. That is what
-lets `nginx.conf` cache JS and assets for a year with `immutable`: a new version
-produces new URLs, so a long cache can never serve a stale file for a URL whose
-contents changed.
+It is stamped at container start into the visible badge, into every `?v=`
+cache-busting query string in `index.html`, and onto every relative ES-module
+import in `src/**/*.js` and `specs/*` (`from './x.js'` becomes
+`from './x.js?v=<version>'`, dynamic `import('./x.js')` too), from a single
+value. That is what lets `nginx.conf` cache a `?v=` URL for a year with
+`immutable`: a new version produces new URLs for the WHOLE module graph, so a
+browser can never link a new module against a stale cached dependency.
+
+Only URLs carrying `?v=` are immutable. Unversioned `.js`, `.jsx`, `.json`,
+`.html` and other assets are served `Cache-Control: no-cache` (revalidated by
+ETag on every use), and `/houses/**` is never immutable. Expected:
+
+```
+curl -sI https://home3d.example.com/src/wall-fittings.js       # Cache-Control: no-cache
+curl -sI 'https://home3d.example.com/src/wall-fittings.js?v=X' # Cache-Control: public, max-age=31536000, immutable
+curl -sI https://home3d.example.com/houses/demo/geometry.json  # Cache-Control: no-cache
+```
 
 Leaving it unset is safe (it falls back to `dev`) but costs you cache-busting:
 every deployment reuses the same asset URLs, and returning visitors keep the

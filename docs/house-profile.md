@@ -620,9 +620,9 @@ Its registry entries name the property to use in `key`:
 A single-type module has `key: null`.
 
 **Cache-busting.** Every builder URL the registry imports carries the app
-version as `?v=`, just as `index.html` does for the scripts it names.
-Otherwise nginx's one-year immutable cache would keep serving the previous
-release's builders. The version comes from the `?v=` the registry itself was
+version as `?v=`, just as `index.html` does for the scripts it names and
+`deploy/generate-config.sh` does for every static relative import. Otherwise
+a browser could keep running the previous release's builders. The version comes from the `?v=` the registry itself was
 imported with, then from `window.HOME3D_CONFIG.version`, or it can be passed
 explicitly.
 
