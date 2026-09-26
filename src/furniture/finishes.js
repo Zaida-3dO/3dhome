@@ -42,6 +42,47 @@ export function isKeptFinish(finish) {
   return KEEP_FINISHES.indexOf(finish) !== -1;
 }
 
+/**
+ * THE ONE READER of a part's finish and keep tags. The builder contract lets
+ * a builder tag EITHER the mesh (`mesh.userData.finish` / `.keep`) OR the
+ * material (`material.userData.finish` / `.keep`, which makeFinish() stamps).
+ * When both are set they must agree. The contract test and the renderer's
+ * merge both read tags through these two functions and nothing else, so the
+ * rule cannot drift between what is tested and what is drawn.
+ *
+ * @param {Object} mesh      a THREE.Mesh
+ * @param {Object} [material]  one of its materials (default: its first)
+ * @returns {{finish: ?string, error: ?string}}  finish is null when error is set
+ */
+export function partFinish(mesh, material) {
+  const mat = material || (mesh && (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material));
+  const onMesh = mesh && mesh.userData ? mesh.userData.finish : undefined;
+  const onMat = mat && mat.userData ? mat.userData.finish : undefined;
+  if (onMesh != null && onMat != null && onMesh !== onMat) {
+    return { finish: null, error: 'mesh says ' + JSON.stringify(onMesh) + ' but its material says ' + JSON.stringify(onMat) };
+  }
+  const f = onMat != null ? onMat : onMesh;
+  if (f == null) return { finish: null, error: 'no userData.finish on the mesh or its material' };
+  if (FINISHES.indexOf(f) === -1) return { finish: null, error: 'finish ' + JSON.stringify(f) + ' is not in the palette' };
+  return { finish: f, error: null };
+}
+
+/**
+ * The part's keep flag, under the same either/or rule:
+ * `{keep: true|false|undefined, error}`. `undefined` means neither is set.
+ * The merge keeps a part when this says true OR its finish is a kept finish.
+ */
+export function partKeep(mesh, material) {
+  const mat = material || (mesh && (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material));
+  const onMesh = mesh && mesh.userData ? mesh.userData.keep : undefined;
+  const onMat = mat && mat.userData ? mat.userData.keep : undefined;
+  if (onMesh != null && onMat != null && !!onMesh !== !!onMat) {
+    return { keep: undefined, error: 'mesh keep=' + onMesh + ' but its material keep=' + onMat };
+  }
+  const k = onMesh != null ? !!onMesh : (onMat != null ? !!onMat : undefined);
+  return { keep: k, error: null };
+}
+
 const MIRROR_COLOR = 0xd8dadc;
 
 /** '#rrggbb' | 0xrrggbb -> 0xrrggbb, or the fallback. */

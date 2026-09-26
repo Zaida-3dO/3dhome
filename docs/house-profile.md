@@ -504,6 +504,27 @@ centred along the width, the **back face is at `z = 0`**, and the front faces
 `material.userData.finish` so the renderer can merge a room's furniture into a
 few draws.
 
+**Finish and keep tags: the mesh or the material.** Every mesh part must say
+which palette finish it is. A builder may put the tag on the mesh
+(`mesh.userData.finish`) or on its material (`material.userData.finish`, which
+`makeFinish()` sets for you). Either passes. If both are set, they must agree,
+and a mismatch fails the contract test. Every `glass`, `mirror` and `emissive`
+part must also be marked `keep: true`, on the mesh or on the material, with the
+same agreement rule. Nothing reads these tags directly. The contract test
+(`scripts/test-furniture-core.mjs`) and the renderer's merge both go through
+`partFinish()` and `partKeep()` in `src/furniture/finishes.js`, so what is
+tested and what is drawn cannot diverge.
+
+**The contract test** builds every type whose module exists at its `DEFAULTS`
+and checks all of the following:
+- the bounding box equals `width`/`depth`/`height` within 0.5 cm
+- x is centred, the bottom is at y = 0 and the back is at z = 0
+- every finish tag is in the palette, and the kept finishes are marked keep
+- `detail: 'low'` has no more triangles than `'full'`
+- the module never imports three itself, whether by `'three'`, a `vendor/`
+  path or a dynamic `import()`
+- the builder runs in Node, so it cannot use the DOM (`document`, a canvas)
+
 **Multi-type modules.** A module that builds several related types, such as
 `kitchen.js` or `small-items.js`, exports one object instead:
 

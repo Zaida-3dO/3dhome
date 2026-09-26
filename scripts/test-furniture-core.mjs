@@ -267,6 +267,52 @@ const compileF = furniture => quietly(() => HouseLoader.compile(house(furniture)
     !['matte', 'gloss', 'metal'].some(Fin.isKeptFinish));
 }
 
+// ---- 6b. the tag readers: mesh OR material, agreeing when both ---------------
+{
+  const plainMat = () => new THREE.MeshStandardMaterial();
+  const mk = (meshTags, matTags) => {
+    const mat = plainMat();
+    Object.assign(mat.userData, matTags || {});
+    const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat);
+    Object.assign(m.userData, meshTags || {});
+    return m;
+  };
+  check('partFinish: tag on the material only', Fin.partFinish(mk(null, { finish: 'metal' })).finish === 'metal');
+  check('partFinish: tag on the mesh only', Fin.partFinish(mk({ finish: 'gloss' }, null)).finish === 'gloss');
+  check('partFinish: both, agreeing', Fin.partFinish(mk({ finish: 'glass' }, { finish: 'glass' })).finish === 'glass');
+  const dis = Fin.partFinish(mk({ finish: 'glass' }, { finish: 'matte' }));
+  check('partFinish: both, disagreeing -> error', dis.finish === null && /mesh says "glass" but its material says "matte"/.test(dis.error), dis);
+  const none = Fin.partFinish(mk(null, null));
+  check('partFinish: neither -> error', none.finish === null && /no userData.finish/.test(none.error), none);
+  const off = Fin.partFinish(mk({ finish: 'velvet' }, null));
+  check('partFinish: off-palette on the mesh -> error', off.finish === null && /not in the palette/.test(off.error), off);
+  check('partFinish: makeFinish material passes', Fin.partFinish(new THREE.Mesh(new THREE.BoxGeometry(), Fin.makeFinish(THREE, 'mirror'))).finish === 'mirror');
+  const multi = new THREE.Mesh(new THREE.BoxGeometry(), [Fin.makeFinish(THREE, 'matte'), Fin.makeFinish(THREE, 'glass')]);
+  check('partFinish: per material of a multi-material mesh', Fin.partFinish(multi, multi.material[1]).finish === 'glass');
+
+  check('partKeep: on the mesh', Fin.partKeep(mk({ keep: true }, null)).keep === true);
+  check('partKeep: on the material', Fin.partKeep(mk(null, { keep: true })).keep === true);
+  check('partKeep: neither -> undefined', Fin.partKeep(mk(null, null)).keep === undefined);
+  const kd = Fin.partKeep(mk({ keep: true }, { keep: false }));
+  check('partKeep: both, disagreeing -> error', kd.error && /keep=true but its material keep=false/.test(kd.error), kd);
+  check('partKeep: both, agreeing', Fin.partKeep(mk({ keep: true }, { keep: true })).keep === true);
+}
+
+// A builder that tags MESHES (not materials) -- as the spec crews were told
+// to -- must pass the contract checks below exactly as makeFinish() output does.
+function meshTaggedBuild(T, p) {
+  const g = new T.Group();
+  const body = new T.Mesh(new T.BoxGeometry(p.width / 100, p.height / 100, p.depth / 100), new T.MeshStandardMaterial());
+  body.geometry.translate(0, p.height / 200, p.depth / 200);
+  body.userData.finish = 'matte';
+  const screen = new T.Mesh(new T.PlaneGeometry(p.width / 200, p.height / 200), new T.MeshStandardMaterial());
+  screen.position.set(0, p.height / 200, p.depth / 100);
+  screen.userData.finish = 'emissive';
+  screen.userData.keep = true;
+  g.add(body, screen);
+  return g;
+}
+
 // ---- 7. every built type meets the builder contract ---------------------------
 // This is the gate for every builder that lands in src/furniture/, not just
 // the box: it loops over each registry type whose module EXISTS (a
@@ -321,12 +367,21 @@ function checkContract(tag, build, p) {
   check(tag + ': depth == params within 0.5 cm, toward +z', Math.abs(b.maxZ - b.minZ - p.depth) <= 0.5, { bbox: b, depth: p.depth });
   const parts = meshParts(full);
   check(tag + ': has meshes', parts.length > 0);
-  const offPalette = parts.filter(x => !x.material || !Fin.FINISHES.includes(x.material.userData && x.material.userData.finish));
-  check(tag + ': every material has a palette userData.finish', offPalette.length === 0,
-    offPalette.map(x => (x.mesh.name || x.mesh.type) + ':' + (x.material && x.material.userData && x.material.userData.finish)));
-  const unkept = parts.filter(x => x.material && Fin.isKeptFinish(x.material.userData.finish) && x.mesh.userData.keep !== true);
-  check(tag + ': glass/mirror/emissive parts are marked keep', unkept.length === 0,
-    unkept.map(x => (x.mesh.name || x.mesh.type) + ':' + x.material.userData.finish));
+  // Tags are read through partFinish/partKeep ONLY -- the same reader the
+  // merge uses: mesh OR material may carry them, and if both do they agree.
+  const named = x => (x.mesh.name || x.mesh.type);
+  const badFinish = parts.map(x => ({ x, r: Fin.partFinish(x.mesh, x.material) })).filter(o => o.r.error);
+  check(tag + ': every part has a palette userData.finish (mesh or material)', badFinish.length === 0,
+    badFinish.map(o => named(o.x) + ': ' + o.r.error));
+  const badKeep = parts.map(x => ({ x, r: Fin.partKeep(x.mesh, x.material) })).filter(o => o.r.error);
+  check(tag + ': mesh and material keep flags agree where both are set', badKeep.length === 0,
+    badKeep.map(o => named(o.x) + ': ' + o.r.error));
+  const unkept = parts.filter(x => {
+    const f = Fin.partFinish(x.mesh, x.material).finish;
+    return f && Fin.isKeptFinish(f) && Fin.partKeep(x.mesh, x.material).keep !== true;
+  });
+  check(tag + ': glass/mirror/emissive parts are marked keep (mesh or material)', unkept.length === 0,
+    unkept.map(x => named(x) + ':' + Fin.partFinish(x.mesh, x.material).finish));
   if (low && low.isObject3D) {
     const tf = triangles(full), tl = triangles(low);
     check(tag + ': detail low has no more triangles than full', tl <= tf, { full: tf, low: tl });
@@ -365,6 +420,8 @@ function checkContract(tag, build, p) {
   [{ width: 120, depth: 35, height: 75 }, { width: 13, depth: 90, height: 201.5, finish: 'glass' }].forEach(params => {
     checkContract('box ' + JSON.stringify(params), Box.build, Object.assign({}, Box.DEFAULTS, params));
   });
+  checkContract('mesh-tagged builder', meshTaggedBuild, { width: 60, depth: 20, height: 40 });
+
   let glassKept = false;
   Box.build(THREE, { finish: 'glass' }).traverse(o => { if (o.isMesh) glassKept = o.userData.keep === true; });
   check('box: a glass box is flagged keep', glassKept);
