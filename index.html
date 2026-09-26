@@ -929,12 +929,12 @@
         return order.filter(g => buckets.has(g)).map(g => ({ name: g, items: buckets.get(g) }));
       }
 
-      // Which spec groups are expanded. Keyed by group name, default open — a
-      // house with few specs should not make someone click to see any of them.
-      // Lives outside renderPanel() so a toggle survives the next re-render.
+      // Which spec groups are expanded. Keyed by group name, default CLOSED —
+      // a section stays collapsed until the user clicks its header. Lives
+      // outside renderPanel() so a toggle survives the next re-render.
       const specGroupsOpen = {};
       function isSpecGroupOpen(name) {
-        return specGroupsOpen[name] !== false;
+        return specGroupsOpen[name] === true;
       }
       const haStatusEl = document.getElementById('ha-status');
       const haStatusDot = document.getElementById('ha-status-dot');
@@ -1072,6 +1072,52 @@
         document.title = house.name;
       }
 
+      // ---- Room -> curtain sliders (sidebar) ----
+      //
+      // One slider per curtain BOUND to a real cover in rooms.json
+      // (sensors.curtains), not per curtain the geometry merely draws -- a
+      // house can model a curtain purely for looks with no HA entity behind
+      // it, and that one gets no slider (nothing to send a command to). The
+      // curtain's label and room come from the house profile (house.curtains,
+      // compiled by house-loader.js: { id, name, room }), keyed by the same
+      // id rooms.json uses. A curtain bound in rooms.json but absent from the
+      // profile (typo, or a profile that dropped a curtain) is skipped rather
+      // than rendering a nameless slider for geometry that does not exist.
+      const curtainMeta = new Map(); // curtainId -> { label, room }
+      (house.curtains || []).forEach(cu => curtainMeta.set(cu.id, { label: cu.name || cu.id, room: cu.room }));
+      const roomCurtains = {}; // roomId -> [{ id, label, entities }]
+      const curtainEntities = new Map(); // curtainId -> [entity_id, ...] (for sendCurtainToHA)
+      Object.keys((sensors && sensors.curtains) || {}).forEach(curtainId => {
+        const meta = curtainMeta.get(curtainId);
+        if (!meta) {
+          console.warn('[home3d] rooms.json binds curtain "' + curtainId +
+            '" but no curtain with that id exists in this house profile -- skipped.');
+          return;
+        }
+        const entities = sensors.curtains[curtainId];
+        if (!Array.isArray(entities) || !entities.length) return;
+        (roomCurtains[meta.room] || (roomCurtains[meta.room] = [])).push({ id: curtainId, label: meta.label, entities });
+        curtainEntities.set(curtainId, entities);
+      });
+
+      // Curtain ids the user is actively dragging: a live onCurtainChange /
+      // onCurtainAvailabilityChange arriving mid-drag must not repaint the
+      // panel and yank the slider out from under the pointer. Added on the
+      // slider's first 'input' and removed on 'change' (fires once on
+      // release), so it spans exactly the drag and no longer.
+      const curtainDragging = new Set();
+      // Last resolved availability per curtain id, mirrored from
+      // ha.onCurtainAvailabilityChange (or the __home3dSensors.curtainAvailable
+      // test seam, which drives this exact map -- same idiom as doorSensorOpen
+      // above for door contacts). Available only once a reading has actually
+      // arrived: a curtain bound in rooms.json but never heard from (HA off,
+      // or the entity has not published yet) defaults to unavailable rather
+      // than claiming a working slider with nothing behind it.
+      const curtainAvailableState = new Map();
+      function curtainIsAvailable(curtainId) {
+        return curtainAvailableState.get(curtainId) === true;
+      }
+
       // ---- Create scene with correct initial light state ----
 
       const home = Home3DScene.create(container, {
@@ -1148,6 +1194,15 @@
           home.setCorniceLight(curtainId, { on: !!on, bri: bri != null ? bri : 100, color: color || null }),
         getCurtainOpen: curtainId => home.getCurtainOpen(curtainId),
         getCornice: curtainId => home.getCorniceLight(curtainId),
+        // Sidebar slider availability -- this is PANEL state (curtainAvailableState),
+        // not scene state, since "can this slider send a command" depends on
+        // whether ha exists and has a reading, not on the 3D curtain itself.
+        //   __home3dSensors.curtainAvailable('lounge_curtain', true)
+        curtainAvailable: (curtainId, available) => {
+          curtainAvailableState.set(curtainId, !!available);
+          renderPanel();
+        },
+        getCurtainSliderAvailable: curtainId => curtainIsAvailable(curtainId),
         daylight: () => home.getDaylightDebug(),
         // Pin the sun ('morning'|'noon'|'night'|'auto') so daylight can be
         // checked at any wall-clock time -- same as the Settings sun buttons.
@@ -1712,9 +1767,17 @@
         // only on a real change, like the sensor callbacks above.
         ha.onCurtainChange((curtainId, st) => {
           home.setCurtainOpen(curtainId, st.pct, st.moving);
+          // Don't fight the user mid-drag: a live reading still updates the
+          // 3D curtain above, but repainting the panel here would yank the
+          // slider to the last-reported position out from under the pointer.
+          if (!curtainDragging.has(curtainId)) renderPanel();
         });
         ha.onCorniceChange((curtainId, st) => {
           home.setCorniceLight(curtainId, st);
+        });
+        ha.onCurtainAvailabilityChange((curtainId, available) => {
+          curtainAvailableState.set(curtainId, available);
+          if (!curtainDragging.has(curtainId)) renderPanel();
         });
 
         ha.connect();
@@ -1741,6 +1804,19 @@
           }
           ha.callServiceDebounced('light', 'turn_on', data, target, key, debounceMs || 0);
         }
+      }
+
+      // Curtain slider -> HA. Fans out to every motor bound to this curtain
+      // (HAClient.coverPositionCommand handles the single-vs-multi-motor
+      // target shape and the clamp/round -- see its unit tests in
+      // scripts/test-curtain-slider-command.mjs) via the same debounced-send
+      // idiom as sendToHA above, keyed per curtain so two curtains' drags
+      // never cancel each other's pending timer.
+      function sendCurtainToHA(curtainId, pct, debounceMs) {
+        if (!ha) return;
+        const cmd = HAClient.coverPositionCommand(pct, curtainEntities.get(curtainId));
+        if (!cmd) return;
+        ha.callServiceDebounced(cmd.domain, cmd.service, cmd.data, cmd.target, 'curtain-' + curtainId, debounceMs || 0);
       }
 
       // Renders the "Strip positions" list for an accent channel group.
@@ -2033,6 +2109,34 @@
             html += '</div>';
           }
 
+          // Curtains: one slider per curtain BOUND to a real cover in this
+          // room (roomCurtains, built from rooms.json + the house profile
+          // above) -- a curtain the geometry draws but rooms.json does not
+          // bind gets no slider, matching the main/ambient lights which are
+          // likewise only ever the profile's bound channels. 0 = closed,
+          // 100 = open, same convention as HA's current_position. This does
+          // NOT add a light toggle: the one-ambience-switch-per-room rule
+          // stands untouched (still exactly the toggle-main/toggle-ambient/
+          // toggle-galaxy handlers below) -- a curtain is a cover, not a
+          // light, and that rule only ever governed ambience/accent lighting.
+          const curtainsForRoom = roomCurtains[rid] || [];
+          curtainsForRoom.forEach(cu => {
+            const pct = home.getCurtainOpen(cu.id);
+            if (pct === null) return; // curtain not in this house's 3D geometry
+            const available = curtainIsAvailable(cu.id);
+            const shown = Math.round(pct);
+            html += `<div class="control-group">
+              <div class="control-header">
+                <span class="control-label">${esc(cu.label.toUpperCase())}</span>
+              </div>
+              <div class="slider-row">
+                <div class="slider-label">${available ? ('Open: ' + shown + '%') : 'Unavailable'}</div>
+                <input type="range" class="slider" min="0" max="100" value="${shown}"
+                  data-action="curtain-open" data-curtain="${esc(cu.id)}"${available ? '' : ' disabled'}>
+              </div>
+            </div>`;
+          });
+
           // Door openness (UI-only slider — not wired to HA). 0 = fully closed,
           // 100 = fully open at the door's collision-solved max angle, always in
           // its fixed single swing direction. Rooms without a door (living room)
@@ -2128,6 +2232,27 @@
             if (action === 'color-input-ambient') el.addEventListener('input', e => {
               s.ambient.color = e.target.value; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 200); renderPanel();
             });
+            if (action === 'curtain-open') {
+              const curtainId = el.dataset.curtain;
+              el.addEventListener('input', e => {
+                const pct = +e.target.value;
+                curtainDragging.add(curtainId); // don't let a live reading yank this slider mid-drag
+                home.setCurtainOpen(curtainId, pct, null);
+                el.previousElementSibling.textContent = `Open: ${pct}%`;
+                sendCurtainToHA(curtainId, pct, 200);
+              });
+              // 'change' fires once on release (mouse-up / key commit), which
+              // is also where the debounced 'input' send above will settle in
+              // the common case -- but a drag that ends in the last 200ms
+              // window needs its OWN send so the final value is never dropped,
+              // and this is also the signal to let onCurtainChange repaint the
+              // slider again.
+              el.addEventListener('change', e => {
+                const pct = +e.target.value;
+                sendCurtainToHA(curtainId, pct, 0);
+                curtainDragging.delete(curtainId);
+              });
+            }
             if (action === 'door-open') el.addEventListener('input', e => {
               const pct = +e.target.value;
               home.setDoorOpen(rid, pct);
