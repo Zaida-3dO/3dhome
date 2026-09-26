@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Radiator Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+
+  /* ---- 2x2 corner picker: a clickable diagram, not a dropdown ---- */
+  .corner-picker { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:6px;
+    width:100%; max-width:220px; aspect-ratio:1; margin:0 auto; }
+  .corner-btn { border:2px solid #d8d3c8; border-radius:6px; background:#f4f1ec; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; font-size:9px; text-transform:uppercase;
+    letter-spacing:0.03em; color:#7a7266; transition:background .12s,border-color .12s,color .12s; padding:4px; text-align:center; }
+  .corner-btn:hover { border-color:#a89c80; }
+  .corner-btn.active { background:#1a1a1c; border-color:#1a1a1c; color:#fff; font-weight:600; }
+  .corner-btn .dot { display:block; width:8px; height:8px; border-radius:50%; background:currentColor; margin:0 auto 4px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+<!-- src/furniture/radiator.js is plain ESM (also imported directly by
+     scripts/test-furniture-radiator.mjs and, by the shared furniture
+     contract, the live-scene furniture placer). This page has no import
+     map, so bridge it onto `window` before the Babel script below runs —
+     the module script and the classic scripts execute in source order, and
+     a module script defers, so the `type="module"` tag runs after
+     ../vendor/three.js but this bridge must resolve before the Babel
+     <script> block reads window.FurnitureRadiator. The babel block is
+     deferred too (`type="text/babel"` compiles to a module internally), so
+     ordinary document order between the two script tags is enough — no
+     polling needed. -->
+<script type="module">
+  import * as M from '../src/furniture/radiator.js';
+  window.FurnitureRadiator = M;
+</script>
+
+<script type="text/babel">
+/* =====================================================================
+   RADIATOR SPEC   ·   one design for EVERY house radiator — a modern white
+   panel radiator (horizontal convector fins, wall brackets bridging the
+   wall gap, pipe tails to the floor) with a smart TRV valve on one of the
+   four corners and the lockshield diagonally opposite it.
+
+   ── DEFAULTS ARE THE STANDARD HOUSE RADIATOR ────────────────────────────
+   width/height/depth ALWAYS describe the OUTER ENVELOPE — including any
+   cover — because the house validator and the live-scene placer both read
+   these three params directly, with no idea a body/cover split exists: 80 x
+   60, thickness 10, depth 12 (a 2cm wall gap, derived as bodyDepth -
+   thickness), elevation 17 (top sits at 77cm), no cover. Other rooms vary
+   (remodel.sh3d: living room 95cm, bedroom 95cm; a hallway radiator is often
+   SMALLER than its slatted cover) — drive those from this Tweaks panel per
+   room, not by editing the module's defaults. An optional cover ('shelf' or
+   'box', a full slatted enclosure) can sit inside the envelope; the
+   RADIATOR BODY's own size is the independent, optional bodyWidth/
+   bodyHeight/bodyDepth, defaulting to a snug fit against the envelope (==
+   no cover) and clamped DOWN if given bigger than the envelope.
+   ────────────────────────────────────────────────────────────────────────
+
+   The geometry builder itself lives in src/furniture/radiator.js (a plain,
+   pure ESM function, `build(THREE, params, opts)` / `buildRadiator` alias,
+   following the shared src/furniture/* contract) so the furniture placer
+   (item 78f2b614) imports the exact same module this page tweaks. That
+   module's own frame puts y=0 at the radiator's BOTTOM (not the floor) and
+   leaves `elevation` for the PLACER to apply — this page plays that placer
+   role for its own 3D preview, adding `t.elevation` when it positions the
+   built group. This file is the tweakable harness around the module: the
+   Tweaks panel, the 2x2 corner-picker diagram, the numbers table, and the
+   "Copy as furniture JSON" button.
+
+   Harness: tweaks-panel.jsx (controls) + spec-three.jsx (ThreeView).
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "width": 80,
+  "height": 60,
+  "depth": 12,
+  "thickness": 10,
+  "elevation": 17,
+  "valveCorner": "bottom-right",
+  "color": "#f2f2ef",
+  "cover": "none",
+  "coverColor": "#c8a878",
+  "bodyWidth": 80,
+  "bodyHeight": 60,
+  "bodyDepth": 12
+}/*EDITMODE-END*/;
+
+const CM = 0.01;
+const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+const CORNER_LABEL = { 'top-left': 'Top left', 'top-right': 'Top right', 'bottom-left': 'Bottom left', 'bottom-right': 'Bottom right' };
+const COVERS = ['none', 'shelf', 'box'];
+const COVER_LABEL = { none: 'None', shelf: 'Shelf', box: 'Full slatted cover' };
+
+// ============== 2x2 corner picker — a clickable diagram, not a dropdown =====
+// Grid order top-left, top-right, bottom-left, bottom-right (CSS grid reads
+// row-major, so this literally lays out as a 2x2 square matching the wall).
+function CornerPicker({ value, onChange }) {
+  const order = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+  return (
+    <div className="corner-picker" role="radiogroup" aria-label="Valve corner">
+      {order.map(c => (
+        <button key={c} type="button" role="radio" aria-checked={c === value}
+          className={'corner-btn' + (c === value ? ' active' : '')}
+          onClick={() => onChange(c)}>
+          <span>
+            <span className="dot"></span>
+            {CORNER_LABEL[c]}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ============== Front-elevation SVG (wall-facing view) ======================
+function FrontElevation({ t }) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const svg = ref.current;
+    if (!svg) return;
+    svg.innerHTML = '';
+    const ns = 'http://www.w3.org/2000/svg';
+    const W = 400, H = 300;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    // width/height are ALWAYS the outer envelope (the cover's, if present).
+    // The body diagram is drawn separately, inset, whenever a cover exists.
+    const width = t.width, height = t.height;
+    const bodyEnv = window.FurnitureRadiator ? window.FurnitureRadiator.bodyEnvelope(t) : { width: t.width, height: t.height, depth: t.depth };
+    const hasCover = t.cover !== 'none';
+    const margin = 40;
+    const SCALE = Math.min((W - 2 * margin) / width, (H - 2 * margin - 30) / height);
+    const midX = W / 2;
+    const baseY = H - 40; // floor line
+
+    const px = (x_cm) => midX + x_cm * SCALE;
+    const py = (y_cm) => baseY - y_cm * SCALE; // y grows upward
+
+    function rect(x1, y1, x2, y2, opts = {}) {
+      const r = document.createElementNS(ns, 'rect');
+      r.setAttribute('x', Math.min(x1, x2)); r.setAttribute('y', Math.min(y1, y2));
+      r.setAttribute('width', Math.abs(x2 - x1)); r.setAttribute('height', Math.abs(y2 - y1));
+      r.setAttribute('fill', opts.fill || 'none');
+      r.setAttribute('stroke', opts.stroke || '#333');
+      r.setAttribute('stroke-width', opts.sw || 1.5);
+      if (opts.rx) r.setAttribute('rx', opts.rx);
+      svg.appendChild(r);
+    }
+    function line(x1, y1, x2, y2, stroke, w = 1.5) {
+      const l = document.createElementNS(ns, 'line');
+      l.setAttribute('x1', x1); l.setAttribute('y1', y1);
+      l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+      l.setAttribute('stroke', stroke); l.setAttribute('stroke-width', w);
+      svg.appendChild(l);
+    }
+    function circle(cx, cy, r, opts = {}) {
+      const c = document.createElementNS(ns, 'circle');
+      c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', r);
+      c.setAttribute('fill', opts.fill || '#888');
+      c.setAttribute('stroke', opts.stroke || '#333');
+      c.setAttribute('stroke-width', opts.sw || 1);
+      svg.appendChild(c);
+    }
+    function txt(x, y, s, o = {}) {
+      const tt = document.createElementNS(ns, 'text');
+      tt.setAttribute('x', x); tt.setAttribute('y', y);
+      tt.setAttribute('font-size', o.size || '10'); tt.setAttribute('fill', o.color || '#444');
+      if (o.anchor) tt.setAttribute('text-anchor', o.anchor);
+      tt.textContent = s; svg.appendChild(tt);
+    }
+
+    // floor line
+    line(margin - 10, baseY, W - margin + 10, baseY, '#a89c80', 3);
+    txt(margin - 10, baseY + 14, 'floor', { color: '#a89c80', size: '9' });
+
+    // COVER (the outer envelope) — drawn first, behind the body, whenever
+    // a cover is present. width/height are ALWAYS the envelope, so this is
+    // simply the full rect at t.elevation..t.elevation+height.
+    const ex1 = px(-width / 2), ex2 = px(width / 2);
+    const ey1 = py(t.elevation), ey2 = py(t.elevation + height);
+    if (hasCover) {
+      // Match the 3D builder's own default exactly: a 'box' enclosure is
+      // WHITE unless coverColor was explicitly moved away from the shelf
+      // default (#c8a878) — a 'shelf' (open-sided, no enclosure) keeps the
+      // page's neutral card background so it doesn't read as a solid box.
+      const DEFAULT_COVER_COLOR = '#c8a878';
+      const boxFill = (t.coverColor && t.coverColor !== DEFAULT_COVER_COLOR) ? t.coverColor : '#ffffff';
+      const coverFill = t.cover === 'box' ? boxFill : '#f4f1ec';
+      const coverStroke = t.cover === 'box' ? '#999' : '#8a6a1a';
+      rect(ex1, ey1, ex2, ey2, { fill: coverFill, stroke: coverStroke, sw: 1.5, rx: 3 });
+      // vertical slats for a 'box' cover, so the diagram reads as an
+      // enclosure rather than a plain rectangle.
+      if (t.cover === 'box') {
+        const slatCount = Math.max(6, Math.round(width / 6));
+        for (let i = 1; i < slatCount; i++) {
+          const sx = ex1 + ((ex2 - ex1) * i) / slatCount;
+          line(sx, ey1 + 4, sx, ey2 - 4, '#ddd', 1);
+        }
+      }
+      // the shelf top + fascia lip, ~2cm below the cover's own top edge —
+      // the shelf/fascia itself is always the (default oak) coverColor,
+      // regardless of the box enclosure's own colour.
+      const shelfLineY = py(t.elevation + height - 2);
+      line(ex1, shelfLineY, ex2, shelfLineY, '#8a6a1a', 1);
+      txt(ex2 + 4, (ey1 + shelfLineY) / 2, 'cover', { size: '8', color: coverStroke });
+    }
+
+    // BODY (the radiator itself) — bodyWidth/bodyHeight/bodyDepth, centred
+    // in the envelope, sitting on the SAME elevation as the envelope (the
+    // body's own bottom is the envelope's own bottom; only its top may sit
+    // below the envelope's top when a cover encloses it).
+    const bw = bodyEnv.width, bh = bodyEnv.height;
+    const x1 = px(-bw / 2), x2 = px(bw / 2);
+    const y1 = py(t.elevation), y2 = py(t.elevation + bh);
+    rect(x1, y1, x2, y2, { fill: t.color, stroke: '#333', sw: 1.5, rx: 3 });
+
+    // fin ribs
+    const finCount = Math.max(4, Math.round(bh / 4));
+    for (let i = 1; i < finCount; i++) {
+      const fy = py(t.elevation + (bh * i) / finCount);
+      line(x1 + 4, fy, x2 - 4, fy, '#bbb', 1);
+    }
+
+    // elevation dimension
+    line(ex1 - 16, baseY, ex1 - 16, ey1, '#999', 1);
+    txt(ex1 - 20, (baseY + ey1) / 2, `${t.elevation}`, { anchor: 'end', size: '9', color: '#666' });
+
+    // corners with the valve dot on the SELECTED corner, lockshield on the
+    // opposite one — mirrors cornerPoint()'s inset logic (against the
+    // BODY's own width/height, exactly as the module does) so the diagram
+    // and the 3D view never disagree about which corner is which.
+    const inset = Math.min(bw, bh) * 0.1 + 4;
+    const cx = (c) => c.endsWith('left') ? x1 + inset * SCALE : x2 - inset * SCALE;
+    const cy = (c) => c.startsWith('bottom') ? py(t.elevation + inset) : py(t.elevation + bh - inset);
+    const opposite = { 'bottom-left': 'top-right', 'bottom-right': 'top-left', 'top-left': 'bottom-right', 'top-right': 'bottom-left' };
+    const opp = opposite[t.valveCorner] || 'top-left';
+    circle(cx(opp), cy(opp), 5, { fill: '#9a9a9a' });
+    txt(cx(opp), cy(opp) - 10, 'lockshield', { anchor: 'middle', size: '8', color: '#888' });
+    circle(cx(t.valveCorner), cy(t.valveCorner), 6, { fill: '#e2b23c', stroke: '#8a6a1a' });
+    txt(cx(t.valveCorner), cy(t.valveCorner) - 11, 'smart TRV', { anchor: 'middle', size: '8', color: '#8a6a1a' });
+
+    // width dimension — the ENVELOPE's own width (what the item actually
+    // occupies on the wall), labelled to say so when a cover makes it
+    // differ from the body's own width.
+    const dimY = baseY + 26;
+    line(ex1, dimY, ex2, dimY, '#999', 1);
+    line(ex1, dimY - 4, ex1, dimY + 4, '#999', 1);
+    line(ex2, dimY - 4, ex2, dimY + 4, '#999', 1);
+    txt(midX, dimY + 14, hasCover ? `cover width ${width} cm (body ${bw} cm)` : `width ${width} cm`, { anchor: 'middle', color: '#666', size: '10' });
+
+    const head = document.createElementNS(ns, 'text');
+    head.setAttribute('x', 12); head.setAttribute('y', 18);
+    head.setAttribute('font-size', '12'); head.setAttribute('fill', '#333');
+    head.textContent = 'Front elevation (wall-facing)';
+    svg.appendChild(head);
+  }, [t]);
+  return <svg ref={ref}></svg>;
+}
+
+// ============== Radiator model bridge (delegates to src/furniture/radiator.js) ==
+// This page plays the PLACER role for its own preview: the module's own
+// frame puts y=0 at the radiator's bottom (not the floor), so the elevation
+// offset — which a real placer would apply when positioning the item in a
+// room — is applied HERE, on the wrapper group, not inside the module.
+function buildRadiatorModel(t, group, THREE) {
+  const built = window.FurnitureRadiator.build(THREE, {
+    width: t.width, height: t.height, depth: t.depth, thickness: t.thickness,
+    valveCorner: t.valveCorner, color: t.color, cover: t.cover, coverColor: t.coverColor,
+    bodyWidth: t.bodyWidth, bodyHeight: t.bodyHeight, bodyDepth: t.bodyDepth,
+  }, { detail: 'full' });
+  built.position.y = t.elevation * CM; // PLACER concern — module leaves y=0 at its own bottom
+  group.add(built);
+
+  // A small reference wall behind it, so the standoff/gap and elevation read
+  // clearly in the 3D view (the module's own origin is the wall plane, this
+  // wrapper's floor is y=0 same as the module's z=0 wall plane). width/
+  // height are ALWAYS the outer envelope now, cover or not, so no
+  // cover-awareness is needed here any more.
+  const wallW = (t.width + 60) * CM, wallH = (t.elevation + t.height + 60) * CM;
+  const wall = new THREE.Mesh(
+    new THREE.BoxGeometry(wallW, wallH, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 })
+  );
+  wall.name = 'referenceWall';
+  wall.position.set(0, wallH / 2, -0.03);
+  wall.receiveShadow = true;
+  group.add(wall);
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(wallW, 1.4),
+    new THREE.MeshStandardMaterial({ color: 0x1e1e20, roughness: 1 })
+  );
+  floor.name = 'floor';
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(0, 0, 0.65);
+  floor.receiveShadow = true;
+  group.add(floor);
+}
+
+// ============== "Copy as furniture JSON" — {type, params}, DEFAULTS-diffed =
+// Emits only the keys that differ from DEFAULTS, per the shared furniture
+// contract, so a placed item's JSON stays small and forward-compatible with
+// a future DEFAULTS change.
+function furnitureJSON(t) {
+  const D = window.FurnitureRadiator ? window.FurnitureRadiator.DEFAULTS : TWEAK_DEFAULTS;
+  const TYPE = window.FurnitureRadiator ? window.FurnitureRadiator.TYPE : 'radiator';
+  const params = {};
+  for (const key of Object.keys(D)) {
+    if (t[key] !== undefined && t[key] !== D[key]) params[key] = t[key];
+  }
+  // bodyWidth/bodyHeight/bodyDepth are intentionally absent from DEFAULTS
+  // (there is no universal default independent of width/height/depth — see
+  // bodyEnvelope() in the module), so they need their own diff: only emit
+  // them when they differ from the snug-fit default bodyEnvelope() would
+  // compute anyway (== the envelope, i.e. "no separate body size").
+  if (window.FurnitureRadiator) {
+    const snug = window.FurnitureRadiator.bodyEnvelope(Object.assign({}, D, t, { bodyWidth: undefined, bodyHeight: undefined, bodyDepth: undefined, cover: 'none' }));
+    if (t.bodyWidth !== undefined && t.bodyWidth !== snug.width) params.bodyWidth = t.bodyWidth;
+    if (t.bodyHeight !== undefined && t.bodyHeight !== snug.height) params.bodyHeight = t.bodyHeight;
+    if (t.bodyDepth !== undefined && t.bodyDepth !== snug.depth) params.bodyDepth = t.bodyDepth;
+  }
+  return { type: TYPE, params };
+}
+
+function CopyJSONButton({ t }) {
+  const [copied, setCopied] = React.useState(false);
+  const onClick = () => {
+    const json = JSON.stringify(furnitureJSON(t), null, 2);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(json).then(
+        () => { setCopied(true); setTimeout(() => setCopied(false), 1500); },
+        () => window.prompt('Copy this furniture JSON:', json)
+      );
+    } else {
+      window.prompt('Copy this furniture JSON:', json);
+    }
+  };
+  return <TweakButton label={copied ? 'Copied!' : 'Copy as furniture JSON'} onClick={onClick} />;
+}
+
+// ============== App ==============
+// Applying a preset resets the BODY size to a SNUG fit against whatever
+// width/height/depth (the envelope) the preset sets, unless the preset
+// itself overrides bodyWidth/bodyHeight/bodyDepth (as the hallway-scale
+// preset does) — otherwise switching presets could leave a stale body size
+// from a PREVIOUSLY-applied preset.
+function applyPreset(setTweak, params) {
+  const merged = Object.assign({ width: 80, height: 60, depth: 12 }, params);
+  const snug = window.FurnitureRadiator
+    ? window.FurnitureRadiator.bodyEnvelope(Object.assign({ bodyWidth: undefined, bodyHeight: undefined, bodyDepth: undefined, cover: 'none' }, merged))
+    : { width: merged.width, height: merged.height, depth: merged.depth };
+  setTweak('bodyWidth', params.bodyWidth !== undefined ? params.bodyWidth : snug.width);
+  setTweak('bodyHeight', params.bodyHeight !== undefined ? params.bodyHeight : snug.height);
+  setTweak('bodyDepth', params.bodyDepth !== undefined ? params.bodyDepth : snug.depth);
+  Object.keys(params).forEach(k => setTweak(k, params[k]));
+}
+
+function PresetButtons({ setTweak }) {
+  const PRESETS = window.FurnitureRadiator ? window.FurnitureRadiator.PRESETS : [];
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      {PRESETS.map(p => (
+        <TweakButton key={p.name} label={p.name} onClick={() => applyPreset(setTweak, p.params)} secondary />
+      ))}
+    </div>
+  );
+}
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const bodyEnv = window.FurnitureRadiator ? window.FurnitureRadiator.bodyEnvelope(t) : { width: t.width, height: t.height, depth: t.depth };
+  // Rounded to 1 decimal place for display only — the raw subtraction can
+  // carry ordinary floating-point noise (e.g. 1.4000000000000004 on a
+  // clamped box cover), which is not a real fractional wall gap, just an
+  // artefact of the arithmetic.
+  const wallGapRaw = window.FurnitureRadiator ? window.FurnitureRadiator.wallGapOf(bodyEnv.depth, t.thickness) : (bodyEnv.depth - t.thickness);
+  const wallGap = Math.round(wallGapRaw * 10) / 10;
+  return (
+    <>
+      <h1>Radiator Spec</h1>
+      <div className="sub">One design for every house radiator — a modern white panel radiator with a smart TRV valve on a chosen corner and the lockshield diagonally opposite, with an optional shelf or full slatted cover. Width/height/depth are ALWAYS the item's outer envelope (including any cover); the radiator body itself can be independently smaller via bodyWidth/bodyHeight/bodyDepth. Configurable: envelope size, body size, thickness, elevation, valve corner, colour, cover. Defaults are the standard house radiator. Use the Tweaks panel or a preset below.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Front elevation</h2>
+          <FrontElevation t={t} />
+          <div className="legend">
+            <b>Yellow dot</b> = smart TRV valve (on the chosen corner). <b>Grey dot</b> = lockshield valve (always the diagonally opposite corner). Use the corner picker below the 3D view to move the valve. The dashed/outlined outer rectangle is the cover, when one is present — the radiator body is drawn inset within it.
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">value</th><th>Variability</th></tr>
+              <tr><td>Width (outer envelope)</td><td className="num">{t.width}</td><td><b>Variable</b> — per room (50/80/95/120cm typical); includes any cover</td></tr>
+              <tr><td>Height (outer envelope)</td><td className="num">{t.height}</td><td>Per room; includes any cover</td></tr>
+              <tr><td>Depth (outer envelope)</td><td className="num">{t.depth}</td><td>Wall face to the outermost front face; includes any cover</td></tr>
+              <tr><td>Body width / height / depth</td><td className="num">{bodyEnv.width} × {bodyEnv.height} × {bodyEnv.depth}</td><td><b>Variable</b> — the radiator itself; snug-fits the envelope by default</td></tr>
+              <tr><td>Thickness (body slab depth)</td><td className="num">{t.thickness}</td><td>The radiator's own slab depth</td></tr>
+              <tr><td>Wall gap (derived)</td><td className="num">{wallGap}</td><td>= body depth − thickness</td></tr>
+              <tr><td>Elevation (floor to bottom edge)</td><td className="num">{t.elevation}</td><td>17cm default, per remodel.sh3d</td></tr>
+              <tr><td>Valve corner</td><td className="num">{CORNER_LABEL[t.valveCorner]}</td><td><b>Variable</b> — one of 4 corners, visual picker</td></tr>
+              <tr><td>Colour</td><td className="num"><span style={{ display:'inline-block', width:11, height:11, borderRadius:2, background:t.color, border:'1px solid rgba(0,0,0,.2)', verticalAlign:'middle' }}></span></td><td>Default white</td></tr>
+              <tr><td>Cover</td><td className="num">{COVER_LABEL[t.cover]}</td><td><b>Variable</b> — none, shelf, or full slatted enclosure</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div className="card full">
+          <h2>3D — radiator on the wall</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildRadiatorModel}
+            heightOf={tt => (tt.elevation + tt.height) * CM}
+          />
+          <div className="legend">The furniture module's own origin is the wall plane with y=0 at the item's bottom edge; this page (playing the placer role) offsets it up by the elevation. The body's back sits at the wall-gap distance from the (dark) reference wall, the wall brackets visibly bridge the gap, and — with a cover present — the enclosure fills the declared width/height/depth while the radiator body can be smaller inside it (see the "75x92 slatted cover, 50 wide radiator" preset).</div>
+        </div>
+
+        <div className="card full">
+          <h2>Valve corner</h2>
+          <CornerPicker value={t.valveCorner} onChange={v => setTweak('valveCorner', v)} />
+        </div>
+
+        <div className="card full">
+          <h2>Presets</h2>
+          <PresetButtons setTweak={setTweak} />
+          <div className="legend">Each preset sets width/height/depth (the envelope) and cover together; every other tweak (elevation, thickness, valve corner not overridden by the preset, colour) stays as you left it.</div>
+        </div>
+
+        <div className="card full">
+          <h2>Export</h2>
+          <CopyJSONButton t={t} />
+          <div className="legend">Emits <code>{'{type, params}'}</code> with only the keys that differ from this module's DEFAULTS — the shape the furniture placer (item 78f2b614) expects.</div>
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Size — outer envelope (always includes any cover)" />
+        <TweakSlider label="Width (outer envelope)" value={t.width} min={40} max={200} step={1} unit="cm"
+          onChange={v => setTweak('width', v)} />
+        <TweakSlider label="Height (outer envelope)" value={t.height} min={30} max={160} step={1} unit="cm"
+          onChange={v => setTweak('height', v)} />
+        <TweakSlider label="Depth (outer envelope, wall to front)" value={t.depth} min={8} max={40} step={0.5} unit="cm"
+          onChange={v => setTweak('depth', v)} />
+
+        <TweakSection label="Radiator body — can be smaller than the envelope" />
+        <TweakSlider label="Body width" value={t.bodyWidth} min={30} max={t.width} step={1} unit="cm"
+          onChange={v => setTweak('bodyWidth', v)} />
+        <TweakSlider label="Body height" value={t.bodyHeight} min={20} max={t.height} step={1} unit="cm"
+          onChange={v => setTweak('bodyHeight', v)} />
+        <TweakSlider label="Body depth" value={t.bodyDepth} min={6} max={t.depth} step={0.5} unit="cm"
+          onChange={v => setTweak('bodyDepth', v)} />
+        <TweakSlider label="Thickness (body slab depth)" value={t.thickness} min={4} max={20} step={0.5} unit="cm"
+          onChange={v => setTweak('thickness', v)} />
+        <TweakRow label="Wall gap (derived)">
+          <span style={{ fontSize: 11 }}>{wallGap} cm</span>
+        </TweakRow>
+
+        <TweakSection label="Position" />
+        <TweakSlider label="Elevation (floor to bottom edge)" value={t.elevation} min={0} max={60} step={1} unit="cm"
+          onChange={v => setTweak('elevation', v)} />
+
+        <TweakSection label="Valve corner" />
+        <TweakRadio label="Corner" value={t.valveCorner} options={CORNERS.map(c => ({ value: c, label: CORNER_LABEL[c] }))}
+          onChange={v => setTweak('valveCorner', v)} />
+
+        <TweakSection label="Colour" />
+        <TweakColor label="Panel colour" value={t.color}
+          onChange={v => setTweak('color', v)} />
+
+        <TweakSection label="Cover" />
+        <TweakRadio label="Cover" value={t.cover} options={COVERS.map(c => ({ value: c, label: COVER_LABEL[c] }))}
+          onChange={v => setTweak('cover', v)} />
+        <TweakColor label="Cover colour" value={t.coverColor}
+          onChange={v => setTweak('coverColor', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// Self-post it so the panel is visible when there's no host driving it.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>

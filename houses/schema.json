@@ -2215,8 +2215,75 @@
 
     "furnitureParams_radiator": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `radiator`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `radiator` (src/furniture/radiator.js): a panel radiator with a smart TRV valve on a chosen corner and an optional shelf/full slatted cover. width/height/depth ALWAYS describe the OUTER ENVELOPE -- including any cover -- because scripts/validate-house.py's footprint/overlap/ceiling checks and src/furniture/place.js both read these three params with no idea a body/cover split exists; a smaller number here than what actually gets built would validate a placement that then collides with a wall or another item. The optional bodyWidth/bodyHeight/bodyDepth describe the RADIATOR BODY itself, defaulting to a snug fit against the envelope (== no cover) when omitted, and clamped DOWN if given bigger than the envelope. Each `default` equals radiator.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 80,
+          "description": "cm, the OUTER ENVELOPE's width (always -- includes any cover), along the wall / the item's local x."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 60,
+          "description": "cm, the OUTER ENVELOPE's height (always -- includes any cover), floor (or `elevation`) to top."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 12,
+          "description": "cm, the OUTER ENVELOPE's wall-to-front distance (always -- includes any cover)."
+        },
+        "bodyWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, the RADIATOR BODY's own width. Optional: defaults to a snug fit == `width` when omitted (the no-cover case). Clamped DOWN to `width` if given bigger -- the body cannot exceed the envelope."
+        },
+        "bodyHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, the RADIATOR BODY's own height. Optional: defaults to a snug fit == `height` when omitted. Clamped DOWN to `height` if given bigger."
+        },
+        "bodyDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, the RADIATOR BODY's own wall-to-front distance. Optional: defaults to a snug fit == `depth` when omitted. Clamped DOWN to `depth`, and further clamped down on a 'box' cover so the body's own front face always clears the cover's interior slats/backing by a real air gap (never level with or ahead of them)."
+        },
+        "thickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 10,
+          "description": "cm, the radiator body's own slab depth (not including the wall gap). wallGap is derived as bodyDepth - thickness, never authored; thickness is itself clamped down to bodyDepth if given bigger."
+        },
+        "elevation": {
+          "type": "number",
+          "minimum": 0,
+          "default": 17,
+          "description": "cm, floor to the item's bottom edge. Applied by the placer, not baked into the builder's own local frame."
+        },
+        "valveCorner": {
+          "type": "string",
+          "enum": ["bottom-left", "bottom-right", "top-left", "top-right"],
+          "default": "bottom-right",
+          "description": "Which corner of the radiator body carries the smart TRV valve head. The lockshield valve is always drawn on the diagonally opposite corner."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f2f2ef"
+        },
+        "cover": {
+          "type": "string",
+          "enum": ["none", "shelf", "box"],
+          "default": "none",
+          "description": "`shelf` = a wooden shelf on top with a short downward fascia lip, sides open. `box` = a full slatted enclosure (top shelf plus front, side and backing panels with vertical slats -- the backing keeps the radiator body from showing through the slat gaps, with a guaranteed real air gap ahead of the body). The item's overall footprint is ALWAYS width/height/depth (the envelope), cover or not."
+        },
+        "coverColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#c8a878"
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_shelf": {
