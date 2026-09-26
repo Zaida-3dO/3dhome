@@ -80,11 +80,6 @@
  * PRESETS live in CabinetSpec.html, not here - this module only builds
  * whatever `params` it is given. Preset *names* are generic and descriptive
  * (no owner names): this is a public repo.
- *
- * DEPENDS ON PR #30 (feat/furniture-data-layer): ./finishes.js ships there.
- * This module's own tests (scripts/test-cabinet.mjs) and CI's dedicated
- * cabinet-builder step cannot pass until that PR merges and this branch
- * rebases onto it - not a bug in this file, a merge-order dependency.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 
@@ -143,6 +138,12 @@ function tag(mesh, name) {
 function box(THREE, w, h, d) {
   return new THREE.BoxGeometry(Math.max(w, 0.0005), Math.max(h, 0.0005), Math.max(d, 0.0005));
 }
+
+// How far a handle projects beyond its door/drawer front face, in METRES.
+// `depth` INCLUDES the handles: every front panel's own outer face sits at
+// `depth - HANDLE_PROJECTION`, so a handle projecting HANDLE_PROJECTION
+// further out lands exactly at `depth` - never past the declared bbox.
+const HANDLE_PROJECTION = 0.025;
 
 // ---- fronts grid normalisation -----------------------------------------
 
@@ -250,13 +251,14 @@ function buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, col
   const w = x1 - x0, h = yTop - yBot;
   const cx = (x0 + x1) / 2, cy = (yBot + yTop) / 2;
   const T = Math.min(0.018, depth * 0.06);
+  const faceZ = depth - HANDLE_PROJECTION; // the door's own OUTER face
   const mat = finish(THREE, gloss ? 'gloss' : 'matte', color);
   const leaf = new THREE.Mesh(box(THREE, w * 0.98, h * 0.98, T), mat);
-  leaf.position.set(cx, cy, T / 2);
+  leaf.position.set(cx, cy, faceZ - T / 2);
   tag(leaf, 'cabinetDoor');
   group.add(leaf);
   if (handles !== false && cell.handle !== false) {
-    addHandle(THREE, group, x1 - Math.min(0.04, w * 0.08), cy, T);
+    addHandle(THREE, group, x1 - Math.min(0.04, w * 0.08), cy, faceZ);
   }
 }
 
@@ -264,14 +266,15 @@ function buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, c
   const w = x1 - x0, h = yTop - yBot;
   const cx = (x0 + x1) / 2, cy = (yBot + yTop) / 2;
   const T = Math.min(0.018, depth * 0.06);
+  const faceZ = depth - HANDLE_PROJECTION; // the drawer front's own OUTER face
   const mat = finish(THREE, gloss ? 'gloss' : 'matte', color);
   const front = new THREE.Mesh(box(THREE, w * 0.98, h * 0.94, T), mat);
-  front.position.set(cx, cy, T / 2);
+  front.position.set(cx, cy, faceZ - T / 2);
   tag(front, 'drawerFront');
   group.add(front);
   const showHandle = handles !== false && cell.handle !== false;
   if (showHandle) {
-    addHandle(THREE, group, cx, yTop - h * 0.12, T, true);
+    addHandle(THREE, group, cx, yTop - h * 0.12, faceZ, true);
   }
 }
 
@@ -279,9 +282,12 @@ function buildGlassOrMirrorCell(THREE, group, kind, x0, x1, yBot, yTop, depth) {
   const w = x1 - x0, h = yTop - yBot;
   const cx = (x0 + x1) / 2, cy = (yBot + yTop) / 2;
   const T = kind === 'glass' ? 0.006 : 0.01;
+  // Glass/mirror doors carry no handle (push- or knob-free in every preset
+  // that uses them), so their own face sits flush at the full depth.
+  const faceZ = depth;
   const mat = finish(THREE, kind, null);
   const pane = new THREE.Mesh(box(THREE, w * 0.94, h * 0.94, T), mat);
-  pane.position.set(cx, cy, T / 2);
+  pane.position.set(cx, cy, faceZ - T / 2);
   tag(pane, kind === 'glass' ? 'cabinetGlassDoor' : 'cabinetMirrorDoor');
   pane.userData.isMirror = kind === 'mirror'; // spec-three.jsx env-cube convention
   group.add(pane);
@@ -291,51 +297,78 @@ function buildGlassOrMirrorCell(THREE, group, kind, x0, x1, yBot, yTop, depth) {
     const FT = 0.02;
     const fx = fx0 === x0 ? fx0 + FT / 2 : fx0 - FT / 2;
     const stile = new THREE.Mesh(box(THREE, FT, h, T), frameMat);
-    stile.position.set(fx, cy, T / 2);
+    stile.position.set(fx, cy, faceZ - T / 2);
     tag(stile, 'cabinetDoorFrame');
     group.add(stile);
   });
 }
 
+/**
+ * Two sliding doors on two tracks: they OVERLAP in the middle by `overlap`
+ * (cm), one slightly in front of the other (a small z offset between the two
+ * tracks, matching how a real sliding wardrobe's two leaves clear each
+ * other), and together span the full cell width. No handles - a sliding
+ * door is pulled by its edge, per every reference photo.
+ */
 function buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth) {
   const w = x1 - x0, h = yTop - yBot;
-  const cx = (x0 + x1) / 2;
   const panels = (cell.panels && cell.panels.length) ? cell.panels : ['white', 'mirror', 'mirror', 'white'];
   const n = panels.length;
   const panelH = h / n;
   const railT = 0.012;
-  const T = Math.min(0.02, depth * 0.05); // slides proud of the carcass front
+  const T = Math.min(0.02, depth * 0.05);
+  // Two tracks: the front leaf's own face sits flush at `depth`; the back
+  // leaf's track sits `trackGap` behind it so the two overlap without
+  // z-fighting, exactly like a real two-track sliding wardrobe.
+  const trackGap = Math.min(0.03, depth * 0.08);
+  const frontFaceZ = depth;
+  const backFaceZ = depth - trackGap;
+  const overlap = Math.min(0.08, w * 0.06); // doors overlap this much at the centre
   const frameMat = finish(THREE, 'matte', '#ffffff');
 
-  for (let i = 0; i < n; i++) {
-    // panels[] is authored top-to-bottom; row i=0 is the top panel.
-    const pTop = yTop - i * panelH;
-    const pBot = pTop - panelH;
-    const pcy = (pTop + pBot) / 2;
-    const kind = panels[i] === 'mirror' ? 'mirror' : 'matte';
-    const inset = kind === 'mirror' ? 0.01 : 0.006;
-    const paneT = kind === 'mirror' ? 0.008 : T;
-    const mat = finish(THREE, kind, '#ffffff');
-    const pane = new THREE.Mesh(box(THREE, w - inset * 2, Math.max(0.01, panelH - railT), paneT), mat);
-    pane.position.set(cx, pcy, paneT / 2);
-    tag(pane, kind === 'mirror' ? 'slidingMirrorPanel' : 'slidingWhitePanel');
-    pane.userData.isMirror = kind === 'mirror';
-    group.add(pane);
+  // Two doors spanning the FULL cell width and overlapping by `overlap`:
+  // left door x0..(cx+overlap/2), right door (cx-overlap/2)..x1. The left
+  // door rides the BACK track, the right door the FRONT track (arbitrary but
+  // consistent), so they visibly clear each other front-to-back.
+  const cx = (x0 + x1) / 2;
+  const doors = [
+    { dx0: x0, dx1: cx + overlap / 2, faceZ: backFaceZ, name: 'L' },
+    { dx0: cx - overlap / 2, dx1: x1, faceZ: frontFaceZ, name: 'R' }
+  ];
 
-    if (i > 0) {
-      const rail = new THREE.Mesh(box(THREE, w, railT, T), frameMat);
-      rail.position.set(cx, pTop, T / 2);
-      tag(rail, 'slidingRail');
-      group.add(rail);
+  doors.forEach(door => {
+    const dw = door.dx1 - door.dx0;
+    const dcx = (door.dx0 + door.dx1) / 2;
+    for (let i = 0; i < n; i++) {
+      // panels[] is authored top-to-bottom; row i=0 is the top panel.
+      const pTop = yTop - i * panelH;
+      const pBot = pTop - panelH;
+      const pcy = (pTop + pBot) / 2;
+      const kind = panels[i] === 'mirror' ? 'mirror' : 'matte';
+      const inset = kind === 'mirror' ? 0.01 : 0.006;
+      const paneT = kind === 'mirror' ? 0.008 : T;
+      const mat = finish(THREE, kind, '#ffffff');
+      const pane = new THREE.Mesh(box(THREE, dw - inset * 2, Math.max(0.01, panelH - railT), paneT), mat);
+      pane.position.set(dcx, pcy, door.faceZ - paneT / 2);
+      tag(pane, kind === 'mirror' ? 'slidingMirrorPanel' : 'slidingWhitePanel');
+      pane.userData.isMirror = kind === 'mirror';
+      group.add(pane);
+
+      if (i > 0) {
+        const rail = new THREE.Mesh(box(THREE, dw, railT, T), frameMat);
+        rail.position.set(dcx, pTop, door.faceZ - T / 2);
+        tag(rail, 'slidingRail');
+        group.add(rail);
+      }
     }
-  }
-  // Thin outer frame edges (left/right stiles), per the reference photo.
-  const FT = 0.015;
-  [x0 + FT / 2, x1 - FT / 2].forEach(fx => {
-    const stile = new THREE.Mesh(box(THREE, FT, h, T), frameMat);
-    stile.position.set(fx, (yBot + yTop) / 2, T / 2);
-    tag(stile, 'slidingFrame');
-    group.add(stile);
+    // Thin outer frame edges (left/right stiles), per the reference photo.
+    const FT = 0.015;
+    [door.dx0 + FT / 2, door.dx1 - FT / 2].forEach(fx => {
+      const stile = new THREE.Mesh(box(THREE, FT, h, T), frameMat);
+      stile.position.set(fx, (yBot + yTop) / 2, door.faceZ - T / 2);
+      tag(stile, 'slidingFrame');
+      group.add(stile);
+    });
   });
 }
 
@@ -398,16 +431,23 @@ function buildStackCell(THREE, group, cell, x0, x1, rowYBottomCm, rowYTopCm, dep
   }
 }
 
-function addHandle(THREE, group, x, y, frontZ, isDrawer) {
+/**
+ * A handle bar projecting from `faceZ` (its door/drawer's own outer face) out
+ * to exactly `faceZ + HANDLE_PROJECTION` - which the caller has already
+ * arranged to equal the cabinet's declared `depth`, so the handle never pokes
+ * past the builder-contract bbox.
+ */
+function addHandle(THREE, group, x, y, faceZ, isDrawer) {
   const mat = finish(THREE, 'metal', '#d8dadc');
+  const tipZ = faceZ + HANDLE_PROJECTION;
   if (isDrawer) {
     const bar = new THREE.Mesh(box(THREE, 0.10, 0.014, 0.014), mat);
-    bar.position.set(x, y, frontZ + 0.02);
+    bar.position.set(x, y, tipZ - 0.007);
     tag(bar, 'drawerHandle');
     group.add(bar);
   } else {
     const bar = new THREE.Mesh(box(THREE, 0.014, 0.14, 0.014), mat);
-    bar.position.set(x, y, frontZ + 0.02);
+    bar.position.set(x, y, tipZ - 0.007);
     tag(bar, 'doorHandle');
     group.add(bar);
   }

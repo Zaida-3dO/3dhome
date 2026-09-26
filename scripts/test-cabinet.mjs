@@ -3,16 +3,13 @@
  * Cabinet builder tests: src/furniture/cabinet.js. No framework, no install -
  * `node scripts/test-cabinet.mjs`.
  *
- * DEPENDS ON PR #30 (feat/furniture-data-layer): cabinet.js imports
- * src/furniture/finishes.js, which ships there. This script cannot pass (the
- * import will fail to resolve) until that PR merges and this branch rebases
- * onto it - a merge-order dependency, not a bug in cabinet.js.
- *
  * WHAT THIS GUARDS (see item 4104b849's acceptance criteria)
  *   1. The built group's bounding box matches `params` (width/height/depth,
  *      converted cm -> m), and y=0 is the floor.
- *   2. z=0 is the BACK of the cabinet; every mesh's front-facing geometry
- *      sits at z >= 0, and the deepest point does not exceed `depth`.
+ *   2. z=0 is the BACK of the cabinet (the interior back panel); every front
+ *      cell's own outer face sits at `depth - handle allowance` (or exactly
+ *      `depth` for a handle-less front), and no mesh - including a handle -
+ *      pokes past `depth`.
  *   3. `detail: 'low'` produces fewer triangles than the default ('full').
  *   4. normaliseFronts(): a row whose cells already sum to the full width is
  *      left alone; a row with cells missing `width` normalises by splitting
@@ -73,7 +70,7 @@ function triangleCount(group) {
   return tris;
 }
 
-// ---- 1/2. bbox matches params; z=0 is the back -----------------------------
+// ---- 1/2. bbox matches params; z=0 is the back; fronts are at the FRONT ----
 {
   // fronts row height is the space ABOVE the plinth (236 - 8 = 228).
   const params = { width: 100, height: 236, depth: 60, fronts: [
@@ -87,6 +84,18 @@ function triangleCount(group) {
   check('y=0 is the floor', near(box.min.y, 0, 0.001), box.min.y);
   check('x is centred', near(box.min.x, -0.5, 0.01) && near(box.max.x, 0.5, 0.01), box);
   check('z=0 is the back (nothing behind it)', box.min.z >= -1e-6, box.min.z);
+
+  // The regression this whole block exists to catch: a reviewer's mutation
+  // moved every front cell to sit near z=0 (the BACK) instead of the front,
+  // and the cabinet's own bbox depth check alone did not catch it (a mirror
+  // door's own thin box sitting anywhere between 0 and depth still keeps the
+  // overall bbox within `depth`). Assert the mirror door mesh's own face
+  // position directly: it must sit at (or very near) the front, not the back.
+  let mirrorDoor = null;
+  g.traverse(o => { if (o.isMesh && o.name === 'cabinetMirrorDoor' && !mirrorDoor) mirrorDoor = o; });
+  check('mirror door exists', !!mirrorDoor);
+  check('mirror door sits at the FRONT (z close to depth=0.60), not the back (z close to 0)',
+    mirrorDoor && mirrorDoor.position.z > 0.55, mirrorDoor && mirrorDoor.position.z);
 }
 
 // ---- 3. low detail produces fewer triangles --------------------------------
@@ -342,8 +351,8 @@ function triangleCount(group) {
     fronts: [
       { height: 189, cells: [
         { kind: 'door', width: 29 },
-        { kind: 'open', width: 2 },
-        { kind: 'stack', width: 49, cells: [
+        { kind: 'open', width: 1 },
+        { kind: 'stack', width: 50, cells: [
           { kind: 'door', height: 32 },
           { kind: 'glass', height: 125 },
           { kind: 'door', height: 32 }
@@ -398,6 +407,176 @@ function triangleCount(group) {
     }), {});
   } catch (e) { threwMismatch = true; }
   check('glassSidePanel: explicit band heights not summing to the side height throws', threwMismatch);
+}
+
+// ---- 11. every front cell's own face sits at the FRONT, not the back ------
+// Code-review regression (PR #36, round 1): every front cell was built at
+// z = T/2 (near the BACK, z=0) instead of the front. The cabinet's overall
+// bbox depth check did not catch this - a thin front panel anywhere between
+// 0 and depth still keeps the bbox within `depth`. These checks read each
+// front mesh's own z position directly, which is what actually catches a
+// mutation that moves the fronts back to z~0.
+{
+  const D = 0.60; // metres - matches params.depth: 60 (cm) below
+  const HANDLE = 0.025; // HANDLE_PROJECTION, metres - depth INCLUDES handles
+  const params = {
+    width: 100, height: 236, depth: 60, plinth: { type: 'plinth', height: 8 },
+    fronts: [{ height: 228, cells: [
+      { kind: 'door', width: 25 },
+      { kind: 'drawer', width: 25 },
+      { kind: 'glass', width: 25 },
+      { kind: 'mirror', width: 25 }
+    ] }]
+  };
+  const g = C.build(THREE, params, {});
+  let door = null, drawer = null, glassDoor = null, mirrorDoor = null;
+  g.traverse(o => {
+    if (!o.isMesh) return;
+    if (o.name === 'cabinetDoor' && !door) door = o;
+    if (o.name === 'drawerFront' && !drawer) drawer = o;
+    if (o.name === 'cabinetGlassDoor' && !glassDoor) glassDoor = o;
+    if (o.name === 'cabinetMirrorDoor' && !mirrorDoor) mirrorDoor = o;
+  });
+  // The mesh's own OUTER face (position + half its own thickness), not its
+  // centre - the doc comment's contract is about the face, and reading the
+  // face is what is robust to a thickness change.
+  function outerFaceZ(mesh) {
+    mesh.geometry.computeBoundingBox();
+    return mesh.position.z + mesh.geometry.boundingBox.max.z;
+  }
+  // Door/drawer own face sits at depth - HANDLE_PROJECTION (their handle
+  // then projects the rest of the way to depth - see check further down).
+  check('door front face sits at depth - handle allowance', door && near(outerFaceZ(door), D - HANDLE, 0.002),
+    door && outerFaceZ(door));
+  check('drawer front face sits at depth - handle allowance', drawer && near(outerFaceZ(drawer), D - HANDLE, 0.002),
+    drawer && outerFaceZ(drawer));
+  // Glass/mirror doors have no handle, so their own face sits flush at depth.
+  check('glass door front face sits flush at depth (no handle)', glassDoor && near(outerFaceZ(glassDoor), D, 0.002),
+    glassDoor && outerFaceZ(glassDoor));
+  check('mirror door front face sits flush at depth (no handle)', mirrorDoor && near(outerFaceZ(mirrorDoor), D, 0.002),
+    mirrorDoor && outerFaceZ(mirrorDoor));
+  // None of them sit anywhere near the back (z=0) - the direct regression check.
+  [door, drawer, glassDoor, mirrorDoor].forEach((m, i) => {
+    check('front cell #' + i + ' is nowhere near the back (z > depth/2)', m && m.position.z > D / 2,
+      m && m.position.z);
+  });
+}
+
+// ---- 12. handles never poke past the declared depth ------------------------
+{
+  const D = 0.60;
+  const params = {
+    width: 100, height: 236, depth: 60, plinth: { type: 'plinth', height: 8 },
+    fronts: [{ height: 228, cells: [
+      { kind: 'door', width: 50 },
+      { kind: 'drawer', width: 50 }
+    ] }]
+  };
+  const g = C.build(THREE, params, {});
+  const handles = [];
+  g.traverse(o => { if (o.isMesh && (o.name === 'doorHandle' || o.name === 'drawerHandle')) handles.push(o); });
+  check('door + drawer handles both built', handles.length === 2, handles.length);
+  handles.forEach(h => {
+    h.geometry.computeBoundingBox();
+    const halfDepth = (h.geometry.boundingBox.max.z - h.geometry.boundingBox.min.z) / 2;
+    const tipZ = h.position.z + halfDepth;
+    check('handle ' + h.name + ' tip does not poke past the declared depth', tipZ <= D + 1e-6, tipZ);
+    check('handle ' + h.name + ' tip reaches (or very nearly reaches) the declared depth',
+      tipZ > D - 0.002, tipZ);
+  });
+}
+
+// ---- 13. every emissive mesh (not just LED-wrap/shelf-light by name) is ---
+//          away from the back, and none pokes past depth -------------------
+{
+  const params = {
+    width: 24, height: 60, depth: 50, plinth: { type: 'plinth', height: 6 }, shelfLights: true,
+    fronts: [
+      { height: 18, ledGapBelow: true, cells: [{ kind: 'glass', width: 24 }] },
+      { height: 18, ledGapBelow: true, cells: [{ kind: 'drawer', width: 24 }] },
+      { height: 18, cells: [{ kind: 'drawer', width: 24 }] }
+    ]
+  };
+  const g = C.build(THREE, params, {});
+  const D = 0.50;
+  const emissiveMeshes = [];
+  g.traverse(o => {
+    if (!o.isMesh) return;
+    if (o.material && o.material.userData && o.material.userData.finish === 'emissive') emissiveMeshes.push(o);
+  });
+  check('at least one emissive mesh exists (shelfLights + ledGapBelow both fired)', emissiveMeshes.length > 0,
+    emissiveMeshes.length);
+  // Generic sweep over EVERY emissive mesh by finish, not by name - this is
+  // what the reviewer asked for: a mutation renaming or adding a new emissive
+  // part must still be caught, not just the ones already named 'ledWrap*'.
+  emissiveMeshes.forEach(m => {
+    check('emissive mesh "' + m.name + '" is not at the back (z > 0)', m.position.z > 0, m.position.z);
+    m.geometry.computeBoundingBox();
+    const maxZ = m.position.z + m.geometry.boundingBox.max.z;
+    check('emissive mesh "' + m.name + '" does not poke past the declared depth', maxZ <= D + 0.006, maxZ);
+  });
+}
+
+// ---- 14. sliding doors overlap on two tracks and span the full width ------
+{
+  const params = {
+    width: 150, height: 236, depth: 60,
+    fronts: [{ height: 228, cells: [
+      { kind: 'sliding', width: 75, panels: ['white', 'mirror', 'mirror', 'white'] },
+      { kind: 'sliding', width: 75, panels: ['white', 'mirror', 'mirror', 'white'] }
+    ] }],
+    plinth: { type: 'plinth', height: 8 }, gloss: false, color: '#ffffff', topColor: '#ffffff'
+  };
+  const g = C.build(THREE, params, {});
+  g.updateMatrixWorld(true);
+  const box = bbox(g);
+  check('sliding wardrobe: bbox width matches params', near(box.max.x - box.min.x, 1.50, 0.01), box);
+
+  const frames = [];
+  g.traverse(o => { if (o.isMesh && o.name === 'slidingFrame') frames.push(o); });
+  check('4 door frame-pairs (2 doors x 2 cells x 2 stiles each = 8)', frames.length === 8, frames.length);
+  const zSet = [...new Set(frames.map(f => f.position.z.toFixed(4)))];
+  check('doors ride exactly TWO distinct tracks (two different z depths)', zSet.length === 2, zSet);
+  const [trackA, trackB] = zSet.map(Number);
+  check('the two tracks are offset from each other (not the same z)', Math.abs(trackA - trackB) > 0.005,
+    { trackA, trackB });
+  check('neither track sits at the back (both z > depth/2)', trackA > 0.30 && trackB > 0.30, { trackA, trackB });
+
+  // Full width coverage: the outermost stiles reach the cabinet's own edges.
+  function xRange(mesh) {
+    mesh.geometry.computeBoundingBox();
+    const bb = mesh.geometry.boundingBox.clone().translate(mesh.position);
+    return [bb.min.x, bb.max.x];
+  }
+  const allX = frames.map(xRange).flat();
+  check('leftmost stile reaches the cabinet\'s left edge', near(Math.min(...allX), box.min.x, 0.02),
+    { min: Math.min(...allX), boxMin: box.min.x });
+  check('rightmost stile reaches the cabinet\'s right edge', near(Math.max(...allX), box.max.x, 0.02),
+    { max: Math.max(...allX), boxMax: box.max.x });
+
+  // Overlap: within one 75cm cell, the two doors' frame x-ranges must
+  // intersect (not just touch) - that is the "overlap" the reference photo
+  // shows, as opposed to two doors that merely meet edge-to-edge. The left
+  // cell spans local x -0.75..0 (cabinet width 1.5m, 2 cells of 0.75m each).
+  const leftCellFrames = frames.filter(f => {
+    const [x0, x1] = xRange(f);
+    return x0 >= -0.751 && x1 <= 0.001;
+  });
+  check('exactly 4 stiles found in the left cell (2 doors x 2 stiles)', leftCellFrames.length === 4,
+    leftCellFrames.map(xRange));
+  // Group stiles into their 2 doors by z (track): each door's own span is the
+  // min/max x across ITS 2 stiles, and the two doors' spans must overlap.
+  const byTrack = new Map();
+  leftCellFrames.forEach(f => {
+    const key = f.position.z.toFixed(4);
+    if (!byTrack.has(key)) byTrack.set(key, []);
+    byTrack.get(key).push(...xRange(f));
+  });
+  const doorSpans = [...byTrack.values()].map(xs => [Math.min(...xs), Math.max(...xs)]);
+  check('exactly 2 door spans (one per track)', doorSpans.length === 2, doorSpans);
+  const [d0, d1] = doorSpans;
+  const overlaps = d0 && d1 && d0[0] < d1[1] - 0.001 && d1[0] < d0[1] - 0.001;
+  check('the two doors within a cell overlap (not just meet edge-to-edge)', overlaps, doorSpans);
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

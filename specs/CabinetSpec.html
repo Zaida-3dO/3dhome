@@ -116,13 +116,17 @@ const PRESETS = {
     label: 'Tall display cabinet',
     params: {
       width: 80, height: 189, depth: 34,
-      // Left: a solid door (29w). A 2cm divider. Right: a glass door (49w)
-      // stacked white(32)/glass(125, w/ shelves + LED)/white(32).
+      // 29 (solid door) + divider + 50 (glass door) = 80: the reference gives
+      // the solid door and glass door as 29 and 50 exactly, which already sum
+      // to 79, leaving only 1cm for the divider (not the illustrative "2cm"
+      // first assumed) - kept both real leaf widths exact and shrunk the
+      // divider instead of shrinking either door. Glass door stacked
+      // white(32)/glass(125, w/ shelves + LED)/white(32) = 189 exactly.
       fronts: [
         { height: 189, cells: [
           { kind: 'door', width: 29 },
-          { kind: 'open', width: 2 },
-          { kind: 'stack', width: 49, cells: [
+          { kind: 'open', width: 1 },
+          { kind: 'stack', width: 50, cells: [
             { kind: 'door', height: 32 },
             { kind: 'glass', height: 125 },
             { kind: 'door', height: 32 }
@@ -161,7 +165,8 @@ const PRESETS = {
         ] }
       ],
       plinth: { type: 'plinth', height: 0 },
-      gloss: true, color: '#ffffff', topColor: '#ffffff'
+      // A dark recess/top over a white gloss body, not all-white.
+      gloss: true, color: '#ffffff', topColor: '#2a2a2a'
     }
   },
   chestOfDrawers: {
