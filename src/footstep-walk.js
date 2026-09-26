@@ -195,3 +195,27 @@ export function walkFootsteps(opts) {
 
   return { prints, turned };
 }
+
+/**
+ * The Y-axis turn that makes one footprint quad point its toe along the walk.
+ *
+ * The caller builds each print as a PlaneGeometry whose +Y edge carries the
+ * ball of the foot (the footprint canvas draws the ball pad at the top, and
+ * CanvasTexture.flipY maps the canvas top to v=1, the plane's +Y edge), lays
+ * it flat with rotateX(-PI/2) — which sends +Y to world -Z — and then turns it
+ * with rotateY(printYaw(dirx, diry)). Plan x maps to world +X and plan y to
+ * world +Z, so the toe must end up along world (dirx, 0, diry).
+ *
+ * rotateY(b) takes (0,0,-1) to (-sin b, 0, -cos b). Setting that equal to
+ * (cos phi, 0, sin phi), with phi = atan2(diry, dirx), gives b = -phi - PI/2.
+ * The previous `-phi + PI/2` differs by exactly PI: it pointed every toe
+ * AGAINST the walk, so each trail read as walking backwards
+ * (scripts/test-footprint-orientation.mjs).
+ *
+ * @param {number} dirx  Walking direction x, in plan coordinates.
+ * @param {number} diry  Walking direction y, in plan coordinates.
+ * @returns {number} Radians for rotateY.
+ */
+export function printYaw(dirx, diry) {
+  return -Math.atan2(diry, dirx) - Math.PI / 2;
+}
