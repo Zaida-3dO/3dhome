@@ -30,12 +30,20 @@ export const MOBILE_MAX_PIXEL_RATIO = 1.5;
 // Mobile GPU families, as WEBGL_debug_renderer_info (or an unmasked
 // gl.RENDERER) names them. "Apple GPU" is what Safari reports on EVERY Apple
 // device, Macs included, so it only counts with an iOS/iPadOS user agent.
-const MOBILE_RE = /\b(mali|immortalis|adreno|powervr|xclipse|videocore)\b/i;
+const MOBILE_RE = /\b(mali|immortalis|adreno|powervr|xclipse)\b/i;
 const APPLE_GPU_RE = /\bapple\s+gpu\b/i;
 // Names that identify a desktop part outright.
 const DESKTOP_RE = /\b(nvidia|geforce|quadro|rtx|radeon|amd|intel|iris|uhd graphics|hd graphics|arc)\b|apple m\d/i;
 // A renderer string that says nothing about the hardware.
 const MASKED_RE = /^\s*(webkit webgl|mozilla|google swiftshader|angle \(google, vulkan[^)]*swiftshader)/i;
+
+// A desktop operating system. A mobile-class GPU inside one (a Snapdragon X
+// Windows laptop's Adreno) is not a tablet: it drives a laptop panel, with
+// a laptop's power budget, and is not capped unless it has a touch pointer.
+function isDesktopOS(ua, maxTouchPoints) {
+  if (/\bandroid\b/i.test(ua) || isIOSLike(ua, maxTouchPoints)) return false;
+  return /\b(windows nt|macintosh|x11|cros)\b/i.test(ua);
+}
 
 function isIOSLike(ua, maxTouchPoints) {
   if (/\b(iphone|ipad|ipod)\b/i.test(ua)) return true;
@@ -61,7 +69,12 @@ export function detectMobileGpu(s) {
   const ua = typeof o.userAgent === 'string' ? o.userAgent : '';
   // 1. The GPU's own name, when it gives one.
   if (r && !MASKED_RE.test(r)) {
-    if (MOBILE_RE.test(r)) return { mobileGpu: true, reason: 'renderer names a mobile GPU' };
+    if (MOBILE_RE.test(r)) {
+      if (ua && isDesktopOS(ua, o.maxTouchPoints) && o.coarsePointer !== true) {
+        return { mobileGpu: false, reason: 'mobile-class GPU in a desktop OS without touch' };
+      }
+      return { mobileGpu: true, reason: 'renderer names a mobile GPU' };
+    }
     if (APPLE_GPU_RE.test(r)) {
       // On a Mac it falls through: a macOS user agent is no mobile signal.
       if (isIOSLike(ua, o.maxTouchPoints)) return { mobileGpu: true, reason: 'Apple GPU on iOS/iPadOS' };
@@ -96,7 +109,9 @@ export function tierForUniforms(maxFragU) {
  *        Wins over the mobile cap, for A/B testing, but never goes ABOVE what
  *        the uniform budget compiles: a forced 'ultra' on a 256-vector phone
  *        would render nothing, so it stays 'low'.
- * @returns {{tier: string, compileTier: string, capped: boolean, overridden: boolean}}
+ * @returns {{tier: string, compileTier: string, capped: boolean, overridden: boolean,
+ *            mobileCaps: boolean}}  mobileCaps: apply the mobile pixel-ratio cap and
+ *            the minor-furniture skip. ?tier= lifts them along with the tier cap.
  */
 export function resolveTier(s) {
   const compileTier = tierForUniforms(s.maxFragU);
@@ -110,7 +125,7 @@ export function resolveTier(s) {
     overridden = true;
     capped = false;
   }
-  return { tier, compileTier, capped, overridden };
+  return { tier, compileTier, capped, overridden, mobileCaps: s.mobileGpu === true && !overridden };
 }
 
 /** The pixel ratio to use: capped at MOBILE_MAX_PIXEL_RATIO on a mobile GPU. */

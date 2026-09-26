@@ -2407,14 +2407,17 @@ export const Home3DScene = (() => {
           }
         });
 
-        // The channel's emitters -> one PointLight (two in a room longer
-        // than 4 m, one per half along its long axis), at their centroid,
-        // reaching as far as the furthest of them did. `userData.gain` is
-        // how many fixtures it stands for: syncLights() multiplies the
-        // channel's per-fixture intensity by it, so the room's total light,
-        // and its on/off/brightness/colour control, are what they were.
+        // The channel's emitters -> one PointLight (two when its fixtures
+        // are more than 2.5 m apart, one per end), at their centroid and
+        // mean height, as bright as the separate fixtures were on the
+        // room's floor (see src/light-merge.js). Strips are never merged:
+        // a strip's light is a glow on the surface it runs along.
+        // `userData.gain` is the merged light's intensity relative to one
+        // fixture; syncLights() multiplies the channel's per-fixture
+        // intensity by it, so on/off, brightness and colour work as before.
         const emitters = ls.splice(0, ls.length);
-        collapseEmitters(emitters, { minX: tx(rm.x1), maxX: tx(rm.x2), minZ: tz(rm.y1), maxZ: tz(rm.y2) })
+        collapseEmitters(emitters, { minX: tx(rm.x1), maxX: tx(rm.x2), minZ: tz(rm.y1), maxZ: tz(rm.y2) },
+          { merge: g.fixtureType !== 'strip', floorY: FY })
           .forEach(m => {
             const pl = new THREE.PointLight(tint, 0.6, m.distance, m.decay);
             pl.position.set(m.x, m.y, m.z);
@@ -3215,11 +3218,12 @@ export const Home3DScene = (() => {
       coarsePointer: typeof matchMedia === 'function' ? matchMedia('(pointer: coarse)').matches : undefined,
       maxTouchPoints: typeof navigator !== 'undefined' ? navigator.maxTouchPoints : 0
     });
-    const mobileGpu = gpu.mobileGpu === true;
     const tierInfo = resolveTier({ maxFragU, mobileGpu: gpu.mobileGpu, override: opts.tier });
+    // The mobile pixel-ratio cap and minor-furniture skip; ?tier= lifts them.
+    const mobileGpu = tierInfo.mobileCaps;
     const tier = tierInfo.tier;
     // The resolution ramp's ceiling (basePixelRatio below) on a mobile GPU.
-    const scenePixelRatio = capPixelRatio(pixelRatio, gpu.mobileGpu);
+    const scenePixelRatio = capPixelRatio(pixelRatio, mobileGpu);
     if (scenePixelRatio !== pixelRatio) {
       ren.setPixelRatio(scenePixelRatio);
       ren.setSize(W, H);

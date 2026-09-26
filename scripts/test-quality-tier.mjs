@@ -40,27 +40,59 @@ const UA = {
 };
 
 // ---- 1. the classifier on renderer strings ----------------------------------
-const cases = [
-  ['Adreno 750 (ANGLE)', 'ANGLE (Qualcomm, Adreno (TM) 750, OpenGL ES 3.2)', UA.androidPhone, true],
-  ['Adreno bare', 'Adreno (TM) 750', UA.androidPhone, true],
-  ['Mali-G925 Immortalis', 'Mali-G925-Immortalis MC12', UA.androidTablet, true],
-  ['Immortalis via ANGLE', 'ANGLE (ARM, Immortalis-G925 MC12, OpenGL ES 3.2)', UA.androidTablet, true],
-  ['PowerVR', 'PowerVR Rogue GE8320', UA.androidPhone, true],
-  ['Apple GPU on an iPad', 'Apple GPU', UA.iPad, true],
-  ['Apple GPU on an iPad in desktop mode (touch points)', 'Apple GPU', UA.iPadDesktopMode, true, 5],
-  ['Apple GPU on a Mac', 'Apple GPU', UA.mac, false, 0],
-  ['NVIDIA', 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 (0x00002704) Direct3D11 vs_5_0 ps_5_0, D3D11)', UA.windows, false],
-  ['Radeon 780M', 'ANGLE (AMD, AMD Radeon 780M Graphics (0x000015BF) Direct3D11 vs_5_0 ps_5_0, D3D11)', UA.windows, false],
-  ['Intel UHD', 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)', UA.windows, false],
-  ['Apple M-series by name', 'Apple M2', UA.mac, false, 0]
+// The NAME alone must decide these. So no case below carries a signal the
+// user-agent fallback could answer with: no user agent at all (the fallback
+// then says null, not true), or -- for Apple, whose name only counts on
+// iOS/iPadOS -- an iPad UA with the pointer UNKNOWN (fallback: null again).
+// Remove any one entry from the mobile-GPU pattern and its case fails.
+const byName = [
+  ['Mali (bare)', 'Mali-G78 MP14'],
+  ['Mali via ANGLE', 'ANGLE (ARM, Mali-G710 MC10, OpenGL ES 3.2)'],
+  ['Immortalis alone (the Tab S11 class)', 'Immortalis-G925 MC12'],
+  ['Immortalis via ANGLE', 'ANGLE (ARM, Immortalis-G925 MC12, OpenGL ES 3.2)'],
+  ['Adreno 750 via ANGLE', 'ANGLE (Qualcomm, Adreno (TM) 750, OpenGL ES 3.2)'],
+  ['Adreno (bare)', 'Adreno (TM) 740'],
+  ['PowerVR', 'PowerVR Rogue GE8320'],
+  ['PowerVR B-Series via ANGLE', 'ANGLE (Imagination Technologies, PowerVR B-Series BXM-8-256, OpenGL ES 3.2)'],
+  ['Xclipse (Samsung RDNA)', 'Samsung Xclipse 940'],
+  ['Xclipse via ANGLE', 'ANGLE (Samsung Electronics Co., Ltd., Xclipse 940, Vulkan 1.3.231)']
 ];
-cases.forEach(([name, renderer, ua, want, touch]) => {
-  const r = Q.detectMobileGpu({ renderer, userAgent: ua, coarsePointer: want, maxTouchPoints: touch != null ? touch : (want ? 5 : 0) });
-  check('classifier: ' + name + ' -> ' + want, r.mobileGpu === want, r);
+byName.forEach(([name, renderer]) => {
+  const r = Q.detectMobileGpu({ renderer, userAgent: '' });
+  check('by name alone: ' + name + ' -> mobile', r.mobileGpu === true, r);
 });
-// The renderer's name decides even against the platform signal.
-check('a named desktop GPU wins over a coarse pointer (touch-screen laptop)',
-  Q.detectMobileGpu({ renderer: 'NVIDIA GeForce RTX 4080', userAgent: UA.windows, coarsePointer: true }).mobileGpu === false);
+check('control: the same call with a desktop name and no UA is not mobile',
+  Q.detectMobileGpu({ renderer: 'NVIDIA GeForce RTX 4080', userAgent: '' }).mobileGpu === false);
+// Apple: the name counts only with an iOS/iPadOS user agent, and the pointer
+// is left unknown so the platform fallback cannot be what says yes.
+check('by name: Apple GPU on an iPad -> mobile',
+  Q.detectMobileGpu({ renderer: 'Apple GPU', userAgent: UA.iPad, maxTouchPoints: 5 }).mobileGpu === true);
+check('by name: Apple GPU on an iPad in desktop mode (Mac UA, touch points) -> mobile',
+  Q.detectMobileGpu({ renderer: 'Apple GPU', userAgent: UA.iPadDesktopMode, maxTouchPoints: 5 }).mobileGpu === true);
+check('Apple GPU on a Mac -> not mobile',
+  Q.detectMobileGpu({ renderer: 'Apple GPU', userAgent: UA.mac, maxTouchPoints: 0 }).mobileGpu === false);
+// Desktop names, on a desktop UA.
+[
+  ['NVIDIA', 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 (0x00002704) Direct3D11 vs_5_0 ps_5_0, D3D11)', UA.windows],
+  ['Radeon 780M', 'ANGLE (AMD, AMD Radeon 780M Graphics (0x000015BF) Direct3D11 vs_5_0 ps_5_0, D3D11)', UA.windows],
+  ['Intel UHD', 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)', UA.windows],
+  ['Apple M2', 'Apple M2', UA.mac]
+].forEach(([name, renderer, ua]) => {
+  check('desktop: ' + name + ' -> not mobile', Q.detectMobileGpu({ renderer, userAgent: ua, maxTouchPoints: 0 }).mobileGpu === false);
+});
+// The desktop-name branch must decide on its own: here the platform says
+// "mobile" (Android, coarse pointer), and only the named desktop GPU says no.
+check('a named desktop GPU wins over an Android UA with a coarse pointer',
+  Q.detectMobileGpu({ renderer: 'NVIDIA GeForce RTX 4080', userAgent: UA.androidTablet, coarsePointer: true }).mobileGpu === false);
+// A Snapdragon X Windows laptop names an Adreno: not a tablet, not capped...
+const snap = 'ANGLE (Qualcomm, Snapdragon(R) X Elite - X1E80100 - Qualcomm(R) Adreno(TM) GPU (0x0000036E) Direct3D11 vs_5_0 ps_5_0, D3D11)';
+check('Snapdragon X Windows laptop (Adreno, no touch) -> not mobile',
+  Q.detectMobileGpu({ renderer: snap, userAgent: UA.windows, coarsePointer: false, maxTouchPoints: 0 }).mobileGpu === false);
+// ...but the same chip in a Windows tablet held as one (coarse pointer) is.
+check('the same Adreno on Windows with a coarse pointer -> mobile',
+  Q.detectMobileGpu({ renderer: snap, userAgent: UA.windows, coarsePointer: true, maxTouchPoints: 10 }).mobileGpu === true);
+check('an Adreno on Android is never excused by the desktop rule',
+  Q.detectMobileGpu({ renderer: 'Adreno (TM) 750', userAgent: UA.androidPhone, coarsePointer: false }).mobileGpu === true);
 // A masked renderer falls back to the platform.
 check('masked "WebKit WebGL" + Android + coarse pointer -> mobile',
   Q.detectMobileGpu({ renderer: 'WebKit WebGL', userAgent: UA.androidTablet, coarsePointer: true }).mobileGpu === true);
@@ -89,6 +121,12 @@ check('mobile GPU at 1024 -> mid, marked capped', tab.tier === 'mid' && tab.capp
 check('mobile GPU at 256 stays low', Q.resolveTier({ maxFragU: 256, mobileGpu: true }).tier === 'low');
 check('?tier=ultra wins over the mobile cap (A/B on the tablet)',
   Q.resolveTier({ maxFragU: 1024, mobileGpu: true, override: 'ultra' }).tier === 'ultra');
+check('a mobile GPU gets the mobile caps (pixel ratio, minor furniture)',
+  Q.resolveTier({ maxFragU: 1024, mobileGpu: true }).mobileCaps === true &&
+  Q.resolveTier({ maxFragU: 1024, mobileGpu: false }).mobileCaps === false &&
+  Q.resolveTier({ maxFragU: 1024, mobileGpu: null }).mobileCaps === false);
+check('?tier= lifts the mobile caps too, whatever tier it names',
+  ['ultra', 'mid', 'low'].every(t => Q.resolveTier({ maxFragU: 1024, mobileGpu: true, override: t }).mobileCaps === false));
 check('?tier=low on a desktop -> low', Q.resolveTier({ maxFragU: 4096, mobileGpu: false, override: 'low' }).tier === 'low');
 check('?tier=ultra never exceeds what compiles (256 stays low)',
   Q.resolveTier({ maxFragU: 256, mobileGpu: true, override: 'ultra' }).tier === 'low');
@@ -108,6 +146,8 @@ check('pixel ratio unchanged otherwise', Q.capPixelRatio(2, false) === 2 && Q.ca
   check('scene: the ramp ceiling is the capped pixel ratio', /const basePixelRatio = scenePixelRatio;/.test(src));
   check('scene: room-shadow lights need the TIER (not only the uniforms) to allow them under shadows=high',
     /roomShadowLights = tier !== 'low' && !tierInfo\.capped;/.test(src) && /const tier = tierInfo\.tier;/.test(src));
+  check('scene: the pixel-ratio cap and minor skip follow mobileCaps (so ?tier= lifts them)',
+    /const mobileGpu = tierInfo\.mobileCaps;/.test(src) && /capPixelRatio\(pixelRatio, mobileGpu\)/.test(src));
   check('scene: a mobile GPU drops minor furniture', /dropMinorFurniture: mobileGpu/.test(src) &&
     /quality\.dropMinorFurniture && item\.priority === 'minor'/.test(src));
   const page = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
