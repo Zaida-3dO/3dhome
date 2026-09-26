@@ -87,6 +87,20 @@ function leafPositions(group) {
 // ---- 0. module shape ------------------------------------------------------
 check('TYPE is "plant"', TYPE === 'plant', TYPE);
 check('DEFAULTS is frozen', Object.isFrozen(DEFAULTS));
+
+// ---- 0b. DEFAULTS carries the width/height/depth drift-test envelope ------
+// (furniture data layer, PR #30): width/depth are the footprint (larger of
+// spread/potTopDiameter for the default corn-plant kind), height is total
+// height including the pot.
+check('DEFAULTS has numeric width', typeof DEFAULTS.width === 'number', DEFAULTS.width);
+check('DEFAULTS has numeric height', typeof DEFAULTS.height === 'number', DEFAULTS.height);
+check('DEFAULTS has numeric depth', typeof DEFAULTS.depth === 'number', DEFAULTS.depth);
+check('DEFAULTS.width/depth = max(spread, potTopDiameter)',
+  DEFAULTS.width === Math.max(DEFAULTS.spread, DEFAULTS.potTopDiameter) &&
+  DEFAULTS.depth === Math.max(DEFAULTS.spread, DEFAULTS.potTopDiameter),
+  { width: DEFAULTS.width, depth: DEFAULTS.depth });
+check('DEFAULTS.height = potHeight + plantHeight',
+  DEFAULTS.height === DEFAULTS.potHeight + DEFAULTS.plantHeight, DEFAULTS.height);
 check('buildPlant alias exists and matches build', typeof buildPlant === 'function');
 
 // ---- 1. total height = potHeight + plantHeight (within tolerance) --------

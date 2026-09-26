@@ -70,6 +70,15 @@
  */
 export const TYPE = 'plant';
 
+// width/height/depth are the DEFAULT KIND's (corn-plant) bounding envelope,
+// cm, required by every furniture builder's drift test (PR #30): width/depth
+// are the footprint (the larger of spread/potTopDiameter -- spread wins for
+// the corn-plant defaults), height is the total height, pot included
+// (potHeight + plantHeight). A wall-planter build overrides `width` (its own
+// footprint width) via its params/preset same as any other field -- these
+// three keys are DEFAULTS' fallback for an unspecified param, not a kind
+// switch, so there is no collision: PRESETS['wall-planter-*'] supplies its
+// own `width` explicitly, same as it already did before this contract.
 export const DEFAULTS = Object.freeze({
   kind: 'corn-plant',
   // corn-plant
@@ -80,12 +89,17 @@ export const DEFAULTS = Object.freeze({
   stemCount: 3,
   spread: 40,
   leafColor: 0x3a5a2e,
-  // wall-planter (width/depth/leafCount/frameColor only apply to this kind;
-  // plantHeight and leafColor are shared but re-defaulted per kind in build())
-  width: 25,
+  // wall-planter (leafCount/frameColor only apply to this kind; plantHeight
+  // and leafColor are shared but re-defaulted per kind in build())
   leafCount: 5,
   frameColor: 0xb8945a,
   seed: 1,
+  // required drift-test envelope (see comment above) -- corn-plant defaults:
+  // width/depth = max(spread, potTopDiameter) = max(40, 30) = 40;
+  // height = potHeight + plantHeight = 56 + 110 = 166
+  width: 40,
+  depth: 40,
+  height: 166,
 });
 
 const CM = 0.01;
