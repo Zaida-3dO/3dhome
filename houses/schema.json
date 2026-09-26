@@ -1099,8 +1099,84 @@
 
     "furnitureParams_fridge-freezer": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `fridge-freezer`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `fridge-freezer` (src/furniture/kitchen.js): a full-height two-door unit. Each `default` equals kitchen.js DEFAULTS.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 60,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 65,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 185,
+          "description": "cm, floor to top."
+        },
+        "frontColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f2f0ea",
+          "description": "Fronts, carcass and plinth."
+        },
+        "frontFinish": {
+          "type": "string",
+          "enum": [
+            "gloss",
+            "matte",
+            "metal"
+          ],
+          "default": "gloss",
+          "description": "Palette finish of the fronts, carcass and plinth."
+        },
+        "handleStyle": {
+          "type": "string",
+          "enum": [
+            "bar",
+            "knob",
+            "rail",
+            "none"
+          ],
+          "default": "bar",
+          "description": "`bar`: D-bar handles. `knob`: small pulls. `rail`: handleless, one continuous J-rail under the worktop (wall units then have none). `none`: push-to-open."
+        },
+        "handleColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#c9cccf",
+          "description": "Handles are always `metal`."
+        },
+        "freezer": {
+          "type": "string",
+          "enum": [
+            "bottom",
+            "top"
+          ],
+          "default": "bottom",
+          "description": "Where the freezer door is."
+        },
+        "freezerRatio": {
+          "type": "number",
+          "minimum": 0.15,
+          "maximum": 0.7,
+          "default": 0.38,
+          "description": "The freezer door's share of the height."
+        },
+        "hinge": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ],
+          "default": "right",
+          "description": "The doors hang from this edge; the handles go on the other."
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_gaming-chair": {
@@ -1277,14 +1353,335 @@
 
     "furnitureParams_kitchen-base-run": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `kitchen-base-run`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `kitchen-base-run` (src/furniture/kitchen.js): floor units under one continuous worktop, laid out left to right as you stand facing the run. Each `default` equals kitchen.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 180,
+          "description": "cm, along the wall / the item's local x. Authoritative: modules that add up to less get a filler at the end away from the corner, and modules that add up to more are scaled to fit, with a warning either way."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 60,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 88.5,
+          "description": "cm, floor to the TOP OF THE WORKTOP. A sink's tap and a hob's splashback stand on the worktop and rise above it; nothing else does."
+        },
+        "modules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "description": "One `kitchen-base-run` module.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cabinet",
+                  "drawers",
+                  "oven",
+                  "hob",
+                  "sink",
+                  "dishwasher",
+                  "washer",
+                  "filler",
+                  "corner"
+                ]
+              },
+              "width": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "cm. Common sizes are 60 and a narrow 34."
+              },
+              "hinge": {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right"
+                ],
+                "description": "cabinet / sink / corner: which edge a single door hangs from; the handle goes on the other. Over 60 cm wide a cabinet or sink has two doors."
+              },
+              "hob": {
+                "type": "boolean",
+                "description": "oven: a flush hob in the worktop above it."
+              },
+              "splashback": {
+                "type": "number",
+                "minimum": 0,
+                "description": "hob, or oven with `hob`: height in cm of a metal wall protector standing on the worktop behind the hob. 0 = none."
+              },
+              "bowl": {
+                "type": "string",
+                "enum": [
+                  "inset",
+                  "undermount"
+                ],
+                "description": "sink: inset (metal rim flush with the worktop) or undermount."
+              },
+              "tap": {
+                "type": "boolean",
+                "description": "sink: draw the tap (default true)."
+              },
+              "plinthLed": {
+                "type": "boolean",
+                "description": "A warm LED strip on the plinth under this module. Adjacent flagged modules share one strip; on the owner's flagged corner module it turns the corner to meet the other run's strip."
+              }
+            },
+            "required": [
+              "kind",
+              "width"
+            ],
+            "additionalProperties": false
+          },
+          "default": [
+            {
+              "kind": "cabinet",
+              "width": 60,
+              "hinge": "left"
+            },
+            {
+              "kind": "oven",
+              "width": 60,
+              "hob": true
+            },
+            {
+              "kind": "drawers",
+              "width": 60
+            }
+          ],
+          "description": "Left to right as you stand facing the run (local +x)."
+        },
+        "corner": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right",
+            "none"
+          ],
+          "default": "none",
+          "description": "The end at which this run OWNS a corner: it ends in a blind `corner` module and its worktop runs to the wall. The other run of the L stops at this run's front face."
+        },
+        "cornerDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 60,
+          "description": "cm, the depth of the OTHER run at this run's corner (runs may differ, 60 against 65). It is how much of the blind corner unit that run hides, and where this run's plinth return and LED turn the corner. Used only when `corner` is not `none`."
+        },
+        "frontColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f2f0ea",
+          "description": "Fronts, carcass and plinth."
+        },
+        "frontFinish": {
+          "type": "string",
+          "enum": [
+            "gloss",
+            "matte",
+            "metal"
+          ],
+          "default": "gloss",
+          "description": "Palette finish of the fronts, carcass and plinth."
+        },
+        "worktopColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#8e8c88",
+          "description": "Worktop (always `matte`)."
+        },
+        "handleStyle": {
+          "type": "string",
+          "enum": [
+            "bar",
+            "knob",
+            "rail",
+            "none"
+          ],
+          "default": "bar",
+          "description": "`bar`: D-bar handles. `knob`: small pulls. `rail`: handleless, one continuous J-rail under the worktop (wall units then have none). `none`: push-to-open."
+        },
+        "handleColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#c9cccf",
+          "description": "Handles are always `metal`."
+        },
+        "worktopThickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 10,
+          "default": 2.5,
+          "description": "cm."
+        },
+        "plinthHeight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30,
+          "default": 13,
+          "description": "cm, the kickboard under the doors."
+        },
+        "ledColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#ffb45a",
+          "description": "Colour of the plinth LED strip under modules flagged `plinthLed`."
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_kitchen-wall-run": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `kitchen-wall-run`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `kitchen-wall-run` (src/furniture/kitchen.js): wall units of mixed heights with their tops aligned, plus an extractor hood. `elevation` (set by the placer) is the bottom of the tallest module. Each `default` equals kitchen.js DEFAULTS.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 180,
+          "description": "cm, along the wall / the item's local x. Authoritative, as for `kitchen-base-run`."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 35,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 72,
+          "description": "cm, the tallest module. Shorter modules hang with their tops aligned to it."
+        },
+        "modules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "description": "One `kitchen-wall-run` module.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cabinet",
+                  "open",
+                  "hood",
+                  "filler",
+                  "corner"
+                ]
+              },
+              "width": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "cm."
+              },
+              "height": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "cm; defaults to the run's height and may not exceed it."
+              },
+              "hinge": {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right"
+                ],
+                "description": "cabinet: which edge a single door hangs from."
+              },
+              "style": {
+                "type": "string",
+                "enum": [
+                  "chimney",
+                  "canopy"
+                ],
+                "description": "hood: a chimney hood (flue up to the run's top) or a canopy under a short cabinet."
+              },
+              "visor": {
+                "type": "string",
+                "enum": [
+                  "smoked",
+                  "glass",
+                  "metal"
+                ],
+                "description": "chimney hood visor. `glass` is a real transparent part and costs a draw of its own; `smoked` merges."
+              }
+            },
+            "required": [
+              "kind",
+              "width"
+            ],
+            "additionalProperties": false
+          },
+          "default": [
+            {
+              "kind": "cabinet",
+              "width": 60,
+              "hinge": "left"
+            },
+            {
+              "kind": "hood",
+              "width": 60,
+              "style": "chimney",
+              "visor": "smoked"
+            },
+            {
+              "kind": "cabinet",
+              "width": 60,
+              "hinge": "right"
+            }
+          ],
+          "description": "Left to right as you stand facing the run (local +x)."
+        },
+        "corner": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right",
+            "none"
+          ],
+          "default": "none",
+          "description": "As for `kitchen-base-run`: which end holds a blind corner unit."
+        },
+        "cornerDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 35,
+          "description": "cm, the depth of the other wall run at this run's corner: how much of the blind corner unit it hides."
+        },
+        "frontColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f2f0ea",
+          "description": "Fronts, carcass and plinth."
+        },
+        "frontFinish": {
+          "type": "string",
+          "enum": [
+            "gloss",
+            "matte",
+            "metal"
+          ],
+          "default": "gloss",
+          "description": "Palette finish of the fronts, carcass and plinth."
+        },
+        "handleStyle": {
+          "type": "string",
+          "enum": [
+            "bar",
+            "knob",
+            "rail",
+            "none"
+          ],
+          "default": "bar",
+          "description": "`bar`: D-bar handles. `knob`: small pulls. `rail`: handleless, one continuous J-rail under the worktop (wall units then have none). `none`: push-to-open."
+        },
+        "handleColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#c9cccf",
+          "description": "Handles are always `metal`."
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_mirror": {
