@@ -209,6 +209,23 @@ jobs:
           # the lower sleeve and its overlap stay fixed).
           set -euo pipefail
           node scripts/test-standing-desk.mjs
+      - name: Wall decor (framed sign + wall sconce, both kinds) builder contract
+        run: |
+          # Asserts the builder contract for src/furniture/wall-sign.js and
+          # wall-sconce.js (kinds 'swing-arm-globe' and 'up-down'): frozen
+          # DEFAULTS with numeric width/height/depth, bbox matching DEFAULTS
+          # within 0.5 cm, y=0 at the bottom, back face at z=0, and the
+          # finish/merge contract -- every mesh tagged from the closed finish
+          # palette, with the glass globe, its bulb, the up-down sconce's two
+          # lenses and beam-cone hints, and the sign's CanvasTexture text
+          # panel all marked userData.keep so the live renderer's per-finish
+          # mesh merge leaves them as their own draw call. Also builds
+          # wall-sign with NO global `document` at all -- the shape the
+          # furniture-core drift test (branch feat/furniture-data-layer) runs
+          # every builder in. Builds real three.js geometry from the vendored
+          # module, same as test-wall-fittings.mjs.
+          set -euo pipefail
+          node scripts/test-wall-decor.mjs
       - name: WebGL failure is classified correctly
         run: |
           # Asserts which of the two WebGL failures we tell the user about. Out

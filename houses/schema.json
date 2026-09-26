@@ -1240,14 +1240,99 @@
 
     "furnitureParams_wall-sconce": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `wall-sconce`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `wall-sconce` (src/furniture/wall-sconce.js): ONE registered type covering two visual kinds selected by `kind`. `default`s below are the 'swing-arm-globe' kind's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs, which only checks the module's single DEFAULTS export). The 'up-down' kind's own fields (bodyWidth, bodyHeight, bodyDepth, plateThickness, lensDiameter, lensProtrusion) are listed too, with no `default` of their own, so an 'up-down' item can set them without additionalProperties rejecting it; wall-sconce.js's own UP_DOWN_DEFAULTS is the source of truth for their values when `kind` is 'up-down'.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["swing-arm-globe", "up-down"],
+          "default": "swing-arm-globe",
+          "description": "Which visual variant to build."
+        },
+        "armLength": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 22,
+          "description": "cm, swing-arm-globe only: horizontal projection of the arm off the wall."
+        },
+        "dropLength": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 18,
+          "description": "cm, swing-arm-globe only: vertical drop from the arm to the globe cap."
+        },
+        "globeDiameter": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 15,
+          "description": "cm, swing-arm-globe only."
+        },
+        "glassColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#6b4a2a",
+          "description": "swing-arm-globe only: smoked/amber glass shade colour."
+        },
+        "plateThickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, up-down only: backplate thickness. See UP_DOWN_DEFAULTS in wall-sconce.js."
+        },
+        "bodyWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, up-down only: the raised body's width. See UP_DOWN_DEFAULTS in wall-sconce.js."
+        },
+        "bodyHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, up-down only: the raised body's height. See UP_DOWN_DEFAULTS in wall-sconce.js."
+        },
+        "bodyDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, up-down only: how far the body stands off the backplate. See UP_DOWN_DEFAULTS in wall-sconce.js."
+        },
+        "lensDiameter": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, up-down only: the top/bottom lens diameter. See UP_DOWN_DEFAULTS in wall-sconce.js."
+        },
+        "lensProtrusion": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, up-down only: how far each lens stands proud of the body. See UP_DOWN_DEFAULTS in wall-sconce.js."
+        },
+        "metalColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#b08d57",
+          "description": "Brass (swing-arm-globe) or brushed copper/bronze (up-down)."
+        },
+        "on": {
+          "type": "boolean",
+          "default": true,
+          "description": "Emissive glow only (bulb, or the up-down kind's two lenses + faint beam-cone hints) -- no THREE light is added by the builder."
+        },
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 15, "description": "cm, overall bbox width." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 29.5, "description": "cm, overall bbox depth (projection off the wall)." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 45.95, "description": "cm, overall bbox height." }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_wall-sign": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `wall-sign`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `wall-sign` (src/furniture/wall-sign.js): a framed sign with a two-line CanvasTexture text panel. `default`s equal wall-sign.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). line1/line2 default to generic placeholder text -- this is a public repo and carries no real-house sign wording; house-specific wording, if any, lives only in a private overlay outside this repo.",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 110, "description": "cm, overall frame width (landscape)." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 45, "description": "cm, overall frame height." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 3, "description": "cm, frame depth (front to back)." },
+        "frameThickness": { "type": "number", "exclusiveMinimum": 0, "default": 4, "description": "cm, width of the frame member around the panel." },
+        "frameColor": { "$ref": "#/$defs/hexColor", "default": "#2b2620" },
+        "panelColor": { "$ref": "#/$defs/hexColor", "default": "#f2ede2" },
+        "line1": { "type": "string", "default": "HOME", "description": "Serif caps line. Generic placeholder text (privacy)." },
+        "line2": { "type": "string", "default": "sweet home", "description": "Script line. Generic placeholder text (privacy)." },
+        "textColor": { "$ref": "#/$defs/hexColor", "default": "#1a1a1a" }
+      },
+      "additionalProperties": false
     },
 
     "lightFixture": {
