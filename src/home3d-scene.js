@@ -18,7 +18,7 @@ import {
   windowDaylight, corniceSpotLayout, corniceLightCount, corniceLightBudget
 } from './wall-fittings.js';
 import {
-  loadFurnitureModules, buildFurnitureSync, scheduleFurnitureAttach, fadeRegistrations,
+  loadFurnitureModules, buildFurnitureSliced, scheduleFurnitureAttach, fadeRegistrations,
   disposeFurniture
 } from './furniture.js';
 
@@ -3758,13 +3758,18 @@ export const Home3DScene = (() => {
         precompileDone,
         modulesLoaded: furnitureModules,
         isDisposed: () => _disposed,
+        // Time-sliced (task c399c2a4): the build hands the main thread back
+        // every few ms, so a full house never lands as one long task -- on
+        // an embedding dashboard that task would freeze the host page
+        // itself. A dispose mid-build stops it and frees what it had made.
         build: builders => {
           furnitureTimeline.buildStart = performance.now();
-          const result = buildFurnitureSync(THREE, furnitureItems, builders, {
-            tx, tz, quality, walls: WALLS
+          return buildFurnitureSliced(THREE, furnitureItems, builders, {
+            tx, tz, quality, walls: WALLS, isCancelled: () => _disposed
+          }).then(result => {
+            furnitureTimeline.buildEnd = performance.now();
+            return result;
           });
-          furnitureTimeline.buildEnd = performance.now();
-          return result;
         },
         renderer: ren,
         camera: cam,

@@ -27,7 +27,7 @@
  */
 import { loadBuilders } from './furniture/registry.js';
 import { resolvePlacement, footprintRect, pickFadeWall } from './furniture/place.js';
-import { flattenGroup, buildBuckets, createMaterialSet, concatGeometries, neverFades } from './furniture/merge.js';
+import { flattenGroup, groupBuckets, buildBucketMesh, createMaterialSet, concatGeometries, neverFades } from './furniture/merge.js';
 
 /** An item casts (through its room's proxy) when it stands on the floor and is tall enough to matter. */
 export const CASTER_MAX_ELEVATION = 30;   // cm: elevation must be BELOW this
@@ -103,8 +103,14 @@ function disposeBuilt(group) {
   mats.forEach(m => m.dispose());
 }
 
+/** Slice length for buildFurnitureSliced (ms of work between yields). */
+export const BUILD_SLICE_MS = 8;
+
 /**
- * Build the furniture synchronously from already-loaded builders.
+ * Build the furniture synchronously from already-loaded builders, in ONE
+ * task. The Node tests and anything that wants the whole result at once use
+ * this; the live scene uses buildFurnitureSliced, which runs the SAME steps
+ * with yields in between (perf budget B2: no furniture task over 50 ms).
  *
  * @param {Object} THREE
  * @param {Array<Object>} items   house.furniture (compiled by house-loader)
@@ -116,9 +122,82 @@ function disposeBuilt(group) {
  * @param {Array<Object>} [opts.walls]  compiled walls, for pickFadeWall
  * @param {number} [opts.roomTriCap]   default PROXY_ROOM_TRI_CAP
  * @param {number} [opts.totalTriCap]  default PROXY_TOTAL_TRI_CAP
+ * @param {string} [opts.bucketScope]  'house' (default) or 'room' -- see merge.js
+ * @param {string} [opts.proxyScope]   'house' (default: one full + one low proxy) or 'room'
  * @returns {{root, beauty, shadowProxies, byId, warnings, stats, depthPrecompile, materials}}
  */
 export function buildFurnitureSync(THREE, items, builders, opts) {
+  const steps = furnitureBuildSteps(THREE, items, builders, opts);
+  let r = steps.next();
+  while (!r.done) r = steps.next();
+  return r.value;
+}
+
+/** Hand the main thread back: scheduler.yield, else a message-channel tick, else setTimeout(0). */
+export function yieldToMain() {
+  const g = typeof globalThis !== 'undefined' ? globalThis : {};
+  if (g.scheduler && typeof g.scheduler.yield === 'function') return g.scheduler.yield();
+  if (typeof g.MessageChannel === 'function') {
+    return new Promise(resolve => {
+      const ch = new g.MessageChannel();
+      ch.port1.onmessage = () => { ch.port1.close(); resolve(); };
+      ch.port2.postMessage(0);
+    });
+  }
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+/**
+ * The same build, TIME-SLICED: the steps run until `opts.sliceMs` (default
+ * BUILD_SLICE_MS) of work has passed, then the main thread is handed back
+ * (`opts.yieldFn`, default yieldToMain) before the next slice. A step is one
+ * item built and flattened, one bucket merged, or one room's shadow proxy,
+ * and items are taken room by room, so no slice runs longer than its budget
+ * plus one step.
+ *
+ * `opts.isCancelled()` is asked after every yield. Once it answers true the
+ * build stops, frees every geometry it had made, and resolves to null: a
+ * scene disposed mid-build gets nothing attached (plan amendment A2).
+ *
+ * Resolves to the buildFurnitureSync result, whose stats also carry
+ * `slices` and `longestSliceMs`.
+ */
+export async function buildFurnitureSliced(THREE, items, builders, opts) {
+  const o = opts || {};
+  const budget = o.sliceMs != null ? o.sliceMs : BUILD_SLICE_MS;
+  const yieldFn = o.yieldFn || yieldToMain;
+  const cancelled = typeof o.isCancelled === 'function' ? o.isCancelled : () => false;
+  const now = typeof performance !== 'undefined' && performance.now ? () => performance.now() : () => Date.now();
+  const steps = furnitureBuildSteps(THREE, items, builders, o);
+  let slices = 1, longest = 0, longestAt = null, t0 = now();
+  for (;;) {
+    const r = steps.next();
+    if (r.done) {
+      if (now() - t0 > longest) { longest = now() - t0; longestAt = 'finish'; }
+      r.value.stats.slices = slices;
+      r.value.stats.longestSliceMs = Math.round(longest * 10) / 10;
+      // The step that ENDED the longest slice -- where to look first if a
+      // slice runs long on some device.
+      r.value.stats.longestSliceAt = longestAt;
+      return r.value;
+    }
+    const spent = now() - t0;
+    if (spent >= budget) {
+      if (spent > longest) { longest = spent; longestAt = r.value || null; }
+      await yieldFn();
+      if (cancelled()) { steps.return(); return null; }
+      slices++;
+      t0 = now();
+    }
+  }
+}
+
+/**
+ * The build as a generator: it yields after every unit of work, and
+ * RETURNS the result. Abandoning it part-way (generator.return()) frees
+ * every geometry it had made so far.
+ */
+function* furnitureBuildSteps(THREE, items, builders, opts) {
   const o = opts || {};
   const q = o.quality || {};
   const low = q.tier === 'low';
@@ -132,6 +211,8 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
 
   const byId = {};
   const tagged = [];          // { part, room, fadeWallId }
+  const made = [];            // every geometry this build owns, until it returns
+  let finished = false;
   const casters = new Map();  // room -> [{ item, builder, params, placement, parts }]
   let skipped = 0;
 
@@ -144,10 +225,17 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
     return flat;
   }
 
-  (items || []).forEach(item => {
+  // Room by room (stable within a room), so a slice boundary falls between
+  // rooms as often as the budget allows.
+  const order = (items || []).map((item, i) => ({ item, i }));
+  const roomRank = new Map();
+  order.forEach(e => { if (!roomRank.has(e.item.room)) roomRank.set(e.item.room, roomRank.size); });
+  order.sort((a, b) => (roomRank.get(a.item.room) - roomRank.get(b.item.room)) || (a.i - b.i));
+  try {
+  for (const { item } of order) {
     const builder = builders && builders.get(item.type);
-    if (!builder) { skipped++; return; }   // the registry already warned
-    if (low && item.priority === 'minor') { skipped++; return; }
+    if (!builder) { skipped++; continue; }   // the registry already warned
+    if (low && item.priority === 'minor') { skipped++; continue; }
     const params = Object.assign({}, builder.DEFAULTS, item.params || {});
     const placement = resolvePlacement(item, params);
     let flat;
@@ -157,8 +245,9 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
       warn('furniture "' + item.id + '" (' + item.type + ') failed to build: ' +
         (e && e.message ? e.message : e) + ' -- skipped');
       skipped++;
-      return;
+      continue;
     }
+    flat.parts.forEach(p => made.push(p.geometry));
     flat.warnings.forEach(warn);
     const fadeWallId = resolveFadeWall(item, params, placement, o.walls);
     const caster = isCaster(item, params);
@@ -173,10 +262,17 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
       if (!casters.has(item.room)) casters.set(item.room, []);
       casters.get(item.room).push({ item, builder, params, placement, parts: flat.parts });
     }
-  });
+    yield 'item ' + item.id;
+  }
 
   const materials = createMaterialSet(THREE);
-  const beauty = buildBuckets(THREE, tagged, materials);
+  const beauty = [];
+  for (const b of groupBuckets(tagged, o.bucketScope === 'room' ? 'room' : 'house').values()) {
+    const mesh = buildBucketMesh(THREE, b, materials);
+    made.push(mesh.geometry);
+    beauty.push(mesh);
+    yield 'bucket ' + b.key.slice(0, 40);
+  }
 
   // ---- Shadow proxies (plan A1, nit 4) ------------------------------------
   const shadowProxies = [];
@@ -201,6 +297,7 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
       r.entries.forEach(e => {
         try {
           const flat = buildPlaced(e.item, e.builder, e.params, e.placement, 'low');
+          flat.parts.forEach(p => made.push(p.geometry));
           castParts(flat.parts).forEach(p => parts.push(p));
           flat.parts.forEach(p => r.lowOwned.push(p));
         } catch (err) {
@@ -213,14 +310,15 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
       r.low = true;
     };
     // Per-room cap: a room over it takes its proxy from a 'low' build.
-    rooms.forEach(r => {
-      if (r.tris <= roomCap) return;
+    for (const r of rooms) {
+      if (r.tris <= roomCap) continue;
       toLow(r);
+      yield 'low proxy build ' + r.room;
       if (r.tris > roomCap) {
         warn('shadow proxy for room "' + r.room + '" is ' + r.tris + ' triangles even at low detail, over the ' +
           roomCap + ' per-room cap -- its builders low detail is not low enough');
       }
-    });
+    }
     // Total cap: drop the LARGEST remaining full-detail room to 'low' until
     // the total fits or every room is already low.
     let total = rooms.reduce((s, r) => s + r.tris, 0);
@@ -233,17 +331,46 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
     if (total > totalCap) {
       warn('shadow proxies total ' + total + ' triangles, over the ' + totalCap + ' cap even at low detail');
     }
-    proxyMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+    // Invisible in the beauty pass, so WHICH program draws it there does not
+    // matter -- and these are exactly the glow bucket's material settings
+    // (vertex-coloured, transparent, front side), so the proxy shares that
+    // program instead of compiling one of its own. No colour attribute is
+    // needed: WebGL reads a missing attribute as a constant.
+    proxyMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false,
+      vertexColors: true, transparent: true, opacity: 1 });
     proxyMaterial.userData.furniture = 'proxy';
-    rooms.forEach(r => {
-      if (!r.parts.length) { r.lowOwned.forEach(p => p.geometry.dispose()); return; }
-      const geo = concatGeometries(THREE, r.parts, { positionOnly: true });
+    // HOUSE-wide proxies by default (task f17a127f): every full-detail room's
+    // casters in ONE proxy and every capped (low-detail) room's in another,
+    // so a pass draws at most two furniture casters. Per-room proxies drew
+    // their neighbours too -- each room SpotLight's frustum takes in about
+    // half the house -- which was +50 draws across the ten room passes on
+    // the full-house fixture, against a line budget of <= 40. A house-wide
+    // proxy is drawn in every pass (its bounds are the house), but the maps
+    // only re-render when something invalidates them, never per frame.
+    // The per-room caps above still decide WHICH rooms go low.
+    // `proxyScope: 'room'` keeps one proxy per room.
+    const groups = [];
+    if (o.proxyScope === 'room') {
+      rooms.forEach(r => groups.push([r]));
+    } else {
+      const full = rooms.filter(r => !r.low), lowRooms = rooms.filter(r => r.low);
+      if (full.length) groups.push(full);
+      if (lowRooms.length) groups.push(lowRooms);
+    }
+    for (const grp of groups) {
+      const parts = [];
+      grp.forEach(r => r.parts.forEach(p => parts.push(p)));
+      const isLow = grp[0].low;
+      const names = grp.map(r => r.room);
+      if (!parts.length) { grp.forEach(r => r.lowOwned.forEach(p => p.geometry.dispose())); continue; }
+      const geo = concatGeometries(THREE, parts, { positionOnly: true });
+      made.push(geo);
       const proxy = new THREE.Mesh(geo, proxyMaterial);
-      proxy.name = 'furniture-proxy:' + r.room;
+      proxy.name = 'furniture-proxy:' + (o.proxyScope === 'room' ? names[0] : (isLow ? 'house-low' : 'house'));
       proxy.castShadow = true;
       proxy.receiveShadow = false;
       proxy.frustumCulled = true;
-      if (r.low) {
+      if (isLow) {
         // The coarse caster must not sit in front of the full-detail surface
         // it shadows (acne); push its depth away from the light. The packing
         // MUST match three's own shadow depth material, or every shadow read
@@ -253,13 +380,16 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
           polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2
         });
         extraDisposables.push(proxy.customDepthMaterial);
-        proxyLowRooms.push(r.room);
+        names.forEach(n => proxyLowRooms.push(n));
       }
-      proxy.userData = { furniture: 'proxy', room: r.room, detail: r.low ? 'low' : 'full', triangles: r.tris };
+      const tris = grp.reduce((n, r) => n + r.tris, 0);
+      proxy.userData = { furniture: 'proxy', room: names.length === 1 ? names[0] : null, rooms: names,
+        detail: isLow ? 'low' : 'full', triangles: tris };
       shadowProxies.push(proxy);
       // The low build exists only for this proxy, which has copied it.
-      r.lowOwned.forEach(p => p.geometry.dispose());
-    });
+      grp.forEach(r => r.lowOwned.forEach(p => p.geometry.dispose()));
+      yield 'proxy ' + proxy.name;
+    }
     // What precompiles the shadow DEPTH program. renderer.compile() builds
     // only beauty programs; the shadow pass draws every caster with a depth
     // material whose side is flipped (FrontSide -> BackSide) and into a
@@ -297,18 +427,25 @@ export function buildFurnitureSync(THREE, items, builders, opts) {
     detail: detail
   };
   if (proxyMaterial) extraDisposables.push(proxyMaterial);
-  return { root, beauty, shadowProxies, byId, warnings, stats, depthPrecompile,
-    materials: materials.all, extraDisposables };
+  const result = { root, beauty, shadowProxies, byId, warnings, stats, depthPrecompile,
+    materials: materials.all, extraDisposables: extraDisposables.concat(materials.textures) };
+  finished = true;
+  return result;
+  } finally {
+    // Abandoned part-way (a cancelled sliced build): free what was made.
+    if (!finished) made.forEach(g => g.dispose());
+  }
 }
 
 /**
  * The async form: load the builders (unless `opts.builders` is given), then
- * build. Resolves to the same shape as buildFurnitureSync.
+ * build, time-sliced. Resolves to the same shape as buildFurnitureSync (or
+ * null if `opts.isCancelled` answered true part-way).
  */
 export async function buildFurniture(THREE, items, opts) {
   const o = opts || {};
   const builders = o.builders || await loadFurnitureModules(items, o.loadOpts);
-  return buildFurnitureSync(THREE, items, builders, o);
+  return buildFurnitureSliced(THREE, items, builders, o);
 }
 
 /**
@@ -357,7 +494,8 @@ export function fadeRegistrations(result) {
  * @param {Promise} ctx.precompileDone
  * @param {Promise<Map>} ctx.modulesLoaded
  * @param {function(): boolean} ctx.isDisposed
- * @param {function(Map): Object} ctx.build   builders -> buildFurnitureSync result
+ * @param {function(Map): (Object|Promise<?Object>)} ctx.build   builders -> a build result, or a
+ *          promise of one (the sliced build); null means "cancelled, nothing to attach"
  * @param {Object} ctx.renderer   WebGLRenderer (or a test double)
  * @param {Object} ctx.camera
  * @param {Object} ctx.scene
