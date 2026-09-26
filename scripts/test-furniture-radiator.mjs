@@ -25,10 +25,19 @@
  *   7. Merge fidelity: every mesh carries `userData.finish` from the shared
  *      palette, no material uses a texture map, and the smart valve's
  *      status LED is genuinely emissive and flagged `userData.keep`.
- *   8. COVER ('none'|'shelf'|'box'): the cover changes the bbox exactly as
- *      the envelope width/height/depth say it should (the bbox-matches-
- *      params rule holds with a cover present), the shelf spans exactly
- *      the radiator's width, and 'box' additionally encloses the sides.
+ *   8. COVER ('none'|'shelf'|'box'): width/height/depth ALWAYS describe the
+ *      radiator BODY; coverWidth/coverHeight/coverDepth (each independently
+ *      optional, defaulting to a snug fit around the body) describe the
+ *      cover's own, possibly LARGER, outer envelope. When a cover is
+ *      present, the bbox-matches-params rule is checked against the cover's
+ *      envelope, not the body's — the shelf spans exactly the cover's
+ *      width/depth, and 'box' additionally encloses the sides at the
+ *      cover's own size.
+ *   9. FIX 444c3a1e: a 'box' cover has a solid backing panel directly
+ *      behind its slats, so nothing rendered directly behind the slats'
+ *      own Z (the fins, specifically) is visible through the airflow gaps
+ *      — checked by casting rays through the actual slat gaps and asserting
+ *      every hit is the backing, never a fin.
  *
  * Builds real three.js geometry from the vendored module, so it exercises
  * the same code the spec page runs rather than a copy of it.
@@ -79,7 +88,7 @@ function triangleCount(group) {
   check('wallGapOf(12, 10) === 2', R.wallGapOf(12, 10) === 2);
   check('build is a function', typeof R.build === 'function');
   check('buildRadiator alias === build', R.buildRadiator === R.build);
-  check('PRESETS has 4 generic, publishable entries', Array.isArray(R.PRESETS) && R.PRESETS.length === 4 &&
+  check('PRESETS has 5 generic, publishable entries', Array.isArray(R.PRESETS) && R.PRESETS.length === 5 &&
     R.PRESETS.every(p => typeof p.name === 'string' && !/[A-Z][a-z]+ [A-Z]/.test(p.name)), R.PRESETS);
 }
 
@@ -148,11 +157,17 @@ for (const corner of R.VALVE_CORNERS) {
   // children order: stem(0), body(1), tail(2), [statusLed(3) for smart only]
   const sPos = new THREE.Vector3(); smart.children[1].getWorldPosition(sPos);
   const lPos = new THREE.Vector3(); lockshield.children[1].getWorldPosition(lPos);
-  const expected = R.cornerPoint(corner, width, height, Math.min(width, height) * 0.1 + 4);
   const midlineY = height * CM / 2;
+  // FIX 6c92144b (test-oracle gap): the expected X SIGN is hard-coded here
+  // per corner name, NOT derived from cornerPoint() itself — asserting a
+  // module's output against that same module's own helper is a tautology
+  // that cannot catch a bug in the helper's sign logic (e.g. 'left' and
+  // 'right' swapped), since the same bug would then agree with itself on
+  // both sides of the check.
+  const expectedXSign = corner.endsWith('left') ? -1 : 1;
 
   check(`${corner}: smart valve X on the requested side`,
-    Math.sign(sPos.x) === Math.sign(expected.x) || near(sPos.x, expected.x, 0.03), { sPos, expected });
+    Math.sign(sPos.x) === expectedXSign, { sPos, expectedXSign });
   check(`${corner}: smart valve Y on the requested top/bottom`,
     corner.startsWith('bottom') ? sPos.y < midlineY : sPos.y > midlineY, { y: sPos.y, midlineY });
   check(`${corner}: lockshield diagonally opposite (X flipped)`,
@@ -225,50 +240,52 @@ for (const c of R.VALVE_CORNERS) {
   }
 }
 
-// ---- 9. COVER: bbox matches the envelope, shelf spans exactly the width ---
+// ---- 9. COVER: width/height/depth are ALWAYS the body's; coverWidth/
+// coverHeight/coverDepth (independently optional) are the cover's own,
+// possibly larger, envelope — the bbox follows the cover when one exists.
 {
-  // 'none' -> no cover meshes at all.
+  // 'none' -> no cover meshes at all, bbox matches the body directly.
   const gNone = R.build(THREE, { width: 80, height: 60, depth: 12, thickness: 10, cover: 'none' }, {});
   let hasCoverNone = false;
   gNone.traverse(o => { if (/^cover/.test(o.name)) hasCoverNone = true; });
   check('cover "none" adds no cover meshes', !hasCoverNone);
 
-  // 'shelf': bbox still matches the (taller, to fit the shelf) envelope
-  // params, and the shelf spans exactly the radiator's width.
-  const shelfParams = { width: 90, height: 70, depth: 12, thickness: 10, cover: 'shelf' };
-  const gShelf = R.build(THREE, shelfParams, {});
-  const bShelf = bboxCm(gShelf);
-  check('shelf: bbox width == envelope width within 0.5cm', Math.abs((bShelf.maxX - bShelf.minX) - shelfParams.width) <= 0.5, bShelf);
-  check('shelf: bbox height == envelope height within 0.5cm', Math.abs((bShelf.maxY - bShelf.minY) - shelfParams.height) <= 0.5, bShelf);
-  check('shelf: bbox depth == envelope depth within 0.5cm', Math.abs((bShelf.maxZ - bShelf.minZ) - shelfParams.depth) <= 0.5, bShelf);
+  // 'shelf' with NO coverWidth/coverHeight/coverDepth specified -> snug fit:
+  // bbox width/depth match the BODY's width/depth, height gets +SHELF_T_CM.
+  const shelfSnug = { width: 90, height: 70, depth: 12, thickness: 10, cover: 'shelf' };
+  const gShelfSnug = R.build(THREE, shelfSnug, {});
+  const bShelfSnug = bboxCm(gShelfSnug);
+  check('shelf (snug): bbox width == body width within 0.5cm', Math.abs((bShelfSnug.maxX - bShelfSnug.minX) - shelfSnug.width) <= 0.5, bShelfSnug);
+  check('shelf (snug): bbox height == body height + 2cm shelf within 0.5cm', Math.abs((bShelfSnug.maxY - bShelfSnug.minY) - (shelfSnug.height + 2)) <= 0.5, bShelfSnug);
+  check('shelf (snug): bbox depth == body depth within 0.5cm', Math.abs((bShelfSnug.maxZ - bShelfSnug.minZ) - shelfSnug.depth) <= 0.5, bShelfSnug);
   let shelfMesh = null;
-  gShelf.traverse(o => { if (o.name === 'coverShelf') shelfMesh = o; });
+  gShelfSnug.traverse(o => { if (o.name === 'coverShelf') shelfMesh = o; });
   check('shelf mesh present', !!shelfMesh);
   if (shelfMesh) {
-    gShelf.updateMatrixWorld(true);
+    gShelfSnug.updateMatrixWorld(true);
     const sb = new THREE.Box3().setFromObject(shelfMesh);
-    check('shelf spans exactly the radiator width (within 0.5cm)', Math.abs((sb.max.x - sb.min.x) / CM - shelfParams.width) <= 0.5, {
-      shelfWidthCm: (sb.max.x - sb.min.x) / CM, expected: shelfParams.width,
+    check('shelf spans exactly the cover envelope width (within 0.5cm)', Math.abs((sb.max.x - sb.min.x) / CM - shelfSnug.width) <= 0.5, {
+      shelfWidthCm: (sb.max.x - sb.min.x) / CM, expected: shelfSnug.width,
     });
   }
   let fascia = null;
-  gShelf.traverse(o => { if (o.name === 'coverFascia') fascia = o; });
+  gShelfSnug.traverse(o => { if (o.name === 'coverFascia') fascia = o; });
   check('shelf has a downward fascia lip', !!fascia);
   check('shelf is NOT a full enclosure (no side/slat meshes)', (() => {
     let found = false;
-    gShelf.traverse(o => { if (/^coverSide|^coverSlat/.test(o.name)) found = true; });
+    gShelfSnug.traverse(o => { if (/^coverSide|^coverSlat/.test(o.name)) found = true; });
     return !found;
   })());
 
-  // 'box': full enclosure, bbox still matches the envelope, sides present.
-  const boxParams = { width: 80, height: 65, depth: 12, thickness: 10, cover: 'box' };
-  const gBox = R.build(THREE, boxParams, {});
-  const bBox = bboxCm(gBox);
-  check('box: bbox width == envelope width within 0.5cm', Math.abs((bBox.maxX - bBox.minX) - boxParams.width) <= 0.5, bBox);
-  check('box: bbox height == envelope height within 0.5cm', Math.abs((bBox.maxY - bBox.minY) - boxParams.height) <= 0.5, bBox);
-  check('box: bbox depth == envelope depth within 0.5cm', Math.abs((bBox.maxZ - bBox.minZ) - boxParams.depth) <= 0.5, bBox);
+  // 'box' with NO cover* overrides -> snug fit, bbox follows the body.
+  const boxSnug = { width: 80, height: 65, depth: 12, thickness: 10, cover: 'box' };
+  const gBoxSnug = R.build(THREE, boxSnug, {});
+  const bBoxSnug = bboxCm(gBoxSnug);
+  check('box (snug): bbox width == body width within 0.5cm', Math.abs((bBoxSnug.maxX - bBoxSnug.minX) - boxSnug.width) <= 0.5, bBoxSnug);
+  check('box (snug): bbox height == body height + 2cm shelf within 0.5cm', Math.abs((bBoxSnug.maxY - bBoxSnug.minY) - (boxSnug.height + 2)) <= 0.5, bBoxSnug);
+  check('box (snug): bbox depth == body depth within 0.5cm', Math.abs((bBoxSnug.maxZ - bBoxSnug.minZ) - boxSnug.depth) <= 0.5, bBoxSnug);
   let sideL = null, sideR = null, slats = 0;
-  gBox.traverse(o => {
+  gBoxSnug.traverse(o => {
     if (o.name === 'coverSide_L') sideL = o;
     if (o.name === 'coverSide_R') sideR = o;
     if (/^coverSlat_/.test(o.name)) slats++;
@@ -276,10 +293,82 @@ for (const c of R.VALVE_CORNERS) {
   check('box: both side panels present (full enclosure)', !!sideL && !!sideR);
   check('box: front has multiple slats', slats >= 4, slats);
 
+  // ---- 9a. box cover LARGER than the radiator body (a real hallway cover):
+  // a 50x60 radiator, depth 12 (wallGap 2), inside a 75w x 92h x 19-deep
+  // slatted box. The bbox must follow the COVER's dimensions, not the
+  // body's.
+  const bigCoverParams = { width: 50, height: 60, depth: 12, thickness: 10, cover: 'box', coverWidth: 75, coverHeight: 92, coverDepth: 19 };
+  const gBigCover = R.build(THREE, bigCoverParams, {});
+  const bBigCover = bboxCm(gBigCover);
+  check('larger cover: bbox width == coverWidth (75) within 0.5cm', Math.abs((bBigCover.maxX - bBigCover.minX) - 75) <= 0.5, bBigCover);
+  check('larger cover: bbox height == coverHeight (92) within 0.5cm', Math.abs((bBigCover.maxY - bBigCover.minY) - 92) <= 0.5, bBigCover);
+  check('larger cover: bbox depth == coverDepth (19) within 0.5cm', Math.abs((bBigCover.maxZ - bBigCover.minZ) - 19) <= 0.5, bBigCover);
+  check('larger cover: bbox width is BIGGER than the body width (75 > 50)', (bBigCover.maxX - bBigCover.minX) > bigCoverParams.width + 5, bBigCover);
+  // The radiator body itself is still modelled at its own (smaller) size,
+  // centred inside the larger cover.
+  let bigCoverPanel = null;
+  gBigCover.traverse(o => { if (o.name === 'radiatorPanel') bigCoverPanel = o; });
+  gBigCover.updateMatrixWorld(true);
+  const bigCoverPanelBox = new THREE.Box3().setFromObject(bigCoverPanel);
+  check('larger cover: the body panel itself stays at its OWN width (50), not the cover\'s',
+    Math.abs((bigCoverPanelBox.max.x - bigCoverPanelBox.min.x) / CM - bigCoverParams.width) <= 0.5,
+    { panelWidthCm: (bigCoverPanelBox.max.x - bigCoverPanelBox.min.x) / CM, expected: bigCoverParams.width });
+
   // Bigger envelope width -> bigger bbox width, with a cover present too.
-  const gBoxBig = R.build(THREE, Object.assign({}, boxParams, { width: 120 }), {});
+  const gBoxBig = R.build(THREE, Object.assign({}, boxSnug, { coverWidth: 120 }), {});
   const bBoxBig = bboxCm(gBoxBig);
-  check('box: wider envelope -> wider bbox', (bBoxBig.maxX - bBoxBig.minX) > (bBox.maxX - bBox.minX), { bBox, bBoxBig });
+  check('box: wider coverWidth -> wider bbox', (bBoxBig.maxX - bBoxBig.minX) > (bBoxSnug.maxX - bBoxSnug.minX), { bBoxSnug, bBoxBig });
+
+  // A cover value smaller than the body is clamped UP to the body's own
+  // size (a cover cannot clip through its own radiator).
+  const gClamped = R.build(THREE, Object.assign({}, boxSnug, { coverWidth: 10 }), {});
+  const bClamped = bboxCm(gClamped);
+  check('an undersized coverWidth is clamped up to the body width, never smaller',
+    (bClamped.maxX - bClamped.minX) >= boxSnug.width - 0.5, bClamped);
+
+  // ---- 9b. FIX 444c3a1e — nothing behind the slats is visible through the
+  // airflow gaps: raycast straight through the middle of each gap (and each
+  // slat) from in front of the cover, toward the wall, and check that the
+  // FIRST thing hit behind the slat plane is the backing panel, never a fin.
+  {
+    const g = R.build(THREE, bigCoverParams, { detail: 'full' });
+    g.updateMatrixWorld(true);
+    let backing = null;
+    const fins = [];
+    g.traverse(o => {
+      if (o.name === 'coverBacking') backing = o;
+      if (/^radiatorFin_/.test(o.name)) fins.push(o);
+    });
+    check('backing panel present on a box cover', !!backing);
+    check('radiator has fins to hide (sanity)', fins.length > 0, fins.length);
+
+    // Sample straight down the gaps BETWEEN slats (not through a slat
+    // itself) at mid-height, casting from just outside the cover face
+    // (z beyond coverDepth) backward toward the wall (-z direction).
+    const cov = R.coverEnvelope(Object.assign({}, R.DEFAULTS, bigCoverParams));
+    const envW = cov.width * CM, envD = cov.depth * CM;
+    const midY = (cov.height * CM) / 2;
+    const raycaster = new THREE.Raycaster();
+    const panelThick = 0.012, slatGap = 0.006;
+    const usableW = envW - panelThick * 2;
+    const slatCount = Math.max(6, Math.round(cov.width / 6));
+    const slatW = Math.max(0.01, (usableW - slatGap * (slatCount - 1)) / slatCount);
+    let gapSamples = 0, gapHitsFin = 0, gapHitsBacking = 0;
+    for (let i = 0; i < slatCount - 1; i++) {
+      const gapCenterX = -usableW / 2 + slatW + slatGap / 2 + i * (slatW + slatGap);
+      const origin = new THREE.Vector3(gapCenterX, midY, envD + 0.05);
+      raycaster.set(origin, new THREE.Vector3(0, 0, -1));
+      const hits = raycaster.intersectObject(g, true);
+      if (!hits.length) continue;
+      gapSamples++;
+      const hitName = hits[0].object.name;
+      if (/^radiatorFin_/.test(hitName)) gapHitsFin++;
+      if (hitName === 'coverBacking') gapHitsBacking++;
+    }
+    check('at least one gap sample actually hit something', gapSamples > 0, gapSamples);
+    check('FIX 444c3a1e: no ray through a slat gap hits a fin', gapHitsFin === 0, { gapSamples, gapHitsFin });
+    check('FIX 444c3a1e: every gap ray that hits anything hits the backing panel', gapHitsBacking === gapSamples, { gapSamples, gapHitsBacking });
+  }
 }
 
 // ---- 10. PRESETS build without throwing and produce sane geometry ---------
@@ -292,8 +381,9 @@ for (const preset of R.PRESETS) {
     continue;
   }
   const b = bboxCm(g);
-  const expectedWidth = preset.params.width;
-  check(`preset "${preset.name}": bbox width matches its own width param`, Math.abs((b.maxX - b.minX) - expectedWidth) <= 0.5, b);
+  const merged = Object.assign({}, R.DEFAULTS, preset.params);
+  const expectedWidth = merged.cover !== 'none' ? R.coverEnvelope(merged).width : merged.width;
+  check(`preset "${preset.name}": bbox width matches its own (cover-aware) width`, Math.abs((b.maxX - b.minX) - expectedWidth) <= 0.5, { b, expectedWidth });
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

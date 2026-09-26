@@ -66,13 +66,16 @@
    four corners and the lockshield diagonally opposite it.
 
    ── DEFAULTS ARE THE STANDARD HOUSE RADIATOR ────────────────────────────
-   width 80 x height 60, thickness 10, depth 12 (a 2cm wall gap, derived as
-   depth - thickness), elevation 17 (top sits at 77cm), no cover. Other
-   rooms vary (remodel.sh3d: living room 95cm, hallway 80cm typically
-   behind a full slatted cover, bedroom 95cm) — drive those from this
-   Tweaks panel per room, not by editing the module's defaults. An optional
-   cover ('shelf' or 'box', a full slatted enclosure) can sit on top; when
-   present, width/height/depth describe the OUTER ENVELOPE including it.
+   width/height/depth ALWAYS describe the RADIATOR BODY itself: 80 x 60,
+   thickness 10, depth 12 (a 2cm wall gap, derived as depth - thickness),
+   elevation 17 (top sits at 77cm), no cover. Other rooms vary (remodel.sh3d:
+   living room 95cm, bedroom 95cm; a hallway radiator is often SMALLER than
+   its slatted cover) — drive those from this Tweaks panel per room, not by
+   editing the module's defaults. An optional cover ('shelf' or 'box', a
+   full slatted enclosure) can sit on top, and can be LARGER than the body
+   via the independent coverWidth/coverHeight/coverDepth overrides — when
+   present, the item's overall footprint follows the COVER's envelope, not
+   the body's.
    ────────────────────────────────────────────────────────────────────────
 
    The geometry builder itself lives in src/furniture/radiator.js (a plain,
@@ -97,7 +100,10 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "valveCorner": "bottom-right",
   "color": "#f2f2ef",
   "cover": "none",
-  "coverColor": "#c8a878"
+  "coverColor": "#c8a878",
+  "coverWidth": 80,
+  "coverHeight": 62,
+  "coverDepth": 12
 }/*EDITMODE-END*/;
 
 const CM = 0.01;
@@ -238,14 +244,20 @@ function buildRadiatorModel(t, group, THREE) {
   const built = window.FurnitureRadiator.build(THREE, {
     width: t.width, height: t.height, depth: t.depth, thickness: t.thickness,
     valveCorner: t.valveCorner, color: t.color, cover: t.cover, coverColor: t.coverColor,
+    coverWidth: t.coverWidth, coverHeight: t.coverHeight, coverDepth: t.coverDepth,
   }, { detail: 'full' });
   built.position.y = t.elevation * CM; // PLACER concern — module leaves y=0 at its own bottom
   group.add(built);
 
   // A small reference wall behind it, so the standoff/gap and elevation read
   // clearly in the 3D view (the module's own origin is the wall plane, this
-  // wrapper's floor is y=0 same as the module's z=0 wall plane).
-  const wallW = (t.width + 60) * CM, wallH = (t.elevation + t.height + 60) * CM;
+  // wrapper's floor is y=0 same as the module's z=0 wall plane). Sized off
+  // the COVER's own envelope when present (it can be larger than the body),
+  // else the body's own width/height.
+  const env = (t.cover !== 'none' && window.FurnitureRadiator)
+    ? window.FurnitureRadiator.coverEnvelope(t)
+    : { width: t.width, height: t.height };
+  const wallW = (env.width + 60) * CM, wallH = (t.elevation + env.height + 60) * CM;
   const wall = new THREE.Mesh(
     new THREE.BoxGeometry(wallW, wallH, 0.06),
     new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 })
@@ -277,6 +289,17 @@ function furnitureJSON(t) {
   for (const key of Object.keys(D)) {
     if (t[key] !== undefined && t[key] !== D[key]) params[key] = t[key];
   }
+  // coverWidth/coverHeight/coverDepth are intentionally absent from DEFAULTS
+  // (there is no universal default independent of width/height/depth — see
+  // coverEnvelope() in the module), so they need their own diff: only emit
+  // them when a cover is actually present AND the tweak differs from the
+  // snug-fit default that coverEnvelope() would compute anyway.
+  if (t.cover && t.cover !== 'none' && window.FurnitureRadiator) {
+    const snug = window.FurnitureRadiator.coverEnvelope(Object.assign({}, D, { coverWidth: undefined, coverHeight: undefined, coverDepth: undefined }, t));
+    if (t.coverWidth !== undefined && t.coverWidth !== snug.width) params.coverWidth = t.coverWidth;
+    if (t.coverHeight !== undefined && t.coverHeight !== snug.height) params.coverHeight = t.coverHeight;
+    if (t.coverDepth !== undefined && t.coverDepth !== snug.depth) params.coverDepth = t.coverDepth;
+  }
   return { type: TYPE, params };
 }
 
@@ -297,7 +320,19 @@ function CopyJSONButton({ t }) {
 }
 
 // ============== App ==============
+// Applying a preset resets the cover envelope to a SNUG fit around whatever
+// width/height/depth the preset sets, unless the preset itself overrides
+// coverWidth/coverHeight/coverDepth (as the "in a larger cover" preset
+// does) — otherwise switching presets could leave a stale, oversized cover
+// envelope from a PREVIOUS preset's larger-cover values.
 function applyPreset(setTweak, params) {
+  const merged = Object.assign({ width: 80, height: 60, depth: 12 }, params);
+  const snug = window.FurnitureRadiator
+    ? window.FurnitureRadiator.coverEnvelope(Object.assign({ coverWidth: undefined, coverHeight: undefined, coverDepth: undefined }, merged))
+    : { width: merged.width, height: merged.height + 2, depth: merged.depth };
+  setTweak('coverWidth', params.coverWidth !== undefined ? params.coverWidth : snug.width);
+  setTweak('coverHeight', params.coverHeight !== undefined ? params.coverHeight : snug.height);
+  setTweak('coverDepth', params.coverDepth !== undefined ? params.coverDepth : snug.depth);
   Object.keys(params).forEach(k => setTweak(k, params[k]));
 }
 
@@ -315,10 +350,11 @@ function PresetButtons({ setTweak }) {
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const wallGap = window.FurnitureRadiator ? window.FurnitureRadiator.wallGapOf(t.depth, t.thickness) : (t.depth - t.thickness);
+  const coverEnv = window.FurnitureRadiator ? window.FurnitureRadiator.coverEnvelope(t) : { width: t.width, height: t.height, depth: t.depth };
   return (
     <>
       <h1>Radiator Spec</h1>
-      <div className="sub">One design for every house radiator — a modern white panel radiator with a smart TRV valve on a chosen corner and the lockshield diagonally opposite, with an optional shelf or full slatted cover. Configurable: size (width, height, depth), thickness, elevation, valve corner, colour, cover. Defaults are the standard house radiator. Use the Tweaks panel or a preset below.</div>
+      <div className="sub">One design for every house radiator — a modern white panel radiator with a smart TRV valve on a chosen corner and the lockshield diagonally opposite, with an optional shelf or full slatted cover that can be LARGER than the radiator itself. Configurable: body size (width, height, depth), thickness, elevation, valve corner, colour, cover, and — when a cover is present — its own independent width/height/depth. Defaults are the standard house radiator. Use the Tweaks panel or a preset below.</div>
 
       <div className="grid">
         <div className="card">
@@ -334,15 +370,16 @@ function App() {
           <table>
             <tbody>
               <tr><th>Feature</th><th className="num">value</th><th>Variability</th></tr>
-              <tr><td>Width</td><td className="num">{t.width}</td><td><b>Variable</b> — per room (80/95/120cm typical)</td></tr>
-              <tr><td>Height</td><td className="num">{t.height}</td><td>Per room; outer envelope when a cover is present</td></tr>
-              <tr><td>Depth (outer envelope)</td><td className="num">{t.depth}</td><td>Wall face to outermost front face</td></tr>
+              <tr><td>Width (radiator body)</td><td className="num">{t.width}</td><td><b>Variable</b> — per room (50/80/95/120cm typical)</td></tr>
+              <tr><td>Height (radiator body)</td><td className="num">{t.height}</td><td>Per room</td></tr>
+              <tr><td>Depth (radiator body)</td><td className="num">{t.depth}</td><td>Wall face to the body's own front face</td></tr>
               <tr><td>Thickness (body depth)</td><td className="num">{t.thickness}</td><td>The radiator's own depth</td></tr>
               <tr><td>Wall gap (derived)</td><td className="num">{wallGap}</td><td>= depth − thickness</td></tr>
               <tr><td>Elevation (floor to bottom edge)</td><td className="num">{t.elevation}</td><td>17cm default, per remodel.sh3d</td></tr>
               <tr><td>Valve corner</td><td className="num">{CORNER_LABEL[t.valveCorner]}</td><td><b>Variable</b> — one of 4 corners, visual picker</td></tr>
               <tr><td>Colour</td><td className="num"><span style={{ display:'inline-block', width:11, height:11, borderRadius:2, background:t.color, border:'1px solid rgba(0,0,0,.2)', verticalAlign:'middle' }}></span></td><td>Default white</td></tr>
               <tr><td>Cover</td><td className="num">{COVER_LABEL[t.cover]}</td><td><b>Variable</b> — none, shelf, or full slatted enclosure</td></tr>
+              {t.cover !== 'none' && <tr><td>Cover envelope (w × h × d)</td><td className="num">{coverEnv.width} × {coverEnv.height} × {coverEnv.depth}</td><td>Can be LARGER than the body — this is the item's overall footprint</td></tr>}
             </tbody>
           </table>
         </div>
@@ -354,7 +391,7 @@ function App() {
             buildModel={buildRadiatorModel}
             heightOf={tt => (tt.elevation + tt.height) * CM}
           />
-          <div className="legend">The furniture module's own origin is the wall plane with y=0 at the radiator's bottom edge; this page (playing the placer role) offsets it up by the elevation. The body's back sits at the wall-gap distance from the (dark) reference wall, and the wall brackets visibly bridge the gap.</div>
+          <div className="legend">The furniture module's own origin is the wall plane with y=0 at the radiator's bottom edge; this page (playing the placer role) offsets it up by the elevation. The body's back sits at the wall-gap distance from the (dark) reference wall, the wall brackets visibly bridge the gap, and — with a cover present — the enclosure can extend beyond the body on every side (see the "50 wide in 75×92 slatted cover" preset).</div>
         </div>
 
         <div className="card full">
@@ -408,6 +445,14 @@ function App() {
           onChange={v => setTweak('cover', v)} />
         <TweakColor label="Cover colour" value={t.coverColor}
           onChange={v => setTweak('coverColor', v)} />
+        {t.cover !== 'none' && <>
+          <TweakSlider label="Cover width (can exceed the body)" value={t.coverWidth} min={t.width} max={200} step={1} unit="cm"
+            onChange={v => setTweak('coverWidth', v)} />
+          <TweakSlider label="Cover height (can exceed the body)" value={t.coverHeight} min={t.height} max={160} step={1} unit="cm"
+            onChange={v => setTweak('coverHeight', v)} />
+          <TweakSlider label="Cover depth / projection (can exceed the body)" value={t.coverDepth} min={t.depth} max={40} step={0.5} unit="cm"
+            onChange={v => setTweak('coverDepth', v)} />
+        </>}
       </TweaksPanel>
     </>
   );

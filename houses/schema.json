@@ -2215,31 +2215,31 @@
 
     "furnitureParams_radiator": {
       "type": "object",
-      "description": "Params for `radiator` (src/furniture/radiator.js): a panel radiator with a smart TRV valve on a chosen corner and an optional shelf/full slatted cover. `depth` is the OUTER envelope (wall to outermost front face) INCLUDING any cover; `wallGap` is not a field here -- it is always derived as depth - thickness. Each `default` equals radiator.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `radiator` (src/furniture/radiator.js): a panel radiator with a smart TRV valve on a chosen corner and an optional shelf/full slatted cover. width/height/depth ALWAYS describe the RADIATOR BODY itself; `depth` is the body's own wall-to-front distance (thickness + the derived wallGap, never authored directly). When `cover` is not 'none', the optional coverWidth/coverHeight/coverDepth describe the cover's own outer envelope, which can be LARGER than the body (each defaults to a snug fit around the body when omitted) -- the item's overall footprint is then the cover's envelope, not the body's. Each `default` equals radiator.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 80,
-          "description": "cm, along the wall / the item's local x. Outer envelope, including any cover."
+          "description": "cm, the RADIATOR BODY's own width, along the wall / the item's local x."
         },
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 60,
-          "description": "cm, floor (or `elevation`) to top. Outer envelope, including any cover."
+          "description": "cm, the RADIATOR BODY's own height, floor (or `elevation`) to top."
         },
         "depth": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 12,
-          "description": "cm, back to front -- the OUTER envelope from the wall face to the outermost front face, including any cover. wallGap (the wall-to-body-back air gap) is derived as depth - thickness, never authored."
+          "description": "cm, the RADIATOR BODY's own wall-to-front distance (thickness + the derived wallGap). wallGap is derived as depth - thickness, never authored."
         },
         "thickness": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 10,
-          "description": "cm, the radiator body's own depth (not including the wall gap or any cover)."
+          "description": "cm, the radiator body's own depth (not including the wall gap)."
         },
         "elevation": {
           "type": "number",
@@ -2261,11 +2261,26 @@
           "type": "string",
           "enum": ["none", "shelf", "box"],
           "default": "none",
-          "description": "`shelf` = a wooden shelf on top with a short downward fascia lip, sides open. `box` = a full slatted enclosure (top shelf plus front and side panels with vertical slats). When not 'none', width/height/depth describe the OUTER ENVELOPE including the cover."
+          "description": "`shelf` = a wooden shelf on top with a short downward fascia lip, sides open. `box` = a full slatted enclosure (top shelf plus front, side and backing panels with vertical slats -- the backing keeps the radiator body from showing through the slat gaps). When not 'none', the item's overall footprint is the COVER's envelope (coverWidth/coverHeight/coverDepth), which may be larger than the radiator body it encloses."
         },
         "coverColor": {
           "$ref": "#/$defs/hexColor",
           "default": "#c8a878"
+        },
+        "coverWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, the COVER's own width. Optional: defaults to a snug fit around the body's own `width` when omitted. Clamped up to `width` if a smaller value is given -- a cover cannot clip through its own radiator. Ignored when `cover` is 'none'."
+        },
+        "coverHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, the COVER's own height. Optional: defaults to `height` plus the ~2cm shelf thickness when omitted. Clamped up to that minimum if a smaller value is given. Ignored when `cover` is 'none'."
+        },
+        "coverDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "cm, the COVER's own wall-to-front distance. Optional: defaults to a snug fit around the body's own `depth` when omitted. Clamped up to `depth` if a smaller value is given. Ignored when `cover` is 'none'."
         }
       },
       "additionalProperties": false

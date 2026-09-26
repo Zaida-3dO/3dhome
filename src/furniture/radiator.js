@@ -3,12 +3,11 @@
  * white panel radiator (horizontal convector fins, wall brackets bridging
  * the wall gap, pipe tails to the floor) with a smart TRV valve head on one
  * corner and a lockshield valve diagonally opposite it, plus an optional
- * cover (a plain shelf, or a full slatted enclosure).
+ * cover (a plain shelf, or a full slatted enclosure that can be LARGER than
+ * the radiator itself).
  *
  * THE BUILDER CONTRACT (every src/furniture/<type>.js follows it — see
- * src/furniture/box.js for the minimal example once PR "furniture data
- * layer" lands; this module is written to the same shape so it needs no
- * rework when that PR's shared finishes.js arrives):
+ * src/furniture/box.js for the minimal example):
  *   - Pure ESM, THREE injected as the first argument — no bare `import
  *     'three'` — so this loads from a plain Node test AND from a spec page
  *     with no import map.
@@ -30,36 +29,57 @@
  *   z  0 at the BACK face (wall side), +z = away from the wall, into the
  *      room
  *
- * `DEFAULTS.depth` is the TOTAL envelope depth — wall face (z=0) to the
- * outermost front face (z=depth) — INCLUDING any cover. `thickness` (the
- * radiator body's own depth) is a separate param; the wall-to-body-back air
- * gap `wallGap` is always DERIVED as `depth - thickness` and is never an
- * authored field in its own right:
+ * `width`/`height`/`depth`/`thickness` ALWAYS describe the RADIATOR BODY
+ * itself, independent of any cover: `depth` is the body's wall-to-front
+ * distance (thickness + the derived wallGap), never the cover's. The
+ * wall-to-body-back air gap `wallGap` is always DERIVED, never authored:
  *   wallGap = depth - thickness
- * With no cover, depth is exactly the wall-to-front distance (thickness +
- * wallGap, e.g. 10 + 2 = 12). With a cover, `depth` is the OUTER envelope of
- * the cover (which must be >= thickness + wallGap), and the bracket still
- * spans 0..wallGap, the body wallGap..wallGap+thickness, with the cover's
- * own geometry filling the rest of the envelope out to z=depth.
  *
- * COVER — `params.cover`: 'none' | 'shelf' | 'box'.
- *   'shelf'  a wooden shelf sitting on top of the radiator, spanning exactly
- *            `width`, deep enough to cover the body plus the wall gap (i.e.
- *            depth), about 2cm thick, with a short downward fascia lip at
- *            the front edge. NOT a full enclosure — the sides stay open.
+ * COVER — `params.cover`: 'none' | 'shelf' | 'box'. When present, it can be
+ * LARGER than the radiator body (a real hallway cover: a 50x60 radiator
+ * inside a 75w x 92h box projecting 19cm) via three independent, OPTIONAL
+ * envelope params:
+ *   coverWidth   cm, default = width  (the cover is at least as wide as the body)
+ *   coverHeight  cm, default = height + shelf thickness (room for the shelf)
+ *   coverDepth   cm, default = depth  (the cover is at least as deep as the body)
+ * WHEN A COVER IS PRESENT, THE BUILT GROUP'S BBOX IS THE COVER'S ENVELOPE
+ * (coverWidth/coverHeight/coverDepth), not the radiator body's — the
+ * bbox-matches-params rule is checked against whichever of the two is
+ * actually the outer surface. The radiator body sits inside the cover,
+ * centred on width and flush with the wall (z=0), exactly as it would with
+ * no cover.
+ *   'shelf'  a wooden shelf sitting on top of the radiator, spanning the
+ *            cover's width and depth, about 2cm thick, with a short downward
+ *            fascia lip at the front edge. NOT a full enclosure — the sides
+ *            stay open, so the radiator body is visible from the front/sides
+ *            below the shelf.
  *   'box'    a full slatted radiator cover: the same top shelf, plus front
- *            and side panels enclosing the radiator, with vertical slats on
- *            the front face. White by default (params.coverColor).
- * When a cover is present, DEFAULTS/params width, height and depth describe
- * the OUTER ENVELOPE including the cover — the bbox-matches-params rule
- * holds either way.
+ *            and side panels FULLY ENCLOSING the radiator (spanning the
+ *            cover's own width/height/depth, not the body's), with vertical
+ *            slats on the front face backed by a solid panel — see FIX
+ *            444c3a1e below — so nothing of the radiator body is visible
+ *            through the gaps between slats. White by default
+ *            (params.coverColor).
+ *
+ * FIX 444c3a1e (fins showing through the slatted box cover): a real slatted
+ * cover reads as solid from the front — the reference photo
+ * (hallway-radiator-cover-mirror.jpg) shows clean white verticals with dark
+ * gaps between them, never a hint of the metal fins behind. The earlier
+ * version modelled only the slats, so the fins (and their contrasting metal
+ * colour) were visible through the airflow gaps whenever a slat's depth
+ * placement left them exposed. Fixed by putting a solid backing panel
+ * (`coverBacking`, same colour as the slats) directly behind the slat layer
+ * — the gaps between slats now show painted MDF, not radiator fins, exactly
+ * as a real cover does. The radiator body is unchanged (still fully modelled
+ * behind the cover, for a future "remove the cover" toggle), just no longer
+ * visible from outside a 'box' cover.
  *
  * ── DIMENSIONS ARE ILLUSTRATIVE, EXCEPT DEFAULTS ────────────────────────
  * DEFAULTS below are the standard house radiator: 80w x 60h, thickness 10,
  * depth 12 (a 2cm wall gap), elevation 17 (applied by the placer, so the
  * top sits at 77cm), no cover. Other rooms vary (remodel.sh3d: living room
- * 95cm, hallway 80cm typically behind a full slatted cover, bedroom 95cm)
- * — pass those as `params`, never by editing DEFAULTS.
+ * 95cm, hallway typically a smaller radiator inside a larger slatted cover,
+ * bedroom 95cm) — pass those as `params`, never by editing DEFAULTS.
  * ─────────────────────────────────────────────────────────────────────
  */
 
@@ -67,18 +87,39 @@ export const TYPE = 'radiator';
 
 export const VALVE_CORNERS = ['bottom-left', 'bottom-right', 'top-left', 'top-right'];
 export const COVERS = ['none', 'shelf', 'box'];
+const SHELF_T_CM = 2; // 2cm shelf thickness — the default coverHeight margin
 
 export const DEFAULTS = Object.freeze({
-  width: 80,        // cm, along the wall
-  height: 60,       // cm, outer envelope (includes any cover)
-  depth: 12,        // cm, outer envelope, wall face to outermost front face
+  width: 80,        // cm, the radiator BODY's own width, along the wall
+  height: 60,       // cm, the radiator BODY's own height
+  depth: 12,        // cm, the radiator BODY's own wall-to-front distance (thickness + derived wallGap)
   thickness: 10,    // cm, the radiator BODY's own depth (wallGap is derived: depth - thickness)
   elevation: 17,    // cm, floor to the item's bottom edge (applied by the placer)
   valveCorner: 'bottom-right',
   color: '#f2f2ef',
   cover: 'none',
   coverColor: '#c8a878', // light oak, used for 'shelf'; 'box' defaults to white below
+  // coverWidth/coverHeight/coverDepth are intentionally ABSENT from DEFAULTS
+  // (there is no sensible universal default independent of width/height/
+  // depth — see coverEnvelope() below, which derives them from whichever of
+  // width/height/depth the caller passed when these are left unset).
 });
+
+/**
+ * The cover's own outer envelope, in cm. Each of coverWidth/coverHeight/
+ * coverDepth is independently optional: unset, it defaults to a snug fit
+ * around the radiator body (coverWidth->width, coverDepth->depth,
+ * coverHeight->height + the shelf thickness so the shelf has room to sit
+ * on top). A cover is never smaller than the body it encloses — an
+ * undersized cover value is clamped up to the body's own size, since a
+ * cover that clips through its own radiator is not a valid design.
+ */
+export function coverEnvelope(o) {
+  const w = Math.max(o.width, o.coverWidth != null ? o.coverWidth : o.width);
+  const h = Math.max(o.height + SHELF_T_CM, o.coverHeight != null ? o.coverHeight : o.height + SHELF_T_CM);
+  const d = Math.max(o.depth, o.coverDepth != null ? o.coverDepth : o.depth);
+  return { width: w, height: h, depth: d };
+}
 
 /**
  * Four generic, publishable presets (no owner-specific naming — this repo is
@@ -90,6 +131,10 @@ export const PRESETS = Object.freeze([
   { name: '120 wide, shelf top, valve bottom-left', params: Object.freeze({ width: 120, cover: 'shelf', valveCorner: 'bottom-left' }) },
   { name: '95 wide, shelf top', params: Object.freeze({ width: 95, cover: 'shelf' }) },
   { name: '80 wide, full slatted cover', params: Object.freeze({ width: 80, cover: 'box' }) },
+  { name: '50 wide in 75x92 slatted cover', params: Object.freeze({
+    width: 50, height: 60, depth: 12, thickness: 10, cover: 'box',
+    coverWidth: 75, coverHeight: 92, coverDepth: 19,
+  }) },
 ]);
 
 const CM = 0.01;
@@ -144,20 +189,23 @@ function finishMaterial(THREE, finish, colorHex) {
 /**
  * Build one radiator, with its optional cover. Pure function: same input
  * always produces an equivalent group. Returns a THREE.Group with x centred
- * on width, y=0 at the item's own bottom (the PLACER applies `elevation`),
- * z=0 at the back (wall) face, z=depth at the outermost front face
- * (radiator body, or cover, whichever is present).
+ * on the OUTER envelope's width (the cover's, if present; else the body's),
+ * y=0 at the item's own bottom (the PLACER applies `elevation`), z=0 at the
+ * back (wall) face, z=(outer envelope depth) at the outermost front face.
  *
  * @param {object} THREE     the three.js namespace (module or UMD/global build)
  * @param {object} [params]
- * @param {number} [params.width]        cm, along the wall (outer envelope)
- * @param {number} [params.height]       cm, outer envelope (includes any cover)
- * @param {number} [params.depth]        cm, outer envelope, wall to outermost front face
+ * @param {number} [params.width]        cm, the RADIATOR BODY's own width
+ * @param {number} [params.height]       cm, the RADIATOR BODY's own height
+ * @param {number} [params.depth]        cm, the RADIATOR BODY's own wall-to-front distance
  * @param {number} [params.thickness]    cm, the radiator body's own depth
  * @param {string} [params.valveCorner]  one of VALVE_CORNERS
  * @param {string} [params.color]        radiator body colour
  * @param {'none'|'shelf'|'box'} [params.cover]
  * @param {string} [params.coverColor]   cover wood/paint colour
+ * @param {number} [params.coverWidth]   cm, the COVER's own width (default: width)
+ * @param {number} [params.coverHeight]  cm, the COVER's own height (default: height + shelf thickness)
+ * @param {number} [params.coverDepth]   cm, the COVER's own wall-to-front distance (default: depth)
  * @param {object} [opts]
  * @param {'full'|'low'} [opts.detail]   'low' drops the valve assemblies
  *                                       and reduces curve segments (default 'full')
@@ -169,22 +217,23 @@ export function build(THREE, params, opts) {
   const corner = VALVE_CORNERS.includes(o.valveCorner) ? o.valveCorner : DEFAULTS.valveCorner;
   const cover = COVERS.includes(o.cover) ? o.cover : DEFAULTS.cover;
 
-  const ENV_W = o.width * CM, ENV_H = o.height * CM, ENV_D = o.depth * CM;
+  // The radiator BODY's own dimensions — always width/height/depth/
+  // thickness, independent of any cover.
+  const BODY_W = o.width * CM, H = o.height * CM;
   const T = o.thickness * CM;
   const GAP = Math.max(0, wallGapOf(o.depth, o.thickness)) * CM;
+  const BODY_D = o.depth * CM;
 
-  // The radiator body itself always sits at the BOTTOM of the envelope
-  // (a cover, if any, sits above it) and spans the FULL requested width —
-  // only its own height is capped so a shelf/box has somewhere to sit. With
-  // no cover the body height IS the envelope height. The reserved space
-  // above the body must equal EXACTLY what the cover geometry below
-  // occupies (shelfT for 'shelf'; shelfT for 'box' too, since the box's
-  // side/slat panels run body-height, same as the shelf case) so the
-  // envelope height comes out exact to the bbox-matches-params rule.
-  const SHELF_T_CM = 2; // 2cm shelf thickness, cm (kept in sync with shelfT below)
-  const coverReserveCm = cover === 'none' ? 0 : SHELF_T_CM;
-  const bodyHeightCm = cover === 'none' ? o.height : Math.max(20, o.height - coverReserveCm);
-  const H = bodyHeightCm * CM;
+  // The OUTER envelope: the cover's own size when a cover is present (never
+  // smaller than the body — see coverEnvelope()), else exactly the body's.
+  const envelope = cover === 'none'
+    ? { width: o.width, height: o.height, depth: o.depth }
+    : coverEnvelope(o);
+  const ENV_W = envelope.width * CM, ENV_H = envelope.height * CM, ENV_D = envelope.depth * CM;
+
+  // The body sits centred in the (possibly wider) envelope and flush with
+  // the wall (its own z=0..depth is unaffected by the cover being deeper).
+  const bodyOffsetX = 0; // both body and envelope are centred on x=0
 
   const group = new THREE.Group();
   group.name = 'radiator';
@@ -206,11 +255,12 @@ export function build(THREE, params, opts) {
     return mesh;
   };
 
-  // ---- main panel: back face at z=GAP, bottom edge at y=0. Front face
-  // convector fins scored in as a ribbed strip pattern via repeated thin
-  // boxes — fewer fins at 'low' detail.
-  const panel = new THREE.Mesh(new THREE.BoxGeometry(ENV_W, H, T), panelMat);
-  panel.position.set(0, H / 2, GAP + T / 2);
+  // ---- main panel: back face at z=GAP, bottom edge at y=0, ALWAYS the
+  // body's own width/height (independent of a wider/taller cover). Front
+  // face convector fins scored in as a ribbed strip pattern via repeated
+  // thin boxes — fewer fins at 'low' detail.
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(BODY_W, H, T), panelMat);
+  panel.position.set(bodyOffsetX, H / 2, GAP + T / 2);
   add(panel, 'radiatorPanel', 'gloss', panelMat);
 
   const finCount = detail === 'low'
@@ -220,28 +270,31 @@ export function build(THREE, params, opts) {
   const finGap = (H * 0.82 - finH * finCount) / Math.max(1, finCount - 1);
   const finTop = H * 0.91;
   // The fins sit PROUD of the panel's own front face by a small amount, but
-  // must never claim more depth than the envelope actually has left beyond
-  // the panel (a tight wallGap/depth combination can leave zero room) — so
-  // their protrusion is capped by whatever room remains to z=depth.
+  // must never claim more depth than the OUTER ENVELOPE actually has left
+  // beyond the panel (a tight wallGap/depth combination, or a shallow
+  // cover, can leave zero room) — so their protrusion is capped by whatever
+  // room remains to z=(envelope depth). This is what keeps the fins from
+  // poking through a cover as well as from overflowing a bare radiator's
+  // own declared depth.
   const finRoomLeft = Math.max(0, ENV_D - (GAP + T));
   const finProtrusion = Math.min(0.006, finRoomLeft);
   const finFrontZ = GAP + T + finProtrusion / 2;
   for (let i = 0; i < finCount; i++) {
     const fy = finTop - i * (finH + finGap) - finH / 2;
     const finMat = finishMaterial(THREE, 'metal', 0xb9bdc2);
-    const fin = new THREE.Mesh(new THREE.BoxGeometry(ENV_W * 0.94, Math.max(0.004, finH * 0.6), Math.max(0.0005, finProtrusion)), finMat);
-    fin.position.set(0, fy, finFrontZ);
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(BODY_W * 0.94, Math.max(0.004, finH * 0.6), Math.max(0.0005, finProtrusion)), finMat);
+    fin.position.set(bodyOffsetX, fy, finFrontZ);
     add(fin, `radiatorFin_${i}`, 'metal', finMat);
   }
 
-  // ---- wall brackets: two, set roughly a fifth of the width from each end,
-  // BRIDGING the gap exactly — from the wall face (z=0) to the body's back
-  // (z=GAP).
-  const bracketInset = Math.min(ENV_W * 0.22, 0.18);
+  // ---- wall brackets: two, set roughly a fifth of the BODY's own width
+  // from each end, BRIDGING the gap exactly — from the wall face (z=0) to
+  // the body's back (z=GAP).
+  const bracketInset = Math.min(BODY_W * 0.22, 0.18);
   const bracketW = 0.03, bracketH = H * 0.5;
   const bracketD = Math.max(GAP, 0.004);
   for (const sx of [-1, 1]) {
-    const bx = sx * (ENV_W / 2 - bracketInset);
+    const bx = bodyOffsetX + sx * (BODY_W / 2 - bracketInset);
     const brMat = finishMaterial(THREE, 'metal', 0x3a3a3e);
     const bracket = new THREE.Mesh(new THREE.BoxGeometry(bracketW, bracketH, bracketD), brMat);
     bracket.position.set(bx, H / 2, bracketD / 2);
@@ -251,20 +304,21 @@ export function build(THREE, params, opts) {
   // ---- valves: the smart TRV head on `corner`, the lockshield on the
   // opposite corner. Dropped entirely at 'low' detail.
   if (detail === 'full') {
-    const valveInsetCm = Math.min(o.width, bodyHeightCm) * 0.1 + 4;
+    const valveInsetCm = Math.min(o.width, o.height) * 0.1 + 4;
     const segs = 12;
     function buildValve(atCorner, isSmart) {
-      const p = cornerPoint(atCorner, o.width, bodyHeightCm, valveInsetCm);
+      const p = cornerPoint(atCorner, o.width, o.height, valveInsetCm);
       const g = new THREE.Group();
       g.name = isSmart ? 'radiatorValveSmart' : 'radiatorValveLockshield';
 
       const frontZ = GAP + T;
       // The valve stem + body + tail-radius + LED epsilon must ALL stay
-      // INSIDE the envelope (never push the bbox past z=depth): the whole
-      // assembly's outer-face budget is capped by whatever room remains
-      // between the panel's front face and the envelope's outer face (the
-      // cover, if any, or the wall-to-front distance) — never more, even
-      // when that room is zero (a tight wall gap flush-mounts the valve).
+      // INSIDE the OUTER ENVELOPE (never push the bbox past z=(envelope
+      // depth), and never poke through a shallower cover than the body's
+      // own depth): the whole assembly's outer-face budget is capped by
+      // whatever room remains between the panel's front face and the
+      // envelope's outer face — never more, even when that room is zero (a
+      // tight wall gap, or a snug cover, flush-mounts the valve).
       const roomLeft = Math.max(0, ENV_D - frontZ);
       // The ENTIRE valve assembly's outermost point — including the tail's
       // own radius (it hangs vertically, so its radius sticks out in Z) and
@@ -345,14 +399,17 @@ export function build(THREE, params, opts) {
     buildValve(oppositeCorner(corner), false);
   }
 
-  // ---- cover: 'shelf' or 'box', sitting in the envelope ABOVE the body
-  // (bodyHeightCm..envelope height) and spanning the full envelope depth
-  // (0..depth) and width.
+  // ---- cover: 'shelf' or 'box', spanning the OUTER ENVELOPE's own width/
+  // height/depth (which can be larger than the radiator body it encloses —
+  // a real hallway cover is a 50x60 radiator inside a 75x92 box). The
+  // shelf sits at the top of the envelope, leaving exactly shelfT of height
+  // for itself; everything below the shelf line is the enclosure's clear
+  // interior height, which comfortably contains the body's own H.
   if (cover !== 'none') {
     const shelfColorHex = new THREE.Color(o.coverColor || DEFAULTS.coverColor).getHex();
     const shelfMat = finishMaterial(THREE, 'matte', shelfColorHex);
-    const shelfT = 0.02; // 2cm shelf thickness
-    const shelfY = H; // shelf sits directly on top of the body's own height
+    const shelfT = SHELF_T_CM * CM;
+    const shelfY = ENV_H - shelfT; // top of the enclosure's clear interior — the shelf sits directly above this
     const shelf = new THREE.Mesh(new THREE.BoxGeometry(ENV_W, shelfT, ENV_D), shelfMat);
     shelf.position.set(0, shelfY + shelfT / 2, ENV_D / 2);
     add(shelf, 'coverShelf', 'matte', shelfMat);
@@ -365,10 +422,11 @@ export function build(THREE, params, opts) {
     add(lip, 'coverFascia', 'matte', lipMat);
 
     if (cover === 'box') {
-      // Full enclosure: front + two side panels, white by default, with
-      // vertical slats on the front. The panels run from the body's own
-      // bottom (y=0) up to the underside of the shelf.
-      const boxColorHex = new THREE.Color(o.color === DEFAULTS.color ? '#ffffff' : o.color).getHex();
+      // Full enclosure spanning the ENVELOPE's own width/height/depth (not
+      // the body's) — front + two side panels, white by default, with
+      // vertical slats on the front backed by a solid panel. The panels run
+      // from the enclosure's own bottom (y=0) up to the underside of the
+      // shelf.
       // If the caller passed an explicit colour it wins for the body; the
       // enclosure defaults to white regardless, per the reference photos,
       // unless coverColor was explicitly set away from the shelf default.
@@ -376,7 +434,8 @@ export function build(THREE, params, opts) {
         ? new THREE.Color(o.coverColor).getHex() : 0xffffff;
       const panelThick = 0.012;
 
-      // side panels: full depth, full body height, at each end of the width
+      // side panels: full envelope depth, full enclosure height, at each
+      // end of the envelope's own width.
       for (const sx of [-1, 1]) {
         const sideMat = finishMaterial(THREE, 'matte', enclosureColorHex);
         const side = new THREE.Mesh(new THREE.BoxGeometry(panelThick, shelfY, ENV_D), sideMat);
@@ -384,9 +443,24 @@ export function build(THREE, params, opts) {
         add(side, `coverSide_${sx < 0 ? 'L' : 'R'}`, 'matte', sideMat);
       }
 
-      // front face: vertical slats spanning the body height, leaving a
-      // small gap between each for airflow (a real slatted radiator cover).
-      const slatCount = Math.max(6, Math.round(o.width / 6));
+      // FIX 444c3a1e — a solid backing panel directly behind the slat
+      // layer, spanning the full envelope width/height, so the gaps between
+      // slats show painted MDF (the reference photo's clean, solid-reading
+      // front) rather than the radiator's metal fins behind. Sits just in
+      // front of the radiator body (so it never touches/z-fights the fins)
+      // and just behind the slats.
+      const backingThick = 0.008;
+      const backingZ = ENV_D - panelThick - backingThick / 2;
+      const backingMat = finishMaterial(THREE, 'matte', enclosureColorHex);
+      const backing = new THREE.Mesh(new THREE.BoxGeometry(ENV_W - panelThick * 2, shelfY, backingThick), backingMat);
+      backing.position.set(0, shelfY / 2, backingZ);
+      add(backing, 'coverBacking', 'matte', backingMat);
+
+      // front face: vertical slats spanning the enclosure height, leaving a
+      // small gap between each for airflow (a real slatted radiator cover)
+      // — the backing panel just behind them means those gaps show solid
+      // MDF, never the fins.
+      const slatCount = Math.max(6, Math.round(envelope.width / 6));
       const slatGap = 0.006;
       const usableW = ENV_W - panelThick * 2;
       const slatW = Math.max(0.01, (usableW - slatGap * (slatCount - 1)) / slatCount);
