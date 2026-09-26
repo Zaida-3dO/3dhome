@@ -48,6 +48,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const imp = rel => import(pathToFileURL(path.join(root, rel)).href);
 
 const THREE = await imp('vendor/three-r160/three.module.min.js');
+// The ONE reader of finish/keep tags (src/furniture/finishes.js, added by
+// PR1a/#30): a builder may tag the mesh OR its material, and the merge and
+// this test both read through partFinish/partKeep so the rule cannot drift
+// between what is tested and what is drawn. See finishes.js's own header.
+const Fin = await imp('src/furniture/finishes.js');
 
 let failures = 0, passes = 0;
 function check(name, cond, detail) {
@@ -56,7 +61,6 @@ function check(name, cond, detail) {
   console.error('FAIL ' + name + (detail !== undefined ? ' -- ' + JSON.stringify(detail) : ''));
 }
 const near = (a, b, eps = 1e-4) => Math.abs(a - b) <= eps;
-const PALETTE = new Set(['matte', 'gloss', 'metal', 'glass', 'mirror', 'emissive']);
 
 function bbox(group) {
   return new THREE.Box3().setFromObject(group);
@@ -87,15 +91,18 @@ function checkFinishAndKeep(tag, group, keptNames, mergeableNames) {
   let allTagged = true, untagged = [];
   group.traverse(o => {
     if (!o.isMesh) return;
-    if (!PALETTE.has(o.userData.finish)) { allTagged = false; untagged.push(o.name); }
+    const r = Fin.partFinish(o, o.material);
+    if (r.error) { allTagged = false; untagged.push((o.name || o.type) + ': ' + r.error); }
   });
   check(tag + ': every mesh carries a finish from the closed palette', allTagged, untagged);
   const meshes = meshesByName(group);
   keptNames.forEach(n => {
-    check(tag + ': ' + n + ' is kept out of the merge', !!meshes[n] && meshes[n].userData.keep === true, meshes[n] && meshes[n].userData);
+    const m = meshes[n];
+    check(tag + ': ' + n + ' is kept out of the merge', !!m && Fin.partKeep(m, m.material).keep === true, m && m.userData);
   });
   mergeableNames.forEach(n => {
-    check(tag + ': ' + n + ' is NOT kept (mergeable)', !!meshes[n] && !meshes[n].userData.keep, meshes[n] && meshes[n].userData);
+    const m = meshes[n];
+    check(tag + ': ' + n + ' is NOT kept (mergeable)', !!m && Fin.partKeep(m, m.material).keep !== true, m && m.userData);
   });
 }
 /** Bbox vs DEFAULTS width/height/depth, within 0.5 cm -- the same tolerance

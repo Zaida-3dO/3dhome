@@ -33,6 +33,7 @@
  * DEFAULTS below are generic placeholder text; real wording, if any, lives
  * only in a private overlay outside this repo.
  */
+import { makeFinish } from './finishes.js';
 
 export const TYPE = 'wall-sign';
 
@@ -120,13 +121,10 @@ export function build(THREE, params, opts) {
   const group = new THREE.Group();
   group.name = 'wallSign';
 
-  const matteMat = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0 });
+  const frameMat = makeFinish(THREE, 'matte', p.frameColor);
+  const backMat = makeFinish(THREE, 'matte', p.frameColor);
 
-  const frameMat = matteMat(p.frameColor);
-  const backMat = matteMat(p.frameColor);
-
-  const add = (mesh, finish) => {
-    mesh.userData.finish = finish;
+  const add = (mesh) => {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     group.add(mesh);
@@ -149,7 +147,7 @@ export function build(THREE, params, opts) {
   // ---- backer board (fills the depth behind the panel) ----
   const backer = new THREE.Mesh(new THREE.BoxGeometry(W, H, backerDepth), backMat);
   backer.position.set(0, H / 2, backerDepth / 2);
-  add(backer, 'matte').name = 'signBacker';
+  add(backer).name = 'signBacker';
 
   // ---- frame: four flat matte members forming a rectangle-with-hole ring,
   // its front face flush with the sign's overall front (z=D), proud of the
@@ -159,19 +157,19 @@ export function build(THREE, params, opts) {
 
   const topBar = new THREE.Mesh(new THREE.BoxGeometry(W, FT, frameDepth), frameMat);
   topBar.position.set(0, H - FT / 2, frameFrontZ - frameDepth / 2);
-  add(topBar, 'matte').name = 'signFrameTop';
+  add(topBar).name = 'signFrameTop';
 
   const botBar = new THREE.Mesh(new THREE.BoxGeometry(W, FT, frameDepth), frameMat);
   botBar.position.set(0, FT / 2, frameFrontZ - frameDepth / 2);
-  add(botBar, 'matte').name = 'signFrameBottom';
+  add(botBar).name = 'signFrameBottom';
 
   const leftBar = new THREE.Mesh(new THREE.BoxGeometry(FT, innerH, frameDepth), frameMat);
   leftBar.position.set(-W / 2 + FT / 2, H / 2, frameFrontZ - frameDepth / 2);
-  add(leftBar, 'matte').name = 'signFrameLeft';
+  add(leftBar).name = 'signFrameLeft';
 
   const rightBar = new THREE.Mesh(new THREE.BoxGeometry(FT, innerH, frameDepth), frameMat);
   rightBar.position.set(W / 2 - FT / 2, H / 2, frameFrontZ - frameDepth / 2);
-  add(rightBar, 'matte').name = 'signFrameRight';
+  add(rightBar).name = 'signFrameRight';
 
   // ---- text panel: the ONE textured, kept-out-of-merge part. Its geometry
   // and position are unconditional so the builder contract (bbox, keep flag)
