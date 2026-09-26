@@ -19,6 +19,9 @@
  *   4. Daylight: a closed blackout lets ~nothing through, a closed sheer lets
  *      a dim, warm share through, an open curtain lets it all through, and
  *      the amount changes monotonically as the curtain moves.
+ *   5. The fully-open stack: 4.7 cm a pleat by default, `stackPerPleat` and
+ *      `stackWidth` overrides in that order of precedence, clamped to a
+ *      closed half -- and the fabric and the daylight use the same span.
  */
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -149,8 +152,9 @@ const xRange = (arr) => {
   const L_shut = xRange(positionsOf(shut).curtain_L_front), R_shut = xRange(positionsOf(shut).curtain_R_front);
   check('open: left half anchored at its own (-x) wall end', near(L_open[0], -W / 2, 1e-6), L_open);
   check('open: right half anchored at its own (+x) wall end', near(R_open[1], W / 2, 1e-6), R_open);
-  check('open: left half gathered to <= 16% of a half', L_open[1] <= -W / 2 + 0.16 * W / 2 + 1e-6, L_open);
-  check('open: right half gathered to <= 16% of a half', R_open[0] >= W / 2 - 0.16 * W / 2 - 1e-6, R_open);
+  // 5 + 2 pleats a half at the default 4.7 cm a pleat: a 32.9 cm stack.
+  check('open: left half gathered to a 32.9 cm stack', near(L_open[1], -W / 2 + 0.329, 1e-6), L_open);
+  check('open: right half gathered to a 32.9 cm stack', near(R_open[0], W / 2 - 0.329, 1e-6), R_open);
   check('closed: the halves meet past the centre line', L_shut[1] > 0 && R_shut[0] < 0, { L_shut, R_shut });
   check('closed: anchors do not move', near(L_shut[0], -W / 2, 1e-6) && near(R_shut[1], W / 2, 1e-6));
 }
@@ -202,12 +206,79 @@ const xRange = (arr) => {
   const tWide = p => F.windowDaylight(glazing, [wide], at({ wide: p })).transmit;
   check('wide curtain 30% open still covers most of the glazing', tWide(30) < 0.4, tWide(30));
   check('wide curtain fully open: stack clears the glazing', near(tWide(100), 1), tWide(100));
+  // 30% open: each half spans 169.28 + (32.9 - 169.28) x 0.3 = 128.37 cm,
+  // so the halves end at 443.72 and start at 515.68.
   check('wide curtain: coverage is measured over the window, not the curtain',
-    near(F.curtainCoverage(glazing, wide, 30), (441.64 - 355 + 605 - 517.76) / 250, 0.01),
+    near(F.curtainCoverage(glazing, wide, 30), (443.72 - 355 + 605 - 515.68) / 250, 0.01),
     F.curtainCoverage(glazing, wide, 30));
 
   check('no live reading falls back to the profile openPct',
     F.windowDaylight(win, [Object.assign({}, blackout, { openPct: 0 })], () => null).transmit <= 0.03);
+}
+
+// ---------------------------------------------------------------------------
+// 5. The fully-open stack: one rule, shared by the fabric and the daylight
+// ---------------------------------------------------------------------------
+{
+  // Rule: stackWidth (cm) > stackPerPleat x pleats > 4.7 cm x pleats, and
+  // never wider than a closed half (half x 1.03).
+  const st = F.curtainStackWidth;
+  check('default stack = 4.7 cm x pleats (5 + 2)', near(st({ outerPleats: 5, innerPleats: 2 }), 32.9, 1e-9),
+    st({ outerPleats: 5, innerPleats: 2 }));
+  check('default stack = 4.7 cm x pleats (3 + 3)', near(st({ outerPleats: 3, innerPleats: 3 }), 28.2, 1e-9));
+  check('default stack = 4.7 cm x pleats (10 + 2)', near(st({ outerPleats: 10, innerPleats: 2 }), 56.4, 1e-9));
+  check('default stack does not depend on the width',
+    near(F.curtainGatheredSpan(80, { outerPleats: 5, innerPleats: 2 }),
+      F.curtainGatheredSpan(150, { outerPleats: 5, innerPleats: 2 }), 1e-9));
+  check('stackPerPleat overrides the default',
+    near(st({ outerPleats: 5, innerPleats: 2, stackPerPleat: 3 }), 21, 1e-9));
+  check('stackWidth overrides stackPerPleat',
+    near(st({ outerPleats: 5, innerPleats: 2, stackPerPleat: 3, stackWidth: 40 }), 40, 1e-9));
+  check('a zero / missing override falls through to the next rule',
+    near(st({ outerPleats: 5, innerPleats: 2, stackWidth: 0, stackPerPleat: null }), 32.9, 1e-9));
+  check('clamped to the closed half', near(F.curtainGatheredSpan(20, { outerPleats: 5, innerPleats: 2 }), 20.6, 1e-9),
+    F.curtainGatheredSpan(20, { outerPleats: 5, innerPleats: 2 }));
+  check('closed half-span is unchanged (x 1.03)', near(F.curtainHalfSpan(100, { outerPleats: 5, innerPleats: 2 }, 0), 103, 1e-9));
+
+  // The fabric the scene draws and the interval the daylight uses must be
+  // the SAME span, for every rule and at every openness.
+  const variants = [
+    ['default', {}],
+    ['stackPerPleat', { stackPerPleat: 6.2 }],
+    ['stackWidth', { stackWidth: 44 }],
+    ['clamped', { w: 50 }]
+  ];
+  for (const [label, extra] of variants) {
+    for (const pct of [100, 60, 0]) {
+      const cur = Object.assign({}, baseCurtain, { openPct: pct, wallId: 1 }, extra);
+      const built = F.buildCurtain(THREE, cur, false);
+      const L = xRange(positionsOf(built).curtain_L_front), R = xRange(positionsOf(built).curtain_R_front);
+      const iv = F.curtainCoverIntervals(cur, pct);
+      const fabricSpan = (L[1] - L[0]) * 100;
+      const want = F.curtainHalfSpan(cur.w / 2, cur, pct / 100);
+      if (iv.length === 2) {
+        const coverSpan = iv[0][1] - iv[0][0];
+        check('coverage span = fabric span (' + label + ', ' + pct + '%)', near(coverSpan, fabricSpan, 1e-3),
+          { coverSpan, fabricSpan });
+        check('right half mirrors the left (' + label + ', ' + pct + '%)',
+          near((R[1] - R[0]) * 100, iv[1][1] - iv[1][0], 1e-3));
+      } else {
+        // Closed: the halves overlap, so coverage is the whole width.
+        check('closed: fabric overlaps past the centre (' + label + ')', fabricSpan > cur.w / 2, fabricSpan);
+      }
+      check('fabric span follows the shared rule (' + label + ', ' + pct + '%)', near(fabricSpan, want, 1e-3),
+        { fabricSpan, want });
+    }
+  }
+  const open100 = Object.assign({}, baseCurtain, { wallId: 1, stackWidth: 44 });
+  const iv = F.curtainCoverIntervals(open100, 100);
+  check('coverage at 100% with stackWidth 44: 44 cm at each end',
+    iv.length === 2 && near(iv[0][1] - iv[0][0], 44, 1e-9) && near(iv[1][1] - iv[1][0], 44, 1e-9), iv);
+  // A wider stack keeps shading the glass when fully open (it used to clear it).
+  const glass = { id: 'g2', wallId: 1, c: 500, w: 160 };   // 420..580, curtain 400..600
+  const t100 = F.windowDaylight(glass, [open100], () => 100).transmit;
+  check('a 44 cm stack over a window 20 cm in from each end still blocks 2 x 24 cm',
+    near(t100, 1 - (48 / 160) * (1 - F.BLACKOUT_TRANSMIT), 1e-9), t100);
 }
 
 if (failures) {

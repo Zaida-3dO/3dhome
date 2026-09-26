@@ -66,15 +66,16 @@
    Plus a FRONT (room-facing) vs BACK (window-facing) tint multiplied on
    top — front shows the pure two-tone, back is a lining tint.
 
-   CORNICE / PELMET — 3 rectangles, solid WHITE throughout: a FRONT face
-   parallel to the wall + 2 SIDE faces at 90° closing it back to the
-   wall. `hasSideFaces=false` (living-room, wall-to-wall) drops the
+   CORNICE / PELMET — solid WHITE throughout: a FRONT face parallel to
+   the wall + 2 SIDE faces at 90° closing it back to the wall + a LID
+   just under the ceiling, so the box reads closed from above.
+   `hasSideFaces=false` (living-room, wall-to-wall) drops the
    sides and spans the whole wall; the strip LIGHT still runs the full
    cornice length either way. The cornice is anchored into the room shell:
    its TOP touches the CEILING, its SIDE-BACKS touch the BACK WALL (no
    render gap) — see ROOM SHELL below.
 
-   ROOM SHELL — a CEILING (bottom face at curtain-height) and a BACK WALL
+   ROOM SHELL — a CEILING (bottom face at curtain-height; hidden unless "Show ceiling" is on) and a BACK WALL
    (front face at z=0, i.e. flush with the cornice side-backs) are added
    so the cornice has real surfaces to sit against. The curtain itself is
    anchored HALFWAY through the cornice depth (mid-depth), not at the
@@ -102,6 +103,8 @@
    ===================================================================== */
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "openPct": 0,
+  "stackPerPleat": 4.7,
+  "stackWidth": 0,
   "width": 220,
   "height": 250,
   "pleats": 7,
@@ -119,11 +122,67 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "corniceLightOn": true,
   "corniceLightColor": "#ffe6bd",
   "corniceLightIntensity": 1.5,
-  "corniceLightHeightPct": 35
+  "showCeiling": false
 }/*EDITMODE-END*/;
 
 const CM = 0.01;
 const clamp01 = (n) => Math.max(0, Math.min(1, n));
+
+// ---- the gathered stack — MIRRORS src/wall-fittings.js (curtainStackWidth,
+// curtainGatheredSpan, curtainHalfSpan). Keep the two in step. All cm. ----
+// Fully open, each half bunches into a stack at its own wall end whose width
+// is set by its pleat count, not by the curtain's width: `stackWidth` if
+// given (> 0), else `stackPerPleat` (default 4.7 cm) × pleats per half,
+// never wider than a closed half.
+const CURTAIN_CLOSED_OVERLAP = 1.03;
+const STACK_PER_PLEAT_CM = 4.7;
+function stackWidthCm(pleats, stackPerPleat, stackWidth) {
+  if (stackWidth != null && stackWidth > 0) return +stackWidth;
+  const per = stackPerPleat != null && stackPerPleat > 0 ? +stackPerPleat : STACK_PER_PLEAT_CM;
+  return per * pleats;
+}
+function halfSpanCm(halfCm, S, openN) {
+  const closed = halfCm * CURTAIN_CLOSED_OVERLAP;
+  const gathered = Math.min(stackWidthCm(S.pleats, S.stackPerPleat, S.stackWidth), closed);
+  return closed + (gathered - closed) * openN;
+}
+
+// ---- cornice downlights — MIRRORS corniceLightCount / corniceSpotLayout in
+// src/wall-fittings.js. 3 lights, or 5 on a cornice >= 250 cm, aimed down
+// and tilted back toward the wall out of the box's open bottom: the cone's
+// front edge leans back (angle < tilt) so it never reaches the front face,
+// nothing points up at the lid, and the end lights sit in from the ends by
+// the furthest sideways reach of any ray inside the box. Metres. ----
+const CORNICE_WIDE_CM = 250;
+const CORNICE_SPOT_TILT = 42 * Math.PI / 180;
+const CORNICE_SPOT_ANGLE = 36 * Math.PI / 180;
+const CORNICE_SPOT_RANGE = 1.2;
+// The light-tight box (metres) — MIRRORS the CORNICE_* constants in
+// src/wall-fittings.js: the lid is the box top, overhanging the front/side
+// outer faces by a lip; front and side tops are buried in the lid; lid and
+// sides run into the back wall. No face merely butts against another.
+const CORNICE_LID_T = 0.01;
+const CORNICE_LID_GAP = 0.001;
+const CORNICE_LID_LIP = 0.002;
+const CORNICE_FACE_TUCK = 0.003;
+const CORNICE_WALL_TUCK = 0.01;
+const CORNICE_STRIP_DROP = 0.012;
+const CURTAIN_HEAD_GAP = 0.014;
+function corniceSpotLayout(box) {
+  const count = box.width / CM >= CORNICE_WIDE_CM ? 5 : 3;
+  const bottom = box.top - box.height;
+  const y = Math.max(bottom + 0.005, box.stripY - 0.015);
+  const z = box.stripZ;
+  const reach = Math.hypot(y - bottom, z) * Math.tan(CORNICE_SPOT_ANGLE) + 0.02;
+  const margin = Math.min(box.width / 2, Math.max(box.width / (2 * count), reach));
+  const run = box.width - 2 * margin;
+  const spots = [];
+  for (let i = 0; i < count; i++) {
+    const x = box.offset - box.width / 2 + margin + (count > 1 ? run * i / (count - 1) : run / 2);
+    spots.push({ x, y, z, tx: x, ty: y - Math.cos(CORNICE_SPOT_TILT), tz: z - Math.sin(CORNICE_SPOT_TILT) });
+  }
+  return { angle: CORNICE_SPOT_ANGLE, spots };
+}
 
 // Module-scoped so the eased open-amount survives buildModel rebuilds
 // (the harness wipes ctx each rebuild). One curtain view per page.
@@ -133,10 +192,10 @@ let _openCurrent = null;
 // side: -1 left half, +1 right half. u∈[0,1] across the span from the
 // OUTER (wall) edge → the centre part. v∈[0,1] floor→ceiling.
 function foldVertex(u, v, side, isBack, openN, P) {
-  // span compresses from ~half-width (closed) toward a small gathered
-  // stack (open). The outer edge is anchored at the wall; the centre
-  // (leading) edge therefore sweeps outward → the slide + the gather.
-  const span = P.closedSpan + (P.gatherFrac * P.width / 2 - P.closedSpan) * openN;
+  // span compresses from ~half-width (closed) toward the gathered stack
+  // (open). The outer edge is anchored at the wall; the centre (leading)
+  // edge therefore sweeps outward → the slide + the gather.
+  const span = halfSpanCm(P.width / 2 / CM, P.stack, openN) * CM;
   const anchorX = side < 0 ? -P.width / 2 : +P.width / 2;
   const x = side < 0 ? anchorX + u * span : anchorX - u * span;
   const y = v * P.height;
@@ -221,8 +280,8 @@ function CrossSection({ t }) {
     // centreline (fix #4), coloured with the SHARP two-tone cut (fix #1)
     // — segment colour flips at the pleat seam, no gradient blend.
     const outerPleats = Math.min(pleats, Math.max(0, t.outerPleats ?? 5));
-    const P = { width, pleats, closedSpan: width / 2 * 1.03,
-                gatherFrac: 0.16, ampBase: 5.5, thickness: 0.02 };
+    const P = { width, pleats, ampBase: 5.5, thickness: 0.02,
+                stack: { pleats, stackPerPleat: t.stackPerPleat, stackWidth: t.stackWidth } };
     for (const side of [-1, 1]) {
       const N = pleats * 10;
       // build per-pleat-segment polylines so the stroke colour can hard-cut
@@ -241,7 +300,7 @@ function CrossSection({ t }) {
       };
       for (let i = 0; i <= N; i++) {
         const u = i / N;
-        const span = P.closedSpan + (P.gatherFrac * P.width / 2 - P.closedSpan) * openN;
+        const span = halfSpanCm(P.width / 2, P.stack, openN);
         const anchorX = side < 0 ? -width / 2 : +width / 2;
         const x = side < 0 ? anchorX + u * span : anchorX - u * span;
         const gatherAmp = 1 + 1.3 * openN;
@@ -282,11 +341,14 @@ function buildCurtain(t, group, THREE, ctx) {
   // the actual pleat count.
   const outerPleats = Math.min(pleats, Math.max(0, t.outerPleats | 0));
   const P = {
-    width, height, pleats,
+    // the heading stops 1.4 cm under the ceiling line, clear of the cornice
+    // lid's underside, so its top edge never pokes up through the lid.
+    // The hem stays on the floor. (CURTAIN_HEAD_GAP in wall-fittings.js)
+    width, height: height - CURTAIN_HEAD_GAP, pleats,
     ampBase: 0.055,          // base fold depth (m)
     thickness: 0.02,         // fabric front→back offset (m)
-    gatherFrac: 0.16,        // gathered span = this × half-width
-    closedSpan: width / 2 * 1.03, // slight centre overlap when closed
+    // what decides the fully-open stack (halfSpanCm; cm)
+    stack: { pleats, stackPerPleat: t.stackPerPleat, stackWidth: t.stackWidth },
     corniceMidZ: cDepth0 / 2, // curtain anchored halfway through cornice depth (fix #4)
   };
 
@@ -370,7 +432,13 @@ function buildCurtain(t, group, THREE, ctx) {
   const cHeight = t.corniceHeight * CM;
   const cWidth = t.hasSideFaces ? width * 1.04 : t.wallWidth * CM;
   const cMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(t.corniceColor), roughness: 0.7 });
-  const cMidY = height - cHeight / 2;   // box top lands exactly at y=height (ceiling line)
+  // Front + side faces run from the cornice bottom up INTO the lid (their
+  // tops are buried CORNICE_FACE_TUCK below the lid top), so from above the
+  // only surface is the lid's — no seam to see the lit inside through.
+  const lidTop = height - CORNICE_LID_GAP;
+  const faceTop = lidTop - CORNICE_FACE_TUCK;
+  const faceH = faceTop - (height - cHeight);
+  const cMidY = faceTop - faceH / 2;
 
   // fix (v3): frontFace used to span exactly `cWidth`, landing its L/R
   // edges on the SIDE FACES' CENTRELINE (x=±cWidth/2) rather than their
@@ -379,7 +447,7 @@ function buildCurtain(t, group, THREE, ctx) {
   // widen the front face by the side panel's full thickness (0.02) so its
   // edges land exactly on the sides' outer faces → a clean sharp 90°.
   const frontFaceW = t.hasSideFaces ? cWidth + 0.02 : cWidth;
-  const frontFace = new THREE.Mesh(new THREE.BoxGeometry(frontFaceW, cHeight, 0.02), cMat);
+  const frontFace = new THREE.Mesh(new THREE.BoxGeometry(frontFaceW, faceH, 0.02), cMat);
   frontFace.name = 'corniceFront';
   frontFace.position.set(0, cMidY, cDepth);
   frontFace.castShadow = true;
@@ -387,25 +455,39 @@ function buildCurtain(t, group, THREE, ctx) {
 
   if (t.hasSideFaces) {
     for (const sx of [-1, 1]) {
-      // depth cDepth, centred at z=cDepth/2 → back edge exactly at z=0
-      // (the back-wall face), front edge exactly at z=cDepth (flush
-      // with the front face) — no render gap either end.
-      const sideFace = new THREE.Mesh(new THREE.BoxGeometry(0.02, cHeight, cDepth), cMat);
+      // runs from CORNICE_WALL_TUCK inside the back wall to z=cDepth
+      // (inside the front face) — overlaps at both ends, no seam.
+      const sideD = cDepth + CORNICE_WALL_TUCK;
+      const sideFace = new THREE.Mesh(new THREE.BoxGeometry(0.02, faceH, sideD), cMat);
       sideFace.name = `corniceSide_${sx < 0 ? 'L' : 'R'}`;
-      sideFace.position.set(sx * cWidth / 2, cMidY, cDepth / 2);
+      sideFace.position.set(sx * cWidth / 2, cMidY, cDepth - sideD / 2);
       sideFace.castShadow = true;
       group.add(sideFace);
     }
   }
 
-  // strip LIGHT running the full cornice length — anchored to the
-  // INSIDE of the FRONT face, HIGHER in the box: ~30-40% of the
-  // cornice height down from the TOP (fix #5), not near the bottom.
+  // LID — the TOP of the box, so with the ceiling hidden or faded, looking
+  // down shows a shut pelmet, not the fabric heading + LED strip. It
+  // overhangs the front/side outer faces by a lip, runs into the back wall,
+  // and sits 1 mm under the ceiling line so it never z-fights the ceiling.
+  // Mirrors buildCurtain in src/wall-fittings.js.
+  {
+    const lidW = t.hasSideFaces ? frontFaceW + 2 * CORNICE_LID_LIP : cWidth;
+    const lidFront = cDepth + 0.01 + CORNICE_LID_LIP, lidBack = -CORNICE_WALL_TUCK;
+    const lid = new THREE.Mesh(new THREE.BoxGeometry(lidW, CORNICE_LID_T, lidFront - lidBack), cMat);
+    lid.name = 'corniceTop';
+    lid.position.set(0, lidTop - CORNICE_LID_T / 2, (lidFront + lidBack) / 2);
+    lid.castShadow = true;
+    group.add(lid);
+  }
+
+  // strip LIGHT running the full cornice length — tucked into the INSIDE
+  // TOP-FRONT CORNER of the box: just under the lid, just behind the front
+  // face (review 2026-09-26; it used to hang ~35% down). Same as the app.
   if (t.corniceLightOn) {
     const lc = new THREE.Color(t.corniceLightColor);
     const inten = t.corniceLightIntensity;
-    const lightDownFrac = clamp01((t.corniceLightHeightPct ?? 35) / 100);
-    const lightY = height - cHeight * lightDownFrac;      // e.g. 35% down from the top
+    const lightY = height - CORNICE_LID_GAP - CORNICE_LID_T - CORNICE_STRIP_DROP;   // just under the lid
     const lightZ = cDepth - 0.025;                        // just inside the front face
     const strip = new THREE.Mesh(
       new THREE.BoxGeometry(cWidth * 0.96, 0.02, 0.03),
@@ -415,22 +497,19 @@ function buildCurtain(t, group, THREE, ctx) {
     strip.position.set(0, lightY, lightZ);
     group.add(strip);
 
-    const nL = 3;
-    for (let i = 0; i < nL; i++) {
-      const lx = -cWidth * 0.42 + i * (cWidth * 0.84) / (nL - 1);
-      const pl = new THREE.PointLight(lc, inten, 3.2, 1.4);
-      pl.position.set(lx, lightY, lightZ);
-      // fix (v3): these uplights never cast shadows, so the cornice front
-      // face — which DOES castShadow — never occludes them from the
-      // ceiling. Occlusion needs all three of {light.castShadow,
-      // occluder.castShadow, receiver.receiveShadow}; the cornice + ceiling
-      // sides were already correct, only this was missing. That's the 3
-      // discrete warm pools on the ceiling review flagged (one per light).
-      pl.castShadow = true;
-      pl.shadow.mapSize.set(512, 512); // point-light shadows are a 6-face
-      // cube map (costlier than the scene's single 1024x1024 key light) —
-      // 512 keeps 3 of them bounded rather than scene-breaking.
-      group.add(pl);
+    // The light it THROWS: a row of unshadowed downlights, exactly as the
+    // app builds them (corniceSpotLayout above). They light the curtain
+    // heading and the wall below the cornice and cannot reach any face of
+    // the cornice itself, so the box stays fully opaque from the room.
+    const layout = corniceSpotLayout({ width: cWidth, offset: 0, top: height, height: cHeight,
+      depth: cDepth, stripY: lightY, stripZ: lightZ });
+    for (const sp of layout.spots) {
+      const spot = new THREE.SpotLight(lc, inten, CORNICE_SPOT_RANGE, layout.angle, 1, 2);
+      spot.name = 'corniceGlow';
+      spot.position.set(sp.x, sp.y, sp.z);
+      spot.target.position.set(sp.tx, sp.ty, sp.tz);
+      group.add(spot);
+      group.add(spot.target);
     }
   }
 
@@ -471,7 +550,10 @@ function buildCurtain(t, group, THREE, ctx) {
   // bottom (room-facing) face stays at y=height; the box grows upward.
   ceiling.position.set(0, height + CEILING_THICKNESS / 2, roomDepth / 2);
   ceiling.receiveShadow = true;
-  group.add(ceiling);
+  // Hidden by default so you can look down on the cornice lid; the Tweaks
+  // "Show ceiling" toggle brings it back as the contact reference. Nothing
+  // else depends on it: the cornice is built the same either way.
+  if (t.showCeiling) group.add(ceiling);
 
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(shellSpan, roomDepth),
@@ -526,12 +608,13 @@ function App() {
               <tr><td>Height (floor→ceiling)</td><td className="num">{t.height}</td><td>Per room</td></tr>
               <tr><td>Pleats per half</td><td className="num">{t.pleats}</td><td>Fold count</td></tr>
               <tr><td>Open</td><td className="num">{t.openPct}%</td><td><b>Animated</b> — slide + gather</td></tr>
+              <tr><td>Stack per side at 100% open</td><td className="num">{Math.min(stackWidthCm(Math.max(2, t.pleats | 0), t.stackPerPleat, t.stackWidth), t.width / 2 * CURTAIN_CLOSED_OVERLAP).toFixed(1)}</td><td>{t.stackWidth > 0 ? 'Override (cm per side)' : `${t.stackPerPleat} cm × ${Math.max(2, t.pleats | 0)} pleats`}</td></tr>
               <tr><td>Outer/extreme colour × count</td><td className="num"><span className="sw" style={{ background: t.outerColor }}></span>×{t.outerPleats}</td><td>Two-tone (edges) — sharp cut</td></tr>
               <tr><td>Inner/centre colour × count</td><td className="num"><span className="sw" style={{ background: t.innerColor }}></span>×{t.innerPleats}</td><td>Two-tone (centre) — sharp cut</td></tr>
               <tr><td>Front / back tint</td><td className="num"><span className="sw" style={{ background: t.frontColor }}></span><span className="sw" style={{ background: t.backColor, marginLeft: 4 }}></span></td><td>Room vs window face</td></tr>
               <tr><td>Cornice side faces</td><td className="num">{t.hasSideFaces ? 'yes' : 'no'}</td><td><b>Variable</b> — off = wall-to-wall</td></tr>
               <tr><td>Cornice depth × height</td><td className="num">{t.corniceDepth}×{t.corniceHeight}</td><td>Pelmet box — white, touches ceiling + back wall</td></tr>
-              <tr><td>Cornice light</td><td className="num">{t.corniceLightOn ? `on ${t.corniceLightIntensity}` : 'off'}</td><td>Full-length strip, {t.corniceLightHeightPct}% down from top, inside front face</td></tr>
+              <tr><td>Cornice light</td><td className="num">{t.corniceLightOn ? `on ${t.corniceLightIntensity}` : 'off'}</td><td>Full-length strip in the inside top-front corner, under the lid; {(t.hasSideFaces ? t.width * 1.04 : t.wallWidth) >= CORNICE_WIDE_CM ? 5 : 3} downlights out of the open bottom</td></tr>
             </tbody>
           </table>
         </div>
@@ -560,6 +643,10 @@ function App() {
         <TweakSection label="Open (animated)" />
         <TweakSlider label="Open" value={t.openPct} min={0} max={100} step={1} unit="%"
           onChange={v => setTweak('openPct', v)} />
+        <TweakSlider label="Stack per pleat (open)" value={t.stackPerPleat} min={2} max={10} step={0.1} unit="cm"
+          onChange={v => setTweak('stackPerPleat', v)} />
+        <TweakSlider label="Stack width override (0 = per pleat)" value={t.stackWidth} min={0} max={120} step={0.5} unit="cm"
+          onChange={v => setTweak('stackWidth', v)} />
 
         <TweakSection label="Two-tone colours — sharp cut" />
         <TweakColor label="Outer / extreme" value={t.outerColor}
@@ -576,6 +663,8 @@ function App() {
           onChange={v => setTweak('backColor', v)} />
 
         <TweakSection label="Cornice / pelmet — white, touches ceiling + wall" />
+        <TweakToggle label="Show ceiling" value={t.showCeiling}
+          onChange={v => setTweak('showCeiling', v)} />
         <TweakToggle label="Side faces (box)" value={t.hasSideFaces}
           onChange={v => setTweak('hasSideFaces', v)} />
         {!t.hasSideFaces &&
@@ -595,8 +684,6 @@ function App() {
           onChange={v => setTweak('corniceLightColor', v)} />
         <TweakSlider label="Light intensity" value={t.corniceLightIntensity} min={0} max={6} step={0.1}
           onChange={v => setTweak('corniceLightIntensity', v)} />
-        <TweakSlider label="Light height (% down from top)" value={t.corniceLightHeightPct} min={10} max={90} step={5} unit="%"
-          onChange={v => setTweak('corniceLightHeightPct', v)} />
       </TweaksPanel>
     </>
   );

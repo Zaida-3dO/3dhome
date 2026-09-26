@@ -1236,6 +1236,8 @@
           renderPanel();
         },
         getCurtainSliderAvailable: curtainId => curtainIsAvailable(curtainId),
+        corniceGlows: curtainId => home.getCorniceGlowDebug(curtainId),
+        orbit: (th, ph, r, target) => home.setOrbit(th, ph, r, target),
         daylight: () => home.getDaylightDebug(),
         // Pin the sun ('morning'|'noon'|'night'|'auto') so daylight can be
         // checked at any wall-clock time -- same as the Settings sun buttons.

@@ -15,7 +15,7 @@ import {
 } from './footstep-walk.js';
 import {
   WINDOW_REVEAL_CM, windowVerticals, placeOnWall, buildWindow, buildCurtain,
-  windowDaylight
+  windowDaylight, corniceSpotLayout, corniceLightCount, corniceLightBudget
 } from './wall-fittings.js';
 import {
   loadFurnitureModules, buildFurnitureSync, scheduleFurnitureAttach, fadeRegistrations,
@@ -949,8 +949,9 @@ export const Home3DScene = (() => {
     return group;
   }
 
-  // Cornice LED glow at full brightness (same order as an ambient strip's).
-  const CORNICE_GLOW_INTENSITY = 0.25;
+  // Cornice downlight intensity at full brightness, PER light (a cornice has
+  // 3 or 5 -- see corniceSpotLayout in wall-fittings.js).
+  const CORNICE_GLOW_INTENSITY = 0.35;
   // Daylight gains, applied to sun factor x curtain transmission.
   const DAYLIGHT_PATCH_GAIN = 0.4;    // additive floor patch colour
   const DAYLIGHT_SPOT_GAIN = 7;       // shared per-room SpotLight intensity
@@ -1726,7 +1727,7 @@ export const Home3DScene = (() => {
       scene.add(built.group);
       if (wn.exterior) built.fadeMeshes.forEach(mesh => fittingFades.push({ mesh, wallId: wn.wallId }));
     });
-    // curtainById: id -> { cu, built, glow, cornice } -- the handles the
+    // curtainById: id -> { cu, built, glows, cornice } -- the handles the
     // Home Assistant cover / cornice-light bindings drive at runtime.
     const curtainById = {};
     CURTAINS.forEach(cu => {
@@ -1734,20 +1735,48 @@ export const Home3DScene = (() => {
       placeOnWall(built.group, cu, cu.roomFace, tx, tz);
       scene.add(built.group);
       if (cu.exterior) built.fadeMeshes.forEach(mesh => fittingFades.push({ mesh, wallId: cu.wallId }));
-      const entry = { cu, built, glow: null, cornice: null };
-      // A cornice's LED strip throws a little light as well as glowing: one
-      // unshadowed PointLight per cornice, on the same tier gate as the
-      // ambient strips (it is the same kind of light, and it replaces the
-      // 'curtain cornice' strip a profile would otherwise list under its
-      // room's ambient channel -- see docs/house-profile.md).
-      if (built.corniceStrip && quality.ambientStrips) {
-        const glow = new THREE.PointLight(built.corniceStrip.userData.restColor, CORNICE_GLOW_INTENSITY, 2.5, 2);
-        glow.position.set(0, -0.06, 0.06);
-        built.corniceStrip.add(glow);
-        entry.glow = glow;
-      }
+      const entry = { cu, built, glows: [], cornice: null };
       curtainById[cu.id] = entry;
     });
+    // A cornice's LED strip throws light as well as glowing: a row of
+    // unshadowed downlights (3 on a narrow cornice, 5 on a wide one), aimed
+    // out of the box's open bottom so none of them can light the cornice's
+    // own faces -- see corniceSpotLayout. Same tier gate as the ambient
+    // strips (it is the same kind of light, and it replaces the 'curtain
+    // cornice' strip a profile would otherwise list under its room's ambient
+    // channel -- see docs/house-profile.md).
+    //
+    // Budget: a SpotLight is 7 fragment-uniform vectors (a PointLight 4).
+    // On the reference house (3 + 3 + 5 = 11 lights) the ultra shader
+    // measured ~384 of 1024; the mid tier drops the 10 shadowed room lights,
+    // estimated ~265 of 512. quality.corniceLightCap bounds the TOTAL so a
+    // house with many cornices cannot push mid over: corniceLightBudget
+    // takes lights off the fullest cornices first. Low: none (strip glows).
+    //
+    // They do NOT join the exterior-wall fade. The fade makes occluding
+    // geometry see-through (the cornice box and its strip are geometry, so
+    // they fade); a light is not geometry, and like every other room light
+    // it keeps lighting the room you are looking into.
+    if (quality.ambientStrips) {
+      const lit = Object.values(curtainById).filter(e => e.built.corniceStrip);
+      const want = lit.map(e => corniceLightCount(e.built.corniceStrip.userData.cornice.width * 100));
+      const counts = corniceLightBudget(want, quality.corniceLightCap);
+      lit.forEach((entry, i) => {
+        if (!counts[i]) return;
+        const built = entry.built;
+        const layout = corniceSpotLayout(built.corniceStrip.userData.cornice, counts[i]);
+        layout.spots.forEach(sp => {
+          const glow = new THREE.SpotLight(built.corniceStrip.userData.restColor,
+            CORNICE_GLOW_INTENSITY, layout.range, layout.angle, 1, 2);
+          glow.name = 'corniceGlow';
+          glow.position.set(sp.x, sp.y, sp.z);
+          glow.target.position.set(sp.tx, sp.ty, sp.tz);
+          built.group.add(glow);
+          built.group.add(glow.target);
+          entry.glows.push(glow);
+        });
+      });
+    }
 
     // === Daylight through the windows ===
     // The global sun + ambient light the house as a whole; this is the part
@@ -3183,6 +3212,9 @@ export const Home3DScene = (() => {
       sunShadow,
       roomShadowLights,
       ambientStrips:    tier !== 'low',
+      // Total cornice downlights (see buildScene). Ultra: uncapped; mid: 12
+      // (84 fragment-uniform vectors); low builds none (ambientStrips off).
+      corniceLightCap:  tier === 'ultra' ? null : 12,
       shadowMapScale,
       // Opt-in bespoke decoration (see the acoustic panels below). Empty by
       // default: a house gets only what its profile describes. The PROFILE is
@@ -4563,8 +4595,21 @@ export const Home3DScene = (() => {
         strip.material.emissiveIntensity = 1.5 * k;
         // Off: an unlit LED strip reads as a dim grey line, not a coloured one.
         strip.material.color.copy(st.on ? col : new THREE.Color(0x3a3a3a));
-        if (e.glow) { e.glow.color.copy(col); e.glow.intensity = CORNICE_GLOW_INTENSITY * k; }
+        e.glows.forEach(g => { g.color.copy(col); g.intensity = CORNICE_GLOW_INTENSITY * k; });
         requestRender();
+      },
+      // The cornice downlights actually built for a curtain, in world space,
+      // with their live colour/intensity -- for checking the tier counts and
+      // that the HA binding reaches every light, not just the first.
+      getCorniceGlowDebug(curtainId) {
+        const e = curtainById[curtainId];
+        if (!e) return null;
+        return e.glows.map(g => {
+          const p = new THREE.Vector3(), t = new THREE.Vector3();
+          g.getWorldPosition(p); g.target.getWorldPosition(t);
+          return { pos: p.toArray(), target: t.toArray(), color: '#' + g.color.getHexString(),
+            intensity: g.intensity, angle: g.angle, distance: g.distance };
+        });
       },
       getCorniceLight(curtainId) {
         const e = curtainById[curtainId];
@@ -4711,6 +4756,13 @@ export const Home3DScene = (() => {
       // powers `?camera=<preset>` for scriptable visual review. Unknown/absent
       // name is a no-op (default view unchanged). Returns true if applied.
       setView(name) { return setView(name); },
+      // Free camera pose for visual checks: orbit angles plus a world-space
+      // look-at point (metres), since the presets can only aim at the floor.
+      setOrbit(th, ph, r, target) {
+        orb.th = th; orb.ph = ph; orb.r = r;
+        if (target) orb.tgt.set(target[0], target[1], target[2]);
+        updCam();
+      },
       // Preset names, for callers that want to validate/enumerate.
       viewPresets: Object.keys(CAMERA_PRESETS),
       // Subscribe an overlay to post-render frames. fn(cam) runs after every

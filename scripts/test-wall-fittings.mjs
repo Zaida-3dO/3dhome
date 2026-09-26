@@ -21,6 +21,10 @@
  *      formula, so a change to either the budget or the fold maths trips it.
  *   5. The balcony door lands at the authored compass end of the run on a
  *      wall whose local frame is rotated 180 degrees.
+ *   6. The cornice is a closed box: a lid under the ceiling line, the fabric
+ *      and LED strip below it, and downlights (3, or 5 on a wide cornice)
+ *      whose cones cannot reach the front, the lid or a side face -- checked
+ *      by casting rays round each cone's edge through the box.
  *
  * The scene half builds real three.js geometry (the vendored module is plain
  * ESM and needs no DOM for geometry), so it exercises the same code the page
@@ -121,6 +125,10 @@ const curtainsDoc = [
   { id: 'sheer', room: 'living', wall: 4, centre: 250, width: 300, offset: 3.5, opacity: 0.4, openPct: 0,
     outerColor: '#eeddaa', innerColor: '#eeddaa', cornice: { enabled: false } },
   { id: 'plainc', room: 'living', wall: 4, centre: 450, width: 60 },
+  { id: 'stacked', room: 'living', wall: 4, centre: 460, width: 40, stackWidth: 18.5, stackPerPleat: 3.3,
+    cornice: { enabled: false } },
+  { id: 'badstack', room: 'living', wall: 4, centre: 470, width: 40, stackWidth: 0, cornice: { enabled: false } },
+  { id: 'bare', room: 'living', wall: 7, centre: 300, width: 60, cornice: { enabled: false } },
   { id: 'lost', room: 'living', wall: 123, centre: 1, width: 1 }
 ];
 const hc = quiet(() => HouseLoader.compile(house({ curtains: curtainsDoc }), ''));
@@ -146,6 +154,170 @@ const cById = Object.fromEntries(hc.curtains.map(c => [c.id, c]));
   check('sheer fold budget', sh && near(sh.maxAmp, 1), sh && sh.maxAmp);
   check('blackout stacked in front of the sheer', bo && near(bo.maxAmp, 5), bo && bo.maxAmp);
   check('unstacked curtain gets the wall-only budget (9 - 2 - 2.5)', pc && near(pc.maxAmp, 4.5), pc && pc.maxAmp);
+  const sk = cById.stacked, bs = cById.badstack;
+  check('stackWidth + stackPerPleat pass through', sk && sk.stackWidth === 18.5 && sk.stackPerPleat === 3.3, sk);
+  check('no stack fields -> null (the default rule)', pc && pc.stackWidth === null && pc.stackPerPleat === null, pc);
+  check('a non-positive stackWidth -> null', bs && bs.stackWidth === null, bs && bs.stackWidth);
+}
+
+// ---- head gap: only for a curtain hanging in a cornice -----------------------
+{
+  const topOf = built => {
+    let t = -Infinity;
+    built.group.traverse(o => {
+      if (!o.isMesh || !/^curtain_/.test(o.name)) return;
+      const p = o.geometry.attributes.position.array;
+      for (let i = 1; i < p.length; i += 3) t = Math.max(t, p[i]);
+    });
+    return t;
+  };
+  const sh = cById.sheer, bare = cById.bare;
+  check('sheer behind the blackout is marked under its cornice', sh && sh.underCornice === true, sh && sh.underCornice);
+  check('a lone cornice-less curtain is not', bare && bare.underCornice === false, bare && bare.underCornice);
+  check('cornice-less curtain keeps its full drop (top at `top`)', near(topOf(F.buildCurtain(THREE, bare, false)), bare.top / 100, 1e-6));
+  check('sheer under a cornice stops CURTAIN_HEAD_GAP short',
+    near(topOf(F.buildCurtain(THREE, sh, false)), sh.top / 100 - F.CURTAIN_HEAD_GAP, 1e-6));
+  check('curtain with its own cornice stops CURTAIN_HEAD_GAP short',
+    near(topOf(F.buildCurtain(THREE, cById.plainc, false)), cById.plainc.top / 100 - F.CURTAIN_HEAD_GAP, 1e-6));
+}
+
+// ---- cornice lid + downlights ----------------------------------------------
+{
+  const meshes = built => { const m = {}; built.group.traverse(o => { if (o.isMesh) (m[o.name] = m[o.name] || []).push(o); }); return m; };
+  const boxOf = o => { o.geometry.computeBoundingBox(); return o.geometry.boundingBox.clone().translate(o.position); };
+  const boxed = Object.assign({}, cById.plainc, { cornice: Object.assign({}, cById.plainc.cornice) });
+  const wall2wall = Object.assign({}, cById.blackout);
+  for (const [label, cur] of [['side faces', boxed], ['wall-to-wall', wall2wall]]) {
+    const built = F.buildCurtain(THREE, cur, true);
+    const m = meshes(built);
+    const TOP = cur.top / 100, D = cur.cornice.depth / 100, H = cur.cornice.height / 100;
+    const lid = m.corniceTop && m.corniceTop[0];
+    check('cornice has a lid (' + label + ')', !!lid, Object.keys(m));
+    if (!lid) continue;
+    const lb = boxOf(lid), fb = boxOf(m.corniceFront[0]);
+    check('lid shares the front face material (' + label + ')', lid.material === m.corniceFront[0].material);
+    check('lid is in the fade set like the front (' + label + ')',
+      built.fadeMeshes.includes(lid) && built.fadeMeshes.includes(m.corniceFront[0]));
+    check('lid top sits just under the ceiling line (' + label + ')',
+      lb.max.y < TOP && lb.max.y > TOP - 0.005, { max: lb.max.y, TOP });
+    // Light-tight: nothing merely butts against anything. The lid is the box
+    // top -- it runs into the wall and overhangs the front's OUTER face --
+    // and the front/side tops are buried inside it (below its top, above
+    // its underside), so from above there is one surface and no seam.
+    check('lid runs into the wall and past the front face (' + label + ')',
+      lb.min.z < -0.005 && lb.max.z > fb.max.z + 0.001, { lid: [lb.min.z, lb.max.z], front: [fb.min.z, fb.max.z] });
+    check('front face top is buried in the lid (' + label + ')',
+      fb.max.y < lb.max.y - 0.001 && fb.max.y > lb.min.y + 0.001, { front: fb.max.y, lid: [lb.min.y, lb.max.y] });
+    if (cur.cornice.sideFaces) {
+      check('lid overhangs the side faces too (' + label + ')',
+        lb.min.x < fb.min.x - 0.001 && lb.max.x > fb.max.x + 0.001, { lid: [lb.min.x, lb.max.x], front: [fb.min.x, fb.max.x] });
+      m.corniceSide.forEach(sf => {
+        const sb = boxOf(sf);
+        check('side face runs into the wall and into the front (' + label + ')',
+          sb.min.z < -0.005 && sb.max.z > fb.min.z + 0.001, [sb.min.z, sb.max.z]);
+        check('side face top is buried in the lid (' + label + ')',
+          sb.max.y < lb.max.y - 0.001 && sb.max.y > lb.min.y + 0.001, sb.max.y);
+      });
+    } else {
+      // Wall-to-wall: the front and lid run into each side wall.
+      const span = (cur.roomSpan[1] - cur.roomSpan[0]) / 100;
+      check('wall-to-wall front and lid run into both side walls (' + label + ')',
+        fb.max.x - fb.min.x > span + 0.01 && lb.max.x - lb.min.x > span + 0.01, { front: fb.max.x - fb.min.x, span });
+    }
+    // Nothing inside pokes up through the lid: fabric and strip stay under it.
+    let topFabric = -Infinity;
+    Object.keys(m).filter(k => /^curtain_/.test(k)).forEach(k => m[k].forEach(o => {
+      const p = o.geometry.attributes.position.array;
+      for (let i = 1; i < p.length; i += 3) topFabric = Math.max(topFabric, p[i]);
+    }));
+    check('fabric heading stays under the lid (' + label + ')', topFabric < lb.min.y, { topFabric, lidBottom: lb.min.y });
+    const strip = m.corniceLightStrip[0], sb = boxOf(strip);
+    check('LED strip tucked in the top-front corner, under the lid, behind the front (' + label + ')',
+      sb.max.y <= lb.min.y + 1e-9 && sb.max.y > lb.min.y - 0.01 && sb.max.z <= fb.min.z + 1e-9 && sb.min.y > TOP - H,
+      { strip: [sb.min.y, sb.max.y, sb.max.z], lid: lb.min.y, front: fb.min.z });
+
+    // Downlights: inside the box, and no ray of any cone can reach the
+    // front face, the lid or a side face. Checked by casting rays around
+    // the cone edge (the extreme directions) through the box.
+    const box = strip.userData.cornice;
+    const layout = F.corniceSpotLayout(box);
+    const n = F.corniceLightCount(box.width * 100);
+    check('light count by width (' + label + ')', layout.spots.length === n && n === (box.width * 100 >= 250 ? 5 : 3),
+      { n, len: layout.spots.length, w: box.width });
+    const xs = layout.spots.map(sp => sp.x);
+    const gaps = xs.slice(1).map((x, i) => x - xs[i]);
+    check('lights evenly spaced (' + label + ')', gaps.every(g => near(g, gaps[0], 1e-9)) && gaps[0] > 0, gaps);
+    check('lights centred on the cornice (' + label + ')',
+      near((xs[0] + xs[xs.length - 1]) / 2, box.offset, 1e-9), { xs, off: box.offset });
+    let leak = null;
+    const frontInner = fb.min.z, sideInner = box.width / 2 - 0.01;
+    layout.spots.forEach(sp => {
+      check('light inside the box (' + label + ')', sp.y < lb.min.y && sp.y > TOP - H && sp.z < frontInner && sp.z > 0, sp);
+      const axis = new THREE.Vector3(sp.tx - sp.x, sp.ty - sp.y, sp.tz - sp.z).normalize();
+      const u = new THREE.Vector3(1, 0, 0), v = new THREE.Vector3().crossVectors(axis, u).normalize();
+      for (let k = 0; k < 72; k++) {
+        const a = k / 72 * 2 * Math.PI;
+        const dir = axis.clone().multiplyScalar(Math.cos(layout.angle))
+          .add(u.clone().multiplyScalar(Math.sin(layout.angle) * Math.cos(a)))
+          .add(v.clone().multiplyScalar(Math.sin(layout.angle) * Math.sin(a))).normalize();
+        if (dir.y >= 0) { leak = leak || { up: dir.toArray() }; continue; }
+        // March to the bottom of the box (or the wall) and see what it met.
+        for (let t = 0; t < 1; t += 0.0005) {
+          const x = sp.x + dir.x * t, y = sp.y + dir.y * t, z = sp.z + dir.z * t;
+          if (y < TOP - H || z < 0) break;
+          if (z >= frontInner) { leak = leak || { front: [x, y, z] }; break; }
+          if (cur.cornice.sideFaces && Math.abs(x - box.offset) >= sideInner) { leak = leak || { side: [x, y, z] }; break; }
+        }
+      }
+    });
+    check('no downlight ray reaches the front, the lid or a side face (' + label + ')', leak === null, leak);
+  }
+  check('3 lights under 250 cm, 5 at 250 cm and over',
+    F.corniceLightCount(249.9) === 3 && F.corniceLightCount(250) === 5 && F.corniceLightCount(120) === 3);
+  // A cramped box: the end lights are pulled in so the side faces stay dark.
+  function cramped0(w) { return { width: w || 0.4, offset: 0, top: 2.5, height: 0.3, depth: 0.2, stripY: 2.476, stripZ: 0.175, sideFaces: true }; }
+  const cramped = { width: 0.4, offset: 0, top: 2.5, height: 0.3, depth: 0.2, stripY: 2.476, stripZ: 0.175, sideFaces: true };
+  const cl = F.corniceSpotLayout(cramped);
+  // specs/CurtainSpec.html keeps its own copy of these (it cannot import the
+  // module); a constant that drifts there makes the spec lie about the app.
+  const fs = await import('node:fs');
+  const spec = fs.readFileSync(path.join(root, 'specs/CurtainSpec.html'), 'utf8');
+  const specConst = name => { const m = spec.match(new RegExp('const ' + name + ' = ([^;]+);')); return m ? m[1].trim() : null; };
+  for (const [name, want] of [
+    ['STACK_PER_PLEAT_CM', String(F.STACK_PER_PLEAT_CM)],
+    ['CURTAIN_CLOSED_OVERLAP', String(F.CURTAIN_CLOSED_OVERLAP)],
+    ['CORNICE_WIDE_CM', String(F.CORNICE_WIDE_CM)],
+    ['CORNICE_SPOT_TILT', Math.round(F.CORNICE_SPOT_TILT * 180 / Math.PI) + ' * Math.PI / 180'],
+    ['CORNICE_SPOT_ANGLE', Math.round(F.CORNICE_SPOT_ANGLE * 180 / Math.PI) + ' * Math.PI / 180'],
+    ['CORNICE_SPOT_RANGE', String(F.CORNICE_SPOT_RANGE)],
+    ['CORNICE_LID_T', String(F.CORNICE_LID_T)],
+    ['CORNICE_LID_GAP', String(F.CORNICE_LID_GAP)],
+    ['CORNICE_LID_LIP', String(F.CORNICE_LID_LIP)],
+    ['CORNICE_FACE_TUCK', String(F.CORNICE_FACE_TUCK)],
+    ['CORNICE_WALL_TUCK', String(F.CORNICE_WALL_TUCK)],
+    ['CORNICE_STRIP_DROP', String(F.CORNICE_STRIP_DROP)],
+    ['CURTAIN_HEAD_GAP', String(+F.CURTAIN_HEAD_GAP.toFixed(6))]
+  ]) check('CurtainSpec.html mirrors ' + name, specConst(name) === want, { spec: specConst(name), want });
+  // Unshadowed, so they must not reach far, nor lean back to horizontal
+  // (that is how light gets through the wall behind them).
+  check('downlight range <= 1.5 m', F.CORNICE_SPOT_RANGE <= 1.5 && F.corniceSpotLayout(cramped0()).range === F.CORNICE_SPOT_RANGE);
+  check('cone back edge at least 10 degrees below horizontal',
+    (F.CORNICE_SPOT_TILT + F.CORNICE_SPOT_ANGLE) * 180 / Math.PI <= 80);
+
+  // Tier cap: the fullest cornices give up lights first, never below 1
+  // until nothing else is left; under the cap, nothing changes.
+  const B = F.corniceLightBudget;
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  check('budget: under the cap -> unchanged', eq(B([3, 3, 5], 12), [3, 3, 5]) && eq(B([3, 3, 5], null), [3, 3, 5]));
+  check('budget: cap 9 takes from the 5 first', eq(B([3, 3, 5], 9), [3, 3, 3]), B([3, 3, 5], 9));
+  check('budget: cap 6 -> two each', eq(B([3, 3, 5], 6), [2, 2, 2]), B([3, 3, 5], 6));
+  check('budget: cap 2 with 3 cornices -> later ones go dark', eq(B([3, 3, 5], 2), [1, 1, 0]), B([3, 3, 5], 2));
+  check('budget: cap 0 -> none', eq(B([3, 5], 0), [0, 0]));
+  const two = F.corniceSpotLayout(cramped0(1.5), 2);
+  check('a reduced count still lays out inside the box', two.spots.length === 2 &&
+    two.spots.every(sp => Math.abs(sp.x) < 0.75), two.spots.map(sp => sp.x));
+  check('cramped cornice: end lights held in by the reach',
+    cl.spots[0].x > -0.2 + 0.1 && cl.spots[cl.spots.length - 1].x < 0.2 - 0.1, cl.spots.map(sp => sp.x));
 }
 
 // ---- scene geometry --------------------------------------------------------
