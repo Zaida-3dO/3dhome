@@ -1,6 +1,6 @@
 {
   "kind": "geometry",
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "id": "demo",
   "name": "Demo Flat",
   "description": "A wholly fictional seven-room flat, invented for this repository. It exists so the app is runnable and evaluable straight after a clone, and so every feature of the engine has something to render: an L-shaped room, a pillar, interior and exterior walls, a cupboard door with a small swing, several lighting channels per room and both forms of rug. It is not anyone's home and no part of it is measured from one.",
@@ -519,6 +519,88 @@
       "maxOpenDegrees": 90,
       "kind": "standard",
       "room": "bedroom"
+    }
+  ],
+  "windows": [
+    {
+      "id": "lounge_balcony",
+      "label": "Lounge balcony doors",
+      "kind": "balcony",
+      "room": "lounge",
+      "wall": 1,
+      "centre": 150,
+      "width": 220,
+      "sill": 6,
+      "height": 205,
+      "doorSide": "west",
+      "notes": "Exercises the balcony kind: a fixed pane with an outward-swinging glass door at the west end."
+    },
+    {
+      "id": "kitchen_window",
+      "label": "Kitchen window",
+      "room": "kitchen",
+      "wall": 1,
+      "centre": 430,
+      "width": 120,
+      "sill": 100,
+      "height": 110,
+      "notes": "A plain window above worktop height, with no curtain."
+    },
+    {
+      "id": "bedroom_window",
+      "label": "Bedroom window",
+      "room": "bedroom",
+      "wall": 3,
+      "centre": 620,
+      "width": 160,
+      "sill": 20,
+      "height": 190,
+      "topSplit": 0.45
+    }
+  ],
+  "curtains": [
+    {
+      "id": "lounge_sheer",
+      "label": "Lounge sheer",
+      "room": "lounge",
+      "wall": 1,
+      "centre": 150,
+      "width": 250,
+      "openPct": 0,
+      "opacity": 0.4,
+      "offset": 3.5,
+      "outerColor": "#d9c27a",
+      "innerColor": "#d9c27a",
+      "cornice": {
+        "enabled": false
+      },
+      "notes": "A sheer hung behind the lounge curtain, under its cornice. Drawn closed so its translucency shows."
+    },
+    {
+      "id": "lounge_curtain",
+      "label": "Lounge curtain",
+      "room": "lounge",
+      "wall": 1,
+      "centre": 150,
+      "width": 250,
+      "openPct": 100,
+      "offset": 12.5,
+      "outerColor": "#3b6e8f",
+      "innerColor": "#e0a458",
+      "cornice": {
+        "sideFaces": false
+      },
+      "notes": "Wall-to-wall cornice: no side faces, spans the whole lounge."
+    },
+    {
+      "id": "bedroom_curtain",
+      "label": "Bedroom curtain",
+      "room": "bedroom",
+      "wall": 3,
+      "centre": 620,
+      "width": 288,
+      "openPct": 60,
+      "notes": "CurtainSpec's default pink/blue two-tone."
     }
   ],
   "lights": [

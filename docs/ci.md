@@ -63,7 +63,7 @@ So the required check is always reported, and an unchanged path is never punishe
 | `actionlint` | `.github/workflows/**` | `raven-actions/actionlint@v2` — lints workflow syntax, expressions, and (via bundled shellcheck) the `run:` script bodies. |
 | `actionlint-gate` | always | **Required check** for the above. |
 | `pii-guard` | always | Runs `scripts/check-no-pii.sh`. |
-| `js-syntax` | always | `node --check` on every `.js` in `src/` and `scripts/`; `JSON.parse` on every `.json` in `houses/` and the repo root. Also runs the two behaviour tests: `scripts/test-config-loader.mjs` and `scripts/test-extra-overlay-global.mjs`. |
+| `js-syntax` | always | `node --check` on every `.js` in `src/` and `scripts/`; `JSON.parse` on every `.json` in `houses/` and the repo root. Also runs the behaviour tests in `scripts/test-*.mjs` — among them `test-wall-fittings.mjs`, which pins the windows/curtains loader pass-through, the derived inside/outside side of each fitting, and curtain stacking. |
 | `house-profiles` | always | Runs `scripts/validate-house.py` over every `houses/*/` profile directory. |
 | `docker-dry-run` | Docker-relevant paths | Builds the image with `push: false` (skips if there is no `Dockerfile` yet). |
 | `docker-dry-run-gate` | always | **Required check** for the above. |

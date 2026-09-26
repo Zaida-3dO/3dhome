@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. Currently `"1.1"` for `rooms.json` (`1.1` added the optional `sensors` block) and `"1.0"` for `geometry.json`. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. Currently `"1.1"` for both: `rooms.json` `1.1` added the optional `sensors` block, `geometry.json` `1.1` added the optional `windows` and `curtains`. A `1.0` geometry still loads. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -137,6 +137,8 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | `walls` | yes | The walls. |
 | `slabs` | no | Hand-traced floor and ceiling outlines. Omit and both are derived from rooms + wall footprints — see below. |
 | `doors` | no | The doors. |
+| `windows` | no | Windows and balcony glazing, each carving its own opening — see below. |
+| `curtains` | no | Curtains, blackout or sheer, hung on the room face of a wall — see below. |
 | `lights` | no | The light fixtures, grouped by room. |
 | `cameraPresets` | no | Per-house camera overrides. Usually omit — see below. |
 
@@ -294,6 +296,69 @@ it further at load time if two open leaves would collide with each other, but it
 will never open a door wider than you said. Do not rely on `kind` to imply an
 angle; `kind` only styles the leaf and decides who yields in a collision (a
 `standard` door gives way before a `cupboard` one).
+
+### Windows
+
+Placed exactly like a door: a wall **id**, a `centre` along it and a `width`.
+Which face of the wall is the inside is **derived from `room`** (the side of the
+wall the room lies on), so there is no inside/outside field to get wrong.
+
+```json
+{
+  "id": "lounge_balcony", "label": "Lounge balcony doors", "kind": "balcony",
+  "room": "lounge", "wall": 1, "centre": 150, "width": 220,
+  "sill": 6, "height": 205, "doorSide": "west"
+}
+```
+
+- `sill` is the height of the bottom of the glass above the floor; `height` is
+  measured **up from the sill** (the Sweet Home 3D elevation + height
+  convention). The wall is carved to the glazing plus a 4 cm frame reveal on
+  every side, leaving wall below the cill and a lintel above.
+- `kind: "window"` (the default) is WindowSpec: a fixed lower pane under a
+  centre-pivot top sash, split at `topSplit` of the glazed height.
+  `kind: "balcony"` is BalconyWindowSpec: a wide fixed pane beside a glass door
+  that swings **outward**, at the `doorSide` end of the run (and hinged on it).
+- The frame sits flush with the wall's **outer** face; the room side shows a
+  plain reveal the depth of the wall. A **cavity wall** modelled as two parallel
+  segments — an inner leaf and an outer skin — names the frame's leaf in `wall`
+  and the other in `throughWalls`: the opening is cut through both, and the
+  cill spans the whole sandwich.
+- On an exterior wall the frame fades with the wall when you look in from
+  outside. The glass is translucent anyway and is left out of the fade.
+
+### Curtains
+
+Also placed like a door (wall id + `centre` + `width`), on the **room** face of
+the wall. Each is a CurtainSpec pair: floor-to-ceiling, centre-parted, two-tone
+pinch-pleat, under a white cornice with a glowing strip light.
+
+```json
+{
+  "id": "bedroom_curtain", "room": "bedroom", "wall": 3,
+  "centre": 620, "width": 288, "openPct": 60,
+  "outerColor": "#d98aa8", "innerColor": "#5f86c4"
+}
+```
+
+- **Colours are data.** `outerColor` is the pleats from each end inward,
+  `innerColor` the pleats toward the centre part (`outerPleats` / `innerPleats`
+  of each, 5 and 2 by default). For a single-colour curtain give both the same
+  value.
+- `openPct` is a static pose: 0 = drawn closed, 100 (the default) = gathered
+  into a stack at each end. There is no animation and no Home Assistant binding
+  yet; the `id` is what a future `cover.*` binding will key on.
+- **A sheer** is a curtain with `opacity` below 1 — one translucent layer, no
+  lining. To hang one behind a blackout, give it a smaller `offset` (its
+  distance from the wall, cm) and `"cornice": { "enabled": false }` so it shares
+  the blackout's cornice. Curtains on the same wall are stacked automatically:
+  each one's folds are limited so they can never pass through the wall or
+  through a curtain hung behind it.
+- `cornice.sideFaces: false` gives a wall-to-wall cornice spanning the whole
+  room along that wall instead of a box just wider than the curtain.
+- The strip light is emissive only. It adds no light source to the scene — the
+  spec page's three point lights per cornice would overrun the mobile GPU
+  budget the quality tiers protect.
 
 ### Lights
 

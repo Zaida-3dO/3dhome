@@ -368,6 +368,199 @@
       ],
       "additionalProperties": false
     },
+    "window": {
+      "type": "object",
+      "title": "A window or a balcony glazing run",
+      "description": "An opening carved through a wall plus a glazed assembly, positioned exactly like a door: `wall` id + `centre` along it, so it follows the wall when the wall moves.\n\nWhich face of the wall is the room's is DERIVED from `room` (the side of the wall's centreline the room lies on), so there is no inside/outside field to contradict it.\n\nThe frame sits flush with the host wall's OUTER face and reaches into the wall; the room side of the wall shows a plain reveal. For a cavity wall modelled as two parallel segments (an inner and an outer leaf), put the frame's leaf in `wall` and the other leaf in `throughWalls`: the opening is cut through both and the cill spans the whole sandwich.\n\nTwo kinds, after the two spec pages:\n  window  — WindowSpec: a fixed lower pane under a centre-pivot upper sash, split by a transom at `topSplit`.\n  balcony — BalconyWindowSpec: a wide fixed pane beside a hinged glass door that swings OUTWARD, the door at the `doorSide` end.\n\nAdded in schemaVersion 1.1.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable identifier, e.g. \"bedroom_window\".",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "label": {
+          "type": "string",
+          "description": "Display name. Defaults to the id."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["window", "balcony"],
+          "default": "window",
+          "description": "`window` = fixed lower pane + centre-pivot upper sash (WindowSpec). `balcony` = fixed pane + hinged outward-swinging glass door (BalconyWindowSpec)."
+        },
+        "room": {
+          "$ref": "#/$defs/roomId",
+          "description": "The room the window belongs to. Also decides which face of the wall is the inside."
+        },
+        "wall": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The `id` of the wall the frame sits in. Must run along plan x or plan y."
+        },
+        "throughWalls": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 },
+          "uniqueItems": true,
+          "description": "OPTIONAL further wall ids the opening is cut through — the other leaf (or leaves) of a cavity wall modelled as parallel segments. Each must run parallel to `wall`."
+        },
+        "centre": {
+          "type": "number",
+          "description": "Centre of the opening along the wall, in plan centimetres on the wall's long axis — the same convention as `door.centre`."
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Glazed width in centimetres. The frame adds a 4 cm reveal each side, and the wall is carved to that."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Glazed height in centimetres, measured UP FROM `sill` (so the top of the glass is at sill + height, the Sweet Home 3D elevation + height convention)."
+        },
+        "sill": {
+          "type": "number",
+          "minimum": 0,
+          "default": 90,
+          "description": "Height of the bottom of the glazing above the floor, in centimetres. A floor-level window with a small step-over cill is a few centimetres. Values under 4 are raised to 4, the depth of the frame's bottom member."
+        },
+        "topSplit": {
+          "type": "number",
+          "minimum": 0.2,
+          "maximum": 0.8,
+          "default": 0.5,
+          "description": "`window` only: the fraction of the glazed height taken by the openable top sash."
+        },
+        "doorSide": {
+          "type": "string",
+          "enum": ["north", "south", "east", "west"],
+          "description": "`balcony` only: which END of the glazing run the hinged door is at (and hinged on). Must lie along the wall — east/west for an east-west wall, north/south for a north-south one. Defaults to west (or south)."
+        },
+        "doorFraction": {
+          "type": "number",
+          "minimum": 0.15,
+          "maximum": 0.4,
+          "default": 0.25,
+          "description": "`balcony` only: the fraction of the run's width taken by the door."
+        },
+        "frameColor": {
+          "$ref": "#/$defs/hexColor",
+          "description": "Frame and sash colour. Defaults to an off-white uPVC."
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "room", "wall", "centre", "width", "height"],
+      "additionalProperties": false
+    },
+    "curtain": {
+      "type": "object",
+      "title": "A curtain pair (blackout or sheer)",
+      "description": "A CurtainSpec curtain: floor-to-ceiling, centre-parted into a left and a right half, two-tone pinch-pleat, under a white cornice with a strip light. Hung on the ROOM face of a wall and positioned like a door and a window: `wall` id + `centre` along it. Which face is the room's is derived from `room`.\n\nA SHEER is the same curtain with `opacity` below 1: one translucent layer with no lining. Hang it behind (window side of) a blackout on the same wall by giving it a smaller `offset` and `cornice.enabled: false`; curtains sharing a wall are stacked automatically so their folds never pass through each other.\n\nEvery colour is a field here rather than a constant in the engine, because colours are what an owner most wants to change. For a single-colour curtain set `outerColor` and `innerColor` to the same value.\n\nThe pose is static: `openPct` says how it hangs. There is no animation and no Home Assistant binding yet.\n\nAdded in schemaVersion 1.1.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "label": {
+          "type": "string"
+        },
+        "room": {
+          "$ref": "#/$defs/roomId"
+        },
+        "wall": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "centre": {
+          "type": "number",
+          "description": "Centre along the wall, plan centimetres — usually the window's own centre."
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Closed width in centimetres: the span of the pair when drawn."
+        },
+        "top": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Height the fabric hangs from, in centimetres above the floor. Defaults to the ceiling height (floor-to-ceiling)."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Drop in centimetres, measured down from `top`. Defaults to `top` (reaches the floor)."
+        },
+        "openPct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 100,
+          "description": "How open it hangs: 0 = drawn closed across the window, 100 = gathered into a stack at each end."
+        },
+        "opacity": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "default": 1,
+          "description": "1 = an opaque (blackout) curtain with a lining. Below 1 = a SHEER: a single translucent layer at this opacity, e.g. 0.4."
+        },
+        "offset": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Distance of the hanging line from the wall's room face, in centimetres. Defaults to half the cornice depth (CurtainSpec hangs from the cornice's mid-line), or 9 with no cornice. The folds swing either side of this line."
+        },
+        "outerColor": {
+          "$ref": "#/$defs/hexColor",
+          "description": "Colour of the OUTER pleats of each half (from the wall end inward). Default pink #d98aa8."
+        },
+        "innerColor": {
+          "$ref": "#/$defs/hexColor",
+          "description": "Colour of the INNER pleats of each half (toward the centre part). Default blue #5f86c4."
+        },
+        "outerPleats": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20,
+          "default": 5,
+          "description": "Number of outer-colour pleats per half."
+        },
+        "innerPleats": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20,
+          "default": 2,
+          "description": "Number of inner-colour pleats per half. outerPleats + innerPleats must be at least 2."
+        },
+        "liningColor": {
+          "$ref": "#/$defs/hexColor",
+          "description": "Tint of the window-facing lining (opaque curtains only). Default #e7dcc4."
+        },
+        "cornice": {
+          "type": "object",
+          "description": "The pelmet box the curtain hangs under. Solid white by default, with a warm strip light along its inside. Set `enabled: false` for a curtain that hangs under another curtain's cornice (a sheer behind a blackout).",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "sideFaces": {
+              "type": "boolean",
+              "default": true,
+              "description": "true: a box just wider than the curtain, closed back to the wall at each end. false: a wall-to-wall front face spanning the whole room, with no ends."
+            },
+            "color": { "$ref": "#/$defs/hexColor" },
+            "depth": { "type": "number", "exclusiveMinimum": 0, "default": 18, "description": "Projection from the wall, cm." },
+            "height": { "type": "number", "exclusiveMinimum": 0, "default": 24, "description": "Front-face height, cm, hanging down from `top`." },
+            "light": { "type": "boolean", "default": true, "description": "Draw the glowing strip light inside the front face. It is emissive only: it adds no light source to the scene." },
+            "lightColor": { "$ref": "#/$defs/hexColor" }
+          },
+          "additionalProperties": false
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "room", "wall", "centre", "width"],
+      "additionalProperties": false
+    },
     "lightFixture": {
       "type": "object",
       "title": "A light fixture group within a room",
@@ -762,6 +955,22 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/door"
+          },
+          "default": []
+        },
+        "windows": {
+          "type": "array",
+          "description": "OPTIONAL windows and balcony glazing. Each carves its opening in its wall. Added in schemaVersion 1.1.",
+          "items": {
+            "$ref": "#/$defs/window"
+          },
+          "default": []
+        },
+        "curtains": {
+          "type": "array",
+          "description": "OPTIONAL curtains (blackout or sheer), hung on the room face of a wall. Added in schemaVersion 1.1.",
+          "items": {
+            "$ref": "#/$defs/curtain"
           },
           "default": []
         },

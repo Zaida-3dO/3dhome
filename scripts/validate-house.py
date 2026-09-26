@@ -222,6 +222,8 @@ def check_geometry(geo, report):
                 f"check this is really unobstructed",
             )
 
+    check_wall_fittings(geo, wall_ids, room_ids, report)
+
     seen_channels = set()
     for entry in geo.get("lights", []):
         rid = entry.get("room")
@@ -265,6 +267,100 @@ def check_geometry(geo, report):
             )
 
     return room_ids, seen_channels
+
+
+def _wall_axis(wall):
+    """(horizontal, lo, hi) for an axis-aligned wall, or None for a diagonal one."""
+    start, end = wall.get("start"), wall.get("end")
+    if not start or not end:
+        return None
+    dx, dy = abs(start[0] - end[0]), abs(start[1] - end[1])
+    if dx >= 0.5 and dy >= 0.5:
+        return None
+    horizontal = dy < dx
+    i = 0 if horizontal else 1
+    lo, hi = sorted((start[i], end[i]))
+    return horizontal, lo, hi
+
+
+def check_wall_fittings(geo, wall_ids, room_ids, report):
+    """Windows and curtains: the references the schema cannot follow.
+
+    Both are positioned like a door (wall id + centre along it), so the same
+    failures apply -- a wall that does not exist, a centre off the end of it, a
+    room that is not in the profile. The engine skips a broken entry with a
+    console warning; this makes the same mistake visible before deploy.
+    """
+    windows = geo.get("windows", [])
+    curtains = geo.get("curtains", [])
+    if not windows and not curtains:
+        return
+
+    # Same reasoning as the `sensors` version check below: the schema accepts
+    # these keys whatever version a profile declares, so this warning is the
+    # only signal that a profile claims an older version than it uses.
+    version = str(geo.get("schemaVersion") or "")
+    try:
+        major, minor = (int(part) for part in version.split(".", 1))
+    except ValueError:
+        major = minor = -1
+    if (major, minor) < (1, 1):
+        report.warn(
+            "geometry.json/schemaVersion",
+            f"`windows`/`curtains` need schemaVersion 1.1 or newer, but this profile declares '{version}' -- bump it",
+        )
+
+    for kind, items in (("windows", windows), ("curtains", curtains)):
+        seen = set()
+        for item in items:
+            iid = item.get("id", "?")
+            where = f"{kind}/{iid}"
+            if iid in seen:
+                report.error(where, f"duplicate {kind[:-1]} id")
+            seen.add(iid)
+            rid = item.get("room")
+            if rid is not None and rid not in room_ids:
+                report.error(where, f"room '{rid}' is not a room in this profile")
+            wid = item.get("wall")
+            if wid not in wall_ids:
+                report.error(where, f"references wall {wid}, which does not exist")
+                continue
+            axis = _wall_axis(wall_ids[wid])
+            if axis is None:
+                report.error(where, f"wall {wid} is not axis-aligned; openings can only be cut in walls along x or y")
+                continue
+            horizontal, lo, hi = axis
+            centre = item.get("centre")
+            half = item.get("width", 0) / 2.0
+            if centre is not None and not (lo - 1e-6 <= centre <= hi + 1e-6):
+                report.error(where, f"centre {centre} is outside wall {wid}'s span ({lo}..{hi})")
+            elif centre is not None and (centre - half < lo - 1e-6 or centre + half > hi + 1e-6):
+                report.warn(
+                    where,
+                    f"span ({centre - half:.1f}..{centre + half:.1f}) overhangs wall {wid}'s span ({lo}..{hi})",
+                )
+            if kind == "windows":
+                for tid in item.get("throughWalls", []):
+                    if tid not in wall_ids:
+                        report.error(where, f"throughWalls names wall {tid}, which does not exist")
+                        continue
+                    t_axis = _wall_axis(wall_ids[tid])
+                    if t_axis is None or t_axis[0] != horizontal:
+                        report.error(where, f"throughWalls wall {tid} is not parallel to wall {wid}")
+                side = item.get("doorSide")
+                if side is not None:
+                    if item.get("kind") != "balcony":
+                        report.warn(where, "doorSide is only used by kind 'balcony' -- ignored")
+                    elif side not in (HORIZONTAL if horizontal else VERTICAL):
+                        report.error(
+                            where,
+                            f"doorSide '{side}' is not an end of wall {wid}; expected one of "
+                            f"{sorted(HORIZONTAL if horizontal else VERTICAL)}",
+                        )
+            else:
+                pleats = item.get("outerPleats", 5) + item.get("innerPleats", 2)
+                if pleats < 2:
+                    report.error(where, "outerPleats + innerPleats must be at least 2")
 
 
 def _check_texture(texture, profile_dir, where, report):

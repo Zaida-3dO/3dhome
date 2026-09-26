@@ -257,6 +257,252 @@ export const HouseLoader = (() => {
   }
 
   /**
+   * Where a wall-mounted fitting (a window, a curtain) sits relative to its
+   * wall: which way is INTO the room, and where the wall's two faces are.
+   *
+   * Windows and curtains both need to know which face of the wall is the
+   * room's. Unlike a door -- whose swing the author states -- a window has no
+   * natural compass field for it, and asking the author for one invites a
+   * contradiction with the `room` they already named. So it is DERIVED: the
+   * side of the wall's centreline the room's bounding-box centre lies on.
+   *
+   * Returns null (with a warning) for a wall that is not axis-aligned, exactly
+   * as compileDoor's hinge/swing check effectively does -- the carving code in
+   * the renderer only cuts openings in walls that run along x or y.
+   */
+  function wallSide(kindLabel, item, wall, room, warn) {
+    const dx = Math.abs(wall.x1 - wall.x2), dy = Math.abs(wall.y1 - wall.y2);
+    if (dx >= 0.5 && dy >= 0.5) {
+      warn(kindLabel + ' "' + item.id + '" is on wall ' + item.wall + ', which is not axis-aligned -- skipped');
+      return null;
+    }
+    const horizontal = dy < dx;
+    const at = horizontal ? wall.y1 : wall.x1;
+    const roomMid = horizontal ? (room.y1 + room.y2) / 2 : (room.x1 + room.x2) / 2;
+    // +1: the room lies on the +y (south) / +x (east) side of the wall.
+    const inDir = roomMid >= at ? 1 : -1;
+    return {
+      axis: horizontal ? 'x' : 'z',
+      at: at,
+      inDir: inDir,
+      thickness: wall.thickness,
+      // Plan coordinate (on the wall's short axis) of each face.
+      roomFace: at + inDir * wall.thickness / 2,
+      outerFace: at - inDir * wall.thickness / 2
+    };
+  }
+
+  // Window defaults. Centimetres, like every authored length.
+  const WINDOW_DEFAULTS = Object.freeze({
+    sill: 90,
+    topSplit: 0.5,
+    doorFraction: 0.25,
+    frameColor: '#f1ede2'
+  });
+
+  /**
+   * A window: an opening carved through its wall (and through any other
+   * leaves of a cavity wall named in `throughWalls`) plus a glazed assembly.
+   * Positioned exactly like a door -- wall id + centre along the wall -- so it
+   * follows the wall when the wall moves.
+   */
+  function compileWindow(win, wallsById, rooms, warn) {
+    const room = rooms[win.room];
+    if (!room) {
+      warn('window "' + win.id + '" belongs to room "' + win.room + '", which is not in this profile -- skipped');
+      return null;
+    }
+    const wall = wallsById[win.wall];
+    if (!wall) {
+      warn('window "' + win.id + '" references wall ' + win.wall + ', which does not exist -- skipped');
+      return null;
+    }
+    const side = wallSide('window', win, wall, room, warn);
+    if (!side) return null;
+
+    // Extra leaves the opening passes through. Each must run parallel to the
+    // host wall, or a "through" cut would slice it crosswise.
+    const through = [];
+    (win.throughWalls || []).forEach(id => {
+      const tw = wallsById[id];
+      if (!tw) {
+        warn('window "' + win.id + '" throughWalls names wall ' + id + ', which does not exist -- ignored');
+        return;
+      }
+      const twHoriz = Math.abs(tw.y1 - tw.y2) < Math.abs(tw.x1 - tw.x2);
+      if ((side.axis === 'x') !== twHoriz) {
+        warn('window "' + win.id + '" throughWalls names wall ' + id + ', which is not parallel to wall ' +
+          win.wall + ' -- ignored');
+        return;
+      }
+      const twAt = twHoriz ? tw.y1 : tw.x1;
+      through.push({ id: id, at: twAt, thickness: tw.thickness });
+    });
+    // How far the outermost face of the whole sandwich sits beyond the host
+    // wall's own outer face, in cm (>= 0). The cill spans the full depth.
+    let beyond = 0;
+    through.forEach(t => {
+      const outer = t.at - side.inDir * t.thickness / 2;
+      beyond = Math.max(beyond, (side.outerFace - outer) * side.inDir);
+    });
+
+    const kind = win.kind || 'window';
+    let doorEnd = null;
+    if (kind === 'balcony') {
+      const endOk = side.axis === 'x' ? ['east', 'west'] : ['north', 'south'];
+      const wanted = win.doorSide || endOk[1];
+      if (endOk.indexOf(wanted) === -1) {
+        warn('window "' + win.id + '" doorSide "' + wanted + '" is not an end of its wall -- using ' + endOk[1]);
+        doorEnd = endOk[1];
+      } else {
+        doorEnd = wanted;
+      }
+    }
+
+    return {
+      id: win.id,
+      name: win.label || win.id,
+      kind: kind,
+      room: win.room,
+      wallId: win.wall,
+      throughWallIds: through.map(t => t.id),
+      exterior: !!wall.outer,
+      axis: side.axis,
+      at: side.at,
+      inDir: side.inDir,
+      hostThickness: side.thickness,
+      outerFace: side.outerFace,
+      beyond: beyond,
+      c: win.centre,
+      w: win.width,
+      h: win.height,
+      sill: win.sill != null ? win.sill : WINDOW_DEFAULTS.sill,
+      topSplit: win.topSplit != null ? win.topSplit : WINDOW_DEFAULTS.topSplit,
+      doorFraction: win.doorFraction != null ? win.doorFraction : WINDOW_DEFAULTS.doorFraction,
+      doorEnd: doorEnd,
+      frameColor: hexToInt(win.frameColor, hexToInt(WINDOW_DEFAULTS.frameColor, 0xf1ede2))
+    };
+  }
+
+  // Curtain defaults -- CurtainSpec's own illustrative defaults.
+  const CURTAIN_DEFAULTS = Object.freeze({
+    outerColor: '#d98aa8',
+    innerColor: '#5f86c4',
+    liningColor: '#e7dcc4',
+    outerPleats: 5,
+    innerPleats: 2,
+    openPct: 100,
+    opacity: 1,
+    corniceColor: '#ffffff',
+    corniceDepth: 18,
+    corniceHeight: 24,
+    corniceLightColor: '#ffe6bd',
+    // Offset used when a curtain has neither an `offset` nor a cornice.
+    offsetNoCornice: 9
+  });
+
+  // Fold-depth budget (cm). CurtainSpec's natural maximum fold amplitude --
+  // 5.5 cm base, x2.3 when fully gathered -- plus the lining's distance behind
+  // the face, the clearance kept off the wall, and the gap kept between two
+  // curtains hung one behind the other.
+  const CURTAIN_NATURAL_MAX_AMP = 5.5 * 2.3;
+  const CURTAIN_LINING_GAP = 2;
+  const CURTAIN_WALL_CLEARANCE = 2.5;
+  const CURTAIN_LAYER_GAP = 1;
+
+  /**
+   * Stack curtains that share a wall so their folds cannot pass through each
+   * other: a blackout with a sheer behind it, say. Each curtain gets `maxAmp`
+   * (cm), the deepest its folds may swing about its hanging line, from the
+   * room it has between whatever hangs BEHIND it (a curtain with a smaller
+   * offset whose span overlaps) and its own hanging line. Processed nearest
+   * the wall first, so each one sees the final reach of those behind it.
+   */
+  function stackCurtains(curtains) {
+    const sorted = curtains.slice().sort((a, b) => a.offset - b.offset);
+    sorted.forEach((c, i) => {
+      let backLimit = CURTAIN_WALL_CLEARANCE;
+      for (let j = 0; j < i; j++) {
+        const b = sorted[j];
+        if (String(b.wallId) !== String(c.wallId)) continue;
+        const overlap = Math.min(b.c + b.w / 2, c.c + c.w / 2) - Math.max(b.c - b.w / 2, c.c - c.w / 2);
+        if (overlap <= 0) continue;
+        backLimit = Math.max(backLimit, b.offset + b.maxAmp + CURTAIN_LAYER_GAP);
+      }
+      const liningGap = c.sheer ? 0 : CURTAIN_LINING_GAP;
+      c.maxAmp = Math.max(1, Math.min(CURTAIN_NATURAL_MAX_AMP, c.offset - liningGap - backLimit));
+    });
+    return curtains;
+  }
+
+  /**
+   * A curtain hung on the room face of a wall. Colours are data (they are the
+   * thing an owner most wants to change), so every one of them is a profile
+   * field with CurtainSpec's defaults behind it. A sheer is the same curtain
+   * with `opacity` below 1.
+   */
+  function compileCurtain(cur, wallsById, rooms, defaults, warn) {
+    const room = rooms[cur.room];
+    if (!room) {
+      warn('curtain "' + cur.id + '" belongs to room "' + cur.room + '", which is not in this profile -- skipped');
+      return null;
+    }
+    const wall = wallsById[cur.wall];
+    if (!wall) {
+      warn('curtain "' + cur.id + '" references wall ' + cur.wall + ', which does not exist -- skipped');
+      return null;
+    }
+    const side = wallSide('curtain', cur, wall, room, warn);
+    if (!side) return null;
+    const ceiling = defaults.ceilingHeight != null ? defaults.ceilingHeight : defaults.wallHeight;
+    const top = cur.top != null ? cur.top : ceiling;
+    const c = cur.cornice || {};
+    const cornice = c.enabled === false ? null : {
+      sideFaces: c.sideFaces !== false,
+      color: hexToInt(c.color, hexToInt(CURTAIN_DEFAULTS.corniceColor, 0xffffff)),
+      depth: c.depth != null ? c.depth : CURTAIN_DEFAULTS.corniceDepth,
+      height: c.height != null ? c.height : CURTAIN_DEFAULTS.corniceHeight,
+      light: c.light !== false,
+      lightColor: hexToInt(c.lightColor, hexToInt(CURTAIN_DEFAULTS.corniceLightColor, 0xffe6bd))
+    };
+    const opacity = cur.opacity != null ? cur.opacity : CURTAIN_DEFAULTS.opacity;
+    // The room's extent along the wall, for a wall-to-wall cornice.
+    const roomSpan = side.axis === 'x' ? [room.x1, room.x2] : [room.y1, room.y2];
+    return {
+      id: cur.id,
+      name: cur.label || cur.id,
+      room: cur.room,
+      wallId: cur.wall,
+      exterior: !!wall.outer,
+      axis: side.axis,
+      at: side.at,
+      inDir: side.inDir,
+      roomFace: side.roomFace,
+      roomSpan: roomSpan,
+      c: cur.centre,
+      w: cur.width,
+      top: top,
+      drop: cur.height != null ? cur.height : top,
+      openPct: cur.openPct != null ? cur.openPct : CURTAIN_DEFAULTS.openPct,
+      opacity: opacity,
+      // A sheer is one translucent layer: no lining behind it, and it keeps its
+      // own opacity rather than joining the exterior-wall fade.
+      sheer: opacity < 1,
+      // Distance of the hanging line from the wall's room face, cm. Default:
+      // the cornice's mid-depth, as CurtainSpec hangs it.
+      offset: cur.offset != null ? cur.offset
+        : (cornice ? cornice.depth / 2 : CURTAIN_DEFAULTS.offsetNoCornice),
+      maxAmp: null,   // filled in by stackCurtains()
+      outerColor: hexToInt(cur.outerColor, hexToInt(CURTAIN_DEFAULTS.outerColor, 0)),
+      innerColor: hexToInt(cur.innerColor, hexToInt(CURTAIN_DEFAULTS.innerColor, 0)),
+      liningColor: hexToInt(cur.liningColor, hexToInt(CURTAIN_DEFAULTS.liningColor, 0)),
+      outerPleats: cur.outerPleats != null ? cur.outerPleats : CURTAIN_DEFAULTS.outerPleats,
+      innerPleats: cur.innerPleats != null ? cur.innerPleats : CURTAIN_DEFAULTS.innerPleats,
+      cornice: cornice
+    };
+  }
+
+  /**
    * Auto-place `n` fixtures over a room when the profile gives a count but no
    * positions. Deliberately simple and deliberately generic-looking: a grid
    * inset from the room's bounding box. It is the "you have not said where your
@@ -425,6 +671,21 @@ export const HouseLoader = (() => {
       const compiled = compileDoor(d, wallsById, defaults, warn);
       if (compiled) doors.push(compiled);
     });
+
+    // ---- Windows and curtains ---------------------------------------------
+    // Both optional; a profile without them compiles to empty lists, and the
+    // renderer draws exactly what it drew before they existed.
+    const windows = [];
+    (Array.isArray(geo.windows) ? geo.windows : []).forEach(w => {
+      const compiled = compileWindow(w, wallsById, rooms, warn);
+      if (compiled) windows.push(compiled);
+    });
+    const curtains = [];
+    (Array.isArray(geo.curtains) ? geo.curtains : []).forEach(c => {
+      const compiled = compileCurtain(c, wallsById, rooms, defaults, warn);
+      if (compiled) curtains.push(compiled);
+    });
+    stackCurtains(curtains);
 
     // ---- Lights -----------------------------------------------------------
     // THE BIG ONE. The predecessor placed fixtures inside the renderer with a
@@ -640,6 +901,8 @@ export const HouseLoader = (() => {
       rooms: rooms,
       roomOrder: roomOrder,
       doors: doors,
+      windows: windows,
+      curtains: curtains,
       lights: lights,
       site: site,
       footprint: footprint,
@@ -783,6 +1046,7 @@ export const HouseLoader = (() => {
     polygonBounds: polygonBounds,
     polygonArea: polygonArea,
     extendWallsForCorners: extendWallsForCorners,
+    stackCurtains: stackCurtains,
     SUPPORTED_SCHEMA_MAJOR: SUPPORTED_SCHEMA_MAJOR
   };
 })();
