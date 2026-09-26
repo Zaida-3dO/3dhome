@@ -2,10 +2,19 @@
 
 **Verdict: doable, with caveats.** Three of the four popover kinds (light, curtain, door) can be
 reached by tapping the 3D object today, on both houses, with no new hand-written map. The fourth
-(climate) is fully buildable but has **no 3D object to tap on `main`**: radiator models live on the
-unmerged `feat/radiator-spec` branch, and the furniture renderer that would draw them is not wired
-into the scene on `main` either. The popover itself is built and exercised; the tap path lights up
-the moment a radiator mesh carries its furniture id.
+(climate) is fully buildable but has **no 3D object to tap on `main`**: the radiator model lives on
+the unmerged `feat/radiator-spec` branch (the registry names `radiator.js`, which is absent on
+`main`). The popover itself is built and exercised through a `?debug=1` seam.
+
+**Finding (late, after the furniture renderer merged as #37):** rendered furniture is **merged into
+per-room buckets** (`src/furniture.js` / `furniture/merge.js`), so a radiator's meshes will NOT carry
+an individual `userData.furnitureId`, and the ancestor-tag resolution below cannot identify one. The
+production route is to resolve a hit on a merged furniture mesh by its **hit point**: convert it to
+plan coordinates and test it against the oriented footprint and height of each climate-bound
+`house.furniture[]` item. That is still derived from `sensors.climate[furnitureId]`, not a new map.
+(The alternative, tagging radiators `keep` so they stay unmerged, costs draw calls per radiator.)
+Merged furniture is already a correct OCCLUDER for the picker, and the colour-less shadow proxies
+(`colorWrite: false`) are treated as see-through.
 
 **Effort.** Spike/prototype: ~1 day (this branch). Production-ready: a further ~2 days — unit tests
 for the picker and the mapping, climate wired to real radiator meshes once they render, the schema
@@ -34,7 +43,7 @@ A tap target is `{ kind, id, entities }`, resolved from the hit mesh by walking 
 | light | fixture mesh `userData.roomId` + **`userData.lightChannel`** (new, one line in the scene) | `rooms.json rooms[roomId][channel]` |
 | curtain | ancestor group named `curtain:<id>` (already set by `wall-fittings.js`) | `sensors.curtains[id]` |
 | door | door mount **`userData.doorProfileId`** (new; the existing `doorId` holds the display label, not the id) | `sensors.doors[id]` |
-| climate | ancestor `userData.furnitureId` (what a rendered radiator will carry) | **new** `sensors.climate[furnitureId]` |
+| climate | *spike:* ancestor `userData.furnitureId`; *production:* hit point inside a climate-bound item's footprint (furniture is merged, see above) | **new** `sensors.climate[furnitureId]` |
 
 Only **bound** objects are targets. An unbound door or curtain falls through to the existing
 tap-a-room behaviour, so nothing that works today changes.
