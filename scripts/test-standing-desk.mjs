@@ -178,5 +178,44 @@ function meshParts(group) {
     Math.abs(lowBbox.minY) <= TOL_CM && Math.abs(lowBbox.minZ) <= TOL_CM, lowBbox);
 }
 
+// ---- 6. controlSide places the panel left/right with a 4cm edge gap -------
+{
+  function panelX(group) {
+    let x = null;
+    group.traverse(o => { if (o.name === 'controlPanel') x = o.position.x; });
+    return x;
+  }
+  function displayX(group) {
+    let x = null;
+    group.traverse(o => { if (o.name === 'controlPanelDisplay') x = o.position.x; });
+    return x;
+  }
+  const W = 120, base = { width: W, depth: 80, topHeight: 95, minHeight: 72, maxHeight: 120 };
+
+  const dflt = build(THREE, Object.assign({}, base));
+  check('default controlSide is right (panel at x>0, front-facing terms)', panelX(dflt) > 0, panelX(dflt));
+
+  const right = build(THREE, Object.assign({}, base, { controlSide: 'right' }));
+  check('controlSide "right" puts the panel at x>0', panelX(right) > 0, panelX(right));
+
+  const left = build(THREE, Object.assign({}, base, { controlSide: 'left' }));
+  check('controlSide "left" puts the panel at x<0', panelX(left) < 0, panelX(left));
+
+  check('display follows the panel to the right', near(displayX(right), panelX(right), 1e-6), { panel: panelX(right), display: displayX(right) });
+  check('display follows the panel to the left', near(displayX(left), panelX(left), 1e-6), { panel: panelX(left), display: displayX(left) });
+
+  // Everything below in metres, matching the builder's own coordinate system
+  // (positions come back in metres; W here is cm, so convert once).
+  const Wm = W * 0.01;
+  const panelWm = Math.min(0.12, Wm * 0.1);
+  const rightOuterEdgeGapCm = (Wm / 2 - (panelX(right) + panelWm / 2)) * 100;
+  const leftOuterEdgeGapCm = (Wm / 2 - (Math.abs(panelX(left)) + panelWm / 2)) * 100;
+  check('right panel outer edge is 4cm in from the desk side edge', near(rightOuterEdgeGapCm, 4, 1e-3), rightOuterEdgeGapCm);
+  check('left panel outer edge is 4cm in from the desk side edge', near(leftOuterEdgeGapCm, 4, 1e-3), leftOuterEdgeGapCm);
+
+  const badValue = build(THREE, Object.assign({}, base, { controlSide: 'up' }));
+  check('unknown controlSide falls back to right', panelX(badValue) > 0, panelX(badValue));
+}
+
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
 if (failures > 0) process.exit(1);
