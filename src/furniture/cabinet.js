@@ -109,12 +109,20 @@ export const DEFAULTS = Object.freeze({
       { kind: 'mirror', width: 50 }
     ] }
   ],
+  // null: this cabinet uses `fronts`, not the columns grid (open shelving).
+  columns: null,
+  // Carcass panel thickness in columns mode only; fronts mode uses a fixed
+  // thickness (see CARC_T in build()) so this has no effect there.
+  panelThickness: 2,
   plinth: { type: 'plinth', height: 8 },
   gloss: false,
   color: '#f2f0ec',
   topColor: '#f2f0ec',
   shelfLights: false,
-  handles: true
+  handles: true,
+  // null: both carcass sides are plain (see the tall display cabinet preset
+  // for a non-null example).
+  glassSidePanel: null
 });
 
 // ---- finish + mesh helpers ----------------------------------------------
