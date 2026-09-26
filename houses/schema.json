@@ -2657,16 +2657,17 @@
 
     "furnitureParams_wall-sign": {
       "type": "object",
-      "description": "Params for `wall-sign` (src/furniture/wall-sign.js): a framed sign with a two-line CanvasTexture text panel. `default`s equal wall-sign.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). line1/line2 default to generic placeholder text -- this is a public repo and carries no real-house sign wording; house-specific wording, if any, lives only in a private overlay outside this repo.",
+      "description": "Params for `wall-sign` (src/furniture/wall-sign.js): a framed sign with a two-line CanvasTexture text panel, two depth levels (outer frame + inner panel/body). `default`s equal wall-sign.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). line1/line2 default to a stock retail sign phrase, not any real house's wording; house-specific wording, if different, lives only in a private overlay outside this repo.",
       "properties": {
         "width": { "type": "number", "exclusiveMinimum": 0, "default": 110, "description": "cm, overall frame width (landscape)." },
         "height": { "type": "number", "exclusiveMinimum": 0, "default": 45, "description": "cm, overall frame height." },
-        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 3, "description": "cm, frame depth (front to back)." },
-        "frameThickness": { "type": "number", "exclusiveMinimum": 0, "default": 4, "description": "cm, width of the frame member around the panel." },
-        "frameColor": { "$ref": "#/$defs/hexColor", "default": "#2b2620" },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 3, "description": "cm, OUTER FRAME depth (front to back), back at z=0 -- the sign's frontmost surface." },
+        "panelDepth": { "type": "number", "exclusiveMinimum": 0, "default": 1.5, "description": "cm, inner panel/body depth. Its own front (text) face sits at z=panelDepth, so the frame projects forward past it by (depth - panelDepth)." },
+        "frameThickness": { "type": "number", "exclusiveMinimum": 0, "default": 2, "description": "cm, width of the frame member around the panel." },
+        "frameColor": { "$ref": "#/$defs/hexColor", "default": "#151515" },
         "panelColor": { "$ref": "#/$defs/hexColor", "default": "#f2ede2" },
-        "line1": { "type": "string", "default": "HOME", "description": "Serif caps line. Generic placeholder text (privacy)." },
-        "line2": { "type": "string", "default": "sweet home", "description": "Script line. Generic placeholder text (privacy)." },
+        "line1": { "type": "string", "default": "GIVE IT TO GOD", "description": "Serif caps line." },
+        "line2": { "type": "string", "default": "and go to sleep", "description": "Script line." },
         "textColor": { "$ref": "#/$defs/hexColor", "default": "#1a1a1a" }
       },
       "additionalProperties": false
