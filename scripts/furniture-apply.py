@@ -34,9 +34,24 @@ Algorithm (§A5, replacing the original plan text -- read this, not §4):
        for the case where something else wrote the file while this ran.
 
 On any failure at any step, the live file is left byte-identical to how it
-started. This script never touches the .sh3d source, and never runs against a
-network share -- both the geometry.json and staging fragment are ordinary
-local paths given on the command line.
+started. This script never touches the .sh3d source.
+
+**This DOES run against a network share in real use.** The private house's
+real geometry.json lives on an SMB mount (`X:/projects/3dhome/house/`), so
+both the swap and the mtime guard need to behave correctly there, not just on
+a local disk:
+- `os.replace()` is atomic for a rename-with-replace on the SAME SMB share,
+  the same way it is on a local volume, because the temp file is always
+  written into the SAME directory as the live file (never a different mount).
+- If something else has the live file open without `FILE_SHARE_DELETE` (a
+  common default on Windows/SMB -- an editor with the file open, or a backup
+  tool scanning it at the wrong moment), `os.replace()` raises `OSError`
+  (`PermissionError`, Windows error 5) rather than silently doing nothing or
+  corrupting the file. This script catches that, deletes the backup it had
+  just written (which would otherwise be orphaned -- nothing changed, so
+  nothing will ever restore from it), and reports one clean line rather than
+  a raw traceback. The live file is untouched either way; re-running once the
+  file is closed is safe.
 """
 
 import argparse
@@ -60,6 +75,33 @@ def load_json(path):
         return json.load(fh)
 
 
+def check_no_duplicate_ids_within_fragment(fragment_items):
+    """Refuses a fragment that names the same id twice, BEFORE any merging.
+
+    A fragment with two items sharing an id used to be merged silently: the
+    second item overwrote the first in the in-memory upsert (same room/type
+    looks like a legitimate update), so the live file ended up with ONE item
+    where the fragment proposed two, exit 0, no warning. That collapse
+    happens before validate-house.py ever runs, so PR1a's own duplicate-id
+    check can't catch it either -- the duplicate is gone by the time
+    anything validates. This must be checked on the fragment alone, first.
+    """
+    seen = {}
+    for item in fragment_items:
+        iid = item.get("id")
+        if not iid:
+            continue  # reported separately, in upsert_furniture
+        seen.setdefault(iid, 0)
+        seen[iid] += 1
+    dupes = sorted(iid for iid, n in seen.items() if n > 1)
+    if dupes:
+        raise ApplyError(
+            f"fragment contains duplicate id(s) {dupes!r} -- each must be unique within the "
+            f"fragment; the extractor should never produce this, so check where the fragment "
+            f"came from"
+        )
+
+
 def upsert_furniture(geometry, fragment_items, replace):
     """Merge fragment_items into geometry['furniture'] by id, in place.
 
@@ -68,6 +110,8 @@ def upsert_furniture(geometry, fragment_items, replace):
     unless replace=True, because that usually means two different physical
     items were accidentally given the same id.
     """
+    check_no_duplicate_ids_within_fragment(fragment_items)
+
     existing = geometry.setdefault("furniture", [])
     by_id = {item["id"]: (i, item) for i, item in enumerate(existing)}
 
@@ -105,20 +149,49 @@ def bump_schema_version(geometry, minimum="1.2"):
         geometry["schemaVersion"] = minimum
 
 
+def _run_validator(target_path, strict):
+    if not VALIDATOR.exists():
+        return False, f"validator not found at {VALIDATOR}"
+    cmd = [sys.executable, str(VALIDATOR), str(target_path)]
+    if strict:
+        cmd.append("--strict")
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    output = proc.stdout + proc.stderr
+    return proc.returncode == 0, output
+
+
 def run_validator_strict(target_path):
-    """Runs validate-house.py --strict on a single file target.
+    """Runs validate-house.py --strict on a single file target, in full --
+    schema validation AND the structural/cross-reference checks in
+    check_geometry.
 
     Returns (ok, output). ok is False on any validator error OR if the
     validator process itself could not be run.
     """
-    if not VALIDATOR.exists():
-        return False, f"validator not found at {VALIDATOR}"
-    proc = subprocess.run(
-        [sys.executable, str(VALIDATOR), str(target_path), "--strict"],
-        capture_output=True, text=True,
-    )
-    output = proc.stdout + proc.stderr
-    return proc.returncode == 0, output
+    return _run_validator(target_path, strict=True)
+
+
+def run_validator_structural_only(geometry, target_path):
+    """Runs validate-house.py against a copy of `geometry` with `furniture`
+    stripped, so the STRUCTURAL and cross-reference checks in check_geometry
+    still run for real (duplicate ids, missing rooms/walls, wall-span
+    overlaps, and so on) even though the schema itself doesn't recognise
+    `furniture` yet (PR1a hasn't merged). This is what
+    `--skip-furniture-schema` actually skips: only the schema-validation
+    verdict on the `furniture` property, never the rest of the file.
+
+    `--strict` is NOT passed here deliberately: the point is exactly to
+    tolerate one specific, known-and-explained gap (no furniture schema yet),
+    which is what --strict's whole purpose is to refuse to tolerate.
+    """
+    stripped = {k: v for k, v in geometry.items() if k != "furniture"}
+    stripped_path = target_path.parent / f"{target_path.name}.no-furniture-{os.getpid()}"
+    try:
+        stripped_path.write_text(json.dumps(stripped, indent=2) + "\n", encoding="utf-8")
+        return _run_validator(stripped_path, strict=False)
+    finally:
+        if stripped_path.exists():
+            stripped_path.unlink()
 
 
 def next_backup_path(geometry_path, room_label):
@@ -143,7 +216,7 @@ def infer_room_label(fragment):
     return "multi"
 
 
-def apply(geometry_path, fragment_path, replace, skip_schema_check=False):
+def apply(geometry_path, fragment_path, replace, skip_furniture_schema=False):
     geometry_path = Path(geometry_path)
     fragment_path = Path(fragment_path)
 
@@ -151,6 +224,15 @@ def apply(geometry_path, fragment_path, replace, skip_schema_check=False):
         raise ApplyError(f"geometry file not found: {geometry_path}")
     if not fragment_path.exists():
         raise ApplyError(f"fragment file not found: {fragment_path}")
+
+    if skip_furniture_schema:
+        print(
+            "WARNING: --skip-furniture-schema is in effect -- schema validation of the "
+            "furniture property is skipped (PR1a's furniture schema hasn't merged yet). "
+            "Every OTHER check (structural, cross-reference, upsert rules, backup, atomic "
+            "swap, mtime guard) still runs for real. See docs/sh3d-import.md.",
+            file=sys.stderr,
+        )
 
     # Step 1: read current state and the mtime we're basing this run on.
     mtime_before = geometry_path.stat().st_mtime
@@ -176,11 +258,21 @@ def apply(geometry_path, fragment_path, replace, skip_schema_check=False):
     # Step 2: write to a temp file in the SAME directory (so os.replace in
     # step 5 is same-volume and therefore atomic).
     temp_path = geometry_path.parent / f"{geometry_path.name}.tmp-{os.getpid()}"
+    backup_path = None
     try:
         temp_path.write_text(json.dumps(geometry, indent=2) + "\n", encoding="utf-8")
 
-        # Step 3: validate the temp copy with --strict. Never the live file.
-        if not skip_schema_check:
+        # Step 3: validate the temp copy. Never the live file.
+        if skip_furniture_schema:
+            # Only the schema verdict on `furniture` is skipped -- every
+            # structural and cross-reference check in check_geometry still
+            # runs, against a copy with `furniture` stripped out (see
+            # run_validator_structural_only's docstring for why).
+            ok, output = run_validator_structural_only(geometry, temp_path)
+            if not ok:
+                print(output, file=sys.stderr)
+                raise ApplyError("structural validation of the merged result failed -- live file untouched")
+        else:
             ok, output = run_validator_strict(temp_path)
             if not ok:
                 print(output, file=sys.stderr)
@@ -201,8 +293,25 @@ def apply(geometry_path, fragment_path, replace, skip_schema_check=False):
 
         backup_path.write_bytes(geometry_path.read_bytes())
 
-        # Step 5: atomic swap.
-        os.replace(temp_path, geometry_path)
+        # Step 5: atomic swap. On Windows and on an SMB share alike, this can
+        # fail with PermissionError if some other process holds the live file
+        # open without FILE_SHARE_DELETE (e.g. an editor with the file open,
+        # or antivirus scanning it at the wrong moment). The live file itself
+        # is untouched by a failed os.replace -- but the backup just written
+        # above is now an orphan (nothing will ever restore from it, because
+        # nothing changed), so it is deleted here rather than left behind,
+        # and the failure is reported as one clean line rather than a raw
+        # traceback.
+        try:
+            os.replace(temp_path, geometry_path)
+        except OSError as exc:
+            if backup_path.exists():
+                backup_path.unlink()
+            raise ApplyError(
+                f"could not swap the new file into place ({exc.strerror or exc}) -- the live file "
+                f"is untouched; this usually means something else has {geometry_path.name} open. "
+                f"Close it and re-run."
+            ) from exc
     finally:
         if temp_path.exists():
             temp_path.unlink()
@@ -216,9 +325,10 @@ def build_arg_parser():
     p.add_argument("--fragment", required=True, help="path to the staged furniture fragment")
     p.add_argument("--replace", action="store_true", help="allow overwriting an id that exists with a different room or type")
     p.add_argument(
-        "--skip-schema-check", action="store_true",
-        help="skip the validate-house.py --strict run (for use only until PR1a's furniture "
-             "schema has merged; see docs/sh3d-import.md)",
+        "--skip-furniture-schema", action="store_true",
+        help="skip ONLY the schema-validation verdict on the furniture property (structural and "
+             "cross-reference checks still run in full); for use only until PR1a's furniture "
+             "schema has merged -- prints a warning when used; see docs/sh3d-import.md",
     )
     return p
 
@@ -226,7 +336,7 @@ def build_arg_parser():
 def main(argv):
     args = build_arg_parser().parse_args(argv[1:])
     try:
-        backup_path = apply(args.geometry, args.fragment, args.replace, args.skip_schema_check)
+        backup_path = apply(args.geometry, args.fragment, args.replace, args.skip_furniture_schema)
     except ApplyError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

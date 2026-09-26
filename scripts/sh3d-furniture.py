@@ -194,21 +194,85 @@ def read_home_xml(sh3d_path):
 
 
 def parse_furniture(root, report):
-    """Every pieceOfFurniture / group element, in document order. A group's
-    own transform is not descended into -- SweetHome3D groups already bake
-    each child's absolute x/y/angle, so reading direct-and-nested elements
-    flat is correct and matches how the app itself lays them out."""
+    """Every pieceOfFurniture / furnitureGroup element, top-level in document
+    order, honouring SweetHome3D's real Home.xml shape.
+
+    In a real SH3D export, `<level>` (when present at all) is an EMPTY
+    sibling element -- it carries no children -- and each piece of furniture
+    is a top-level child of `<home>` that references its level through a
+    `level="<id>"` IDREF attribute, not by nesting. A plan with only one
+    level commonly omits `<level>` entirely and omits the attribute too.
+    Earlier code assumed the opposite (furniture nested inside `<level>`),
+    which silently extracted nothing from any real file.
+
+    So: walk the WHOLE document once, collect every level id in document
+    order (to know which one is "first" when a `level` attribute is given),
+    and pick every `pieceOfFurniture`/`furnitureGroup` that either has no
+    `level` attribute (single/no-level plan) or names the first level. A
+    plan with more than one level (by distinct level ids actually referenced
+    or declared) is reported with a warning, and only the first level's
+    pieces are read -- this script does not support multi-level extraction.
+
+    A `furnitureGroup`'s own transform is not descended into for its
+    children: SweetHome3D already bakes each child's absolute x/y/angle, so
+    the group is skipped and its children (which appear as their own
+    elements in the document, nested under the group) are read directly --
+    see the caller, which drops bare group containers rather than emitting
+    them as an extra item.
+    """
+    level_ids_in_order = []
+    for el in root.iter():
+        tag = el.tag.rsplit("}", 1)[-1]
+        if tag == "level":
+            lid = el.get("id")
+            if lid and lid not in level_ids_in_order:
+                level_ids_in_order.append(lid)
+
+    referenced_levels = set()
+    all_pieces = []
+    lights = []
+    for el in root.iter():
+        tag = el.tag.rsplit("}", 1)[-1]
+        if tag in ("pieceOfFurniture", "furnitureGroup", "light"):
+            if tag == "light":
+                lights.append(el)
+                continue  # reported by the caller; lamps are not a supported type yet
+            all_pieces.append(el)
+            lvl = el.get("level")
+            if lvl:
+                referenced_levels.add(lvl)
+
+    distinct_levels = referenced_levels or set(level_ids_in_order)
+    if len(distinct_levels) > 1:
+        # First by document order among the ones actually seen.
+        ordered = [lid for lid in level_ids_in_order if lid in distinct_levels] or sorted(distinct_levels)
+        first_level = ordered[0]
+        report.add(
+            f"WARNING: {len(distinct_levels)} levels found in the plan; only level "
+            f"'{first_level}' is read (multi-level plans are not supported)"
+        )
+    elif distinct_levels:
+        first_level = next(iter(distinct_levels))
+    else:
+        first_level = None  # no level info at all -- single-level plan
+
     items = []
-    levels = root.findall(".//level")
-    if len(levels) > 1:
-        report.add(f"WARNING: {len(levels)} levels found in the plan; only the first is read (multi-level plans are not supported)")
-    search_root = levels[0] if levels else root
-    for el in search_root.iter():
-        tag = el.tag.rsplit("}", 1)[-1]  # strip any namespace
-        if tag in ("pieceOfFurniture", "furnitureGroup", "doorOrWindow"):
-            if tag == "doorOrWindow":
-                continue  # doors/windows are skipped explicitly below by kind
-            items.append(el)
+    for el in all_pieces:
+        tag = el.tag.rsplit("}", 1)[-1]
+        lvl = el.get("level")
+        if first_level is not None and lvl is not None and lvl != first_level:
+            continue  # belongs to a later level -- skipped, already warned about
+        if tag == "furnitureGroup":
+            continue  # its children are separate elements in the document; see module docstring
+        items.append(el)
+
+    for light_el in lights:
+        lvl = light_el.get("level")
+        if first_level is not None and lvl is not None and lvl != first_level:
+            continue
+        name = light_el.get("name", "") or "(unnamed light)"
+        report.add(f"SKIP '{name}': SH3D <light> (lamp) fixtures are not a supported furniture type yet")
+
     return items
 
 
@@ -294,6 +358,7 @@ def convert(sh3d_root, geometry, dx, dy, extra_rules, report):
     walls = geometry.get("walls", {}).get("segments", [])
 
     furniture_out = []
+    id_counts = {}
 
     els = parse_furniture(sh3d_root, report)
     for el in els:
@@ -358,7 +423,7 @@ def convert(sh3d_root, geometry, dx, dy, extra_rules, report):
             priority = "normal"
 
         item = {
-            "id": _slugify(name) or f"item-{len(furniture_out) + 1}",
+            "id": _unique_id(room["id"], ftype, id_counts),
             "room": room["id"],
             "type": ftype,
             "at": at,
@@ -382,8 +447,29 @@ def convert(sh3d_root, geometry, dx, dy, extra_rules, report):
 
 
 def _slugify(name):
-    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    """Lowercase, underscore-separated slug, matching the schema's general id
+    pattern (`^[a-z][a-z0-9_]*$`, e.g. `houses/schema.json`'s `roomId`) --
+    NOT hyphens, which that pattern rejects.
+    """
+    s = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     return s or None
+
+
+def _unique_id(room_id, ftype, id_counts):
+    """Plan §1's id convention is `<room>_<type>_<n>` (see e.g.
+    `office_radiator`). Two source pieces mapping to the same room+type
+    (very common -- "Radiator" appearing twice, say) must NOT collide: a
+    collision used to silently merge two different physical items into one
+    on apply, with no warning from either tool. `id_counts` is mutated by the
+    caller across the whole conversion, so ids stay unique fragment-wide, not
+    just within one call.
+    """
+    slug_type = _slugify(ftype) or "item"
+    slug_room = _slugify(room_id) or "room"
+    base = f"{slug_room}_{slug_type}"
+    n = id_counts.get(base, 0) + 1
+    id_counts[base] = n
+    return base if n == 1 else f"{base}_{n}"
 
 
 def try_snap_to_wall(item, walls, rooms, room, report):
@@ -427,27 +513,76 @@ def try_snap_to_wall(item, walls, rooms, room, report):
         if in_dir is None:
             continue
 
+        # The item's FRONT must point INTO the room (same direction as the
+        # wall's room-side normal), not at the wall. Snapping something whose
+        # front faces the wall used to silently turn it around: a
+        # wall-anchor's front always faces into `room` by construction (plan
+        # §1), so accepting a back-to-the-room item here would flip it 180
+        # degrees with no record of that happening. The wall's outward normal
+        # is (0, inDir) for a horizontal wall or (inDir, 0) for a vertical
+        # one; the item's own front is (fx, fy).
+        wall_normal = (0.0, in_dir) if horizontal else (in_dir, 0.0)
+        facing_dot = fx * wall_normal[0] + fy * wall_normal[1]
+        if facing_dot <= 0:
+            report.add(
+                f"REVIEW '{item['source']['sh3d']}': its front faces wall {wall.get('id')} rather than "
+                f"into the room -- left free rather than snapped, which would have turned it 180 degrees"
+            )
+            continue
+
         face_pt = room_face_point(wall, in_dir, along)
         dist = math.hypot(back[0] - face_pt[0], back[1] - face_pt[1])
         if dist > WALL_REVIEW_MAX_CM:
             continue
 
-        candidate = {"wall": wall.get("id"), "centre": round(along, 2), "dist": dist}
+        # `centre` must lie ON the wall's own span, or PR1a's validator (and
+        # the plan's own "centre outside the wall span" rule) will reject it.
+        # `along` can land past the wall's end here because the search window
+        # above deliberately allows some slack past it (to catch furniture
+        # drawn slightly beyond a wall that has since been trimmed); clamp
+        # the STORED centre to the span and flag it if that clamp actually
+        # moved it, rather than silently proposing an out-of-span value.
+        clamped_along = min(max(along, lo), hi)
+        clamped = abs(clamped_along - along) > 1e-6
+
+        candidate = {
+            "wall": wall.get("id"), "centre": round(clamped_along, 2), "dist": dist,
+            "inDir": in_dir, "clamped": clamped, "clamped_from": along,
+        }
         if best is None or dist < best["dist"]:
             best = candidate
 
     if best is None:
         return None
 
+    # `_inDir` is carried on the snap result (private, leading underscore --
+    # not part of the public furniture schema) so later passes that need the
+    # wall's outward direction (mirror-into-wardrobe folding) don't have to
+    # re-derive it, which would mean re-running the §2.3 probe a second time
+    # against the same room and risking disagreement with what was actually
+    # snapped.
+    def _review_suffix():
+        if not best["clamped"]:
+            return ""
+        return (
+            f" REVIEW: centre clamped from {best['clamped_from']:.1f} to {best['centre']} to stay "
+            f"within wall {best['wall']}'s span -- check the wall hasn't moved or been trimmed."
+        )
+
     if best["dist"] <= WALL_SNAP_CM:
         offset = round(best["dist"], 2)
-        return {"wall": best["wall"], "centre": best["centre"], "offset": offset}
+        result = {"wall": best["wall"], "centre": best["centre"], "offset": offset, "_inDir": best["inDir"]}
+        if best["clamped"]:
+            item.setdefault("notes", "")
+            item["notes"] = (item["notes"] + " " if item["notes"] else "") + _review_suffix().strip()
+        return result
     if WALL_REVIEW_MIN_CM <= best["dist"] <= WALL_REVIEW_MAX_CM:
         item.setdefault("notes", "")
         item["notes"] = (item["notes"] + " " if item["notes"] else "") + (
-            f"REVIEW: {best['dist']:.1f} cm off wall {best['wall']}'s face -- snapped with offset 0, check against the current wall position"
+            f"REVIEW: {best['dist']:.1f} cm off wall {best['wall']}'s face -- snapped with offset 0, "
+            f"check against the current wall position.{_review_suffix()}"
         )
-        return {"wall": best["wall"], "centre": best["centre"], "offset": 0}
+        return {"wall": best["wall"], "centre": best["centre"], "offset": 0, "_inDir": best["inDir"]}
     return None
 
 
@@ -479,11 +614,12 @@ def aggregate_kitchen_runs(furniture, report):
             continue
         passthrough.append(item)
 
-    def _fold(groups, run_type):
+    def _fold(groups, run_type, keep_elevation):
         out = []
         for wall, members in groups.items():
             members.sort(key=lambda m: m["centre"])
             modules = []
+            module_notes = []
             for m in members:
                 src = m.get("source", {}).get("sh3d", "").lower()
                 if "oven" in src:
@@ -503,50 +639,164 @@ def aggregate_kitchen_runs(furniture, report):
                 else:
                     kind = "cabinet"
                 modules.append({"kind": kind, "width": m["params"].get("width", 60)})
-            centres = [m["centre"] for m in members]
+                # A module folded into a run loses its own item-level `notes`
+                # (e.g. a REVIEW flag from snapping slightly off the wall) --
+                # carry it forward against the run instead of silently
+                # dropping it, tagged with which sh3d source it came from.
+                m_note = m.get("notes")
+                if m_note:
+                    module_notes.append(f"[{m.get('source', {}).get('sh3d', '?')}] {m_note}")
+
+            # The run's centre is the MIDPOINT OF ITS EXTENT (leftmost module's
+            # start to rightmost module's end along the wall), not the mean of
+            # the members' own centres -- the mean is wrong whenever widths
+            # differ, since it weights every module as if it were the same
+            # size instead of weighting by where its edges actually fall.
+            widths = [mod["width"] for mod in modules]
+            member_centres = [m["centre"] for m in members]
+            starts = [c - w / 2.0 for c, w in zip(member_centres, widths)]
+            ends = [c + w / 2.0 for c, w in zip(member_centres, widths)]
+            run_centre = (min(starts) + max(ends)) / 2.0
+
             run = {
-                "id": f"{run_type}-wall-{wall}",
+                "id": f"{_slugify(run_type)}_wall_{wall}",
                 "room": members[0]["room"],
                 "type": run_type,
                 "wall": wall,
-                "centre": round(sum(centres) / len(centres), 2),
+                "centre": round(run_centre, 2),
                 "offset": 0,
                 "params": {"modules": modules, "corner": "none"},
                 "priority": "normal",
-                "notes": f"REVIEW: aggregated from {len(members)} sh3d item(s) on wall {wall}; verify module order and corner",
+                "notes": (
+                    f"REVIEW: aggregated from {len(members)} sh3d item(s) on wall {wall}; verify module "
+                    f"order and corner." + ("".join(f" {n}." for n in module_notes) if module_notes else "")
+                ),
                 "source": {"sh3d": ", ".join(m.get("source", {}).get("sh3d", "?") for m in members)},
             }
+            if keep_elevation:
+                # kitchen-wall-run items (upper cabinets, the hood) hang above
+                # the worktop -- collapsing to elevation 0 during aggregation
+                # used to land them on the floor. Use the highest member
+                # elevation as a conservative representative (a hood is
+                # usually mounted above the cabinets it's grouped with).
+                elevations = [m.get("elevation", 0) for m in members if m.get("elevation")]
+                if elevations:
+                    run["elevation"] = round(max(elevations), 2)
             report.add(f"NOTE: aggregated {len(members)} item(s) on wall {wall} into {run['id']}")
             out.append(run)
         return out
 
-    result = passthrough + _fold(base_groups, "kitchen-base-run") + _fold(wall_groups, "kitchen-wall-run")
+    result = (
+        passthrough
+        + _fold(base_groups, "kitchen-base-run", keep_elevation=False)
+        + _fold(wall_groups, "kitchen-wall-run", keep_elevation=True)
+    )
     return result
 
 
 # ---------------------------------------------------------------------------
 # Mirror-into-wardrobe folding
 # ---------------------------------------------------------------------------
-def fold_mirrors_into_wardrobes(furniture, report):
+def _item_front_face(item, walls_by_id):
+    """The item's front-face segment in ABSOLUTE plan coordinates, as
+    (centre_point, normal, half_width) -- `normal` is the outward unit
+    vector the front faces, `centre_point` is the midpoint of the front
+    face, and `half_width` lets a caller test span overlap along the face.
+
+    Both anchor forms are resolved into the SAME coordinate system (plan
+    cm), which the previous version did not do: it compared a free item's
+    `at` (its CENTRE) against a wall-anchored item's raw `centre` (a
+    WALL-LOCAL coordinate, paired with a fake y of 0), so a wall-anchored
+    wardrobe was never within reach of anything. Returns None if the
+    geometry can't be resolved (e.g. the item's wall id is unknown).
+    """
+    depth = item["params"].get("depth", 0.0)
+    width = item["params"].get("width", 0.0)
+
+    if "at" in item:
+        rotation = item.get("rotation", 0.0)
+        r = math.radians(rotation)
+        front = (-math.sin(r), math.cos(r))
+        at = item["at"]
+        face_centre = (at[0] + front[0] * depth / 2.0, at[1] + front[1] * depth / 2.0)
+        return face_centre, front, width / 2.0
+
+    if "wall" in item and "centre" in item:
+        wall = walls_by_id.get(item["wall"])
+        if wall is None:
+            return None
+        axis = wall_axis(wall)
+        if axis is None:
+            return None
+        horizontal, lo, hi = axis
+        thickness = wall.get("thickness", 10.0)
+        at_line = wall["start"][1] if horizontal else wall["start"][0]
+        # room_side is which side of the wall the item's room is on. Plan
+        # items don't carry inDir directly, but a wall-anchored item's
+        # `offset` is always measured INTO the room from the wall's room
+        # face, and the extractor only ever snaps on the room side -- so the
+        # face normal points away from the wall's centreline, on whichever
+        # side the item's own back sits. We derive that from the item's own
+        # `notes`-free stored `_inDir` if present (set by try_snap_to_wall),
+        # else assume +1 and let the caller's own snapping have been correct.
+        in_dir = item.get("_inDir", 1)
+        along = item["centre"]
+        back_face_at = at_line + in_dir * thickness / 2.0
+        offset = item.get("offset", 0.0)
+        front_at = back_face_at + in_dir * (offset + depth)
+        face_centre = (along, front_at) if horizontal else (front_at, along)
+        normal = (0.0, in_dir) if horizontal else (in_dir, 0.0)
+        return face_centre, normal, width / 2.0
+
+    return None
+
+
+def _point_to_face_distance(point, face_centre, face_normal, half_width):
+    """Perpendicular distance from `point` to the face's plane, but only
+    counted when `point` projects within the face's own span (its "overlap"
+    with the face) -- a point far off the end of a wardrobe's front doesn't
+    count as being on that front just because the plane is close.
+    """
+    dx, dy = point[0] - face_centre[0], point[1] - face_centre[1]
+    perp_dist = abs(dx * face_normal[0] + dy * face_normal[1])
+    # Tangential vector along the face (perpendicular to the normal).
+    tangent = (-face_normal[1], face_normal[0])
+    along = dx * tangent[0] + dy * tangent[1]
+    if abs(along) > half_width + 1e-6:
+        return None  # off the end of the face -- not overlapping its span
+    return perp_dist
+
+
+def fold_mirrors_into_wardrobes(furniture, walls, report):
     """Plan §4: 'a mirror within 2 cm of a wardrobe front → folded into that
     wardrobe's `params.fronts`'. A mirror is identified by its sh3d SOURCE
     NAME containing "mirror" -- it usually has no dedicated type mapping of
     its own (a plain wall mirror panel maps to `box`), so this must not
-    require it to already be typed `cabinet`."""
+    require it to already be typed `cabinet`.
+
+    Measured against the wardrobe's FRONT-FACE PLANE (not its centre point),
+    in one consistent coordinate system for both anchor forms -- see
+    `_item_front_face`. A mirror qualifies when it is within
+    MIRROR_WARDROBE_FOLD_CM of that plane AND its own centre projects within
+    the wardrobe's front-face span (so a mirror near the wardrobe's SIDE,
+    not its front, does not fold in just because it is nearby).
+    """
+    walls_by_id = {w.get("id"): w for w in walls}
     mirrors = [f for f in furniture if "mirror" in f.get("source", {}).get("sh3d", "").lower()]
     wardrobes = [f for f in furniture if f["type"] == "cabinet" and "mirror" not in f.get("source", {}).get("sh3d", "").lower()]
     folded_ids = set()
 
     for mirror in list(mirrors):
-        m_pos = _item_point(mirror)
-        if m_pos is None:
+        m_point = _item_reference_point(mirror, walls_by_id)
+        if m_point is None:
             continue
         for wardrobe in wardrobes:
-            w_pos = _item_point(wardrobe)
-            if w_pos is None:
+            face = _item_front_face(wardrobe, walls_by_id)
+            if face is None:
                 continue
-            dist = math.hypot(m_pos[0] - w_pos[0], m_pos[1] - w_pos[1])
-            if dist <= MIRROR_WARDROBE_FOLD_CM:
+            face_centre, face_normal, half_width = face
+            dist = _point_to_face_distance(m_point, face_centre, face_normal, half_width)
+            if dist is not None and dist <= MIRROR_WARDROBE_FOLD_CM:
                 fronts = wardrobe["params"].setdefault("fronts", [])
                 fronts.append("mirror")
                 folded_ids.add(id(mirror))
@@ -556,11 +806,25 @@ def fold_mirrors_into_wardrobes(furniture, report):
     return [f for f in furniture if id(f) not in folded_ids]
 
 
-def _item_point(item):
+def _item_reference_point(item, walls_by_id):
+    """A representative absolute-plan point for an item, used as the
+    'where is the mirror' side of the front-face distance test.
+
+    A free item's `at` already is one, in the same plan-cm coordinate system
+    `_item_front_face` uses. A wall-anchored item's own `centre` is
+    WALL-LOCAL (a 1D position along the wall), so resolving it into plan
+    coordinates uses that item's OWN front face -- a mirror is thin and is
+    expected to sit flush, so its own front-face midpoint is representative
+    of where it actually is. This is what the previous version got wrong: it
+    paired a wall-local `centre` number directly with a fake y of 0 and
+    called that a plan point, which put a wall-anchored mirror nowhere near
+    any wardrobe regardless of where it actually was.
+    """
     if "at" in item:
         return tuple(item["at"])
     if "wall" in item and "centre" in item:
-        return (item["centre"], 0)  # coarse -- wall+centre items are compared by centre only
+        face = _item_front_face(item, walls_by_id)
+        return face[0] if face else None
     return None
 
 
@@ -604,10 +868,14 @@ def main(argv):
     extra_rules = load_extra_rules(args.map)
     report = Report()
 
+    walls = geometry.get("walls", {}).get("segments", [])
+
     root = read_home_xml(sh3d_path)
     furniture = convert(root, geometry, dx, dy, extra_rules, report)
-    furniture = fold_mirrors_into_wardrobes(furniture, report)
+    furniture = fold_mirrors_into_wardrobes(furniture, walls, report)
     furniture = aggregate_kitchen_runs(furniture, report)
+    for item in furniture:
+        item.pop("_inDir", None)  # internal only -- never part of the output schema
 
     basedon_mtime = Path(args.geometry).stat().st_mtime
     fragment = {

@@ -49,6 +49,19 @@ every item it touches, so it is required on every run rather than assumed.
 - **Reads** `Home.xml` from inside the `.sh3d` zip, in memory, with the
   standard library only (`zipfile` + `xml.etree.ElementTree`). It never
   writes back to the `.sh3d` file.
+- **Reads the real SweetHome3D layout.** `pieceOfFurniture` and
+  `furnitureGroup` elements are **top-level children of `<home>`**, each
+  optionally naming its level through a `level="<id>"` attribute; `<level>`
+  itself, when present, is an **empty sibling element** with no nested
+  children. A plan with only one level commonly has no `<level>` element and
+  no `level` attribute at all. A `furnitureGroup`'s own container is not
+  emitted as an item -- only its member `pieceOfFurniture` children are (SH3D
+  bakes each child's absolute position, so the group's own transform is
+  never applied a second time). A plan with more than one distinct level is
+  read from its first level only, **with a warning**; a single-level or
+  no-level plan extracts everything with no spurious warning. SH3D `<light>`
+  (lamp) fixtures are reported as skipped by name, same as any other
+  unsupported piece.
 - **Converts** each piece of furniture:
   - `at = [x + DX, y + DY]` (SH3D's `x`/`y` are already the footprint centre)
   - `rotation = degrees(angle) mod 360`
@@ -56,6 +69,10 @@ every item it touches, so it is required on every run rather than assumed.
     is copied
   - `modelMirrored="true"` becomes `params.mirrored: true`, noted in the
     report
+  - `id` follows the plan's `<room>_<type>` convention (e.g.
+    `office_radiator`); a second item that maps to the same room and type
+    gets a numbered suffix (`office_radiator_2`, ...) so two source pieces
+    sharing a name can never collide on id.
 - **Assigns a room** by testing which room polygon contains the item's centre.
   An item that falls inside no room is left unassigned and flagged for review.
 - **Snaps to a wall** when the item's back edge is parallel to an
@@ -63,7 +80,13 @@ every item it touches, so it is required on every run rather than assumed.
   of it -- it becomes a `wall`/`centre`/`offset` item instead of a free `at`
   item. An item 10-40 cm off a face is still snapped, with `offset: 0`, but
   is flagged `REVIEW` in its `notes` field -- this is what catches furniture
-  that was drawn against a wall that has since moved.
+  that was drawn against a wall that has since moved. `centre` is clamped to
+  the wall's own span (and flagged `REVIEW` if clamping moved it) rather than
+  ever being proposed outside it, which the schema will reject. An item whose
+  **front faces the wall** (rather than into the room) is left free and
+  flagged `REVIEW` instead of being snapped -- snapping it would silently
+  turn it 180 degrees, since a wall anchor's front always faces into `room`
+  by construction.
 
   The wall-side test used here (which side of the wall the room is actually
   on) is the fixed probe from plan §2.3: a point is checked a few cm past
@@ -83,17 +106,25 @@ every item it touches, so it is required on every run rather than assumed.
   plants, picture frames to `wall-art`, clocks. Kitchen lower-cabinet, oven,
   hob, sink, dishwasher and washer entries on the same wall are **aggregated**
   into a single `kitchen-base-run` item with an ordered `modules` list; upper
-  cabinets and hoods aggregate the same way into `kitchen-wall-run`. A mirror
-  found within about 2 cm of a wardrobe's front is folded into that
-  wardrobe's `params.fronts` instead of becoming its own item. Anything that
-  matches nothing becomes a generic `box` with `priority: "minor"`, flagged
-  for review.
+  cabinets and hoods aggregate the same way into `kitchen-wall-run`, which
+  keeps a representative (maximum) `elevation` across its members so upper
+  cabinets don't collapse to the floor. Each run's `centre` is the midpoint of
+  its own extent (leftmost module's start to rightmost module's end), not the
+  mean of the members' centres, which would be wrong whenever module widths
+  differ. A folded module's own `REVIEW` note (e.g. from snapping slightly
+  off the wall) is carried into the run's `notes` rather than dropped.
+
+  A mirror found within about 2 cm of a wardrobe's **front-face plane**
+  (measured in one consistent plan-coordinate system for both anchor forms,
+  and only when the mirror's own position projects within that face's span)
+  is folded into that wardrobe's `params.fronts` instead of becoming its own
+  item. Anything that matches nothing becomes a generic `box` with
+  `priority: "minor"`, flagged for review.
 - **Skips**, with the reason recorded in the report: doors, windows,
-  curtains, bathroom fixtures, anything marked `visible="false"`, and
-  anything named as a rug (rugs become a suggested `rooms[].rug.polygon`
-  instead of a furniture entry -- not implemented by this pass; the note in
-  the report says so). A plan with more than one level is read from its
-  first level only, with a warning.
+  curtains, bathroom fixtures, anything marked `visible="false"`, SH3D
+  `<light>` fixtures, and anything named as a rug (rugs become a suggested
+  `rooms[].rug.polygon` instead of a furniture entry -- not implemented by
+  this pass; the note in the report says so).
 - **Refuses a `--out` path that git would ever track.** If the path is
   already tracked, or sits inside a git work tree and is not covered by
   `.gitignore`, the script exits with an error rather than writing -- this
@@ -155,7 +186,7 @@ python scripts/furniture-apply.py \
 | `--geometry <path>` | yes | the live file to update |
 | `--fragment <path>` | yes | the staging fragment to apply |
 | `--replace` | no | allow overwriting an id that already exists with a **different** room or type |
-| `--skip-schema-check` | no | skip the `validate-house.py --strict` run (see below) |
+| `--skip-furniture-schema` | no | skip *only* the schema-validation verdict on the `furniture` property (see below) |
 
 ### Algorithm
 
@@ -163,18 +194,27 @@ This is the design from the plan's round-2 amendment, §A5, which **replaces**
 the original `furniture-apply.py` design in plan §4:
 
 1. Read the current `geometry.json` and upsert the fragment's items into it
-   **in memory**, by `id`. An id that already exists with a different room or
+   **in memory**, by `id`. **The fragment is refused outright if it contains
+   the same id twice**, before any merging happens -- a same-id collision
+   used to be merged silently (the second occurrence overwrote the first,
+   since matching room/type looks like a legitimate update), which left the
+   live file with one item where the fragment proposed two, with no warning.
+   An id that already exists **in the live file** with a different room or
    type is refused unless `--replace` is given -- that mismatch usually means
    two different physical items were accidentally given the same id.
 2. Write the merged result to a **temp file in the same directory**:
    `geometry.json.tmp-<pid>`.
-3. Run `validate-house.py --strict` on the **temp file only**. On any
-   failure, delete the temp file, exit 1, and leave the live file untouched.
+3. Run `validate-house.py` on the **temp file only**. On any failure, delete
+   the temp file, exit 1, and leave the live file untouched.
 4. Back up the live file to `geometry.json.bak-<yyyymmdd>-furniture-<room>`.
    If that name already exists, `-2`, `-3`, ... are tried instead. **An
    existing backup is never overwritten.**
 5. Swap the temp file in with `os.replace(temp, geometry.json)`, which is
-   atomic on the same volume.
+   atomic on the same volume (including an SMB share -- see "Running against
+   a network share" below). **If the swap itself fails** (see below), the
+   backup just written is deleted (nothing will ever restore from it, since
+   nothing changed) and a clean one-line error is reported, not a raw
+   traceback.
 6. If the live file's mtime changed between step 1 and step 5, the run
    **aborts before the swap** -- a second guard alongside the single-writer
    convention, for the case where something else wrote the file while this
@@ -183,20 +223,42 @@ the original `furniture-apply.py` design in plan §4:
 On any failure at any step, the live file is left byte-identical to how it
 started.
 
-### Why `--skip-schema-check` exists, and when to use it
+### Running against a network share
+
+The real target, `X:/projects/3dhome/house/geometry.json`, is on an **SMB
+mount**, not a local disk. `os.replace()`'s atomicity guarantee holds there
+too, for the same reason it holds locally: the temp file is always written
+into the **same directory** as the live file (never a different mount), so
+the rename-with-replace is a single filesystem operation on one share.
+
+If something else has the live file open without `FILE_SHARE_DELETE` (an
+editor with the file open, or a backup/antivirus tool scanning it at the
+wrong moment -- a common situation on Windows and SMB alike), `os.replace()`
+raises `PermissionError` (Windows error 5) rather than silently doing nothing
+or corrupting the file. This tool catches that, cleans up the orphaned
+backup, and reports one line telling you to close whatever has the file open
+and re-run. The live file itself is untouched either way.
+
+### Why `--skip-furniture-schema` exists, and when to use it
 
 The furniture schema itself (`furniture[]`, its `$defs`, the 1.2 version
 bump) is being built in parallel, in plan PR1a, and had not merged as of this
 PR. Until it has, `houses/schema.json` does not recognise a `furniture`
 property at all (its geometry definition uses `additionalProperties: false`),
-so `validate-house.py --strict` on **any** file carrying `furniture[]`
-fails schema validation today, correctly -- not a bug in this tool. Passing
-`--skip-schema-check` runs every other check in `apply()` (upsert rules,
-temp-file write, backup-never-overwritten, atomic swap, mtime guard) without
-that one. **Once PR1a merges, drop `--skip-schema-check` from normal use** --
-the real gate is `validate-house.py --strict` running for real, and this flag
-existing at all is a stopgap for the parallel-PR window, not a permanent
-escape hatch.
+so schema-validating **any** file carrying `furniture[]` fails today,
+correctly -- not a bug in this tool.
+
+`--skip-furniture-schema` skips **only that one verdict**. Every other check
+still runs for real, against a copy of the merged file with `furniture`
+stripped out: duplicate room/wall ids, a door or window referencing a
+non-existent wall, a centre outside a wall's span, and everything else
+`validate-house.py`'s structural and cross-reference checks catch. It also
+prints a `WARNING` line every time it is used, so a run with it enabled is
+never silently indistinguishable from a fully-validated one. **Once PR1a
+merges, drop `--skip-furniture-schema` from normal use** -- the real gate is
+`validate-house.py` validating the whole file, furniture schema included, and
+this flag existing at all is a stopgap for the parallel-PR window, not a
+permanent escape hatch.
 
 ### Testing
 
@@ -204,9 +266,14 @@ escape hatch.
 since the two tools work on the same synthetic fixtures) covers: a clean
 upsert with a schema-version bump; a same-room/type id upsert; a
 different-room/type id collision refused without `--replace` and allowed
-with it; a same-day backup that already exists being left untouched while a
-`-2` backup is created instead; a forced `--strict` validation failure (using
-today's real schema, which does not yet know `furniture[]`) leaving the live
-file byte-identical and no temp file behind; and an mtime change between the
-initial read and the swap aborting before anything is written. All of it runs
-against synthetic geometry fixtures built fresh in a temp directory.
+with it; a fragment containing a duplicate id refused outright, with or
+without `--replace`; a same-day backup that already exists being left
+untouched while a `-2` backup is created instead; a forced validation
+failure (using today's real schema, which does not yet know `furniture[]`)
+leaving the live file byte-identical and no temp file behind; `--skip-
+furniture-schema` still catching a genuine structural defect (a duplicate
+wall id) that has nothing to do with the furniture schema gap; an mtime
+change between the initial read and the swap aborting before anything is
+written; and a simulated `os.replace()` failure leaving the live file
+untouched with the orphaned backup cleaned up. All of it runs against
+synthetic geometry fixtures built fresh in a temp directory.
