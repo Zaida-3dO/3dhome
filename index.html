@@ -833,6 +833,9 @@
       //   identical frame costs ~30ms). So a cold ?embed=1 open freezes for
       //   ~40-57s. See docs/perf-cold-start.md.
       const shadows = params.get('shadows') || (isPreview ? 'low' : (isEmbed ? 'low' : 'auto'));
+      // ?tier=ultra|mid|low forces the quality tier, for A/B testing (never
+      // above what the GPU's uniform budget compiles). See docs/url-parameters.md.
+      const tierParam = ['ultra', 'mid', 'low'].indexOf(params.get('tier')) !== -1 ? params.get('tier') : undefined;
       const fpsParam = parseInt(params.get('fps'), 10);
       // ?furniture=0 (or false/off): start with the furniture hidden AND
       // unbuilt, for a bare plan or an A/B cost check. The Settings "Show
@@ -1236,6 +1239,7 @@
         rotateSpeed: rotateSpeed,
         initialState: initialState,
         shadows: shadows,
+        tier: tierParam,
         furniture: furnitureOn,
         maxFps: maxFps,
         pixelRatio: scenePixelRatio,

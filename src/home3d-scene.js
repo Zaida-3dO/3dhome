@@ -9,6 +9,8 @@
  */
 
 import * as THREE from 'three';
+import { detectMobileGpu, resolveTier, capPixelRatio } from './quality-tier.js';
+import { collapseEmitters } from './light-merge.js';
 import { HouseLoader } from './house-loader.js';
 import {
   insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, printYaw, WALK_DEFAULTS
@@ -1760,15 +1762,25 @@ export const Home3DScene = (() => {
     if (quality.ambientStrips) {
       const lit = Object.values(curtainById).filter(e => e.built.corniceStrip);
       const want = lit.map(e => corniceLightCount(e.built.corniceStrip.userData.cornice.width * 100));
-      const counts = corniceLightBudget(want, quality.corniceLightCap);
+      // Below ultra each cornice is at most quality.cornicePerCornice lights
+      // (task cd6d5d05: a cornice is ONE light channel, driven by one HA
+      // entity), spread along it by corniceSpotLayout; each carries the
+      // share of the wanted count it stands for (userData.gain), so the
+      // cornice throws the same total light. Ultra keeps 3/5 when the
+      // budget allows.
+      const perCornice = quality.cornicePerCornice;
+      const capped = want.map(n => (perCornice ? Math.min(n, perCornice) : n));
+      const counts = corniceLightBudget(capped, quality.corniceLightCap);
       lit.forEach((entry, i) => {
         if (!counts[i]) return;
         const built = entry.built;
         const layout = corniceSpotLayout(built.corniceStrip.userData.cornice, counts[i]);
         layout.spots.forEach(sp => {
+          const gain = want[i] / counts[i];
           const glow = new THREE.SpotLight(built.corniceStrip.userData.restColor,
-            CORNICE_GLOW_INTENSITY, layout.range, layout.angle, 1, 2);
+            CORNICE_GLOW_INTENSITY * gain, layout.range, layout.angle, 1, 2);
           glow.name = 'corniceGlow';
+          glow.userData.gain = gain;
           glow.position.set(sp.x, sp.y, sp.z);
           glow.target.position.set(sp.tx, sp.ty, sp.tz);
           built.group.add(glow);
@@ -2265,7 +2277,12 @@ export const Home3DScene = (() => {
 
       // --- Fixture builders, one per fixtureType --------------------------
       // Each takes a world-space position and returns nothing; it pushes the
-      // visible fixture mesh into `meshes` and its PointLight into `lights`.
+      // visible fixture mesh into `meshes` and its light EMITTER (position,
+      // range, decay -- not yet a light) into `lights`. The channel's
+      // emitters become one or two real PointLights once the channel is
+      // built (collapseEmitters, task cd6d5d05): three.js pays every light
+      // on every fragment of the house, so one light per fixture was the
+      // single biggest per-pixel cost on a phone or tablet GPU.
       // The emissive disc/sphere is what the user clicks to select the room, so
       // every fixture carries { roomId, clickable }.
 
@@ -2277,10 +2294,7 @@ export const Home3DScene = (() => {
         b.userData = { roomId: id, clickable: true };
         scene.add(b);
         meshes.push(b);
-        const pl = new THREE.PointLight(tint, 0.6, Math.max(w, d) * 1.8, 1.8);
-        pl.position.set(px, py - 0.06, pz);
-        scene.add(pl);
-        lights.push(pl);
+        lights.push({ x: px, y: py - 0.06, z: pz, intensity: 1, distance: Math.max(w, d) * 1.8, decay: 1.8 });
       };
 
       // Surface-mounted spot: a small sphere. Historically a room's five spots
@@ -2306,10 +2320,7 @@ export const Home3DScene = (() => {
         b.userData = { roomId: id, clickable: true };
         scene.add(b);
         meshes.push(b);
-        const pl = new THREE.PointLight(tint, 0.5, 4, 2);
-        pl.position.set(px, py, pz);
-        scene.add(pl);
-        lights.push(pl);
+        lights.push({ x: px, y: py, z: pz, intensity: 1, distance: 4, decay: 2 });
       };
 
       // Linear LED run. `size` is the emitter's [length, height, depth] in cm,
@@ -2327,10 +2338,7 @@ export const Home3DScene = (() => {
         m.userData = { roomId: id, clickable: true };
         scene.add(m);
         meshes.push(m);
-        const pl = new THREE.PointLight(tint, 0.2, 2.5, 2);
-        pl.position.set(px, py, pz);
-        scene.add(pl);
-        lights.push(pl);
+        lights.push({ x: px, y: py, z: pz, intensity: 1, distance: 2.5, decay: 2 });
       };
 
       /**
@@ -2392,17 +2400,30 @@ export const Home3DScene = (() => {
               break;
             case 'none':
               // Light with no visible fixture geometry.
-              {
-                const pl = new THREE.PointLight(tint, 0.6, Math.max(w, d) * 1.8, 1.8);
-                pl.position.set(px, fixtureY(pos, 0.08), pz);
-                scene.add(pl);
-                ls.push(pl);
-              }
+              ls.push({ x: px, y: fixtureY(pos, 0.08), z: pz, intensity: 1, distance: Math.max(w, d) * 1.8, decay: 1.8 });
               break;
             default:
               addDownlight(px, fixtureY(pos, 0.02), pz, ms, ls, tint);
           }
         });
+
+        // The channel's emitters -> one PointLight (two in a room longer
+        // than 4 m, one per half along its long axis), at their centroid,
+        // reaching as far as the furthest of them did. `userData.gain` is
+        // how many fixtures it stands for: syncLights() multiplies the
+        // channel's per-fixture intensity by it, so the room's total light,
+        // and its on/off/brightness/colour control, are what they were.
+        const emitters = ls.splice(0, ls.length);
+        collapseEmitters(emitters, { minX: tx(rm.x1), maxX: tx(rm.x2), minZ: tz(rm.y1), maxZ: tz(rm.y2) })
+          .forEach(m => {
+            const pl = new THREE.PointLight(tint, 0.6, m.distance, m.decay);
+            pl.position.set(m.x, m.y, m.z);
+            pl.userData.gain = m.intensity;
+            pl.userData.fixtures = m.count;
+            pl.name = 'roomLight:' + id + ':' + channel;
+            scene.add(pl);
+            ls.push(pl);
+          });
 
         // A spot cluster shares one PointLight — see addSpotMesh. WHERE it
         // hangs depends on whether the profile said where the spots are:
@@ -3178,10 +3199,31 @@ export const Home3DScene = (() => {
     // We classify the GPU and skip the heaviest light categories on low tier.
     const gl = ren.getContext();
     const maxFragU = gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS);
-    let tier;
-    if (maxFragU >= 1024)      tier = 'ultra';  // full scene as designed
-    else if (maxFragU >= 512)  tier = 'mid';    // drop room shadow lights
-    else                       tier = 'low';    // also drop ambient strips + sun shadow
+    // The uniform count answers "will the shader compile?"; it says nothing
+    // about fill rate. A mobile GPU (task b37115bc, src/quality-tier.js) is
+    // capped at 'mid' and a pixel ratio of 1.5 whatever it reports, and
+    // `opts.tier` (the page's ?tier=) overrides both for A/B testing -- never
+    // above what the uniform budget compiles.
+    let gpuName = '';
+    try {
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      gpuName = String(gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+    } catch (e) { /* no name: the user agent decides */ }
+    const gpu = detectMobileGpu({
+      renderer: gpuName,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+      coarsePointer: typeof matchMedia === 'function' ? matchMedia('(pointer: coarse)').matches : undefined,
+      maxTouchPoints: typeof navigator !== 'undefined' ? navigator.maxTouchPoints : 0
+    });
+    const mobileGpu = gpu.mobileGpu === true;
+    const tierInfo = resolveTier({ maxFragU, mobileGpu: gpu.mobileGpu, override: opts.tier });
+    const tier = tierInfo.tier;
+    // The resolution ramp's ceiling (basePixelRatio below) on a mobile GPU.
+    const scenePixelRatio = capPixelRatio(pixelRatio, gpu.mobileGpu);
+    if (scenePixelRatio !== pixelRatio) {
+      ren.setPixelRatio(scenePixelRatio);
+      ren.setSize(W, H);
+    }
     // Start from the GPU-tier defaults, then let the `shadows` opt override. The
     // 10 invisible per-room shadow-casting PointLights ('ultra' only) are by far
     // the biggest GPU cost (each = a 6-face cubemap shadow render every frame) —
@@ -3202,19 +3244,27 @@ export const Home3DScene = (() => {
       // room-shadow lights. Guarded by tier !== 'low': on a sub-512-uniform GPU
       // the full light+shadow set fails to compile the shader (nothing renders),
       // so only the very weakest devices degrade instead of breaking.
+      // A mobile GPU capped to mid gets NO room-shadow lights even here:
+      // fill rate, not the shader, is what it cannot afford (b37115bc).
+      // ?tier= lifts the cap, and this with it.
       sunShadow = tier !== 'low';
-      roomShadowLights = tier !== 'low';
+      roomShadowLights = tier !== 'low' && !tierInfo.capped;
       shadowMapScale = 1;
     }
     const quality = {
       tier,
       maxFragU,
+      mobileGpu,
+      // A mobile GPU also skips `priority: "minor"` furniture (as low does).
+      dropMinorFurniture: mobileGpu,
       sunShadow,
       roomShadowLights,
       ambientStrips:    tier !== 'low',
       // Total cornice downlights (see buildScene). Ultra: uncapped; mid: 12
       // (84 fragment-uniform vectors); low builds none (ambientStrips off).
       corniceLightCap:  tier === 'ultra' ? null : 12,
+      // ...and at most this many per cornice below ultra (null: 3 or 5).
+      cornicePerCornice: tier === 'ultra' ? null : 2,
       shadowMapScale,
       // Opt-in bespoke decoration (see the acoustic panels below). Empty by
       // default: a house gets only what its profile describes. The PROFILE is
@@ -3249,14 +3299,6 @@ export const Home3DScene = (() => {
     // update, but be explicit rather than relying on it.
     ren.shadowMap.autoUpdate = false;
     ren.shadowMap.needsUpdate = wantShadows;
-    console.info(
-      `[Home3DScene] Quality tier=${tier} ` +
-      `(MAX_FRAGMENT_UNIFORM_VECTORS=${maxFragU}) shadows=${shadows} maxFps=${maxFps || 'uncapped'}. ` +
-      `sunShadow=${quality.sunShadow} ` +
-      `roomShadowLights=${quality.roomShadowLights} ` +
-      `shadowMapScale=${quality.shadowMapScale} ` +
-      `ambientStrips=${quality.ambientStrips}`
-    );
     // ─────────────────────────────────────────────────────────────────────────
 
     ren.toneMapping = THREE.ACESFilmicToneMapping;
@@ -3267,12 +3309,36 @@ export const Home3DScene = (() => {
     // Furniture builders start loading NOW, in parallel with the scene build
     // and its precompile (plan amendment A2). Nothing is built until both are
     // done -- see the furniture block after the precompile below.
-    const furnitureItems = Array.isArray(HOUSE.furniture) ? HOUSE.furniture : [];
+    const furnitureItems = (Array.isArray(HOUSE.furniture) ? HOUSE.furniture : [])
+      .filter(item => !(quality.dropMinorFurniture && item.priority === 'minor'));
     let furnitureVisible = opts.furniture !== false;
     let furnitureModules = (furnitureItems.length && furnitureVisible)
       ? loadFurnitureModules(furnitureItems) : null;
 
     const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight } = buildScene(scene, quality);
+    {
+      // The tier line, with what the tier actually built: light counts are
+      // the per-pixel cost on a phone or tablet (every light, every fragment).
+      const lc = { point: 0, spot: 0, spotShadow: 0, dir: 0 };
+      scene.traverse(o => {
+        if (!o.isLight) return;
+        if (o.isPointLight) lc.point++;
+        else if (o.isSpotLight) { lc.spot++; if (o.castShadow) lc.spotShadow++; }
+        else if (o.isDirectionalLight) lc.dir++;
+      });
+      console.info(
+        `[Home3DScene] Quality tier=${tier} ` +
+        `(MAX_FRAGMENT_UNIFORM_VECTORS=${maxFragU}; mobileGpu=${gpu.mobileGpu} [${gpu.reason}]` +
+        `${tierInfo.capped ? '; capped from ' + tierInfo.compileTier : ''}` +
+        `${tierInfo.overridden ? '; ?tier=' + opts.tier : ''}) ` +
+        `shadows=${shadows} maxFps=${maxFps || 'uncapped'} pixelRatio<=${scenePixelRatio}. ` +
+        `sunShadow=${quality.sunShadow} ` +
+        `roomShadowLights=${quality.roomShadowLights} ` +
+        `shadowMapScale=${quality.shadowMapScale} ` +
+        `ambientStrips=${quality.ambientStrips}. ` +
+        `lights: point=${lc.point} spot=${lc.spot} (shadowed ${lc.spotShadow}) dir=${lc.dir}`
+      );
+    }
 
     // ── On-demand render requests ──────────────────────────────────────────
     // A NON-auto-rotating scene (the #3d popup) only changes when the user moves
@@ -3513,7 +3579,7 @@ export const Home3DScene = (() => {
     // moves the CAP, and the applied value is their minimum, an in-flight
     // ramp-up structurally CANNOT stomp a drag-triggered ramp-down — there is
     // no ordering in which the two can oscillate against each other.
-    const basePixelRatio = pixelRatio;
+    const basePixelRatio = scenePixelRatio;
     // Cap while dragging. Held at 1 rather than 0.75: below 1 the softening
     // reads as a defect on a phone rather than as responsiveness, and the win
     // from 1 -> 0.75 is a further 44% of a buffer that is already the smaller
@@ -3814,12 +3880,15 @@ export const Home3DScene = (() => {
     // lightState[id].main for an array (one entry per entity in rooms[id].main)
     // and look up mainLights[id][i] against its matching entity here. Sidebar
     // controls stay group-level — only the visual state goes per-bulb.
+    // A merged room light stands for several fixtures (buildScene); any other
+    // light stands for one.
+    const lightGain = l => (l.userData && l.userData.gain > 0 ? l.userData.gain : 1);
     function syncLights() {
       ids.forEach(id => {
         const s = lightState[id];
         if (!s) return;
         const mc = k2h(s.main.temp), mb = s.main.on ? s.main.bri / 100 : 0;
-        (mainLights[id] || []).forEach(l => { l.intensity = mb * 0.6; l.color.setHex(mc); });
+        (mainLights[id] || []).forEach(l => { l.intensity = mb * 0.6 * lightGain(l); l.color.setHex(mc); });
         (mainMeshes[id] || []).forEach(m => {
           m.material.emissive.setHex(s.main.on ? mc : 0x222222);
           m.material.emissiveIntensity = s.main.on ? mb * 2 : 0.05;
@@ -3831,7 +3900,7 @@ export const Home3DScene = (() => {
           if (!state) return;
           const ac = parseInt(String(state.color).replace("#", ""), 16);
           const ab = state.on ? state.bri / 100 : 0;
-          (lights || []).forEach(l => { l.intensity = ab * 0.3; l.color.setHex(ac); });
+          (lights || []).forEach(l => { l.intensity = ab * 0.3 * lightGain(l); l.color.setHex(ac); });
           (meshes || []).forEach(m => {
             m.material.color.setHex(ac);
             m.material.emissive.setHex(state.on ? ac : 0x111111);
@@ -4600,7 +4669,7 @@ export const Home3DScene = (() => {
         strip.material.emissiveIntensity = 1.5 * k;
         // Off: an unlit LED strip reads as a dim grey line, not a coloured one.
         strip.material.color.copy(st.on ? col : new THREE.Color(0x3a3a3a));
-        e.glows.forEach(g => { g.color.copy(col); g.intensity = CORNICE_GLOW_INTENSITY * k; });
+        e.glows.forEach(g => { g.color.copy(col); g.intensity = CORNICE_GLOW_INTENSITY * k * (g.userData.gain || 1); });
         requestRender();
       },
       // The cornice downlights actually built for a curtain, in world space,
