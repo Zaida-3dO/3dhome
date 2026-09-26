@@ -239,6 +239,21 @@ jobs:
           # geometry from the vendored module.
           set -euo pipefail
           node scripts/test-cabinet.mjs
+      - name: Plant builder geometry, seed determinism and finish tagging
+        run: |
+          # Asserts build()'s total height matches potHeight + plantHeight
+          # (corn-plant) within tolerance, the base sits at y=0, a leaf's
+          # widest spread stays within the requested footprint, 'low' detail
+          # stays at or under the 300-triangle mobile budget for BOTH kinds
+          # and is a real reduction from 'full', the SAME seed reproduces the
+          # IDENTICAL leaf layout while a DIFFERENT seed changes it, the
+          # corn-plant preset matches item 889bf6ce's measurements, every
+          # mesh in every preset carries a valid userData.finish (the live
+          # renderer merges meshes by finish) with glass/emissive meshes also
+          # carrying userData.keep=true, and the wall-planter kind mounts
+          # back-to-wall (z=0) with a distinct anatomy from the corn plant.
+          set -euo pipefail
+          node scripts/test-plant-builder.mjs
       - name: WebGL failure is classified correctly
         run: |
           # Asserts which of the two WebGL failures we tell the user about. Out
