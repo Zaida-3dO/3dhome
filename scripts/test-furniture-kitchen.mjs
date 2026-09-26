@@ -594,6 +594,38 @@ function contained(g, p) {
   check('hinge lines cost no draw', draws(Object.values(placeL(JSON.parse(JSON.stringify(K.EXAMPLE_L))))).size <= 4);
 }
 
+// ---- 11. Load JSON cannot take bad data -----------------------------------------------
+{
+  const slots = ['kitchen-base-run', 'kitchen-base-run', 'kitchen-wall-run', 'kitchen-wall-run', 'fridge-freezer'];
+  const entry = params => JSON.stringify([{ type: 'kitchen-base-run', params: params }]);
+  const throwsWith = (text, re) => { try { K.parseKitchenJson(text, slots, THREE); return false; } catch (e) { return re.test(e.message); } };
+  // The two review repros: both used to report "Loaded." and then blank the page.
+  check('Load JSON: modules "x" is refused before anything is swapped', throwsWith(entry({ modules: 'x' }), /modules must be an array/));
+  check('Load JSON: modules [null] is refused', throwsWith(entry({ modules: [null] }), /modules\[0\] must be an object/));
+  check('Load JSON: a widthless module is refused', throwsWith(entry({ modules: [{ kind: 'cabinet' }] }), /width must be a positive number/));
+  check('Load JSON: an unknown hinge is refused', throwsWith(entry({ modules: [{ kind: 'cabinet', width: 60, hinge: 'up' }] }), /hinge must be left, right or top/));
+  check('Load JSON: a non-numeric width is refused', throwsWith(entry({ width: '180' }), /width must be a positive number/));
+  check('Load JSON: a wrong type in a slot is refused', throwsWith(JSON.stringify([{ type: 'fridge-freezer', params: {} }]), /should be a kitchen-base-run/));
+  check('Load JSON: not an array is refused', throwsWith('{}', /expected an array/));
+  // What Copy JSON gives round-trips, and a wall corner from an older export is dropped.
+  const ex = JSON.parse(JSON.stringify(K.EXAMPLE_L));
+  const keys = ['a', 'b', 'wall', 'wallB', 'fridge'];
+  const text = JSON.stringify(keys.map((k, i) => ({ type: slots[i], params: K.paramsDiff(slots[i], Object.assign({}, K.TYPES[slots[i]].DEFAULTS, ex[k])) })));
+  let back = null;
+  try { back = K.parseKitchenJson(text, slots, THREE); } catch (e) { back = e.message; }
+  check('Load JSON: the example L round-trips through Copy JSON', Array.isArray(back) && back.length === 5 &&
+    back[2].modules.length === ex.wall.modules.length && back[0].corner === 'left', back);
+  const old = JSON.parse(text);
+  old[2].params.corner = 'left'; old[2].params.cornerDepth = 30;
+  const b2 = K.parseKitchenJson(JSON.stringify(old), slots, THREE);
+  check('Load JSON: a wall run corner from an older export is dropped', !('corner' in b2[2]) && !('cornerDepth' in b2[2]), Object.keys(b2[2]));
+  check('Load JSON: ...so the result validates against the wall-run rules', K.validateParams('kitchen-wall-run', b2[2]).length === 0);
+  // The trial build is real: a builder that throws is reported, not swallowed.
+  // A THREE that cannot build anything stands in for a builder that throws.
+  const T2 = {};
+  check('Load JSON: a piece that does not build is refused', (() => { try { K.parseKitchenJson(JSON.stringify([{ type: 'kitchen-base-run', params: {} }]), slots, T2); return false; } catch (e) { return /entry 1 does not build/.test(e.message); } })());
+}
+
 // ---- 9. Copy JSON ------------------------------------------------------------------
 {
   const d = K.paramsDiff('kitchen-base-run', Object.assign({}, BASE.DEFAULTS, { corner: 'left', frontColor: '#223344' }));

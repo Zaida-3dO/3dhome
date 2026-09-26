@@ -169,7 +169,7 @@ function materials(THREE, p) {
     steel: makeFinish(THREE, 'metal', '#c3c6c9'),
     dark: makeFinish(THREE, 'gloss', '#141518'),
     burner: makeFinish(THREE, 'matte', '#303134'),
-    seam: makeFinish(THREE, 'matte', '#6f6c67'),
+    seam: makeFinish(THREE, 'matte', '#5c5a55'),
     glass: makeFinish(THREE, 'glass', '#d6e6ea'),
     smoked: makeFinish(THREE, 'gloss', '#3a3f44'),
     led: makeFinish(THREE, 'emissive', p.ledColor || '#ffb45a'),
@@ -1132,4 +1132,84 @@ export function paramsDiff(type, params) {
     if (keepWidth || !sameValue(v, impl.DEFAULTS[k])) out[k] = v;
   });
   return out;
+}
+
+/**
+ * Why `params` cannot be built as `type`, as a list of messages -- empty when
+ * it can. For data arriving from outside (the spec page's Load JSON): the
+ * builders shrug off a bad field with a warning, but a list that is not a
+ * list, or a module that is not an object, is not something to draw.
+ *   - width / depth / height / worktopHeight: positive numbers when given
+ *   - modules: an array of objects, each with a string `kind` and a positive
+ *     numeric `width`; `hinge` one of left/right/top (left/right on a fridge);
+ *     `height`, `at`, `splashback` numbers when given
+ *   - sink: null or an object with numeric fields
+ */
+export function validateParams(type, params) {
+  const errs = [];
+  if (!TYPES[type]) return ['unknown type ' + JSON.stringify(type)];
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return ['params must be an object'];
+  const posNum = v => typeof v === 'number' && isFinite(v) && v > 0;
+  const num = v => typeof v === 'number' && isFinite(v);
+  ['width', 'depth', 'height', 'worktopHeight'].forEach(k => {
+    if (params[k] !== undefined && !posNum(params[k])) errs.push(k + ' must be a positive number');
+  });
+  if (type === 'fridge-freezer') {
+    if (params.hinge !== undefined && ['left', 'right'].indexOf(params.hinge) === -1) errs.push('hinge must be left or right');
+    return errs;
+  }
+  if (params.modules !== undefined) {
+    if (!Array.isArray(params.modules)) errs.push('modules must be an array');
+    else params.modules.forEach((m, i) => {
+      const at = 'modules[' + i + ']';
+      if (!m || typeof m !== 'object' || Array.isArray(m)) { errs.push(at + ' must be an object'); return; }
+      if (typeof m.kind !== 'string') errs.push(at + '.kind must be a string');
+      if (!posNum(m.width)) errs.push(at + '.width must be a positive number');
+      if (m.hinge !== undefined && HINGES.indexOf(m.hinge) === -1) errs.push(at + '.hinge must be left, right or top');
+      ['height', 'at', 'splashback'].forEach(k => {
+        if (m[k] !== undefined && !num(m[k])) errs.push(at + '.' + k + ' must be a number');
+      });
+    });
+  }
+  if (type === 'kitchen-base-run' && params.sink !== undefined && params.sink !== null) {
+    if (typeof params.sink !== 'object' || Array.isArray(params.sink)) errs.push('sink must be null or an object');
+    else ['at', 'width', 'depth'].forEach(k => {
+      if (params.sink[k] !== undefined && !num(params.sink[k])) errs.push('sink.' + k + ' must be a number');
+    });
+  }
+  return errs;
+}
+
+/**
+ * Read what the spec page's Copy JSON gives -- an array of {type, params} in
+ * slot order -- back into params, or THROW with a message naming the entry.
+ * Nothing is returned unless every entry validates (validateParams) AND a
+ * trial build of every piece succeeds, so a caller can swap its state only
+ * on success and keep what it had on failure. A wall run's `corner` /
+ * `cornerDepth` (from an older export) are dropped: wall runs do not corner.
+ *
+ * @param {string} text
+ * @param {string[]} slots  the type expected at each position
+ * @param {Object} THREE    for the trial build
+ * @returns {Object[]} one params object per entry given (merged over DEFAULTS)
+ */
+export function parseKitchenJson(text, slots, THREE) {
+  const arr = JSON.parse(text);
+  if (!Array.isArray(arr)) throw new Error('expected an array, as Copy JSON gives');
+  return arr.map((entry, i) => {
+    const type = slots[i];
+    if (!type) throw new Error('entry ' + (i + 1) + ' has no slot (there are ' + slots.length + ' pieces)');
+    if (!entry || entry.type !== type) throw new Error('entry ' + (i + 1) + ' should be a ' + type);
+    const params = JSON.parse(JSON.stringify(entry.params === undefined ? {} : entry.params));
+    if (type === 'kitchen-wall-run' && params && typeof params === 'object') { delete params.corner; delete params.cornerDepth; }
+    const errs = validateParams(type, params);
+    if (errs.length) throw new Error('entry ' + (i + 1) + ': ' + errs.slice(0, 3).join('; '));
+    const full = Object.assign(JSON.parse(JSON.stringify(TYPES[type].DEFAULTS)), params);
+    try {
+      TYPES[type].build(THREE, full, { detail: 'low' });
+    } catch (e) {
+      throw new Error('entry ' + (i + 1) + ' does not build: ' + (e && e.message ? e.message : e));
+    }
+    return full;
+  });
 }
