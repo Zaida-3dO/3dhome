@@ -29,8 +29,16 @@
  *     'drawer'  - a drawer front. handle unless handle:false (push-to-open).
  *     'glass'   - fixed glass panel front, keep = true.
  *     'mirror'  - fixed mirror panel front, keep = true.
- *     'sliding' - a sliding door split into equal horizontal `panels`, each
- *                 'white' (matte, carcass colour) or 'mirror' (keep = true).
+ *     'sliding' - `doors` (default 2) sliding leaves sharing this ONE cell's
+ *                 full width, each split into equal horizontal `panels`
+ *                 ('white', matte carcass colour, or 'mirror', keep = true).
+ *                 Adjacent leaves alternate between two tracks (a small z
+ *                 offset) and overlap at each shared seam - the whole run is
+ *                 ONE sliding cell; do not author N adjacent sliding cells to
+ *                 get N doors, that builds N INDEPENDENT 2-door runs instead
+ *                 (e.g. two 75cm sliding cells side by side renders 4 doors,
+ *                 not 2 - see the 2-door sliding wardrobe preset for the
+ *                 correct one-cell-doors:2 shape).
  *     'open'    - no front: an open cubby/shelf opening.
  *     'stack'   - this ONE column has its OWN vertical stack of sub-cells,
  *                 independent of the row height: `cells: [{kind, height}]`,
@@ -247,11 +255,10 @@ export function normaliseColumns(columns, width) {
 
 // ---- builders for each front-cell kind ---------------------------------
 
-function buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, handles) {
+function buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, handles, faceZ) {
   const w = x1 - x0, h = yTop - yBot;
   const cx = (x0 + x1) / 2, cy = (yBot + yTop) / 2;
   const T = Math.min(0.018, depth * 0.06);
-  const faceZ = depth - HANDLE_PROJECTION; // the door's own OUTER face
   const mat = finish(THREE, gloss ? 'gloss' : 'matte', color);
   const leaf = new THREE.Mesh(box(THREE, w * 0.98, h * 0.98, T), mat);
   leaf.position.set(cx, cy, faceZ - T / 2);
@@ -262,11 +269,10 @@ function buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, col
   }
 }
 
-function buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, handles) {
+function buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, handles, faceZ) {
   const w = x1 - x0, h = yTop - yBot;
   const cx = (x0 + x1) / 2, cy = (yBot + yTop) / 2;
   const T = Math.min(0.018, depth * 0.06);
-  const faceZ = depth - HANDLE_PROJECTION; // the drawer front's own OUTER face
   const mat = finish(THREE, gloss ? 'gloss' : 'matte', color);
   const front = new THREE.Mesh(box(THREE, w * 0.98, h * 0.94, T), mat);
   front.position.set(cx, cy, faceZ - T / 2);
@@ -278,13 +284,10 @@ function buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, c
   }
 }
 
-function buildGlassOrMirrorCell(THREE, group, kind, x0, x1, yBot, yTop, depth) {
+function buildGlassOrMirrorCell(THREE, group, kind, x0, x1, yBot, yTop, depth, faceZ) {
   const w = x1 - x0, h = yTop - yBot;
   const cx = (x0 + x1) / 2, cy = (yBot + yTop) / 2;
   const T = kind === 'glass' ? 0.006 : 0.01;
-  // Glass/mirror doors carry no handle (push- or knob-free in every preset
-  // that uses them), so their own face sits flush at the full depth.
-  const faceZ = depth;
   const mat = finish(THREE, kind, null);
   const pane = new THREE.Mesh(box(THREE, w * 0.94, h * 0.94, T), mat);
   pane.position.set(cx, cy, faceZ - T / 2);
@@ -304,11 +307,17 @@ function buildGlassOrMirrorCell(THREE, group, kind, x0, x1, yBot, yTop, depth) {
 }
 
 /**
- * Two sliding doors on two tracks: they OVERLAP in the middle by `overlap`
- * (cm), one slightly in front of the other (a small z offset between the two
- * tracks, matching how a real sliding wardrobe's two leaves clear each
- * other), and together span the full cell width. No handles - a sliding
- * door is pulled by its edge, per every reference photo.
+ * `doors` (default 2) sliding leaves sharing this ONE cell's full width.
+ * Adjacent leaves alternate between two tracks (a small z offset, one
+ * slightly in front of the other) and OVERLAP at each shared seam by
+ * `overlap` (cm) - matching how a real two-track sliding wardrobe's leaves
+ * clear each other - and together span the full cell width. No handles - a
+ * sliding door is pulled by its edge, per every reference photo.
+ *
+ * IMPORTANT: this is what makes "N doors" mean N doors total, not N doors
+ * PER adjacent sliding cell - two adjacent 'sliding' cells side by side
+ * would build 2 independent runs (4 doors), which is why a multi-door
+ * sliding front must be authored as ONE cell with `doors: N`.
  */
 function buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth) {
   const w = x1 - x0, h = yTop - yBot;
@@ -317,24 +326,29 @@ function buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth) {
   const panelH = h / n;
   const railT = 0.012;
   const T = Math.min(0.02, depth * 0.05);
-  // Two tracks: the front leaf's own face sits flush at `depth`; the back
-  // leaf's track sits `trackGap` behind it so the two overlap without
-  // z-fighting, exactly like a real two-track sliding wardrobe.
+  // Two tracks: even-indexed doors ride the front track (flush at `depth`),
+  // odd-indexed doors ride the back track (`trackGap` behind it), so any two
+  // ADJACENT doors sit on different tracks and visibly clear each other
+  // front-to-back at their shared, overlapping seam.
   const trackGap = Math.min(0.03, depth * 0.08);
   const frontFaceZ = depth;
   const backFaceZ = depth - trackGap;
-  const overlap = Math.min(0.08, w * 0.06); // doors overlap this much at the centre
+  const doorCount = Math.max(1, Math.round(cell.doors || 2));
+  const overlap = Math.min(0.08, (w / doorCount) * 0.12); // doors overlap this much at each seam
   const frameMat = finish(THREE, 'matte', '#ffffff');
 
-  // Two doors spanning the FULL cell width and overlapping by `overlap`:
-  // left door x0..(cx+overlap/2), right door (cx-overlap/2)..x1. The left
-  // door rides the BACK track, the right door the FRONT track (arbitrary but
-  // consistent), so they visibly clear each other front-to-back.
-  const cx = (x0 + x1) / 2;
-  const doors = [
-    { dx0: x0, dx1: cx + overlap / 2, faceZ: backFaceZ, name: 'L' },
-    { dx0: cx - overlap / 2, dx1: x1, faceZ: frontFaceZ, name: 'R' }
-  ];
+  // doorCount doors spanning the FULL cell width: door i's nominal span is
+  // [x0 + i*w/doorCount, x0 + (i+1)*w/doorCount], widened by half the
+  // overlap on each shared edge (none on the cabinet's own outer edges) so
+  // consecutive doors overlap rather than merely touch.
+  const doors = [];
+  for (let i = 0; i < doorCount; i++) {
+    const nomX0 = x0 + (i / doorCount) * w;
+    const nomX1 = x0 + ((i + 1) / doorCount) * w;
+    const dx0 = i === 0 ? nomX0 : nomX0 - overlap / 2;
+    const dx1 = i === doorCount - 1 ? nomX1 : nomX1 + overlap / 2;
+    doors.push({ dx0, dx1, faceZ: i % 2 === 0 ? frontFaceZ : backFaceZ });
+  }
 
   doors.forEach(door => {
     const dw = door.dx1 - door.dx0;
@@ -376,21 +390,33 @@ function buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth) {
  * Dispatches one non-stack front cell (door/drawer/glass/mirror/sliding/
  * open) to its builder. Shared by the row loop and buildStackCell's
  * sub-cells, so a stack's sub-cells support every ordinary cell kind.
+ *
+ * Every hinged/fixed front (door, drawer, glass, mirror) shares ONE common
+ * face plane, `faceZ`, computed here from the WHOLE cabinet's `handles`
+ * setting - not per cell-kind - so a glass section never pokes past (or
+ * sits behind) the solid door bands of the same front. If the cabinet has
+ * handles anywhere (`p.handles !== false`), that plane is `depth -
+ * HANDLE_PROJECTION` so a handle can still project the rest of the way to
+ * `depth`; a fully handleless cabinet (`p.handles === false`) puts every
+ * front flush at `depth` instead, since nothing needs the clearance.
+ * (`sliding` is exempt: its two-track system is an intentional multi-plane
+ * design of its own, not part of this shared plane.)
  */
 function buildFrontCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p, low) {
+  const faceZ = p.handles === false ? depth : depth - HANDLE_PROJECTION;
   switch (cell.kind) {
     case 'door':
-      buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p.handles);
+      buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p.handles, faceZ);
       break;
     case 'drawer':
-      buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p.handles);
+      buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p.handles, faceZ);
       break;
     case 'glass':
-      buildGlassOrMirrorCell(THREE, group, 'glass', x0, x1, yBot, yTop, depth);
+      buildGlassOrMirrorCell(THREE, group, 'glass', x0, x1, yBot, yTop, depth, faceZ);
       if (p.shelfLights && !low) addShelfLight(THREE, group, x0, x1, yTop, depth);
       break;
     case 'mirror':
-      buildGlassOrMirrorCell(THREE, group, 'mirror', x0, x1, yBot, yTop, depth);
+      buildGlassOrMirrorCell(THREE, group, 'mirror', x0, x1, yBot, yTop, depth, faceZ);
       break;
     case 'sliding':
       buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth);

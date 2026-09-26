@@ -52,6 +52,10 @@ function check(name, cond, detail) {
 }
 const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
 const FINISH_SET = new Set(['matte', 'gloss', 'metal', 'glass', 'mirror', 'emissive']);
+// A real margin off the back plane (z=0), not just `z > 0` - a mesh sitting
+// a fraction of a millimetre off the back panel would pass a bare `> 0`
+// check while still being visually "at the back".
+const BACK_MARGIN = 0.01;
 
 function bbox(group) {
   group.updateMatrixWorld(true);
@@ -201,8 +205,11 @@ function triangleCount(group) {
   check('two side LED strips per gap (4 total)', wraps.side.length === 4, wraps.side.length);
   check('LED strips are emissive + keep', [...wraps.front, ...wraps.side]
     .every(m => m.material.userData.finish === 'emissive' && m.userData.keep === true));
-  // No strip behind the back (z=0 plane): every wrap mesh's centre z > 0.
-  check('LED wrap never sits at the back (z=0)', [...wraps.front, ...wraps.side].every(m => m.position.z > 0),
+  // No strip behind (or right at) the back plane - a real margin, not just
+  // z > 0, so a mutation that puts a strip a fraction of a mm off the back
+  // panel still trips this.
+  check('LED wrap never sits near the back (z > margin)',
+    [...wraps.front, ...wraps.side].every(m => m.position.z > BACK_MARGIN),
     [...wraps.front, ...wraps.side].map(m => m.position.z));
   const D = 0.50;
   // The strip is centred ON the front face (half embedded, half proud) so it
@@ -444,22 +451,48 @@ function triangleCount(group) {
     mesh.geometry.computeBoundingBox();
     return mesh.position.z + mesh.geometry.boundingBox.max.z;
   }
-  // Door/drawer own face sits at depth - HANDLE_PROJECTION (their handle
-  // then projects the rest of the way to depth - see check further down).
+  // Code-review round 2: every hinged/fixed front shares ONE common face
+  // plane - a cabinet WITH handles (the default) puts door/drawer/glass/
+  // mirror all at depth - HANDLE_PROJECTION (their handle then projects the
+  // rest of the way to depth), so a glass section never pokes past (or sits
+  // behind) the solid door bands of the same front.
   check('door front face sits at depth - handle allowance', door && near(outerFaceZ(door), D - HANDLE, 0.002),
     door && outerFaceZ(door));
   check('drawer front face sits at depth - handle allowance', drawer && near(outerFaceZ(drawer), D - HANDLE, 0.002),
     drawer && outerFaceZ(drawer));
-  // Glass/mirror doors have no handle, so their own face sits flush at depth.
-  check('glass door front face sits flush at depth (no handle)', glassDoor && near(outerFaceZ(glassDoor), D, 0.002),
-    glassDoor && outerFaceZ(glassDoor));
-  check('mirror door front face sits flush at depth (no handle)', mirrorDoor && near(outerFaceZ(mirrorDoor), D, 0.002),
-    mirrorDoor && outerFaceZ(mirrorDoor));
+  check('glass door shares the SAME front plane as door/drawer (depth - handle allowance)',
+    glassDoor && near(outerFaceZ(glassDoor), D - HANDLE, 0.002), glassDoor && outerFaceZ(glassDoor));
+  check('mirror door shares the SAME front plane as door/drawer (depth - handle allowance)',
+    mirrorDoor && near(outerFaceZ(mirrorDoor), D - HANDLE, 0.002), mirrorDoor && outerFaceZ(mirrorDoor));
+  check('door and glass front faces are coplanar (no 2.5cm mismatch)',
+    door && glassDoor && near(outerFaceZ(door), outerFaceZ(glassDoor), 0.002),
+    door && glassDoor && { door: outerFaceZ(door), glass: outerFaceZ(glassDoor) });
   // None of them sit anywhere near the back (z=0) - the direct regression check.
   [door, drawer, glassDoor, mirrorDoor].forEach((m, i) => {
     check('front cell #' + i + ' is nowhere near the back (z > depth/2)', m && m.position.z > D / 2,
       m && m.position.z);
   });
+
+  // A fully handleless cabinet (the chest of drawers preset) puts EVERY
+  // front flush at depth instead - no clearance is needed when nothing on
+  // the whole cabinet has a handle.
+  const paramsNoHandles = Object.assign({}, params, { handles: false });
+  const gnh = C.build(THREE, paramsNoHandles, {});
+  let doorNH = null, drawerNH = null, glassNH = null, mirrorNH = null;
+  gnh.traverse(o => {
+    if (!o.isMesh) return;
+    if (o.name === 'cabinetDoor' && !doorNH) doorNH = o;
+    if (o.name === 'drawerFront' && !drawerNH) drawerNH = o;
+    if (o.name === 'cabinetGlassDoor' && !glassNH) glassNH = o;
+    if (o.name === 'cabinetMirrorDoor' && !mirrorNH) mirrorNH = o;
+  });
+  [['door', doorNH], ['drawer', drawerNH], ['glass', glassNH], ['mirror', mirrorNH]].forEach(([name, m]) => {
+    check('handleless cabinet: ' + name + ' front sits flush at depth', m && near(outerFaceZ(m), D, 0.002),
+      m && outerFaceZ(m));
+  });
+  let handleCount = 0;
+  gnh.traverse(o => { if (o.isMesh && (o.name === 'doorHandle' || o.name === 'drawerHandle')) handleCount++; });
+  check('handleless cabinet: no handle meshes built at all', handleCount === 0, handleCount);
 }
 
 // ---- 12. handles never poke past the declared depth ------------------------
@@ -510,7 +543,8 @@ function triangleCount(group) {
   // what the reviewer asked for: a mutation renaming or adding a new emissive
   // part must still be caught, not just the ones already named 'ledWrap*'.
   emissiveMeshes.forEach(m => {
-    check('emissive mesh "' + m.name + '" is not at the back (z > 0)', m.position.z > 0, m.position.z);
+    check('emissive mesh "' + m.name + '" is not near the back (z > margin)', m.position.z > BACK_MARGIN,
+      m.position.z);
     m.geometry.computeBoundingBox();
     const maxZ = m.position.z + m.geometry.boundingBox.max.z;
     check('emissive mesh "' + m.name + '" does not poke past the declared depth', maxZ <= D + 0.006, maxZ);
@@ -518,12 +552,15 @@ function triangleCount(group) {
 }
 
 // ---- 14. sliding doors overlap on two tracks and span the full width ------
+// Code-review round 2: the 2-door sliding wardrobe preset must build EXACTLY
+// 2 doors, not 4 - a `doors: N` sliding run is ONE cell spanning the full
+// width, not N adjacent 'sliding' cells (which would each build their own
+// independent 2-door run).
 {
   const params = {
     width: 150, height: 236, depth: 60,
     fronts: [{ height: 228, cells: [
-      { kind: 'sliding', width: 75, panels: ['white', 'mirror', 'mirror', 'white'] },
-      { kind: 'sliding', width: 75, panels: ['white', 'mirror', 'mirror', 'white'] }
+      { kind: 'sliding', width: 150, doors: 2, panels: ['white', 'mirror', 'mirror', 'white'] }
     ] }],
     plinth: { type: 'plinth', height: 8 }, gloss: false, color: '#ffffff', topColor: '#ffffff'
   };
@@ -534,7 +571,8 @@ function triangleCount(group) {
 
   const frames = [];
   g.traverse(o => { if (o.isMesh && o.name === 'slidingFrame') frames.push(o); });
-  check('4 door frame-pairs (2 doors x 2 cells x 2 stiles each = 8)', frames.length === 8, frames.length);
+  check('exactly 2 doors x 2 stiles = 4 frame stiles (NOT 8 - the regression this guards)',
+    frames.length === 4, frames.length);
   const zSet = [...new Set(frames.map(f => f.position.z.toFixed(4)))];
   check('doors ride exactly TWO distinct tracks (two different z depths)', zSet.length === 2, zSet);
   const [trackA, trackB] = zSet.map(Number);
@@ -554,20 +592,11 @@ function triangleCount(group) {
   check('rightmost stile reaches the cabinet\'s right edge', near(Math.max(...allX), box.max.x, 0.02),
     { max: Math.max(...allX), boxMax: box.max.x });
 
-  // Overlap: within one 75cm cell, the two doors' frame x-ranges must
-  // intersect (not just touch) - that is the "overlap" the reference photo
-  // shows, as opposed to two doors that merely meet edge-to-edge. The left
-  // cell spans local x -0.75..0 (cabinet width 1.5m, 2 cells of 0.75m each).
-  const leftCellFrames = frames.filter(f => {
-    const [x0, x1] = xRange(f);
-    return x0 >= -0.751 && x1 <= 0.001;
-  });
-  check('exactly 4 stiles found in the left cell (2 doors x 2 stiles)', leftCellFrames.length === 4,
-    leftCellFrames.map(xRange));
-  // Group stiles into their 2 doors by z (track): each door's own span is the
-  // min/max x across ITS 2 stiles, and the two doors' spans must overlap.
+  // Overlap: the two doors' own x-spans (min/max across their 2 stiles each,
+  // grouped by track/z) must INTERSECT at the middle seam, not just meet
+  // edge-to-edge.
   const byTrack = new Map();
-  leftCellFrames.forEach(f => {
+  frames.forEach(f => {
     const key = f.position.z.toFixed(4);
     if (!byTrack.has(key)) byTrack.set(key, []);
     byTrack.get(key).push(...xRange(f));
@@ -576,7 +605,17 @@ function triangleCount(group) {
   check('exactly 2 door spans (one per track)', doorSpans.length === 2, doorSpans);
   const [d0, d1] = doorSpans;
   const overlaps = d0 && d1 && d0[0] < d1[1] - 0.001 && d1[0] < d0[1] - 0.001;
-  check('the two doors within a cell overlap (not just meet edge-to-edge)', overlaps, doorSpans);
+  check('the two doors overlap at the middle seam (not just meet edge-to-edge)', overlaps, doorSpans);
+
+  // A run of MORE than 2 doors is also supported: doors: 4 should build 4
+  // doors alternating tracks, still spanning the full width.
+  const params4 = Object.assign({}, params, { fronts: [{ height: 228, cells: [
+    { kind: 'sliding', width: 150, doors: 4, panels: ['white', 'mirror', 'mirror', 'white'] }
+  ] }] });
+  const g4 = C.build(THREE, params4, {});
+  const frames4 = [];
+  g4.traverse(o => { if (o.isMesh && o.name === 'slidingFrame') frames4.push(o); });
+  check('doors: 4 builds 4 doors x 2 stiles = 8 frame stiles', frames4.length === 8, frames4.length);
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

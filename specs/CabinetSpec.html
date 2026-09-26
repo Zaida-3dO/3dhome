@@ -104,9 +104,10 @@ const PRESETS = {
     label: '2-door sliding wardrobe, 4-panel doors',
     params: {
       width: 150, height: 236, depth: 60,
+      // ONE sliding cell spanning the full width, doors:2 - two doors total
+      // (not two adjacent sliding cells, which would build 4 doors: 2 each).
       fronts: [{ height: 228, cells: [
-        { kind: 'sliding', width: 75, panels: ['white', 'mirror', 'mirror', 'white'] },
-        { kind: 'sliding', width: 75, panels: ['white', 'mirror', 'mirror', 'white'] }
+        { kind: 'sliding', width: 150, doors: 2, panels: ['white', 'mirror', 'mirror', 'white'] }
       ] }],
       plinth: { type: 'plinth', height: 8 },
       gloss: false, color: '#ffffff', topColor: '#ffffff'
