@@ -32,6 +32,8 @@
  * precedent).
  */
 
+import { makeFinish, FINISHES } from './finishes.js';
+
 export const TYPE = 'gaming-chair';
 
 /** Defaults, in cm and degrees. Size-L figures. */
@@ -73,8 +75,8 @@ export const PRESETS = Object.freeze({
   pink: Object.freeze({ label: 'Racing chair – pink', primaryColor: '#e9a3ab' }),
 });
 
-/** The finish set a renderer merges by. */
-export const FINISHES = Object.freeze(['matte', 'gloss', 'metal', 'glass', 'emissive']);
+/** The finish palette a renderer merges by (re-exported from ./finishes.js). */
+export { FINISHES };
 
 const CM = 0.01;
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
@@ -172,17 +174,16 @@ export function build(THREE, params, opts) {
   // ---- materials ----------------------------------------------------------
   const primaryCol = new THREE.Color(P.primaryColor);
   const embossCol = primaryCol.clone().multiplyScalar(0.78);
-  const mat = {
-    primary: new THREE.MeshStandardMaterial({ color: primaryCol, roughness: 0.45, metalness: 0 }),
-    back: new THREE.MeshStandardMaterial({ color: new THREE.Color(P.backColor), roughness: 0.85, metalness: 0 }),
-    frame: new THREE.MeshStandardMaterial({ color: new THREE.Color(P.frameColor), roughness: 0.6, metalness: 0 }),
-    metal: new THREE.MeshStandardMaterial({ color: new THREE.Color(P.frameColor), roughness: 0.35, metalness: 0.8 }),
-    pillow: new THREE.MeshStandardMaterial({ color: new THREE.Color(P.pillowColor), roughness: 0.95, metalness: 0 }),
-    emboss: new THREE.MeshStandardMaterial({ color: embossCol, roughness: 0.6, metalness: 0 }),
-    label: new THREE.MeshStandardMaterial({ color: new THREE.Color(P.labelColor), roughness: 0.7, metalness: 0 }),
-  };
   // PVC leather reads glossy; the gas lift is metal; everything else is matte.
+  // Every material comes from makeFinish() so the renderer can merge by finish.
   const FINISH = { primary: 'gloss', back: 'matte', frame: 'matte', metal: 'metal', pillow: 'matte', emboss: 'matte', label: 'matte' };
+  const hex = c => '#' + c.getHexString();
+  const COLOR = {
+    primary: P.primaryColor, back: P.backColor, frame: P.frameColor, metal: P.frameColor,
+    pillow: P.pillowColor, emboss: hex(embossCol), label: P.labelColor,
+  };
+  const mat = {};
+  for (const k of Object.keys(FINISH)) mat[k] = makeFinish(THREE, FINISH[k], COLOR[k]);
   for (const [k, m] of Object.entries(mat)) m.name = 'gamingChair_' + k;
 
   const root = new THREE.Group();

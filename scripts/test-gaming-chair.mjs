@@ -204,6 +204,7 @@ for (const deg of [90, 110, 135, 155]) {
                  'reclineLever', 'baseHub', 'baseLeg_0', 'casterWheel_0_L', 'gasLift', 'neckPillow'];
   for (const n of black) {
     check(`${n} is black`, lum(n) < 0.02, hex(n));
+    check(`${n} material comes from makeFinish`, find(g, n).material.userData.finish === find(g, n).userData.finish, n);
     check(`${n} is not the colourway`, hex(n) !== PINK, hex(n));
   }
   check('back panel follows backColor', (() => {
@@ -242,7 +243,7 @@ for (const deg of [90, 110, 135, 155]) {
   }
   check('bulk parts are mergeable', !find(g, 'seatCushion').userData.keep && !find(g, 'baseLeg_0').userData.keep);
   const logo = find(g, 'backrestLogo').material.color, prim = new THREE.Color(PINK);
-  check('logo is a darker tone of the colourway', logo.r < prim.r && logo.g < prim.g && logo.b < prim.b && near(logo.r / prim.r, logo.g / prim.g, 1e-3));
+  check('logo is a darker tone of the colourway', logo.r < prim.r && logo.g < prim.g && logo.b < prim.b && near(logo.r / prim.r, logo.g / prim.g, 0.02)); // 8-bit hex rounding via makeFinish
 }
 
 // ---- 5. detail levels + budget -----------------------------------------------
