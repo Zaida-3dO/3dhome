@@ -728,7 +728,7 @@
 
         { "if": { "properties": { "type": { "const": "cabinet" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_cabinet" } } } },
 
-        { "if": { "properties": { "type": { "const": "clock" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_clock" } } } },
+        { "if": { "properties": { "type": { "const": "coat-rack" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_coat-rack" } } } },
 
         { "if": { "properties": { "type": { "const": "digital-piano" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_digital-piano" } } } },
 
@@ -752,6 +752,8 @@
 
         { "if": { "properties": { "type": { "const": "pc-tower" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_pc-tower" } } } },
 
+        { "if": { "properties": { "type": { "const": "photo-frame" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_photo-frame" } } } },
+
         { "if": { "properties": { "type": { "const": "plant" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_plant" } } } },
 
         { "if": { "properties": { "type": { "const": "radiator" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_radiator" } } } },
@@ -766,15 +768,19 @@
 
         { "if": { "properties": { "type": { "const": "standing-desk" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_standing-desk" } } } },
 
-        { "if": { "properties": { "type": { "const": "tv" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_tv" } } } },
+        { "if": { "properties": { "type": { "const": "subwoofer" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_subwoofer" } } } },
 
-        { "if": { "properties": { "type": { "const": "wall-art" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-art" } } } },
+        { "if": { "properties": { "type": { "const": "tube-floor-lamp" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_tube-floor-lamp" } } } },
+
+        { "if": { "properties": { "type": { "const": "tv" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_tv" } } } },
 
         { "if": { "properties": { "type": { "const": "wall-clock" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-clock" } } } },
 
         { "if": { "properties": { "type": { "const": "wall-sconce" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-sconce" } } } },
 
-        { "if": { "properties": { "type": { "const": "wall-sign" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-sign" } } } }
+        { "if": { "properties": { "type": { "const": "wall-sign" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-sign" } } } },
+
+        { "if": { "properties": { "type": { "const": "wire-shelf" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wire-shelf" } } } }
       ]
     },
     "furnitureFade": {
@@ -995,10 +1001,24 @@
       "additionalProperties": false
     },
 
-    "furnitureParams_clock": {
+    "furnitureParams_coat-rack": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `clock`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `coat-rack` (src/furniture/small-items.js, TYPES['coat-rack']): a wall hook rail with 0-3 simple draped coats. `height` is the FULL assembly: the rail is a fixed-height band at the top of it, and any draped coats hang from the rail down toward y=0 within that same declared height -- never below it. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 80, "description": "cm." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm, the full assembly (rail band plus any draped coats' drop)." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 6, "description": "cm." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#6b5a45" },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
+        "coats": { "type": "integer", "minimum": 0, "maximum": 3, "default": 0, "description": "How many draped coats hang from the rail." },
+        "coatColors": {
+          "type": "array", "items": { "$ref": "#/$defs/hexColor" },
+          "default": ["#3a3f4a", "#7a2e2e", "#2e4a3a"],
+          "description": "Cycled across the coats, one per hook."
+        },
+        "coatHeight": { "type": "number", "exclusiveMinimum": 0, "default": 55, "description": "cm, the coat's own drop below the rail, clamped to stay within the declared `height` (never crosses y=0)." }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_digital-piano": {
@@ -1797,20 +1817,72 @@
 
     "furnitureParams_mirror": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `mirror`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `mirror` (src/furniture/small-items.js, TYPES['mirror']): round, rect, pebble or triangle, with a frame. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 60, "description": "cm." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 80, "description": "cm." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 3, "description": "cm." },
+        "shape": { "type": "string", "enum": ["round", "rect", "pebble", "triangle"], "default": "rect" },
+        "frameColor": { "$ref": "#/$defs/hexColor", "default": "#3a3a3a" },
+        "frameWidth": { "type": "number", "exclusiveMinimum": 0, "default": 2.5, "description": "cm." },
+        "frameFinish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_monitor": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `monitor`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `monitor` (src/furniture/small-items.js, TYPES['monitor']): flat or curved super-ultrawide, with an optional riser. `height` and `depth` are the FULL assembly: with `riser` enabled, set `height` to include the riser and stand below the panel, and set `depth` to at least `riserDepth` (the riser is typically the deepest part). Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 85, "description": "cm." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 35, "description": "cm, the full assembly including its own stand (and riser, if any)." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 8, "description": "cm, the full assembly -- must be at least `riserDepth` when `riser` is set, or the riser is clamped to fit and reads shallower than requested." },
+        "curved": { "type": "boolean", "default": false },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#181818" },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
+        "screenColor": { "$ref": "#/$defs/hexColor", "default": "#0d1520" },
+        "riser": { "type": "boolean", "default": false },
+        "riserHeight": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm." },
+        "riserWidth": { "type": "number", "exclusiveMinimum": 0, "default": 40, "description": "cm." },
+        "riserDepth": { "type": "number", "exclusiveMinimum": 0, "default": 25, "description": "cm, clamped to at most the declared `depth`." }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_pc-tower": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `pc-tower`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `pc-tower` (src/furniture/small-items.js, TYPES['pc-tower']): a box-ish tower with an optional glass side panel. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 22, "description": "cm." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 45, "description": "cm." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 42, "description": "cm." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#141414" },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
+        "glassPanel": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_photo-frame": {
+      "type": "object",
+      "description": "Params for `photo-frame` (src/furniture/small-items.js, TYPES['photo-frame']): 1-N panels of picture-frame artwork. `image` is a URL relative to the HOUSE dir, loaded (by the live scene, never by this schema or the builder contract test) as a texture on a kept panel; a plain colour panel otherwise. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 60, "description": "cm, the whole run of panels." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 50, "description": "cm." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 3, "description": "cm, the frame's projection." },
+        "panels": { "type": "integer", "minimum": 1, "default": 1, "description": "How many equal panels split `width`, e.g. 5 for a multi-panel artwork." },
+        "gap": { "type": "number", "minimum": 0, "default": 2, "description": "cm, between adjacent panels." },
+        "frameColor": { "$ref": "#/$defs/hexColor", "default": "#3a3a3a" },
+        "frameWidth": { "type": "number", "exclusiveMinimum": 0, "default": 3, "description": "cm." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#e7e2d6", "description": "The plain-colour fallback panel, used when `image` is unset or fails to load." },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
+        "image": {
+          "anyOf": [{ "type": "string" }, { "type": "null" }],
+          "default": null,
+          "description": "A URL relative to the HOUSE dir. No leading slash, no `..`, no absolute URL -- the same rule as textures and overlays."
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_plant": {
@@ -1906,8 +1978,26 @@
 
     "furnitureParams_shelf": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `shelf`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `shelf` (src/furniture/small-items.js, TYPES['shelf']): a floating shelf, with an optional LED edge, an optional stacked `levels` set, and an optional `backPanel` L-section (a floating shelf with a back panel against the wall). `height` is ALWAYS the full assembly: one slab's thickness with no `levels`, the WHOLE stack (every slab plus every gap) with `levels`, or the overall back-panel-to-shelf-top height with `backPanel`. Each slab's own thickness is the separate `shelfThickness` param. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 80, "description": "cm." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 20, "description": "cm." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 5, "description": "cm, the FULL assembly -- see the block description for what that means per option." },
+        "shelfThickness": { "type": "number", "exclusiveMinimum": 0, "default": 5, "description": "cm, ONE slab's own thickness -- independent of `height`, which is always the overall envelope." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#e7e2d6" },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
+        "led": { "type": "boolean", "default": false },
+        "ledColor": { "$ref": "#/$defs/hexColor", "default": "#eaf6ff" },
+        "levels": {
+          "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 }, "default": [],
+          "description": "Explicit vertical gaps (cm) between stacked shelves, e.g. [30, 30] for a 3-shelf set. Empty = a single shelf. Set `height` to the sum of every `shelfThickness` slab plus every gap."
+        },
+        "backPanel": { "type": "boolean", "default": false, "description": "An L-section: a vertical back panel against the wall plus the horizontal shelf slab. Applies to the bottom unit of a `levels` stack." },
+        "backPanelHeight": { "type": "number", "exclusiveMinimum": 0, "default": 20, "description": "cm." },
+        "backPanelColor": { "$ref": "#/$defs/hexColor", "default": "#f4f2ec" },
+        "shelfColor": { "$ref": "#/$defs/hexColor", "default": "#8a6a45", "description": "The horizontal slab's own colour when `backPanel` is set (independent of `color`, which is the plain single-shelf colour)." }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_slat-panel": {
@@ -1980,8 +2070,24 @@
 
     "furnitureParams_speaker": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `speaker`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `speaker` (src/furniture/small-items.js, TYPES['speaker']): four kinds selected by `kind`. `width` is always the OVERALL (widest) footprint width -- for `wall-trapezoid` that is the back edge (`frontWidth` is the narrower front). `ceiling` is geometry only; see the builder's own comment for how a placer should orient it (elevation + rotation, no new placement mechanism). Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 29, "description": "cm, the overall (widest) footprint width." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 28, "description": "cm." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm." },
+        "frontWidth": { "type": "number", "exclusiveMinimum": 0, "default": 16, "description": "wall-trapezoid only: the narrower front edge." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#f2f2f2" },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
+        "kind": { "type": "string", "enum": ["wall-trapezoid", "floor-standing", "ceiling", "centre"], "default": "wall-trapezoid" },
+        "boxShape": { "type": "boolean", "default": false, "description": "wall-trapezoid only: swap the trapezoid plan for a plain box." },
+        "plinthWidth": { "type": "number", "exclusiveMinimum": 0, "default": 22, "description": "floor-standing only: the outrigger plinth footprint, capped to `width`/`depth`." },
+        "plinthDepth": { "type": "number", "exclusiveMinimum": 0, "default": 30, "description": "floor-standing only." },
+        "midDrivers": { "type": "integer", "minimum": 2, "maximum": 3, "default": 2, "description": "floor-standing only: bass/mid discs below the top tweeter." },
+        "midDriverDiameter": { "type": "number", "exclusiveMinimum": 0, "default": 13, "description": "cm, centre only." },
+        "tweeterDiameter": { "type": "number", "exclusiveMinimum": 0, "default": 2.5, "description": "cm, centre only." },
+        "firing": { "type": "string", "enum": ["down", "angled", "up"], "default": "down", "description": "ceiling only: which face carries the driver." }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_standing-desk": {
@@ -2042,16 +2148,56 @@
       "additionalProperties": false
     },
 
-    "furnitureParams_tv": {
+    "furnitureParams_subwoofer": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `tv`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `subwoofer` (src/furniture/small-items.js, TYPES['subwoofer']): a simple cube. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 35, "description": "cm." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 35, "description": "cm." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 35, "description": "cm." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#f2f2f2" },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" }
+      },
+      "additionalProperties": false
     },
 
-    "furnitureParams_wall-art": {
+    "furnitureParams_tube-floor-lamp": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `wall-art`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `tube-floor-lamp` (src/furniture/small-items.js, TYPES['tube-floor-lamp']): a thin emissive light tube rising from a small cylinder base. `width`/`depth` are the OVERALL footprint (the base, the widest part), not the thin tube. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 20, "description": "cm, the base's diameter (the overall footprint)." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 20, "description": "cm, the base's diameter." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 150, "description": "cm, base plus tube." },
+        "baseHeight": { "type": "number", "exclusiveMinimum": 0, "default": 20, "description": "cm." },
+        "tubeDiameter": { "type": "number", "exclusiveMinimum": 0, "default": 4, "description": "cm." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#e8f4ff", "description": "The tube's own (emissive) colour." },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "emissive" },
+        "baseColor": { "$ref": "#/$defs/hexColor", "default": "#e8e8e8" },
+        "baseFinish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
+        "oneSidedGlow": { "type": "boolean", "default": false, "description": "An open half-tube (glows from one side only) instead of a full cylinder." }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_tv": {
+      "type": "object",
+      "description": "Params for `tv` (src/furniture/small-items.js, TYPES['tv']): a wall TV. `bezelStyle: 'thin'` is a plain flat panel (optionally on a pedestal `stand` instead of wall-mounted); `'picture-frame'` is a wooden picture-frame bezel (Frame-TV look), wall-hung. \"Art mode\" imagery is not built yet. Generic defaults only -- real dimensions come from a research note, never a model name, which never appears in this repo. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 167.1, "description": "cm." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 95.9, "description": "cm, the FULL assembly: with `stand` enabled this includes the pedestal below the panel." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 5.4, "description": "cm, the full assembly -- with `stand` enabled, set at least `standDepth` (the pedestal foot is typically the deepest part)." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#111111" },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
+        "bezelStyle": { "type": "string", "enum": ["thin", "picture-frame"], "default": "thin" },
+        "frameColor": { "$ref": "#/$defs/hexColor", "default": "#8a6a4a", "description": "picture-frame style only." },
+        "frameWidth": { "type": "number", "exclusiveMinimum": 0, "default": 4, "description": "cm, picture-frame style only." },
+        "screenColor": { "$ref": "#/$defs/hexColor", "default": "#1a2733" },
+        "stand": { "type": "boolean", "default": false, "description": "thin style only: a central pedestal stand instead of wall-mounting." },
+        "standHeight": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm." },
+        "standWidth": { "type": "number", "exclusiveMinimum": 0, "default": 42, "description": "cm." },
+        "standDepth": { "type": "number", "exclusiveMinimum": 0, "default": 31.7, "description": "cm, clamped to at most the declared `depth`." }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_wall-clock": {
@@ -2207,6 +2353,19 @@
         "line1": { "type": "string", "default": "HOME", "description": "Serif caps line. Generic placeholder text (privacy)." },
         "line2": { "type": "string", "default": "sweet home", "description": "Script line. Generic placeholder text (privacy)." },
         "textColor": { "$ref": "#/$defs/hexColor", "default": "#1a1a1a" }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_wire-shelf": {
+      "type": "object",
+      "description": "Params for `wire-shelf` (src/furniture/small-items.js, TYPES['wire-shelf']): a triangular white wire wall shelf (living room). Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 40, "description": "cm, the back edge." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 40, "description": "cm, back to the front point." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 3, "description": "cm." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#f4f4f4" },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "metal" }
       },
       "additionalProperties": false
     },

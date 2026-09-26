@@ -469,7 +469,7 @@ function checkContract(tag, build, p) {
   // The ?v= cache-bust.
   const u1 = R.moduleUrl('radiator', { version: '1.4.2' });
   check('moduleUrl: carries the explicit version', /\/src\/furniture\/radiator\.js\?v=1\.4\.2$/.test(u1), u1);
-  const u2 = R.moduleUrl('clock', { version: '9' });
+  const u2 = R.moduleUrl('speaker', { version: '9' });
   check('moduleUrl: a multi-type entry resolves to its module file', /\/small-items\.js\?v=9$/.test(u2), u2);
   delete globalThis.HOME3D_CONFIG;
   check('moduleUrl: no version anywhere -> no ?v=', !/\?v=/.test(R.moduleUrl('box')), R.moduleUrl('box'));
