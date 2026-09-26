@@ -131,20 +131,29 @@ function fitToEnvelope(THREE, group, widthM, depthM, heightM) {
   const sx = rawW > EPS ? widthM / rawW : 1;
   const sy = rawH > EPS ? heightM / rawH : 1;
   const sz = rawD > EPS ? depthM / rawD : 1;
-  const cx = (box.min.x + box.max.x) / 2;
+  // Anchor: x is CENTRED (subtract the midpoint), y and z are PINNED to
+  // their raw minimum (subtract min, not centre) -- y's min becomes the new
+  // 0 (bottom), z's min becomes the new 0 (back), matching the box builder's
+  // own local-frame contract exactly, before the per-axis scale is applied.
+  const ax = (box.min.x + box.max.x) / 2;
+  const ay = box.min.y;
+  const az = box.min.z;
 
   const wrapper = new THREE.Group();
   wrapper.name = group.name;
   wrapper.userData = group.userData;
   // Reparent every child of `group` into `wrapper`, applying the correction
-  // as a transform on each (rather than mutating raw geometry): centre x,
-  // pin the bottom/back to 0, then scale per axis about that anchor.
+  // as a transform on each (rather than mutating raw geometry): anchor each
+  // axis per the rule above, then scale per axis about that anchor. Every
+  // child of buildCornPlantRaw/buildWallPlanterRaw is a direct, unrotated
+  // (or axis-aligned-quaternion, for wire struts) child of the raw group
+  // with no additional nested scale, so scaling position+scale here is
+  // equivalent to scaling the fully-flattened world geometry.
   const children = group.children.slice();
   for (const child of children) {
-    child.position.x -= cx;
-    child.position.x *= sx;
-    child.position.y *= sy;
-    child.position.z *= sz;
+    child.position.x = (child.position.x - ax) * sx;
+    child.position.y = (child.position.y - ay) * sy;
+    child.position.z = (child.position.z - az) * sz;
     child.scale.x *= sx;
     child.scale.y *= sy;
     child.scale.z *= sz;

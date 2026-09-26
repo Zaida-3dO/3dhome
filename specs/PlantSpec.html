@@ -84,6 +84,9 @@ const { DEFAULTS, PRESETS } = window.FurniturePlant;
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "preset": "corn-plant-tall",
   "kind": "corn-plant",
+  "width": 40,
+  "depth": 40,
+  "height": 166,
   "potHeight": 56,
   "potTopDiameter": 30,
   "potColor": "#9c7c4a",
@@ -91,34 +94,30 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "stemCount": 3,
   "spread": 40,
   "leafColor": "#33502a",
-  "width": 25,
   "leafCount": 6,
   "frameColor": "#b8945a",
   "seed": 7
 }/*EDITMODE-END*/;
 
-function hexNum(v) {
-  return typeof v === 'string' ? parseInt(v.replace('#', ''), 16) : v;
-}
-function hexStr(v) {
-  if (typeof v === 'string') return v;
-  return '#' + (v >>> 0).toString(16).padStart(6, '0');
-}
-
-// Params object the builder actually wants, derived from tweak state.
+// Params object the builder actually wants, derived from tweak state. Colours
+// are plain '#rrggbb' strings straight through -- makeFinish() (finishes.js)
+// and the schema's hexColor $def both take that form natively, so there is
+// no number<->string conversion left to keep in sync.
 function paramsFromTweaks(t) {
   return {
     kind: t.kind,
+    width: t.width,
+    depth: t.depth,
+    height: t.height,
     potHeight: t.potHeight,
     potTopDiameter: t.potTopDiameter,
-    potColor: hexNum(t.potColor),
+    potColor: t.potColor,
     plantHeight: t.plantHeight,
     stemCount: t.stemCount,
     spread: t.spread,
-    leafColor: hexNum(t.leafColor),
-    width: t.width,
+    leafColor: t.leafColor,
     leafCount: t.leafCount,
-    frameColor: hexNum(t.frameColor),
+    frameColor: t.frameColor,
     seed: t.seed,
   };
 }
@@ -153,12 +152,7 @@ function App() {
   const applyPreset = (name) => {
     const preset = PRESETS[name];
     if (!preset) return;
-    const edits = { preset: name, kind: preset.kind };
-    for (const [k, v] of Object.entries(preset)) {
-      if (k === 'kind') continue;
-      edits[k] = (k === 'potColor' || k === 'leafColor' || k === 'frameColor') ? hexStr(v) : v;
-    }
-    setTweak(edits);
+    setTweak(Object.assign({ preset: name }, preset));
   };
 
   const copyJson = () => {
@@ -197,26 +191,29 @@ function App() {
             <tbody>
               <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
               <tr><td>Kind</td><td className="num">{t.kind}</td><td><b>Variable</b></td></tr>
+              <tr><td>Width (envelope)</td><td className="num">{t.width}</td><td><b>Variable</b> — final bbox width</td></tr>
+              <tr><td>Depth (envelope)</td><td className="num">{t.depth}</td><td><b>Variable</b> — final bbox depth, back at z=0</td></tr>
+              <tr><td>Height (envelope)</td><td className="num">{t.height}</td><td><b>Variable</b> — final bbox height, bottom at y=0</td></tr>
               {!isWallPlanter && <>
-                <tr><td>Pot height</td><td className="num">{t.potHeight}</td><td><b>Variable</b></td></tr>
-                <tr><td>Pot opening diameter</td><td className="num">{t.potTopDiameter}</td><td><b>Variable</b></td></tr>
-                <tr><td>Plant height (above pot)</td><td className="num">{t.plantHeight}</td><td><b>Variable</b></td></tr>
-                <tr><td>Stem/cane count</td><td className="num">{t.stemCount}</td><td><b>Variable</b></td></tr>
-                <tr><td>Widest leaf spread</td><td className="num">{t.spread}</td><td><b>Variable</b></td></tr>
+                <tr><td>Pot height</td><td className="num">{t.potHeight}</td><td>Proportioning</td></tr>
+                <tr><td>Pot opening diameter</td><td className="num">{t.potTopDiameter}</td><td>Proportioning</td></tr>
+                <tr><td>Plant height (above pot)</td><td className="num">{t.plantHeight}</td><td>Proportioning</td></tr>
+                <tr><td>Stem/cane count</td><td className="num">{t.stemCount}</td><td>Proportioning</td></tr>
+                <tr><td>Widest leaf spread</td><td className="num">{t.spread}</td><td>Proportioning</td></tr>
               </>}
               {isWallPlanter && <>
-                <tr><td>Planter width</td><td className="num">{t.width}</td><td><b>Variable</b></td></tr>
-                <tr><td>Leaf height</td><td className="num">{t.plantHeight}</td><td><b>Variable</b></td></tr>
-                <tr><td>Leaf count</td><td className="num">{t.leafCount}</td><td><b>Variable</b></td></tr>
+                <tr><td>Leaf height</td><td className="num">{t.plantHeight}</td><td>Proportioning</td></tr>
+                <tr><td>Leaf count</td><td className="num">{t.leafCount}</td><td>Proportioning</td></tr>
               </>}
               <tr><td>Seed</td><td className="num">{t.seed}</td><td><b>Variable</b> — reshuffles leaf layout deterministically</td></tr>
             </tbody>
           </table>
           <div className="legend">
-            Total height = potHeight + plantHeight (corn-plant) or the wall-planter's own opening +
-            leaf height, within a small tolerance — leaves only ever droop DOWNWARD from their
-            attachment point, so they never push the top of the bounding box higher. See
-            scripts/test-plant-builder.mjs.
+            width/depth/height are the AUTHORITATIVE final bounding box -- the builder proportions its
+            procedural geometry (pot/canes/leaves or planter/leaves) internally, then a measure-and-fit
+            pass (fitToEnvelope in src/furniture/plant.js) rescales the whole result to land on exactly
+            this envelope: x centred on 0, bottom at y=0, back at z=0. See scripts/test-plant-builder.mjs
+            and scripts/test-furniture-core.mjs.
           </div>
         </div>
 
@@ -225,9 +222,7 @@ function App() {
           <ThreeView
             t={t}
             buildModel={buildPlantModel}
-            heightOf={tt => (tt.kind === 'wall-planter'
-              ? (tt.width * 0.01 * 0.7 + tt.plantHeight * 0.01)
-              : (tt.potHeight + tt.plantHeight) * 0.01)}
+            heightOf={tt => tt.height * 0.01}
           />
           <div className="legend">Drag to orbit, scroll to zoom. Change the seed to reshuffle the leaf layout without changing any size.</div>
         </div>
@@ -248,8 +243,16 @@ function App() {
           options={['corn-plant', 'wall-planter']}
           onChange={v => setTweak('kind', v)} />
 
+        <TweakSection label="Envelope (final bounding box)" />
+        <TweakSlider label="Width" value={t.width} min={8} max={80} step={1} unit="cm"
+          onChange={v => setTweak('width', v)} />
+        <TweakSlider label="Depth" value={t.depth} min={8} max={80} step={1} unit="cm"
+          onChange={v => setTweak('depth', v)} />
+        <TweakSlider label="Height" value={t.height} min={15} max={220} step={1} unit="cm"
+          onChange={v => setTweak('height', v)} />
+
         {!isWallPlanter && <>
-          <TweakSection label="Corn plant — size" />
+          <TweakSection label="Corn plant — proportioning" />
           <TweakSlider label="Pot height" value={t.potHeight} min={20} max={100} step={1} unit="cm"
             onChange={v => setTweak('potHeight', v)} />
           <TweakSlider label="Pot opening diameter" value={t.potTopDiameter} min={10} max={50} step={1} unit="cm"
@@ -268,9 +271,7 @@ function App() {
         </>}
 
         {isWallPlanter && <>
-          <TweakSection label="Wall planter — size" />
-          <TweakSlider label="Width" value={t.width} min={8} max={40} step={1} unit="cm"
-            onChange={v => setTweak('width', v)} />
+          <TweakSection label="Wall planter — proportioning" />
           <TweakSlider label="Leaf height" value={t.plantHeight} min={10} max={60} step={1} unit="cm"
             onChange={v => setTweak('plantHeight', v)} />
           <TweakSlider label="Leaf count" value={t.leafCount} min={2} max={10} step={1}

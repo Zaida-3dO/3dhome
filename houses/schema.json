@@ -1306,8 +1306,87 @@
 
     "furnitureParams_plant": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `plant`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `plant` (src/furniture/plant.js): a procedural potted or wall-mounted plant. Each `default` equals plant.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). width/depth/height are the authoritative bounding envelope the builder fits its procedural geometry onto exactly; potHeight/plantHeight/spread/stemCount/leafCount proportion the interior detail for the `kind` in use.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["corn-plant", "wall-planter"],
+          "default": "corn-plant",
+          "description": "corn-plant: a potted Dracaena fragrans, free-standing. wall-planter: a hanging faceted ceramic planter, wall-mounted."
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 40,
+          "description": "cm, along the wall / the item's local x -- the footprint envelope."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 40,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 166,
+          "description": "cm, floor (or `elevation`) to top."
+        },
+        "potHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 56,
+          "description": "corn-plant only: pot height, cm (proportioning; width/depth/height above are the final envelope)."
+        },
+        "potTopDiameter": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 30,
+          "description": "corn-plant only: pot opening diameter, cm (proportioning)."
+        },
+        "potColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#9c7c4a"
+        },
+        "plantHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 110,
+          "description": "corn-plant: vase-top to top-of-foliage, cm (proportioning). wall-planter: leaf height above the opening, cm (proportioning)."
+        },
+        "stemCount": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "default": 3,
+          "description": "corn-plant only: number of canes."
+        },
+        "spread": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 40,
+          "description": "corn-plant only: widest leaf spread, cm (proportioning)."
+        },
+        "leafColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#33502a"
+        },
+        "leafCount": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "default": 5,
+          "description": "wall-planter only: number of spiky leaves."
+        },
+        "frameColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#b8945a"
+        },
+        "seed": {
+          "type": "integer",
+          "default": 1,
+          "description": "Deterministic leaf-layout seed -- the same seed always lays out the same leaves."
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_radiator": {
