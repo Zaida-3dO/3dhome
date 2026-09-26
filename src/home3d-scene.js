@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { HouseLoader } from './house-loader.js';
 import {
-  insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, WALK_DEFAULTS
+  insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, printYaw, WALK_DEFAULTS
 } from './footstep-walk.js';
 import {
   WINDOW_REVEAL_CM, windowVerticals, placeOnWall, buildWindow, buildCurtain,
@@ -2659,7 +2659,7 @@ export const Home3DScene = (() => {
           const g = new THREE.PlaneGeometry(PRINT_CM * S * 0.62, PRINT_CM * S);
           // Lay flat, then turn the print to face along the walking line.
           g.rotateX(-Math.PI / 2);
-          g.rotateY(-Math.atan2(p.diry, p.dirx) + Math.PI / 2);
+          g.rotateY(printYaw(p.dirx, p.diry));   // toe leads; see printYaw
           g.translate(tx(p.x), 0.012, tz(p.y));
           return g;
         });

@@ -182,6 +182,14 @@ jobs:
           # wall-fittings test above.
           set -euo pipefail
           node scripts/test-furniture-radiator.mjs
+      - name: Footprints point toe-first along the walk
+        run: |
+          # Builds each print exactly as home3d-scene.js does (rotateX(-PI/2),
+          # rotateY(printYaw)) with the vendored three and asserts the toe (v=1)
+          # edge leads the walking direction in eight directions. The previous
+          # rotation was off by PI and drew every trail walking backwards.
+          set -euo pipefail
+          node scripts/test-footprint-orientation.mjs
       - name: Windows and curtains compile and place correctly
         run: |
           # Asserts the loader pass-through for windows[]/curtains[], the
