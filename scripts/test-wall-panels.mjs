@@ -10,14 +10,18 @@
  *
  *   1. slat-panel: slats fit the whole width (first and last slat flush with
  *      the panel's edges), and the requested colours/finish actually land on
- *      the slat vs. the backing mesh (not swapped).
- *   2. hex-panel-cluster: the living-room preset (side 18, rows
- *      3,4,5,4,4,4,3,2) produces exactly 29 hex meshes; a hex is pointy-top
- *      (a vertex straight up, not a flat edge); rows are centred by default
- *      (offsets null); the cluster is one merged geometry + one material
- *      (cheap, per the plan); and the DEFAULTS bbox this module freezes at
- *      load time is internally consistent with the live layout maths, not a
- *      hand-typed guess that could drift from the code that draws it.
+ *      the slat vs. the backing mesh (not swapped); the opt-in grainMap
+ *      stamps a roughness map on the slat material and flags the mesh keep.
+ *   2. hex-panel-cluster: the living-room preset (side 18, columns
+ *      3,4,5,4,4,4,3,2 left to right) produces exactly 29 hex meshes; a hex
+ *      is flat-top (a flat edge left/right, not a vertex); columns are
+ *      centred by default except column 5 shifted down half a hex
+ *      (columnOffsets [0,0,0,0,1,0,0,0]); the cluster is one merged geometry
+ *      + one material (cheap, per the plan); the DEFAULTS bbox this module
+ *      freezes at load time is internally consistent with the live layout
+ *      maths, not a hand-typed guess that could drift from the code that
+ *      draws it; and the honeycomb has no overlaps and no gaps between
+ *      neighbouring columns.
  */
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -112,6 +116,30 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
     }
   });
   check('slat-panel: a glass-finish slat is flagged keep', sawKeptGlass);
+
+  // grainMap (oak preset, criterion 9): off by default, opt-in flags every
+  // slat mesh keep even under plain Node where makeOakGrainRoughnessMap
+  // returns null (no DOM canvas) -- the keep flag and params are still
+  // real effects worth checking independent of whether a texture landed.
+  check('slat-panel: DEFAULTS.grainMap is false', D.grainMap === false);
+  const gPlain = build(THREE, Object.assign({}, D), { detail: 'full' });
+  let anyKeptPlain = false;
+  gPlain.traverse(o => { if (o.isMesh && o.userData.keep === true) anyKeptPlain = true; });
+  check('slat-panel: default (no grainMap) has no kept meshes', !anyKeptPlain);
+  const gGrain = build(THREE, Object.assign({}, D, { grainMap: true }), { detail: 'full' });
+  let slatCount = 0, keptCount = 0;
+  gGrain.traverse(o => {
+    if (!o.isMesh) return;
+    const mat = Array.isArray(o.material) ? o.material[0] : o.material;
+    if (mat && mat.color && mat.color.getHex() === slatColorInt) {
+      slatCount++;
+      if (o.userData.keep === true) keptCount++;
+    }
+  });
+  check('slat-panel: grainMap:true flags every slat mesh keep', slatCount > 0 && keptCount === slatCount, { slatCount, keptCount });
+  check('slat-panel: real Acupanel geometry defaults (2.7/4.0/1.0/0.9cm)',
+    D.slatWidth === 2.7 && D.pitch === 4.0 && D.slatDepth === 1.0 && D.backingDepth === 0.9 && near(D.depth, 1.9),
+    { slatWidth: D.slatWidth, pitch: D.pitch, slatDepth: D.slatDepth, backingDepth: D.backingDepth, depth: D.depth });
 }
 
 // ---- hex-panel-cluster: the living-room preset ------------------------------
@@ -119,10 +147,12 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   const build = WP.TYPES['hex-panel-cluster'].build;
   const D = WP.TYPES['hex-panel-cluster'].DEFAULTS;
 
-  check('hex-panel-cluster: DEFAULTS.rows is the living-room preset',
-    JSON.stringify(D.rows) === JSON.stringify([3, 4, 5, 4, 4, 4, 3, 2]), D.rows);
-  check('hex-panel-cluster: DEFAULTS.offsets is null (every row centred)', D.offsets === null);
+  check('hex-panel-cluster: DEFAULTS.columns is the living-room preset',
+    JSON.stringify(D.columns) === JSON.stringify([3, 4, 5, 4, 4, 4, 3, 2]), D.columns);
+  check('hex-panel-cluster: DEFAULTS.columnOffsets shifts only column 5 (index 4) down half a hex',
+    JSON.stringify(D.columnOffsets) === JSON.stringify([0, 0, 0, 0, 1, 0, 0, 0]), D.columnOffsets);
   check('hex-panel-cluster: DEFAULTS.side is 18cm', D.side === 18);
+  check('hex-panel-cluster: DEFAULTS.color is the dark green felt', D.color === '#1e3228', D.color);
 
   const g = build(THREE, Object.assign({}, D), { detail: 'full' });
   const hexMeshes = [];
@@ -138,17 +168,16 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   const matSet = new Set(hexMeshes.map(m => Array.isArray(m.material) ? m.material[0] : m.material));
   check('hex-panel-cluster: all hexes share one material instance', matSet.size === 1, matSet.size);
 
-  // Pointy-top: the shared hex geometry's own local bbox is taller (y) than
-  // it is wide (x) by the pointy-top ratio (height = 2*side, width =
-  // sqrt(3)*side -> height/width = 2/sqrt(3) ~= 1.1547), not the flat-top
-  // ratio (which would be < 1).
+  // Flat-top: the shared hex geometry's own local bbox is WIDER (x) than it
+  // is tall (y) -- width = 2*side, height = sqrt(3)*side -> width/height =
+  // 2/sqrt(3) ~= 1.1547, the inverse of the pointy-top ratio.
   const hexGeo = hexMeshes[0].geometry;
   hexGeo.computeBoundingBox();
   const bb = hexGeo.boundingBox;
   const wLocal = bb.max.x - bb.min.x, hLocal = bb.max.y - bb.min.y;
-  check('hex-panel-cluster: pointy-top (local height > local width)', hLocal > wLocal, { wLocal, hLocal });
-  check('hex-panel-cluster: pointy-top ratio height/width ~= 2/sqrt(3)',
-    near(hLocal / wLocal, 2 / Math.sqrt(3), 0.01), hLocal / wLocal);
+  check('hex-panel-cluster: flat-top (local width > local height)', wLocal > hLocal, { wLocal, hLocal });
+  check('hex-panel-cluster: flat-top ratio width/height ~= 2/sqrt(3)',
+    near(wLocal / hLocal, 2 / Math.sqrt(3), 0.01), wLocal / hLocal);
 
   // Overall bbox: back at z=0 (contract test already checks this for the
   // full group at DEFAULTS; re-derive it independently here from the raw
@@ -162,22 +191,22 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   check('hex-panel-cluster: back at z=0', near(gb.min.z, 0, 0.002), gb);
   check('hex-panel-cluster: depth == thickness', near((gb.max.z - gb.min.z) * 100, D.thickness, 0.05), gb);
 
-  // A different cluster shape still lays out correctly: row counts summed.
-  const g2 = build(THREE, Object.assign({}, D, { rows: [1, 2, 1], side: 10 }), { detail: 'full' });
+  // A different cluster shape still lays out correctly: column counts summed.
+  const g2 = build(THREE, Object.assign({}, D, { columns: [1, 2, 1], side: 10 }), { detail: 'full' });
   let n2 = 0;
   g2.traverse(o => { if (o.isMesh) n2++; });
-  check('hex-panel-cluster: a custom rows array produces the summed hex count', n2 === 4, n2);
+  check('hex-panel-cluster: a custom columns array produces the summed hex count', n2 === 4, n2);
 
-  // Explicit offsets shift a row without changing the hex count.
-  const g3 = build(THREE, Object.assign({}, D, { rows: [2, 2], offsets: [0, 1], side: 10 }), { detail: 'full' });
+  // Explicit columnOffsets shift a column without changing the hex count.
+  const g3 = build(THREE, Object.assign({}, D, { columns: [2, 2], columnOffsets: [0, 1], side: 10 }), { detail: 'full' });
   let n3 = 0;
   g3.traverse(o => { if (o.isMesh) n3++; });
-  check('hex-panel-cluster: offsets do not change the hex count', n3 === 4, n3);
+  check('hex-panel-cluster: columnOffsets do not change the hex count', n3 === 4, n3);
   g3.updateMatrixWorld(true);
   g2.updateMatrixWorld(true);
   const b2 = new THREE.Box3().setFromObject(g2), b3 = new THREE.Box3().setFromObject(g3);
-  check('hex-panel-cluster: a shifted row widens the bbox vs. the unshifted layout',
-    (b3.max.x - b3.min.x) > (b2.max.x - b2.min.x) - 1e-6, { shifted: b3, plain: b2 });
+  check('hex-panel-cluster: a shifted column heightens the bbox vs. the unshifted layout',
+    (b3.max.y - b3.min.y) > (b2.max.y - b2.min.y) - 1e-6, { shifted: b3, plain: b2 });
 
   // Palette/keep sanity, same style as the slat-panel section above.
   const gGlass = build(THREE, Object.assign({}, D, { finish: 'mirror' }), { detail: 'full' });
@@ -188,6 +217,61 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
     if (mat && mat.userData && mat.userData.finish === 'mirror') mirrorKept = mirrorKept || o.userData.keep === true;
   });
   check('hex-panel-cluster: a mirror-finish cluster is flagged keep', mirrorKept);
+
+  // ---- no overlaps, no gaps: adjacent columns must interlock -------------
+  // Re-derive each hex's own 6 world-space vertices (flat-top, local frame)
+  // and check two geometric properties directly against the living-room
+  // preset's actual centres, independent of any bbox shortcut:
+  //   1. no two hexes overlap (centre-to-centre distance is never less than
+  //      the honeycomb's minimum packing distance for two same-size hexes);
+  //   2. every hex in columns 1-7 (0-indexed 0-6) shares an edge with at
+  //      least one hex in the next column (centre-to-centre distance from
+  //      SOME hex in column c+1 equals the honeycomb's own neighbour
+  //      distance, i.e. no gap).
+  {
+    const sideCm = D.side;
+    const rowPitch = Math.sqrt(3) * sideCm, colPitch = 1.5 * sideCm, halfHex = rowPitch / 2;
+    const columns = D.columns, offsets = D.columnOffsets;
+    // neighbourDist: centre-to-centre distance between two hexes that share
+    // an edge (one column apart, offset by half a row-pitch) -- derived from
+    // the honeycomb geometry itself (colPitch horizontally, halfHex
+    // vertically), not hand-typed, so a side-length change cannot desync it.
+    const neighbourDist = Math.sqrt(colPitch * colPitch + halfHex * halfHex);
+    const centresByCol = columns.map((count, c) => {
+      const off = offsets[c] || 0;
+      const y0 = -((count - 1) * rowPitch) / 2 - off * halfHex;
+      const x = c * colPitch;
+      const out = [];
+      for (let r = 0; r < count; r++) out.push([x, y0 + r * rowPitch]);
+      return out;
+    });
+    const allCentres = centresByCol.flat();
+    const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+    // 1. No overlap: every pair of distinct hexes is at least neighbourDist
+    // apart (same-column neighbours are rowPitch apart, which is larger).
+    let minPairDist = Infinity;
+    for (let i = 0; i < allCentres.length; i++) {
+      for (let j = i + 1; j < allCentres.length; j++) {
+        minPairDist = Math.min(minPairDist, dist(allCentres[i], allCentres[j]));
+      }
+    }
+    check('hex-panel-cluster: no two hexes overlap (min centre distance >= neighbour distance)',
+      minPairDist >= neighbourDist - 1e-6, { minPairDist, neighbourDist });
+
+    // 2. No gaps: every hex in columns 1-7 (index 0-6) has at least one
+    // neighbour in the next column at exactly neighbourDist.
+    let gapFound = null;
+    for (let c = 0; c < columns.length - 1; c++) {
+      for (const centre of centresByCol[c]) {
+        const hasNeighbour = centresByCol[c + 1].some(other => near(dist(centre, other), neighbourDist, 1e-6));
+        if (!hasNeighbour) { gapFound = { column: c, centre }; break; }
+      }
+      if (gapFound) break;
+    }
+    check('hex-panel-cluster: every hex in columns 1-7 shares an edge with the next column (no gaps)',
+      gapFound === null, gapFound);
+  }
 }
 
 // ---- registry wiring (this module's own entries, not the whole registry) ---
