@@ -39,6 +39,48 @@
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 
+/**
+ * A BoxGeometry with the two caps PERPENDICULAR TO `capAxis` dropped -- 4
+ * side faces (8 tris) instead of 6 (12 tris). BoxGeometry's own face order
+ * is [+x,-x,+y,-y,+z,-z] (verified against the vendored build); `capAxis`
+ * picks which opposing pair to drop: 'x' drops faces 0,1 (keeps 2,3,4,5),
+ * 'y' drops 2,3 (the default box faces -- keeps 0,1,4,5), 'z' drops 4,5.
+ * For a leg, the hidden ends are along its own long axis (y, the default).
+ * For a crossbar built as BoxGeometry(length, thickness, thickness), the
+ * hidden ends are its two tips along x, not its top/bottom (which, being a
+ * horizontal bar, ARE sometimes visible from below or above) -- so the
+ * crossbar passes capAxis: 'x'. Saves 4 tris per part; used by every leg
+ * and crossbar in buildDiningTable (perf review round 1, item 89769f2b,
+ * fix #5).
+ */
+function openBoxGeometry(THREE, width, height, depth, capAxis) {
+  const box = new THREE.BoxGeometry(width, height, depth);
+  const pos = box.attributes.position.array;
+  const norm = box.attributes.normal.array;
+  const dropFaces = capAxis === 'x' ? [0, 1] : capAxis === 'z' ? [4, 5] : [2, 3];
+  const sideFaceIdx = [0, 1, 2, 3, 4, 5].filter(f => !dropFaces.includes(f));
+  const newPos = [], newNorm = [];
+  sideFaceIdx.forEach(f => {
+    for (let v = 0; v < 4; v++) {
+      const i = (f * 4 + v) * 3;
+      newPos.push(pos[i], pos[i + 1], pos[i + 2]);
+      newNorm.push(norm[i], norm[i + 1], norm[i + 2]);
+    }
+  });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(newPos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(newNorm, 3));
+  // BoxGeometry's own per-face winding is [0,2,1, 2,3,1] (verified against
+  // the vendored build), not the [0,1,2, 0,2,3] a generic quad might assume.
+  const indices = [];
+  for (let f = 0; f < sideFaceIdx.length; f++) {
+    const base = f * 4;
+    indices.push(base, base + 2, base + 1, base + 2, base + 3, base + 1);
+  }
+  geo.setIndex(indices);
+  return geo;
+}
+
 // ---------------------------------------------------------------------------
 // dining-table - round top on four splayed square legs, no pedestal, joined
 // by a low X crossbar frame near the floor.
@@ -80,8 +122,32 @@ function buildDiningTable(THREE, params, opts) {
   group.name = 'furniture:dining-table';
 
   // Top: a short cylinder, its top face at y = h. Thin (2.8 cm) and matte
-  // white per the photo -- no gloss sheen on the real top.
-  const topGeo = new THREE.CylinderGeometry(r, r, topThickness, segments);
+  // white per the photo -- no gloss sheen on the real top. The underside is
+  // never seen (the table always stands on its legs, never viewed from
+  // below) so it carries no bottom cap -- an open-ended cylinder side
+  // (2*segments tris) plus ONE manual top cap (a CircleGeometry, `segments`
+  // tris) instead of a closed CylinderGeometry's two caps, saving `segments`
+  // tris (14 at the low-detail default) with the top surface unchanged
+  // (perf review round 1, item 89769f2b, fix #5).
+  const topSide = new THREE.CylinderGeometry(r, r, topThickness, segments, 1, true);
+  const topCap = new THREE.CircleGeometry(r, segments);
+  topCap.rotateX(-Math.PI / 2); // CircleGeometry is built facing +z; rotate flat, facing +y
+  topCap.translate(0, topThickness / 2, 0); // sits at the cylinder's own top face
+  const topGeo = new THREE.BufferGeometry();
+  const sidePos = topSide.attributes.position.array, capPos = topCap.attributes.position.array;
+  const sideNorm = topSide.attributes.normal.array, capNorm = topCap.attributes.normal.array;
+  const merged = new Float32Array(sidePos.length + capPos.length);
+  merged.set(sidePos, 0);
+  merged.set(capPos, sidePos.length);
+  const mergedNorm = new Float32Array(sideNorm.length + capNorm.length);
+  mergedNorm.set(sideNorm, 0);
+  mergedNorm.set(capNorm, sideNorm.length);
+  topGeo.setAttribute('position', new THREE.BufferAttribute(merged, 3));
+  topGeo.setAttribute('normal', new THREE.BufferAttribute(mergedNorm, 3));
+  const sideVertCount = sidePos.length / 3;
+  const sideIdx = Array.from(topSide.index.array);
+  const capIdx = Array.from(topCap.index.array, i => i + sideVertCount);
+  topGeo.setIndex(sideIdx.concat(capIdx));
   topGeo.translate(0, h - topThickness / 2, r);
   const top = new THREE.Mesh(topGeo, makeFinish(THREE, p.topFinish, p.topColor));
   top.name = 'tabletop';
@@ -97,7 +163,16 @@ function buildDiningTable(THREE, params, opts) {
   // exactly h - topThickness -- the foot lands at y=0 by construction,
   // independent of splayAngle.
   const legSize = 0.032;               // square cross-section, metres
-  const legTopInset = r * 0.62;        // how far in from the rim the leg attaches
+  // How far in from the rim the leg attaches. At 0.62 (the original value)
+  // the leg's TOP corner sits at radius r*0.62*sqrt(2) =~ 0.31m from the
+  // table's own centre for a 100cm table -- inside the nested chairs' own
+  // 0.45m arc radius, so it passed straight through both neighbouring
+  // chairs' seat and back shell (found by code review round 1, item
+  // 89769f2b). 0.70 is the largest fraction that still keeps the leg's top
+  // corner (radius r*0.70*sqrt(2)) under the table's own rim, and clears the
+  // DEFAULTS chair radius (45cm) by >2cm, verified against the real built
+  // chair geometry in the "legs clear the nested chairs" test below.
+  const legTopInset = r * 0.70;
   const splayAngle = 0.16;             // radians outward tilt, from vertical
   // The centreline compensation below (1/cos(splayAngle)) is exact for a
   // ROUND leg; a SQUARE leg's tilted corners drop a little further still.
@@ -110,7 +185,7 @@ function buildDiningTable(THREE, params, opts) {
   const vertSpan = h - topThickness - (legSize / 2) * Math.sin(splayAngle);
   const legLen = vertSpan / Math.cos(splayAngle);
 
-  const legGeo = new THREE.BoxGeometry(legSize, legLen, legSize);
+  const legGeo = openBoxGeometry(THREE, legSize, legLen, legSize, 'y');
   legGeo.translate(0, -legLen / 2, 0); // pivot (0,0,0) is the TOP end of the leg
   const legCorners = [
     { sx: -1, sz: -1 }, { sx: 1, sz: -1 }, { sx: -1, sz: 1 }, { sx: 1, sz: 1 }
@@ -149,7 +224,7 @@ function buildDiningTable(THREE, params, opts) {
     const mid = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
     const dir = new THREE.Vector3().subVectors(b, a);
     const lenFlat = Math.hypot(dir.x, dir.z);
-    const barGeo = new THREE.BoxGeometry(lenFlat, barThickness, barThickness);
+    const barGeo = openBoxGeometry(THREE, lenFlat, barThickness, barThickness, 'x');
     const bar = new THREE.Mesh(barGeo, legMat.clone());
     bar.name = name;
     bar.position.set(mid.x, frameY, mid.z);
@@ -193,7 +268,13 @@ const CHAIR_DEFAULTS = Object.freeze({
   // footprints from these without running any JS.
   width: 63.6,     // 2 * radius * sin(backSweep/2) at the DEFAULTS below
   depth: 45,       // == radius
-  height: 75,
+  // Capped below the dining-table's own underside (its DEFAULTS.height 75
+  // minus its 2.8cm top slab, with a 1cm clearance margin) -- when 4 of
+  // these are tucked under a dining-table at DEFAULTS, the back's highest
+  // point (at the centre, see backHeight's profile below) must not poke
+  // into the tabletop (code review round 1, item 89769f2b: the back top
+  // used to sit AT y=75, 2.8cm inside the table's underside at y=72.2).
+  height: 71,
   radius: 45,          // cm, the arc's radius -- also this wedge's depth
   backSweep: 90,       // degrees, the arc's angular span, centred on straight back
   seatHeight: 52,      // cm, floor to the top of the seat (photo reads 50-55cm)
@@ -259,26 +340,70 @@ function buildDiningChair(THREE, params, opts) {
   group.add(seat);
 
   // ---- Back: a thin curved shell rising from the arc, the outer wall of
-  // the eventual cylinder. ~40cm tall per the photo, highest at the centre
-  // back and curving down/out toward the sides is out of scope for a first
-  // cut -- a constant-height shell already reads as "one continuous arc"
-  // from every normal viewing angle, and keeps the bbox height exact. ----
-  const backHeight = Math.max(0.01, Math.min(0.40, h - seatH));
+  // the eventual cylinder. TALLEST at the centre back, tapering down toward
+  // the sides (code review round 1, item 89769f2b, fix #6 -- the photo shows
+  // this profile, not a constant height). The peak is capped so the back's
+  // highest point stays under a DEFAULTS dining-table's underside with a 1cm
+  // margin when 4 of these are tucked underneath it (see CHAIR_DEFAULTS
+  // .height's own comment) -- `h` (this build's declared height) IS that
+  // peak, so a caller who raises `height` raises the peak, and the profile
+  // still tapers down proportionally toward the sides.
   const backThickness = 0.025;
   const innerR = radius - backThickness;
   const backSegs = detail ? 6 : 16;
+  const peakHeight = Math.max(0.01, h - seatH);
+  const sideHeight = peakHeight * 0.65; // tapered, never to zero -- still one continuous shell
+  function heightAt(theta) {
+    // 1 at the centre (theta=0), 0 at the sweep edges -- a half-cosine taper.
+    const frac = Math.cos((theta / (sweep / 2)) * (Math.PI / 2));
+    return sideHeight + (peakHeight - sideHeight) * frac;
+  }
 
   // CylinderGeometry's own local frame sweeps theta -> (x=r*sin(theta),
   // z=r*cos(theta)); to match the seat shape's x=r*sin(a), z=r-r*cos(a)
-  // convention (back-centre a=0 at world z=0, curving forward to +z), the
-  // cylinder needs its z axis MIRRORED (scale z by -1) before translating by
-  // +radius -- confirmed by probe: theta=0 -> z=0, theta=+-sweep/2 -> the
-  // same side-edge z the seat shape produces, for every sweep.
-  function backShell(rad, name) {
-    const geo = new THREE.CylinderGeometry(rad, rad, backHeight, backSegs, 1, true, -sweep / 2, sweep);
-    geo.scale(1, 1, -1);
-    geo.translate(0, 0, rad);
-    geo.translate(0, seatH + backHeight / 2, 0);
+  // convention (back-centre a=0 at world z=0, curving forward to +z), that
+  // needs the z axis MIRRORED -- which is also what flipped the winding in
+  // round 1 (geo.scale(1,1,-1) mirrors the geometry, so the triangle winding
+  // no longer matches the outward-pointing normal attribute, and the shell
+  // was invisible from outside / lit from inside). This custom ruled-surface
+  // build sidesteps a stock CylinderGeometry (which also cannot vary its own
+  // height per-angle) and lays out the winding correctly from the start:
+  // both rings are wound the SAME way seen from OUTSIDE the arc (increasing
+  // theta), and each quad's two triangles keep that same outward winding.
+  //
+  // @param sign +1 for the outer shell (front face read from outside, at
+  //   `radius`), -1 for the inner shell (front face read from INSIDE the
+  //   shell -- i.e. its own outside -- at `radius - backThickness`, so its
+  //   winding is the mirror of the outer one).
+  function backShell(rad, sign, name) {
+    const segs = backSegs;
+    const positions = [];
+    const indices = [];
+    for (let i = 0; i <= segs; i++) {
+      const theta = -sweep / 2 + (i / segs) * sweep;
+      const x = rad * Math.sin(theta);
+      const z = rad - rad * Math.cos(theta); // matches the seat shape's convention
+      const bottomY = seatH;
+      const topY = seatH + heightAt(theta);
+      positions.push(x, bottomY, z, x, topY, z); // 2 verts per column: bottom, top
+    }
+    for (let i = 0; i < segs; i++) {
+      const a = i * 2, b = a + 1, c = a + 2, d = a + 3; // a,c bottom; b,d top
+      if (sign > 0) {
+        // Outward normal points AWAY from the apex (0,*,radius) -- for the
+        // OUTER shell that is away from the wedge's own centre, i.e. the
+        // winding that reads front-facing from outside the arc.
+        indices.push(a, b, c, b, d, c);
+      } else {
+        // Inner shell: its visible ("outside") face is the concave side,
+        // facing the apex -- the mirror winding of the outer shell.
+        indices.push(a, c, b, b, c, d);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
     const mesh = new THREE.Mesh(geo, seatMat.clone());
     mesh.name = name;
     // Matte velvet, same finish/merge rule as every other flat-palette part
@@ -290,7 +415,11 @@ function buildDiningChair(THREE, params, opts) {
   }
   const backGroup = new THREE.Group();
   backGroup.name = 'back';
-  backGroup.add(backShell(radius, 'backOuter'), backShell(innerR, 'backInner'));
+  // Both shells centred on the SAME arc convention (radius from the apex),
+  // so the inner shell is a uniform `backThickness` inset from the outer one
+  // everywhere, including at the back centre (round 1 fix #4 -- it used to
+  // be centred on its own radius, giving zero thickness at the centre).
+  backGroup.add(backShell(radius, 1, 'backOuter'), backShell(innerR, -1, 'backInner'));
   group.add(backGroup);
 
   // ---- Legs: 4 slim square near-vertical legs, placed INSIDE the wedge

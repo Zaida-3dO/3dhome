@@ -1196,8 +1196,8 @@
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 75,
-          "description": "cm, floor to the top of the curved back shell."
+          "default": 71,
+          "description": "cm, floor to the HIGHEST point of the curved back shell (its centre -- the shell tapers lower toward the sides). Capped so 4 of these, tucked under a dining-table at its own DEFAULTS height (75cm, minus its 2.8cm top slab), clear the tabletop's underside by about 1cm."
         },
         "radius": {
           "type": "number",

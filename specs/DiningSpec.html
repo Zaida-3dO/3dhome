@@ -91,10 +91,12 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "legColor": "#1a1a1a",
   "chairRadius": 45,
   "chairBackSweep": 90,
-  "chairHeight": 75,
+  "chairHeight": 71,
   "chairSeatHeight": 52,
   "chairColor": "#1a1a1a",
-  "pulledOut": 0
+  "pulledOut": 0,
+  "chairAlone": false,
+  "detail": "full"
 }/*EDITMODE-END*/;
 
 const CM = 0.01;
@@ -102,19 +104,27 @@ const PULL_OUT_MAX_M = 0.45; // 45 cm, per the "pulled out" acceptance criterion
 
 // Presets: named combinations a reviewer can jump straight to, instead of
 // hand-dialling every slider back to a known-good state. "nested-set" is the
-// numbers read off the real photos; "larger-table" is an alternate size.
+// numbers read off the real photos; "larger-table" is an alternate size;
+// "chair-alone" isolates one chair (no table, no other chairs) so its own
+// shape -- the wedge, the curved back, the leg/stretcher frame -- can be
+// checked without three others obscuring it (visual review round 1, item
+// 89769f2b, fix #7).
 const PRESETS = {
   'nested-set': {
     tableDiameter: 100, tableHeight: 75, tableTopColor: '#f5f5f2', tableFrameHeight: 22, legColor: '#1a1a1a',
-    chairRadius: 45, chairBackSweep: 90, chairHeight: 75, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 0
+    chairRadius: 45, chairBackSweep: 90, chairHeight: 71, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: false
   },
   'pulled-out': {
     tableDiameter: 100, tableHeight: 75, tableTopColor: '#f5f5f2', tableFrameHeight: 22, legColor: '#1a1a1a',
-    chairRadius: 45, chairBackSweep: 90, chairHeight: 75, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 1
+    chairRadius: 45, chairBackSweep: 90, chairHeight: 71, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 1, chairAlone: false
   },
   'larger-table': {
     tableDiameter: 120, tableHeight: 76, tableTopColor: '#f5f5f2', tableFrameHeight: 24, legColor: '#1a1a1a',
-    chairRadius: 45, chairBackSweep: 90, chairHeight: 75, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 0
+    chairRadius: 45, chairBackSweep: 90, chairHeight: 71, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: false
+  },
+  'chair-alone': {
+    tableDiameter: 100, tableHeight: 75, tableTopColor: '#f5f5f2', tableFrameHeight: 22, legColor: '#1a1a1a',
+    chairRadius: 45, chairBackSweep: 90, chairHeight: 71, chairSeatHeight: 52, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: true
   }
 };
 
@@ -134,18 +144,46 @@ function useDiningModule() {
 function buildDiningScene(t, group, THREE, ctx) {
   const Dining = window.__dining;
   if (!Dining) return;
+  const detailOpt = { detail: t.detail === 'low' ? 'low' : 'full' };
+
+  // "chair-alone": isolate one chair, facing the camera, no table and no
+  // other chairs -- so its own shape can be checked without the other three
+  // obscuring it (fix #7).
+  if (t.chairAlone) {
+    const chair = Dining.TYPES['dining-chair'].build(THREE, {
+      radius: t.chairRadius, backSweep: t.chairBackSweep, height: t.chairHeight, seatHeight: t.chairSeatHeight,
+      seatColor: t.chairColor, seatFinish: 'matte', legColor: t.chairColor, legFinish: 'matte'
+    }, detailOpt);
+    // Rotate 180 so its front (the wedge's point) faces the default camera,
+    // the same "facing the viewer" convention every other single-item spec
+    // page uses.
+    chair.rotation.y = Math.PI;
+    group.add(chair);
+    return;
+  }
 
   const table = Dining.TYPES['dining-table'].build(THREE, {
     width: t.tableDiameter, depth: t.tableDiameter, height: t.tableHeight,
     topColor: t.tableTopColor, topFinish: 'matte',
     legColor: t.legColor, legFinish: 'matte', frameHeight: t.tableFrameHeight
-  }, { detail: 'full' });
+  }, detailOpt);
+  // By the builder contract the table's own local frame has its BACK at
+  // z=0 and its centre at z=+diameter/2 -- so placing the GROUP at the
+  // nesting centre (as the chairs below do) requires shifting it back by
+  // that radius, or the table renders half a diameter off the chair ring
+  // (code review + visual review round 1, item 89769f2b, fix #3).
+  table.position.z = -(t.tableDiameter / 2) * CM;
   group.add(table);
 
   // Four quadrant chairs, tucked at 90-degree rotations so their curved
   // backs together form the cylinder the table top overhangs -- see the
   // NESTING MATH note above the tweak defaults for the placement formula
-  // this shares with scripts/test-dining.mjs.
+  // this shares with scripts/test-dining.mjs. Both the table above and the
+  // chairs here are centred on the SAME point (the group origin), so
+  // `pulledOut` -- which only moves `placeDist`, the chairs' own radial
+  // distance from that shared origin -- is already radial from the table's
+  // true centre (fix #3's other half: keep this centre shared, not
+  // re-derive a second one for the slider).
   const chairRadiusM = t.chairRadius / 100;
   const placeDist = chairRadiusM + t.pulledOut * PULL_OUT_MAX_M;
   for (let i = 0; i < 4; i++) {
@@ -153,7 +191,7 @@ function buildDiningScene(t, group, THREE, ctx) {
     const chair = Dining.TYPES['dining-chair'].build(THREE, {
       radius: t.chairRadius, backSweep: t.chairBackSweep, height: t.chairHeight, seatHeight: t.chairSeatHeight,
       seatColor: t.chairColor, seatFinish: 'matte', legColor: t.chairColor, legFinish: 'matte'
-    }, { detail: 'full' });
+    }, detailOpt);
     chair.position.set(placeDist * Math.sin(theta), 0, placeDist * Math.cos(theta));
     chair.rotation.y = theta + Math.PI;
     group.add(chair);
@@ -169,7 +207,8 @@ function furnitureJSON(t) {
       params: {
         width: t.tableDiameter, depth: t.tableDiameter, height: t.tableHeight,
         topColor: t.tableTopColor, legColor: t.legColor, frameHeight: t.tableFrameHeight
-      }
+      },
+      notes: '`at` is this item\'s own LOCAL-FRAME origin (its back edge, per the builder contract), NOT its visual centre -- the table\'s round centre sits `diameter/2` in front of `at` along its own +z (unrotated: `at.y + diameter/2`). This spec page\'s own 3D view accounts for that offset when centring the table on the same point the 4 chairs ring; a house profile must do the same.'
     },
     {
       id: 'kitchen_dining_chair_1', room: 'kitchen', type: 'dining-chair',
@@ -178,7 +217,7 @@ function furnitureJSON(t) {
         radius: t.chairRadius, backSweep: t.chairBackSweep, height: t.chairHeight,
         seatHeight: t.chairSeatHeight, seatColor: t.chairColor, legColor: t.chairColor
       },
-      notes: 'Tucked (pulledOut=0) placement: 4 copies at rotation 0/90/180/270, each at radius `radius` from the table centre along its own rotation -- see dining.js and this spec\'s NESTING MATH note. Placement is out of this spec\'s scope; the house profile decides real `at`.'
+      notes: 'Tucked (pulledOut=0) placement: 4 copies at rotation 0/90/180/270, each with `at` (its own back-arc centre, per the builder contract) on the ring of radius `radius` around the SAME centre the table above is centred on -- see dining.js and this spec\'s NESTING MATH note. Placement is out of this spec\'s scope; the house profile decides real `at`.'
     }
   ];
   return JSON.stringify(items, null, 2);
@@ -224,6 +263,11 @@ function App() {
         <CopyJSONButton t={t} />
       </div>
 
+      {t.chairAlone &&
+        <div className="legend" style={{ marginBottom: 16 }}>
+          <b>Chair-alone view</b> -- one dining-chair, no table, no other chairs. Turn off "Chair alone" in the Tweaks panel to see the nested set.
+        </div>}
+
       <div className="grid">
         <div className="card">
           <h2>Numbers</h2>
@@ -237,6 +281,7 @@ function App() {
               <tr><td>Chair backSweep</td><td className="num">{t.chairBackSweep}&deg;</td><td><b>90 nests exactly</b> (4 &times; 90 = 360)</td></tr>
               <tr><td>Chair seat height</td><td className="num">{t.chairSeatHeight}</td><td>Clamped below chair height</td></tr>
               <tr><td>Pulled out</td><td className="num">{(t.pulledOut * 45).toFixed(0)} cm</td><td>0 = tucked, 1 = +45cm radially</td></tr>
+              <tr><td>Detail</td><td className="num">{t.detail}</td><td>Full or low triangle budget</td></tr>
             </tbody>
           </table>
           <div className="legend">
@@ -246,15 +291,15 @@ function App() {
         </div>
 
         <div className="card full">
-          <h2>3D — nesting dining set</h2>
+          <h2>3D — {t.chairAlone ? 'chair alone' : 'nesting dining set'}</h2>
           {!diningReady && <div className="legend">Loading src/furniture/dining.js…</div>}
           {diningReady &&
             <ThreeView
               t={t}
               buildModel={buildDiningScene}
-              heightOf={tt => tt.tableHeight * CM}
+              heightOf={tt => (tt.chairAlone ? tt.chairHeight : tt.tableHeight) * CM}
             />}
-          <div className="legend">Drag to orbit, scroll to zoom. Use "Pulled out" to slide the 4 chairs out from the nested cylinder.</div>
+          <div className="legend">Drag to orbit, scroll to zoom. Use "Pulled out" to slide the 4 chairs out from the nested cylinder, or "Chair alone" to isolate one.</div>
         </div>
       </div>
 
@@ -263,6 +308,11 @@ function App() {
         <TweakSelect label="Preset" value={t.preset}
           options={['custom', ...Object.keys(PRESETS)]}
           onChange={v => (v === 'custom' ? setTweak('preset', v) : applyPreset(v))} />
+        <TweakToggle label="Chair alone" value={t.chairAlone}
+          onChange={v => setTweak('chairAlone', v)} />
+        <TweakRadio label="Detail" value={t.detail}
+          options={[{ value: 'full', label: 'Full' }, { value: 'low', label: 'Low' }]}
+          onChange={v => setTweak('detail', v)} />
 
         <TweakSection label="Table" />
         <TweakSlider label="Diameter" value={t.tableDiameter} min={70} max={160} step={2} unit="cm"
@@ -281,7 +331,7 @@ function App() {
           onChange={v => setTweak('chairRadius', v)} />
         <TweakSlider label="Back sweep" value={t.chairBackSweep} min={60} max={120} step={5} unit="deg"
           onChange={v => setTweak('chairBackSweep', v)} />
-        <TweakSlider label="Height" value={t.chairHeight} min={65} max={90} step={1} unit="cm"
+        <TweakSlider label="Height" value={t.chairHeight} min={55} max={71} step={1} unit="cm"
           onChange={v => setTweak('chairHeight', v)} />
         <TweakSlider label="Seat height" value={t.chairSeatHeight} min={45} max={58} step={1} unit="cm"
           onChange={v => setTweak('chairSeatHeight', v)} />
