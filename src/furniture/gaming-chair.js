@@ -50,6 +50,14 @@ export const DEFAULTS = Object.freeze({
   backrestWidth: 53,     // at the shoulder wings
   baseDiameter: 53.7,    // 5-star wheelbase, 21.13 in
   casterDiameter: 6.5,   // 65 mm PU twin-wheel
+  // Overall bounding envelope at the DEFAULT pose (recline 95, seat 47), in
+  // cm: width = armrest span (the widest part), depth = backrest back to the
+  // caster tip, height = floor to backrest top. Descriptive only -- build()
+  // does not read them; the params above drive the shape, and
+  // scripts/test-gaming-chair.mjs pins the built bbox to these within 0.5 cm.
+  width: 70,
+  height: 119.7,
+  depth: 61.5,
 });
 
 /** Adjustment ranges the chair physically allows. build() clamps to these. */

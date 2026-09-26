@@ -20,6 +20,8 @@
  *   5. 'low' detail is genuinely cheaper, and both stay inside a mobile budget.
  *   6. Adjustables clamp to the chair's real ranges; toFurnitureJSON emits
  *      only the keys that differ from DEFAULTS.
+ *   7. DEFAULTS.width/height/depth (the furniture data layer's envelope) match
+ *      the built bbox at the default pose within 0.5 cm.
  *
  * Builds real three.js geometry from the vendored module (plain ESM, no DOM).
  */
@@ -91,6 +93,17 @@ for (const reclineDeg of [90, 95, 120, 155]) {
     check(`${tag}: userData.type`, g.userData.type === 'gaming-chair');
   }
 }
+
+// envelope: DEFAULTS width/height/depth match the built bbox at the default pose
+for (const detail of ['full', 'low']) {
+  const size = bbox(C.build(THREE, {}, { detail })).getSize(new THREE.Vector3());
+  const D = C.DEFAULTS;
+  for (const [k, v] of [['width', size.x], ['height', size.y], ['depth', size.z]]) {
+    check(`DEFAULTS.${k} is a number`, typeof D[k] === 'number', D[k]);
+    check(`${detail}: DEFAULTS.${k} matches the built bbox within 0.5 cm`, near(v, D[k] * CM, 0.005), [v * 100, D[k]]);
+  }
+}
+check('default pose is recline 95 / seat 47', C.DEFAULTS.reclineDeg === 95 && C.DEFAULTS.seatHeight === 47);
 
 // ---- 2. published dimensions -------------------------------------------------
 {
