@@ -6,10 +6,11 @@
  *
  * WHAT THIS GUARDS
  *
- *   1. The envelope beyond DEFAULTS: sinks, splashbacks, corners, every
- *      handle style, narrow doors, mixed wall heights, a top freezer. The
- *      only parts allowed above a base run's `height` (the worktop top) are
- *      the ones tagged aboveWorktop -- a tap and a splashback.
+ *   1. The envelope beyond DEFAULTS, with no exceptions: sinks and taps,
+ *      hood splashbacks, corners, every handle style, narrow doors, mixed
+ *      wall heights, a top freezer. Every bbox equals width/depth/height;
+ *      the worktop pieces tile the run around their cut-outs; low detail is
+ *      at most 60% of full once full passes 300 triangles.
  *   2. Modules run LEFT TO RIGHT in local +x, and `width` is authoritative
  *      (a short list is padded with a filler, a long one scaled).
  *   3. The hob is flush in the worktop over its own module; the oven front is
@@ -64,69 +65,164 @@ function unionBox(list) {
 }
 const near = (a, b, tol) => Math.abs(a - b) <= (tol === undefined ? 0.5 : tol);
 
-/** The envelope checks: bbox == width/depth, centred, bottom at 0, back at 0, and height == params. */
+const tri = gr => meshes(gr).reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3, 0);
+
+/**
+ * The worktop pieces tile the run's W x D exactly once, except over the
+ * cut-outs (a hob, a sink), which no piece may cover. Sampled on a 1 cm grid.
+ * Returns the number of bad sample points.
+ */
+function worktopTiling(g, p) {
+  const tops = meshes(g, m => m.name === 'worktop').map(boxCm);
+  const holes = meshes(g, m => m.name === 'hob' || m.name === 'sink' || m.name === 'sink-rim').map(boxCm);
+  const inside = (b, x, z) => x > b.x0 && x < b.x1 && z > b.z0 && z < b.z1;
+  let bad = 0;
+  // Off the half-centimetre grid, so no sample lands exactly on an edge.
+  for (let x = -p.width / 2 + 0.37; x < p.width / 2; x += 1) {
+    for (let z = 0.41; z < p.depth; z += 1) {
+      const n = tops.filter(b => inside(b, x, z)).length;
+      const hole = holes.some(b => inside(b, x, z));
+      if (hole ? n !== 0 : n !== 1) bad++;
+    }
+  }
+  return bad;
+}
+
+/** The envelope checks: bbox == width/depth/height exactly (no exceptions), centred, bottom at 0, back at 0. */
 function checkEnvelope(tag, impl, params) {
   const p = Object.assign({}, impl.DEFAULTS, params);
   const g = build(impl, params);
   const all = meshes(g);
-  const above = all.filter(m => m.userData.aboveWorktop === true);
-  const body = unionBox(all.filter(m => m.userData.aboveWorktop !== true));
   const whole = boxCm(g);
   check(tag + ': width == params', near(whole.x1 - whole.x0, p.width), { whole, width: p.width });
   check(tag + ': centred on x', near((whole.x0 + whole.x1) / 2, 0), whole);
   check(tag + ': bottom at y = 0', near(whole.y0, 0), whole);
   check(tag + ': back at z = 0', near(whole.z0, 0), whole);
   check(tag + ': depth == params', near(whole.z1 - whole.z0, p.depth), { whole, depth: p.depth });
-  check(tag + ': height (without tap/splashback) == params', near(body.y1, p.height), { body, height: p.height });
-  [...new Set(above.map(m => m.name))].forEach(name => {
-    const b = unionBox(above.filter(m => m.name === name));
-    check(tag + ': the ' + name + ' stands on the worktop', near(b.y0, p.height, 0.05), b);
-  });
+  check(tag + ': height == params (the whole envelope)', near(whole.y1 - whole.y0, p.height), { whole, height: p.height });
   const bad = all.filter(m => Fin.partFinish(m).error);
   check(tag + ': every part has a palette finish', bad.length === 0, bad.map(m => m.name));
   const low = build(impl, params, 'low');
-  const tri = gr => meshes(gr).reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3, 0);
-  check(tag + ': low detail is lighter', tri(low) <= tri(g), { full: tri(g), low: tri(low) });
-  return { g, above };
+  const tf = tri(g), tl = tri(low);
+  check(tag + ': low detail is lighter', tl <= tf, { full: tf, low: tl });
+  if (tf > 300) check(tag + ': low detail is at most 60% of full (full > 300)', tl <= 0.6 * tf, { full: tf, low: tl, ratio: tl / tf });
+  if (impl === BASE) {
+    check(tag + ': worktop pieces tile the run around the cut-outs (full)', worktopTiling(g, p) === 0, worktopTiling(g, p));
+    check(tag + ': worktop pieces tile the run around the cut-outs (low)', worktopTiling(low, p) === 0, worktopTiling(low, p));
+  }
+  return { g, low, p };
 }
 
-// ---- 1. envelopes beyond DEFAULTS ------------------------------------------------
+// ---- 1. envelopes beyond DEFAULTS -- no exceptions ------------------------------------
 {
-  const sink = checkEnvelope('base with inset sink + splashback', BASE, {
-    width: 214, corner: 'right',
-    modules: [{ kind: 'sink', width: 60 }, { kind: 'hob', width: 60, splashback: 60 },
-      { kind: 'cabinet', width: 34 }, { kind: 'corner', width: 60 }],
-  });
-  check('sink run: the tap and the splashback are the parts above the worktop',
-    sink.above.some(m => m.name === 'tap') && sink.above.some(m => m.name === 'splashback') &&
-    sink.above.every(m => m.name === 'tap' || m.name === 'splashback'), sink.above.map(m => m.name));
+  // A sink with a tap: `height` is the envelope, the worktop is worktopHeight.
+  const tapRun = { width: 210, corner: 'right', height: 118.5,
+    modules: [{ kind: 'sink', width: 60 }, { kind: 'hob', width: 60 }, { kind: 'cabinet', width: 30 }, { kind: 'corner', width: 60 }] };
+  const t = checkEnvelope('base with inset sink + tap', BASE, tapRun);
+  const tap = unionBox(meshes(t.g, m => m.name === 'tap'));
+  const top = unionBox(meshes(t.g, m => m.name === 'worktop'));
+  check('tap run: the worktop is at worktopHeight', near(top.y1, 88.5, 0.01), top);
+  check('tap run: the tap rises from the worktop to exactly height', near(tap.y0, 88.5, 0.01) && near(tap.y1, 118.5, 0.01), tap);
+  check('tap run: the tap is the only thing above the worktop',
+    meshes(t.g, m => boxCm(m).y1 > 88.5 + 0.01).every(m => m.name === 'tap'),
+    meshes(t.g, m => boxCm(m).y1 > 88.5 + 0.01).map(m => m.name));
+  check('tap run: low detail keeps the tap, so the envelope holds there too', near(boxCm(t.low).y1, 118.5, 0.01), boxCm(t.low));
+  check('baseRunHeight: worktop + the tap', K.baseRunHeight(tapRun) === 88.5 + K.TAP_RISE && K.baseRunHeight({}) === 88.5);
+
+  checkEnvelope('base with a run-level sink + tap', BASE, { width: 180, height: 118.5,
+    modules: [{ kind: 'cabinet', width: 60 }, { kind: 'dishwasher', width: 60 }, { kind: 'cabinet', width: 60 }],
+    sink: { at: 70, width: 90 } });
   checkEnvelope('base with undermount sink, no tap', BASE, { modules: [{ kind: 'sink', width: 80, bowl: 'undermount', tap: false }, { kind: 'washer', width: 60 }, { kind: 'filler', width: 40 }] });
   ['bar', 'knob', 'rail', 'none'].forEach(h => checkEnvelope('base, handleStyle ' + h, BASE, { handleStyle: h, corner: 'left',
     modules: [{ kind: 'corner', width: 100 }, { kind: 'cabinet', width: 80 }] }));
-  checkEnvelope('base, narrow doors', BASE, { width: 83, modules: [{ kind: 'cabinet', width: 34 }, { kind: 'cabinet', width: 34, hinge: 'right' }, { kind: 'cabinet', width: 15 }] });
-  checkEnvelope('wall, mixed heights + canopy', WALL, { height: 86, modules: [{ kind: 'cabinet', width: 60 }, { kind: 'hood', width: 60, style: 'canopy', height: 66 }, { kind: 'open', width: 60, height: 66 }] });
-  checkEnvelope('wall, chimney only', WALL, { width: 60, modules: [{ kind: 'hood', width: 60 }] });
-  checkEnvelope('fridge, top freezer, left hinge', FRIDGE, { freezer: 'top', hinge: 'left', width: 70, height: 200 });
+  checkEnvelope('base, narrow doors', BASE, { width: 75, modules: [{ kind: 'cabinet', width: 30 }, { kind: 'cabinet', width: 30, hinge: 'right' }, { kind: 'cabinet', width: 15 }] });
+  checkEnvelope('base, defaults with a hob', BASE, {});
 
-  // The above-worktop rule can fail: a splashback whose tag is removed must be caught.
-  const g = build(BASE, { modules: [{ kind: 'hob', width: 60, splashback: 60 }], width: 60 });
-  const sb = meshes(g, m => m.name === 'splashback')[0];
-  sb.userData.aboveWorktop = false;
-  const body = unionBox(meshes(g, m => m.userData.aboveWorktop !== true));
-  check('probe: an untagged splashback breaks the height envelope', !near(body.y1, BASE.DEFAULTS.height), body);
+  // Mismatches still hold the envelope, and say so.
+  warnings.length = 0;
+  const noTap = checkEnvelope('base, height above the worktop but no tap', BASE, { height: 95 });
+  check('no tap: the worktop is drawn at height instead, with a warning',
+    near(unionBox(meshes(noTap.g, m => m.name === 'worktop')).y1, 95, 0.01) && warnings.some(w => /no tap to fill it/.test(w)), warnings);
+  warnings.length = 0;
+  const noRoom = checkEnvelope('base, a tap but no room for it', BASE, { modules: [{ kind: 'sink', width: 60 }], width: 60 });
+  check('no room: the tap is omitted, with a warning',
+    meshes(noRoom.g, m => m.name === 'tap').length === 0 && warnings.some(w => /tap omitted/.test(w)), warnings);
+  warnings.length = 0;
+  build(BASE, { width: 60, modules: [{ kind: 'hob', width: 60, splashback: 60 }] });
+  check('a base-run splashback is refused (it belongs to the hood now)', warnings.some(w => /belongs to the wall run/.test(w)), warnings);
+
+  // Wall runs: mixed heights, a canopy, and a hood's splashback down to the worktop.
+  checkEnvelope('wall, mixed heights + canopy', WALL, { height: 85, modules: [{ kind: 'cabinet', width: 60 }, { kind: 'hood', width: 60, style: 'canopy', height: 65 }, { kind: 'open', width: 60, height: 65 }] });
+  checkEnvelope('wall, chimney only', WALL, { width: 60, modules: [{ kind: 'hood', width: 60 }] });
+  const sbRun = { width: 180, height: 120, modules: [{ kind: 'cabinet', width: 60, height: 70 },
+    { kind: 'hood', width: 60, height: 60, splashback: 60 }, { kind: 'cabinet', width: 60, height: 55 }] };
+  const sb = checkEnvelope('wall, hood with a splashback', WALL, sbRun);
+  const panel = boxCm(meshes(sb.g, m => m.name === 'splashback')[0]);
+  check('wall splashback: hangs from the hood down to the run\'s bottom', near(panel.y0, 0, 0.01) && near(panel.y1, 60, 0.01) && panel.z1 <= 0.5, panel);
+  warnings.length = 0;
+  build(WALL, { width: 60, height: 70, modules: [{ kind: 'hood', width: 60, height: 60, splashback: 40 }] });
+  check('wall splashback longer than the room under the hood: clamped, with a warning', warnings.some(w => /fits under the hood/.test(w)), warnings);
+
+  checkEnvelope('fridge, top freezer, left hinge', FRIDGE, { freezer: 'top', hinge: 'left', width: 70, height: 200 });
+  const ft = checkEnvelope('fridge with a top LED', FRIDGE, { topLed: true, plinthLed: true });
+  const tl = meshes(ft.g, m => m.name === 'top-led');
+  check('fridge topLed: a kept emissive strip flush with its top', tl.length === 1 && near(boxCm(tl[0]).y1, FRIDGE.DEFAULTS.height, 0.01) &&
+    Fin.partKeep(tl[0]).keep === true && Fin.partFinish(tl[0]).finish === 'emissive');
+  check('fridge: no top LED unless asked', meshes(build(FRIDGE, {}), m => m.name === 'top-led').length === 0);
+
+  // The envelope check can fail: lift the tap 1 cm and it must be caught.
+  const g = build(BASE, tapRun);
+  meshes(g, m => m.name === 'tap').forEach(m => { m.position.y += 0.01; });
+  check('probe: a tap 1 cm past height breaks the envelope check', !near(boxCm(g).y1 - boxCm(g).y0, 118.5, 0.5), boxCm(g));
+  // The tiling check can fail: drop the strip in front of the hob.
+  const h = build(BASE, {});
+  const hob = boxCm(meshes(h, m => m.name === 'hob')[0]);
+  const front = meshes(h, m => m.name === 'worktop').find(m => { const b = boxCm(m); return near(b.z0, hob.z1, 0.01) && near(b.x0, hob.x0, 0.01); });
+  front.parent.remove(front);
+  check('probe: a missing worktop strip in front of the hob is caught', worktopTiling(h, BASE.DEFAULTS) > 0);
+}
+
+// Every piece of the example L holds its envelope too.
+[['a', BASE], ['b', BASE], ['wall', WALL], ['wallB', WALL], ['fridge', FRIDGE]].forEach(([k, impl]) => {
+  checkEnvelope('EXAMPLE_L.' + k, impl, JSON.parse(JSON.stringify(K.EXAMPLE_L[k])));
+});
+
+// ---- 1a. the sink bowl reads from above ---------------------------------------------
+{
+  const g = build(BASE, { width: 180, height: 118.5, modules: [{ kind: 'cabinet', width: 60 }, { kind: 'dishwasher', width: 60 }, { kind: 'cabinet', width: 60 }],
+    sink: { at: 70, width: 90, drainer: 'right' } });
+  const bowl = unionBox(meshes(g, m => m.name === 'sink'));
+  // A ray straight down through the middle of the bowl's opening.
+  const rc = new THREE.Raycaster(new THREE.Vector3((bowl.x0 + bowl.x1) / 200, 2, (bowl.z0 + bowl.z1) / 200), new THREE.Vector3(0, -1, 0));
+  g.updateMatrixWorld(true);
+  const hits = rc.intersectObjects(meshes(g), false);
+  check('sink: looking down into the bowl, the first thing hit is the steel bowl', hits.length > 0 && hits[0].object.name === 'sink',
+    hits.slice(0, 3).map(h => h.object.name + '@' + (h.point.y * 100).toFixed(1)));
+  check('sink: the carcass is cut down under it', meshes(g, m => m.name === 'carcass').some(m => boxCm(m).y1 < 88.5 - 20), meshes(g, m => m.name === 'carcass').map(m => boxCm(m).y1));
+}
+
+// ---- 1c. the owner's corner module cannot be narrower than the other leg -------------
+{
+  warnings.length = 0;
+  const g = build(BASE, { width: 178, corner: 'left', cornerDepth: 60, modules: [{ kind: 'corner', width: 58 }, { kind: 'cabinet', width: 60 }, { kind: 'cabinet', width: 60 }] });
+  const blind = unionBox(meshes(g, m => m.name === 'blind-panel'));
+  check('a 58 cm corner module against a 60 cm leg is drawn 60 wide', near(blind.x1 - blind.x0, 60 - 0.3, 0.05), blind);
+  check('...with a warning naming the clash', warnings.some(w => /cannot clash/.test(w)), warnings);
+  const doors = meshes(g, m => m.name === 'door').map(boxCm).sort((a, b) => a.x0 - b.x0);
+  check('...and the neighbour gives up the difference', near(doors[0].x0, -89 + 60 + 0.15, 0.05), doors[0]);
 }
 
 // ---- 1b. narrow doors keep their handles on the door ----------------------------
 {
-  [34, 15].forEach(w => {
+  [30, 15].forEach(w => {
     const g = build(BASE, { width: w, modules: [{ kind: 'cabinet', width: w }] });
     const door = boxCm(meshes(g, m => m.name === 'door')[0]);
     const h = boxCm(meshes(g, m => m.name === 'handle')[0]);
     check('a ' + w + ' cm door keeps its handle inside it', h.x0 > door.x0 && h.x1 < door.x1, { door, h });
     check('a ' + w + ' cm door is one door', meshes(g, m => m.name === 'door').length === 1);
   });
-  const g = build(BASE, { width: 34, modules: [{ kind: 'cabinet', width: 34, hinge: 'left' }] });
-  const gR = build(BASE, { width: 34, modules: [{ kind: 'cabinet', width: 34, hinge: 'right' }] });
+  const g = build(BASE, { width: 30, modules: [{ kind: 'cabinet', width: 30, hinge: 'left' }] });
+  const gR = build(BASE, { width: 30, modules: [{ kind: 'cabinet', width: 30, hinge: 'right' }] });
   const hx = gg => { const b = boxCm(meshes(gg, m => m.name === 'handle')[0]); return (b.x0 + b.x1) / 2; };
   check('hinge left puts the handle on the right edge, hinge right on the left', hx(g) > 0 && hx(gR) < 0, { left: hx(g), right: hx(gR) });
   const two = build(BASE, { width: 80, modules: [{ kind: 'cabinet', width: 80 }] });
@@ -206,7 +302,7 @@ function worktopReport(L) {
   check('L: they meet -- B starts at A\'s front edge', near(r.B.z0, r.A.z1, 0.01), r);
   check('L: the owner\'s worktop runs to the side wall', near(r.A.x0, 0, 0.01), r);
   check('L: B\'s worktop sits against the side wall, within A\'s corner', near(r.B.x0, 0, 0.01) && r.B.x1 <= r.A.x1, r);
-  check('L: the example runs differ in depth (60 against 65)', ex.b.depth !== (ex.a.depth || BASE.DEFAULTS.depth), ex.b.depth);
+  check('L: the example runs differ in depth (60 against 62)', ex.b.depth !== (ex.a.depth || BASE.DEFAULTS.depth), ex.b.depth);
   check('L: B\'s worktop is its own depth deep', near(r.B.x1 - r.B.x0, ex.b.depth, 0.01), r);
   // No gap: the corner square in front of the side wall -- B's depth wide,
   // A's depth deep -- is covered entirely by A's worktop.
@@ -320,25 +416,25 @@ function draws(groups) {
 
 // ---- 8b. a run-level sink spanning two modules --------------------------------------
 {
-  const p = { width: 154, modules: [{ kind: 'cabinet', width: 60 }, { kind: 'dishwasher', width: 60 }, { kind: 'cabinet', width: 34 }],
-    sink: { at: 60, width: 95, depth: 50, bowl: 'inset', drainer: 'right' } };
-  const env = checkEnvelope('base with a run-level 95 cm sink', BASE, p);
+  const p = { width: 150, height: 118.5, modules: [{ kind: 'cabinet', width: 60 }, { kind: 'dishwasher', width: 60 }, { kind: 'cabinet', width: 30 }],
+    sink: { at: 60, width: 90, depth: 50, bowl: 'inset', drainer: 'right' } };
+  const env = checkEnvelope('base with a run-level 90 cm sink', BASE, p);
   const g = env.g;
   const out = unionBox(meshes(g, m => m.name === 'sink' || m.name === 'sink-rim'));
-  check('run-level sink: 95 cm wide, centred `at` 60 cm from the left end', near(out.x1 - out.x0, 95, 0.05) && near((out.x0 + out.x1) / 2, -77 + 60, 0.05), out);
-  check('run-level sink: spans the module boundary at 60 cm', out.x0 < -17 && out.x1 > -17, out);
+  check('run-level sink: 90 cm wide, centred `at` 60 cm from the left end', near(out.x1 - out.x0, 90, 0.05) && near((out.x0 + out.x1) / 2, -75 + 60, 0.05), out);
+  check('run-level sink: spans the module boundary at 60 cm', out.x0 < -15 && out.x1 > -15, out);
   check('run-level sink: 50 cm deep', near(out.z1 - out.z0, 50, 0.05), out);
-  check('run-level sink: its plate is flush with the worktop', near(out.y1, BASE.DEFAULTS.height, 0.01), out);
-  check('run-level sink: has a tap', env.above.some(m => m.name === 'tap'));
+  check('run-level sink: its plate is flush with the worktop', near(out.y1, BASE.DEFAULTS.worktopHeight, 0.01), out);
+  check('run-level sink: has a tap', meshes(g, m => m.name === 'tap').length > 0);
   const covering = meshes(g, m => m.name === 'worktop').map(boxCm)
     .filter(b => b.x0 < out.x1 - 0.01 && b.x1 > out.x0 + 0.01 && b.z0 < out.z1 - 0.01 && b.z1 > out.z0 + 0.01);
   check('run-level sink: the worktop is cut for it', covering.length === 0, covering);
   // The bowl is beside the drainer, not across it.
   const bowl = unionBox(meshes(g, m => m.name === 'sink'));
-  check('drainer right: the bowl is in the left part of the sink', bowl.x1 < (out.x0 + out.x1) / 2 + 5, { bowl, out });
+  check('drainer right: the bowl is at the left, a drainer of 20 cm or more to its right', near(bowl.x0, out.x0 + 2, 0.05) && bowl.x1 < out.x1 - 20, { bowl, out });
 
   warnings.length = 0;
-  const off = build(BASE, { sink: { at: 5, width: 95 } });
+  const off = build(BASE, { sink: { at: 5, width: 90 } });
   const o2 = unionBox(meshes(off, m => m.name === 'sink' || m.name === 'sink-rim'));
   check('a sink placed past the end is moved inside the run, with a warning',
     o2.x0 >= -90 - 0.01 && warnings.some(w => /does not fit/.test(w)), { o2, warnings });
@@ -352,11 +448,13 @@ function draws(groups) {
   const tops = ['wall', 'wallB'].map(k => boxCm(L[k]).y1);
   check('L: both wall runs top out on the top line', tops.every(t => near(t, ex.wallTop, 0.05)), tops);
   const short = meshes(L.wall, m => m.name === 'carcass').map(boxCm).filter(b => b.y1 - b.y0 < 60);
-  check('L: a 56 cm wall unit hangs 65 cm over the worktop (its LED recess 1 cm up)', short.length > 0 && short.every(b => near(b.y0, 88.5 + 65 + 1, 0.05)), short);
+  check('L: a 55 cm wall unit hangs from the top line (its LED recess 1 cm up)', short.length > 0 && short.every(b => near(b.y0, ex.wallTop - 55 + 1, 0.05)), short);
   const tall = meshes(L.wall, m => m.name === 'carcass').map(boxCm).filter(b => b.y1 - b.y0 > 60);
-  check('L: a 72 cm wall unit hangs 49 cm over the worktop (its LED recess 1 cm up)', tall.length > 0 && tall.every(b => near(b.y0, 88.5 + 49 + 1, 0.05)), tall);
+  check('L: a 70 cm wall unit hangs from the top line (its LED recess 1 cm up)', tall.length > 0 && tall.every(b => near(b.y0, ex.wallTop - 70 + 1, 0.05)), tall);
+  const sbp = meshes(L.wall, m => m.name === 'splashback').map(boxCm);
+  check('L: the hood splashback reaches down to the worktop', sbp.length === 1 && near(sbp[0].y0, 88.5, 0.05), sbp);
   check('L: the fridge-freezer meets the top line', near(boxCm(L.fridge).y1, ex.wallTop, 0.05), boxCm(L.fridge));
-  check('elevationForTop: 209.5 top, 72 run -> 137.5', near(K.elevationForTop(209.5, { height: 72 }), 137.5, 1e-9));
+  check('elevationForTop: 210 top, 70 run -> 140', near(K.elevationForTop(210, { height: 70 }), 140, 1e-9));
 
   ['under-led', 'top-led'].forEach(name => {
     const leds = [...meshes(L.wall, m => m.name === name), ...meshes(L.wallB, m => m.name === name)];
@@ -369,9 +467,10 @@ function draws(groups) {
       near(ret.z1, bS.z0, 0.05) && near(ret.x0, bS.x0, 0.05) && near(ret.y0, bS.y0, 0.05), { ret, bS });
   });
   const under = meshes(L.wall, m => m.name === 'under-led').map(boxCm);
-  check('L: under-cabinet strips follow each module\'s own bottom (72 and 56 differ)',
+  check('L: under-cabinet strips follow each module\'s own bottom (70 and 55 differ)',
     new Set(under.map(b => Math.round(b.y0))).size === 2, under.map(b => b.y0));
-  check('L: no LED under the hood', under.every(b => b.x1 <= 125 + 0.05 || b.x0 >= 185 - 0.05), under);
+  const hoodX = unionBox(meshes(L.wall, m => m.name === 'hood'));
+  check('L: no LED under the hood', under.every(b => b.x1 <= hoodX.x0 + 0.05 || b.x0 >= hoodX.x1 - 0.05), { under, hoodX });
 
   // Probe: the continuity check fails when the wall owner is told the wrong depth.
   const wrong = JSON.parse(JSON.stringify(ex));
@@ -389,7 +488,7 @@ function draws(groups) {
 
   const f = build(FRIDGE, {});
   const ds = meshes(f, m => m.name === 'door').map(boxCm).sort((p, q2) => p.y0 - q2.y0);
-  check('fridge: freezer door is freezerHeight (93) over the plinth (13)', near(ds[0].y0, 13, 0.2) && near(ds[0].y1, 13 + 93, 0.2), ds[0]);
+  check('fridge: freezer door is freezerHeight (90) over the plinth (13)', near(ds[0].y0, 13, 0.2) && near(ds[0].y1, 13 + 90, 0.2), ds[0]);
   check('fridge: stands on a recessed plinth', meshes(f, m => m.name === 'plinth').length === 1 &&
     boxCm(meshes(f, m => m.name === 'plinth')[0]).z1 <= FRIDGE.DEFAULTS.depth - 7.9);
   check('fridge: plinthLed draws a strip', meshes(build(FRIDGE, { plinthLed: true }), m => m.name === 'plinth-led').length === 1);

@@ -20,28 +20,30 @@
  *                               handle goes on the other edge). Over 60 cm
  *                               wide a cabinet or sink gets two doors.
  *     oven                      hob: true puts a hob in the worktop above it
- *     hob, oven+hob             splashback: <cm tall> (0 = none) -- a metal
- *                               wall protector standing on the worktop
- *                               behind the hob, up toward the hood
  *     sink                      a sink centred on this one module (bowl,
  *                               drainer, tap as for the run-level `sink`)
  *     any                       plinthLed: true -- an LED strip on the
  *                               plinth under this module (see ledStrips())
  *
  *   base run `sink`: { at, width, depth, bowl, drainer, tap } -- a sink
- *              placed along the RUN, not inside a module, so a 95 cm inset
+ *              placed along the RUN, not inside a module, so a 90 cm inset
  *              sink can span a cabinet and the dishwasher beside it. `at` is
  *              cm from the run's left end to the sink's centre.
  *
  *   wall run:  { kind, width, height? }  kind = cabinet | open | hood |
  *              filler | corner. `height` defaults to the run's height and may
- *              differ per module (72 next to 56, say). Module TOPS align at
+ *              differ per module (70 next to 55, say). Module TOPS align at
  *              the run's top and each module's bottom follows from its own
  *              height; the placer sets `elevation` for the run's bottom (the
  *              bottom of its tallest module) -- elevationForTop() turns a
  *              top line into that number.
  *     cabinet / corner / filler underLed: true (a strip under it, lighting
  *                               the worktop), topLed: true (one on top)
+ *     hood                      splashback: <cm> -- a metal panel hung on
+ *                               the wall under the hood, down toward the
+ *                               worktop. It is part of the wall run, so the
+ *                               run's height reaches down to its bottom;
+ *                               give every module its own `height` then.
  *     hood                      style: 'chimney' | 'canopy',
  *                               visor: 'smoked' | 'glass' | 'metal'
  *                               (chimney only). 'smoked' is dark gloss and
@@ -59,18 +61,27 @@
  * faces that end) and its worktop runs right to the wall. The other run of an
  * L is authored to stop at the owner's front face, so their worktops meet
  * without overlapping or gapping even when the two runs differ in depth (a
- * 60 leg and a 65 leg, say). The owner is told the other run's depth in
+ * 60 leg and a 62 leg, say). The owner is told the other run's depth in
  * `cornerDepth`: that is how much of its blind corner is hidden, and where
  * its plinth return (and LED) turns. A run that does not own a corner is
  * `'none'`. Each run's worktop is exactly its own `depth` deep.
  *
- * ABOVE THE WORKTOP. A base run's `height` is the TOP OF ITS WORKTOP -- the
- * number the fade rule and footprints care about. Two accessories stand on
- * the worktop and so rise above it: a sink's tap and a hob's splashback. They
- * are the only parts allowed above `height`, each is tagged
- * `userData.aboveWorktop = true`, and scripts/test-furniture-kitchen.mjs
- * pins that nothing else is. Neither is in DEFAULTS, so a run built at its
- * defaults meets the bounding-box contract exactly.
+ * WHICH LEG OWNS IT. Exactly one leg of an L owns the corner: the one whose
+ * worktop runs into the corner to the side wall, with the blind unit under
+ * it. Author the OTHER leg to start at the owner's front face (its own
+ * `corner: 'none'`). Its carcass then sits in front of the owner's corner
+ * module, so that module must be at least `cornerDepth` wide -- the builder
+ * guarantees it, widening a narrower one from its neighbour with a warning
+ * (a 58 cm corner module against a 60 cm leg is drawn 60), so the two legs
+ * cannot clash.
+ *
+ * HEIGHT IS THE ENVELOPE, always: every run's bounding box is exactly its
+ * width x depth x height, whatever its modules. A base run's worktop top is
+ * `worktopHeight`; when a sink has a tap, the tap rises from the worktop to
+ * exactly `height` (baseRunHeight() gives worktopHeight + TAP_RISE), and
+ * with no tap the worktop is drawn at `height`. A wall run's `height` runs
+ * from the bottom of whatever hangs lowest -- a module, or a hood's
+ * splashback -- to its top line.
  *
  * DRAWS. A kitchen is drawn in four palette finishes -- `matte` (worktop,
  * hob burners), `gloss` (fronts, carcass, plinth, oven door, hob glass, a
@@ -306,6 +317,7 @@ const BASE_DEFAULTS = deepFreeze({
   width: 180,
   depth: 60,
   height: 88.5,
+  worktopHeight: 88.5,
   modules: [
     { kind: 'cabinet', width: 60, hinge: 'left' },
     { kind: 'oven', width: 60, hob: true },
@@ -368,7 +380,7 @@ function cornerLine(corner, reach, W) {
  * LED STRIPS. A strip is a thin emissive, kept line under every module
  * flagged for it -- `plinthLed` on a base run, `underLed` / `topLed` on a
  * wall run. Adjacent flagged modules share one strip (a strip breaks where
- * the flagged modules' strip heights differ, e.g. under a 72 next to a 56).
+ * the flagged modules' strip heights differ, e.g. under a 70 next to a 55).
  * A subset of modules -- "from the third to the corner" -- is just those
  * modules flagged.
  *
@@ -416,7 +428,7 @@ function ledStrips(THREE, g, mods, corner, cornerDepth, W, D, o) {
  * when there is one), the bowl sunk into it. Undermount: the bowl alone under
  * the worktop's cut edge. Returns the worktop cut-out it needs.
  */
-function drawSink(THREE, g, mats, sk, D, H, yW, full) {
+function drawSink(THREE, g, mats, sk, D, H, yW, full, tapTop) {
   const inset = sk.bowl !== 'undermount';
   const z0 = Math.max(1, (D - sk.depth) / 2), z1 = Math.min(D - 1, z0 + sk.depth);
   const x0 = sk.cx - sk.width / 2, x1 = sk.cx + sk.width / 2;
@@ -429,7 +441,21 @@ function drawSink(THREE, g, mats, sk, D, H, yW, full) {
   if (drainer === 'right') bx1 = bx0 + bw;
   if (drainer === 'left') bx0 = bx1 - bw;
   const bz0 = z0 + rim, bz1 = z1 - rim;
-  const top = inset ? H - 0.6 : yW, bottom = H - 20, t = 0.6;
+  const bottom = H - SINK_DEPTH;
+  const cx = (bx0 + bx1) / 2;
+  const tz = Math.max(2, z0 / 2 + 0.5);
+  if (!full) {
+    // Low detail: the sink as one steel block sunk 6 mm into its cut-out,
+    // and the tap (when there is one) as one post, so the envelope holds.
+    add(g, box(THREE, mats.steel, x0, x1, bottom, H - 0.6, z0, z1, 'sink'));
+    if (tapTop !== null) {
+      const q = box(THREE, mats.steel, cx - 1.4, cx + 1.4, H, tapTop, tz - 1.4, tz + 1.4, 'tap');
+      q.userData.aboveWorktop = true;
+      g.add(q);
+    }
+    return { x0: x0, x1: x1, z0: z0, z1: z1 };
+  }
+  const top = inset ? H - 0.6 : yW, t = 0.6;
   add(g, box(THREE, mats.steel, bx0, bx1, bottom, bottom + t, bz0, bz1, 'sink'));
   add(g, box(THREE, mats.steel, bx0, bx0 + t, bottom, top, bz0, bz1, 'sink'));
   add(g, box(THREE, mats.steel, bx1 - t, bx1, bottom, top, bz0, bz1, 'sink'));
@@ -443,23 +469,29 @@ function drawSink(THREE, g, mats, sk, D, H, yW, full) {
     plate(x0, bx0, bz0, bz1);
     plate(bx1, x1, bz0, bz1);
   }
-  if (full && sk.tap !== false) {
-    const cx = (bx0 + bx1) / 2;
-    const tz = Math.max(2, z0 / 2 + 0.5), reach = Math.min(20, (bz0 + bz1) / 2 - tz);
-    const parts = [
-      cyl(THREE, mats.steel, cx, tz, H, H + 30, 1.4, 12, 'tap'),
-      box(THREE, mats.steel, cx - 1, cx + 1, H + 28, H + 30, tz, tz + reach, 'tap'),
-      box(THREE, mats.steel, cx - 1, cx + 1, H + 24, H + 28, tz + reach - 2, tz + reach, 'tap'),
-    ];
+  if (tapTop !== null) {
+    // A swan-neck tap whose top is exactly `tapTop` (the run's height).
+    const rise = tapTop - H, reach = Math.min(20, (bz0 + bz1) / 2 - tz);
+    const parts = [cyl(THREE, mats.steel, cx, tz, H, tapTop, 1.4, 12, 'tap')];
+    if (rise > 4) {
+      parts.push(box(THREE, mats.steel, cx - 1, cx + 1, tapTop - 2, tapTop, tz, tz + reach, 'tap'));
+      parts.push(box(THREE, mats.steel, cx - 1, cx + 1, Math.max(H, tapTop - 6), tapTop - 2, tz + reach - 2, tz + reach, 'tap'));
+    }
     parts.forEach(q => { q.userData.aboveWorktop = true; g.add(q); });
   }
   return { x0: x0, x1: x1, z0: z0, z1: z1 };
 }
 
+// How far a sink's bowl sinks below the worktop top.
+const SINK_DEPTH = 20;
+
+// The tap rise the spec page (and baseRunHeight) allows for above the worktop.
+export const TAP_RISE = 30;
+
 /** The run-level sink spec, or null. `at` is cm from the run's LEFT end to the sink's centre. */
 function sinkSpec(raw, W, D) {
   if (!raw || typeof raw !== 'object') return null;
-  const width = Math.max(20, Math.min(W, typeof raw.width === 'number' ? raw.width : 95));
+  const width = Math.max(20, Math.min(W, typeof raw.width === 'number' ? raw.width : 90));
   const depth = Math.max(20, Math.min(D - 4, typeof raw.depth === 'number' ? raw.depth : 50));
   let at = typeof raw.at === 'number' ? raw.at : W / 2;
   const lo = width / 2, hi = W - width / 2;
@@ -470,11 +502,47 @@ function sinkSpec(raw, W, D) {
   return { cx: -W / 2 + at, width: width, depth: depth, bowl: raw.bowl, drainer: raw.drainer, tap: raw.tap };
 }
 
+/**
+ * The params a base run needs its `height` to be: the worktop top, plus the
+ * tap's rise when a sink with a tap is present. What the spec page sets.
+ */
+export function baseRunHeight(params) {
+  const p = resolve(BASE_DEFAULTS, params);
+  const wt = typeof p.worktopHeight === 'number' ? p.worktopHeight : p.height;
+  const tap = (p.sink && typeof p.sink === 'object' && p.sink.tap !== false) ||
+    (Array.isArray(p.modules) && p.modules.some(m => m && m.kind === 'sink' && m.tap !== false));
+  return wt + (tap ? TAP_RISE : 0);
+}
+
+/**
+ * An owner's corner module must be at least as wide as the other run is
+ * deep, or the other run's carcass lands on the next module's door. So it is
+ * grown to `cornerDepth`, taking the difference from its neighbour, with a
+ * warning -- the clash cannot be drawn.
+ */
+function growCorner(mods, corner, cornerDepth, type) {
+  if (corner !== 'left' && corner !== 'right') return;
+  const i = corner === 'left' ? 0 : mods.length - 1;
+  const m = mods[i];
+  if (!m || m.kind !== 'corner') {
+    warn(type + ': the run owns the ' + corner + ' corner but does not end in a `corner` module there');
+    return;
+  }
+  const short = cornerDepth - (m.x1 - m.x0);
+  const j = corner === 'left' ? 1 : mods.length - 2;
+  const n = mods[j];
+  if (short <= 0.01 || !n) return;
+  const give = Math.min(short, Math.max(0, (n.x1 - n.x0) - 10));
+  warn(type + ': the corner module is ' + (m.x1 - m.x0) + ' cm but the other run is ' + cornerDepth +
+    ' cm deep -- widened by ' + give + ' cm from its neighbour so the other run cannot clash with it');
+  if (corner === 'left') { m.x1 += give; n.x0 += give; } else { m.x0 -= give; n.x1 -= give; }
+}
+
 function buildBaseRun(THREE, params, opts) {
   const p = resolve(BASE_DEFAULTS, params);
   const detail = opts && opts.detail === 'low' ? 'low' : 'full';
   const full = detail === 'full';
-  const W = p.width, D = p.depth, H = p.height;
+  const W = p.width, D = p.depth;
   const T = Math.max(1, Math.min(10, p.worktopThickness));
   const P = Math.max(0, Math.min(30, p.plinthHeight));
   const corner = checkCorner(p.corner, 'kitchen-base-run');
@@ -482,6 +550,43 @@ function buildBaseRun(THREE, params, opts) {
   const style = handleStyleOf(p);
   const mats = materials(THREE, p);
   const mods = layoutModules(p.modules, W, { kinds: BASE_KINDS, type: 'kitchen-base-run', corner: corner });
+  growCorner(mods, corner, cornerDepth, 'kitchen-base-run');
+
+  // The sinks, first: they decide the tap and where the carcass is cut.
+  const sinks = [];
+  mods.forEach(m => {
+    if (m.kind !== 'sink') return;
+    const w = m.x1 - m.x0;
+    // The module shorthand for a sink centred on one module; a sink that
+    // spans modules is the run-level `sink`.
+    sinks.push({ cx: (m.x0 + m.x1) / 2, width: Math.max(20, Math.min(w - 6, 90)), depth: Math.min(50, D - 10),
+      bowl: m.bowl, drainer: w - 6 >= 70 ? m.drainer : 'none', tap: m.tap });
+  });
+  const runSink = sinkSpec(p.sink, W, D);
+  if (runSink) sinks.push(runSink);
+  mods.forEach(m => {
+    if (typeof m.splashback === 'number' && m.splashback > 0) {
+      warn('kitchen-base-run: `splashback` belongs to the wall run\'s hood module now -- ignored here');
+    }
+  });
+
+  // HEIGHT IS THE ENVELOPE. The worktop's top is `worktopHeight`; a tap, if
+  // there is one, rises from it to exactly `height`. With no tap there is
+  // nothing above the worktop, so the worktop is drawn at `height`.
+  const hasTap = sinks.some(sk => sk.tap !== false);
+  let H = typeof p.worktopHeight === 'number' ? p.worktopHeight : p.height;
+  let tapTop = null;
+  if (H > p.height) {
+    warn('kitchen-base-run: worktopHeight ' + H + ' is above height ' + p.height + ' -- the worktop is drawn at height');
+    H = p.height;
+  }
+  if (hasTap) {
+    if (p.height - H > 0.01) tapTop = p.height;
+    else warn('kitchen-base-run: a sink has a tap but height leaves no room above the worktop -- set height to worktopHeight + the tap (' + TAP_RISE + ' cm); tap omitted');
+  } else if (p.height - H > 0.01) {
+    warn('kitchen-base-run: height ' + p.height + ' is above worktopHeight ' + H + ' with no tap to fill it -- the worktop is drawn at height');
+    H = p.height;
+  }
 
   const g = new THREE.Group();
   g.name = 'furniture:kitchen-base-run';
@@ -493,14 +598,23 @@ function buildBaseRun(THREE, params, opts) {
   const fTop = style === 'rail' ? yW - 4 : yW;          // fronts' top edge
   const fBot = P;
 
-  add(g, box(THREE, mats.front, -W / 2, W / 2, P, yW, 0, zF0, 'carcass'));
+  // The carcass, cut down under each sink so the bowl reads from above.
+  const sinkX = sinks.map(sk => [Math.max(-W / 2, sk.cx - sk.width / 2), Math.min(W / 2, sk.cx + sk.width / 2)])
+    .sort((a, b) => a[0] - b[0]);
+  let cx0 = -W / 2;
+  sinkX.forEach(([a, b]) => {
+    if (a > cx0) add(g, box(THREE, mats.front, cx0, a, P, yW, 0, zF0, 'carcass'));
+    add(g, box(THREE, mats.front, Math.max(a, cx0), b, P, Math.max(P + 1, H - SINK_DEPTH - 1), 0, zF0, 'carcass'));
+    cx0 = Math.max(cx0, b);
+  });
+  if (cx0 < W / 2) add(g, box(THREE, mats.front, cx0, W / 2, P, yW, 0, zF0, 'carcass'));
   add(g, box(THREE, mats.front, -W / 2, W / 2, 0, P, 0, D - 8, 'plinth'));
   if (style === 'rail' && full) {
     // Handleless: one continuous recessed metal J-rail under the worktop.
     add(g, box(THREE, mats.handle, -W / 2, W / 2, fTop + 0.5, yW - 0.5, zF0 - 1, zF0, 'handle-rail'));
   }
 
-  const cutouts = [], sinks = [];
+  const cutouts = [];
   mods.forEach(m => {
     const w = m.x1 - m.x0;
     if (m.kind === 'drawers' || m.kind === 'hob') {
@@ -549,25 +663,12 @@ function buildBaseRun(THREE, params, opts) {
           add(g, cyl(THREE, mats.burner, cx + b[0] * dx, cz + b[1] * dz, H - 0.1, H - 0.02, Math.min(b[2], dx * 0.9, dz * 0.9), 16, 'hob-ring'));
         });
       }
-      const sb = typeof m.splashback === 'number' ? m.splashback : 0;
-      if (sb > 0) {
-        const s = add(g, box(THREE, mats.steel, m.x0, m.x1, H, H + sb, 0, 0.4, 'splashback'));
-        if (s) s.userData.aboveWorktop = true;
-      }
     }
 
-    if (m.kind === 'sink') {
-      // The module shorthand for a sink centred on one module; a sink that
-      // spans modules is the run-level `sink`.
-      sinks.push({ cx: (m.x0 + m.x1) / 2, width: Math.max(20, Math.min(w - 6, 95)), depth: Math.min(50, D - 10),
-        bowl: m.bowl, drainer: w - 6 >= 70 ? m.drainer : 'none', tap: m.tap });
-    }
   });
 
-  const runSink = sinkSpec(p.sink, W, D);
-  if (runSink) sinks.push(runSink);
   sinks.forEach(sk => {
-    const c = drawSink(THREE, g, mats, sk, D, H, yW, full);
+    const c = drawSink(THREE, g, mats, sk, D, H, yW, full, sk.tap !== false ? tapTop : null);
     const clash = cutouts.find(o => o.x0 < c.x1 && o.x1 > c.x0);
     if (clash) warn('kitchen-base-run: a sink overlaps the hob along the run -- the worktop is cut for the hob only');
     else cutouts.push(c);
@@ -592,7 +693,7 @@ const WALL_KINDS = ['cabinet', 'open', 'hood', 'filler', 'corner'];
 const WALL_DEFAULTS = deepFreeze({
   width: 180,
   depth: 30,
-  height: 72,
+  height: 70,
   modules: [
     { kind: 'cabinet', width: 60, hinge: 'left' },
     { kind: 'hood', width: 60, style: 'chimney', visor: 'smoked' },
@@ -610,8 +711,8 @@ const WALL_DEFAULTS = deepFreeze({
 
 /**
  * The elevation that puts a wall run's TOP at `topCm` above the floor. Wall
- * runs line up by their tops: a 72 cm unit 49 cm over an 88.5 cm worktop and
- * a 56 cm unit 65 cm over it share the top line 209.5. A run's modules
+ * runs line up by their tops: a 70 cm unit 50 cm over a 90 cm worktop and a
+ * 55 cm unit 65 cm over it share the top line 210. A run's modules
  * already hang from its top (each module's bottom follows from its own
  * height), so the placer needs only this one number per run -- and a
  * fridge-freezer that should meet the same line takes `height: topCm`.
@@ -632,6 +733,7 @@ function buildWallRun(THREE, params, opts) {
   if (style === 'rail') style = 'none';   // wall units have no J-rail: handleless
   const mats = materials(THREE, p);
   const mods = layoutModules(p.modules, W, { kinds: WALL_KINDS, type: 'kitchen-wall-run', corner: corner });
+  growCorner(mods, corner, cornerDepth, 'kitchen-wall-run');
 
   const g = new THREE.Group();
   g.name = 'furniture:kitchen-wall-run';
@@ -648,6 +750,13 @@ function buildWallRun(THREE, params, opts) {
     const y0 = H - mh, w = m.x1 - m.x0;
 
     if (m.kind === 'hood') {
+      // A splashback hangs on the wall under the hood, down to the worktop.
+      // It is part of this run, so the run's height reaches down to it.
+      const sb = typeof m.splashback === 'number' && m.splashback > 0 ? Math.min(m.splashback, y0) : 0;
+      if (typeof m.splashback === 'number' && m.splashback > y0 + 0.01) {
+        warn('kitchen-wall-run: the splashback is ' + m.splashback + ' cm but only ' + y0 + ' cm fits under the hood in a ' + H + ' cm run -- raise the run\'s height');
+      }
+      if (sb > 0) add(g, box(THREE, mats.steel, m.x0, m.x1, y0 - sb, y0, 0, 0.4, 'splashback'));
       if (m.style === 'canopy') {
         // Integrated canopy: a slim metal hood under a short cabinet.
         const yc = y0 + Math.min(14, mh);
@@ -710,22 +819,24 @@ function buildWallRun(THREE, params, opts) {
 // ---- fridge-freezer --------------------------------------------------------------
 
 // Kept equal to houses/schema.json $defs/furnitureParams_fridge-freezer.
-// The default height is the wall units' top line (88.5 + 49 + 72): an
-// integrated tall unit meets it. For another line, set `height` to it.
+// The default height is a typical wall units' top line, 210: an integrated
+// tall unit meets it. For another line, set `height` to it.
 const FRIDGE_DEFAULTS = deepFreeze({
   width: 60,
   depth: 60,
-  height: 209.5,
+  height: 210,
   frontColor: '#f2f0ea',
   frontFinish: 'gloss',
   handleStyle: 'bar',
   handleColor: '#c9cccf',
   freezer: 'bottom',
-  freezerHeight: 93,
+  freezerHeight: 90,
   plinthHeight: 13,
   hinge: 'right',
   plinthLed: false,
   ledColor: '#ffb45a',
+  topLed: false,
+  topLedColor: '#ffb45a',
 });
 
 /**
@@ -744,13 +855,16 @@ function buildFridge(THREE, params, opts) {
 
   const P = Math.max(0, Math.min(30, typeof p.plinthHeight === 'number' ? p.plinthHeight : 13));
   const zF1 = D - (style === 'bar' || style === 'knob' ? 2.5 : 0), zF0 = zF1 - 2;
-  add(g, box(THREE, mats.front, -W / 2, W / 2, P, H, 0, zF0, 'cabinet'));
+  const lit = p.topLed === true;
+  add(g, box(THREE, mats.front, -W / 2, W / 2, P, H - (lit ? 0.5 : 0), 0, zF0, 'cabinet'));
+  // A strip on top, behind the doors -- to carry a wall run's top strip over it.
+  if (lit) add(g, box(THREE, mats.topLed, -W / 2, W / 2, H - 0.4, H, zF0 - 2.5, zF0 - 1.5, 'top-led'));
   if (P > 0) {
     add(g, box(THREE, mats.front, -W / 2, W / 2, 0, P, 0, D - 8, 'plinth'));
     if (p.plinthLed === true) add(g, box(THREE, mats.led, -W / 2, W / 2, Math.max(0, P - 1.4), P - 0.4, D - 8, D - 7.6, 'plinth-led'));
   }
   const span = H - P;
-  const fz = Math.max(20, Math.min(span - 20, typeof p.freezerHeight === 'number' ? p.freezerHeight : 93));
+  const fz = Math.max(20, Math.min(span - 20, typeof p.freezerHeight === 'number' ? p.freezerHeight : 90));
   const split = p.freezer === 'top' ? H - fz : P + fz;
   const lower = { x0: -W / 2, x1: W / 2, y0: P, y1: split };
   const upper = { x0: -W / 2, x1: W / 2, y0: split, y1: H };
@@ -796,13 +910,13 @@ export const WALL_MODULE_KINDS = Object.freeze(WALL_KINDS.slice());
  *
  * @param {{a, b, wall, wallB, fridge: Object, wallTop?: number}} items
  *   each a params object (merged over its type's DEFAULTS); `wallTop` is the
- *   wall units' top line in cm (default 209.5)
+ *   wall units' top line in cm (default 210)
  */
 export function exampleLPoses(items) {
   const a = resolve(BASE_DEFAULTS, items.a), b = resolve(BASE_DEFAULTS, items.b);
   const w = resolve(WALL_DEFAULTS, items.wall), wb = resolve(WALL_DEFAULTS, items.wallB);
   const f = resolve(FRIDGE_DEFAULTS, items.fridge);
-  const top = typeof items.wallTop === 'number' ? items.wallTop : 209.5;
+  const top = typeof items.wallTop === 'number' ? items.wallTop : 210;
   return {
     a: { type: 'kitchen-base-run', x: a.width / 2, y: 0, z: 0, rotY: 0 },
     b: { type: 'kitchen-base-run', x: 0, y: 0, z: a.depth + b.width / 2, rotY: Math.PI / 2 },
@@ -818,49 +932,53 @@ export function exampleLPoses(items) {
  */
 export const EXAMPLE_L = deepFreeze({
   a: {
-    width: 245,
+    width: 240,
     corner: 'left',
-    cornerDepth: 65,
+    cornerDepth: 62,
     modules: [
-      { kind: 'corner', width: 65, plinthLed: true },
-      { kind: 'drawers', width: 60, plinthLed: true },
-      { kind: 'oven', width: 60, hob: true, splashback: 60 },
+      { kind: 'corner', width: 70, plinthLed: true },
+      { kind: 'drawers', width: 50, plinthLed: true },
+      { kind: 'oven', width: 60, hob: true },
       { kind: 'cabinet', width: 60, hinge: 'right' },
     ],
   },
   b: {
-    width: 188,
-    depth: 65,
+    width: 180,
+    depth: 62,
+    // Worktop 88.5 plus the tap's 30: the run's envelope.
+    height: 118.5,
     modules: [
-      { kind: 'cabinet', width: 34, hinge: 'left', plinthLed: true },
+      { kind: 'cabinet', width: 30, hinge: 'left', plinthLed: true },
       { kind: 'cabinet', width: 60, hinge: 'right', plinthLed: true },
       { kind: 'dishwasher', width: 60, plinthLed: true },
-      { kind: 'cabinet', width: 34, hinge: 'right', plinthLed: true },
+      { kind: 'cabinet', width: 30, hinge: 'right', plinthLed: true },
     ],
-    // One 95 cm inset sink spanning the 60 cabinet and the dishwasher.
-    sink: { at: 94, width: 95, depth: 50, bowl: 'inset', drainer: 'right' },
+    // One 90 cm inset sink spanning the 60 cabinet and the dishwasher.
+    sink: { at: 80, width: 90, depth: 50, bowl: 'inset', drainer: 'right' },
   },
   wall: {
-    width: 245,
+    width: 240,
     corner: 'left',
+    // From the worktop (the splashback's bottom) to the 210 top line.
+    height: 121.5,
     modules: [
-      { kind: 'corner', width: 65, underLed: true, topLed: true },
-      { kind: 'cabinet', width: 60, hinge: 'right', underLed: true, topLed: true },
-      { kind: 'hood', width: 60, height: 60, style: 'chimney', visor: 'smoked' },
-      { kind: 'cabinet', width: 60, height: 56, hinge: 'right', underLed: true, topLed: true },
+      { kind: 'corner', width: 70, height: 70, underLed: true, topLed: true },
+      { kind: 'cabinet', width: 50, height: 70, hinge: 'right', underLed: true, topLed: true },
+      { kind: 'hood', width: 60, height: 60, style: 'chimney', visor: 'smoked', splashback: 61.5 },
+      { kind: 'cabinet', width: 60, height: 55, hinge: 'right', underLed: true, topLed: true },
     ],
   },
   wallB: {
-    width: 170,
+    width: 160,
     modules: [
-      { kind: 'cabinet', width: 45, height: 56, hinge: 'left', underLed: true, topLed: true },
-      { kind: 'cabinet', width: 65, hinge: 'left', underLed: true, topLed: true },
+      { kind: 'cabinet', width: 40, height: 55, hinge: 'left', underLed: true, topLed: true },
+      { kind: 'cabinet', width: 60, hinge: 'left', underLed: true, topLed: true },
       { kind: 'cabinet', width: 60, hinge: 'right', underLed: true, topLed: true },
     ],
   },
-  fridge: {},
-  // 88.5 worktop + 49 gap + 72 units: the line every wall unit's top meets.
-  wallTop: 209.5,
+  fridge: { topLed: true },
+  // The line every wall unit's top, and the fridge-freezer's, meets.
+  wallTop: 210,
 });
 
 function sameValue(a, b) {

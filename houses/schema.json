@@ -1099,7 +1099,7 @@
 
     "furnitureParams_fridge-freezer": {
       "type": "object",
-      "description": "Params for `fridge-freezer` (src/furniture/kitchen.js): a full-height two-door housing on the base runs' recessed plinth. Its default height is the wall units' top line (88.5 + 49 + 72 = 209.5); for another line set `height` to it. Each `default` equals kitchen.js DEFAULTS.",
+      "description": "Params for `fridge-freezer` (src/furniture/kitchen.js): a full-height two-door housing on the base runs' recessed plinth. Its default height is a typical wall units' top line, 210; for another line set `height` to it. Set `depth` to the neighbouring run's so its plinth face and plinth LED line up. Each `default` equals kitchen.js DEFAULTS.",
       "properties": {
         "width": {
           "type": "number",
@@ -1116,8 +1116,8 @@
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 209.5,
-          "description": "cm, floor to top -- the wall units' top line to line up with them."
+          "default": 210,
+          "description": "cm, floor to top -- the wall units' top line, to line up with them."
         },
         "frontColor": {
           "$ref": "#/$defs/hexColor",
@@ -1162,7 +1162,7 @@
         "freezerHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 93,
+          "default": 90,
           "description": "cm, the freezer door; the fridge door takes the rest."
         },
         "plinthHeight": {
@@ -1190,6 +1190,16 @@
           "$ref": "#/$defs/hexColor",
           "default": "#ffb45a",
           "description": "Colour of the plinth strip."
+        },
+        "topLed": {
+          "type": "boolean",
+          "default": false,
+          "description": "An LED strip on its top, to carry a wall run's top strip over it."
+        },
+        "topLedColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#ffb45a",
+          "description": "Colour of the top strip."
         }
       },
       "additionalProperties": false
@@ -1387,7 +1397,13 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 88.5,
-          "description": "cm, floor to the TOP OF THE WORKTOP. A sink's tap and a hob's splashback stand on the worktop and rise above it; nothing else does."
+          "description": "cm, the run's whole ENVELOPE: floor to the top of the tallest part. With a sink that has a tap, that is the tap's top (worktopHeight + the tap, e.g. + 30); with no tap it is the worktop's top, and the worktop is drawn there."
+        },
+        "worktopHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 88.5,
+          "description": "cm, floor to the top of the worktop, when a tap rises above it to `height`. Ignored (with a warning) when there is no tap to fill the space between them."
         },
         "modules": {
           "type": "array",
@@ -1427,11 +1443,6 @@
               "hob": {
                 "type": "boolean",
                 "description": "oven: a flush hob in the worktop above it."
-              },
-              "splashback": {
-                "type": "number",
-                "minimum": 0,
-                "description": "hob, or oven with `hob`: height in cm of a metal wall protector standing on the worktop behind the hob. 0 = none."
               },
               "bowl": {
                 "type": "string",
@@ -1491,13 +1502,13 @@
             "none"
           ],
           "default": "none",
-          "description": "The end at which this run OWNS a corner: it ends in a blind `corner` module and its worktop runs to the wall. The other run of the L stops at this run's front face."
+          "description": "The end at which this run OWNS a corner: the leg whose worktop runs into the corner to the side wall, with a blind `corner` module there. Exactly one leg of an L owns it; the other is `none` and starts at the owner's front face."
         },
         "cornerDepth": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 60,
-          "description": "cm, the depth of the OTHER run at this run's corner (runs may differ, 60 against 65). It is how much of the blind corner unit that run hides, and where this run's plinth return and LED turn the corner. Used only when `corner` is not `none`."
+          "description": "cm, the depth of the OTHER run at this run's corner (runs may differ). It is how much of the blind corner unit that run hides, and where this run's plinth return and LED turn. The corner module is widened to at least this, from its neighbour, so the other run cannot clash with it."
         },
         "frontColor": {
           "$ref": "#/$defs/hexColor",
@@ -1556,7 +1567,7 @@
         },
         "sink": {
           "default": null,
-          "description": "A sink placed along the RUN rather than inside one module, so a 95 cm inset sink can span a cabinet and the dishwasher beside it. null = none (a `sink` module is the one-module shorthand).",
+          "description": "A sink placed along the RUN rather than inside one module, so a 90 cm inset sink can span a cabinet and the dishwasher beside it. null = none (a `sink` module is the one-module shorthand). A tap (the default) needs `height` above `worktopHeight`.",
           "anyOf": [
             {
               "type": "null"
@@ -1572,7 +1583,7 @@
                 "width": {
                   "type": "number",
                   "exclusiveMinimum": 0,
-                  "description": "cm, the whole sink including any drainer (default 95)."
+                  "description": "cm, the whole sink including any drainer (default 90)."
                 },
                 "depth": {
                   "type": "number",
@@ -1628,8 +1639,8 @@
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 72,
-          "description": "cm, the tallest module. Every module hangs from the run's top, so a shorter one's bottom is higher; the placer's `elevation` is the tallest module's bottom (elevationForTop() in kitchen.js turns a shared top line, e.g. 209.5, into it)."
+          "default": 70,
+          "description": "cm, the run's whole ENVELOPE: from the bottom of whatever hangs lowest (a module, or a hood's splashback) to the top line every module hangs from. The placer's `elevation` is that bottom; elevationForTop() in kitchen.js turns a shared top line into it."
         },
         "modules": {
           "type": "array",
@@ -1656,7 +1667,7 @@
               "height": {
                 "type": "number",
                 "exclusiveMinimum": 0,
-                "description": "cm; defaults to the run's height and may not exceed it."
+                "description": "cm; defaults to the run's height and may not exceed it. With a hood splashback, give every module its own height."
               },
               "hinge": {
                 "type": "string",
@@ -1690,6 +1701,11 @@
               "topLed": {
                 "type": "boolean",
                 "description": "cabinet / corner / filler: an LED strip on top of it."
+              },
+              "splashback": {
+                "type": "number",
+                "minimum": 0,
+                "description": "hood: height in cm of a metal panel hung on the wall under the hood, down toward the worktop. It is part of this run, so the run's height reaches down to its bottom."
               }
             },
             "required": [

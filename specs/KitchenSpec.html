@@ -62,8 +62,9 @@
 
    ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
    Every number here is a generic default in standard fitted-kitchen
-   sizes (60 and 34 cm base modules, an 88.5 cm worktop, 72 cm wall
-   units hung 49 cm above it). This is a component reference, not a
+   sizes (60 and 30 cm base modules, a worktop about 90 cm up, 70 and
+   55 cm wall units hanging from a 210 cm top line). This is a
+   component reference, not a
    record of any particular kitchen: build your own run from the
    module list and copy the JSON.
    ─────────────────────────────────────────────────────────────────────
@@ -154,9 +155,9 @@ function ModuleRow({ m, i, n, isWall, onChange, onMove, onRemove }) {
             </select>}
           {!isWall && m.kind === 'oven' &&
             <label className="f"><input type="checkbox" checked={!!m.hob} onChange={e => set('hob', e.target.checked)} />hob</label>}
-          {!isWall && (m.kind === 'hob' || (m.kind === 'oven' && m.hob)) &&
-            <label className="f" title="splashback height, cm (0 = none)">splash
-              <input type="number" min="0" step="5" value={m.splashback || 0} onChange={e => set('splashback', Number(e.target.value) || undefined)} /></label>}
+          {isWall && m.kind === 'hood' &&
+            <label className="f" title="splashback under the hood, cm tall (0 = none); then use 'fit height'">splash
+              <input type="number" min="0" step="0.5" value={m.splashback || 0} onChange={e => set('splashback', Number(e.target.value) || undefined)} /></label>}
           {!isWall && m.kind === 'sink' &&
             <select value={m.bowl || 'inset'} onChange={e => set('bowl', e.target.value)}>
               <option value="inset">inset</option><option value="undermount">undermount</option>
@@ -193,17 +194,25 @@ function ModuleRow({ m, i, n, isWall, onChange, onMove, onRemove }) {
 
 function RunEditor({ run, isWall, onChange }) {
   const mods = run.modules;
-  const setMods = next => onChange(Object.assign({}, run, { modules: next }));
+  // A base run's height is its envelope (worktop + tap when there is one), so
+  // it follows every edit; a wall run's has a 'fit' button.
+  const emit = isWall ? onChange : r => onChange(Object.assign({}, r, { height: K.baseRunHeight(r) }));
+  const wallFit = r => Math.max(...r.modules.map(m => (m.height || r.height) + (m.kind === 'hood' ? (m.splashback || 0) : 0)));
+  const setMods = next => emit(Object.assign({}, run, { modules: next }));
   const sum = sumWidths(mods);
   const move = (i, d) => { const next = mods.slice(); const [x] = next.splice(i, 1); next.splice(i + d, 0, x); setMods(next); };
-  const num = (k, v) => onChange(Object.assign({}, run, { [k]: Number(v) }));
+  const num = (k, v) => emit(Object.assign({}, run, { [k]: Number(v) }));
   return (
     <div>
       <div className="kv">
         <span>width</span><span><input type="number" step="1" value={run.width} onChange={e => num('width', e.target.value)} /> cm
           {' '}<button className="btn ghost" onClick={() => num('width', sum)} disabled={Math.abs(sum - run.width) < 0.05}>fit to modules ({sum})</button></span>
         <span>depth</span><span><input type="number" step="1" value={run.depth} onChange={e => num('depth', e.target.value)} /> cm</span>
-        <span>height</span><span><input type="number" step="0.5" value={run.height} onChange={e => num('height', e.target.value)} /> cm{isWall ? ' (tallest module)' : ' (worktop top)'}</span>
+        {isWall
+          ? <><span>height</span><span><input type="number" step="0.5" value={run.height} onChange={e => num('height', e.target.value)} /> cm (the whole envelope)
+              {' '}<button className="btn ghost" onClick={() => num('height', wallFit(run))} disabled={Math.abs(wallFit(run) - run.height) < 0.05}>fit height ({wallFit(run)})</button></span></>
+          : <><span>worktop</span><span><input type="number" step="0.5" value={run.worktopHeight} onChange={e => num('worktopHeight', e.target.value)} /> cm high
+              {' '}(height {run.height}{run.height > run.worktopHeight ? ', with the tap' : ''})</span></>}
         <span>corner</span><span>
           <select value={run.corner} onChange={e => onChange(Object.assign({}, run, { corner: e.target.value }))}>
             <option value="none">none</option><option value="left">left</option><option value="right">right</option>
@@ -225,10 +234,10 @@ function RunEditor({ run, isWall, onChange }) {
       <div className="row">
         <span style={{ fontSize: 11 }}>add:</span>
         {(isWall ? ['cabinet', 'hood', 'open'] : ['cabinet', 'drawers', 'oven', 'sink', 'dishwasher']).map(k => (
-          <button key={k} className="btn ghost" onClick={() => setMods(mods.concat([{ kind: k, width: k === 'cabinet' && !isWall ? 34 : 60 }]))}>+ {k}</button>
+          <button key={k} className="btn ghost" onClick={() => setMods(mods.concat([{ kind: k, width: k === 'cabinet' && !isWall ? 30 : 60 }]))}>+ {k}</button>
         ))}
       </div>
-      {!isWall && <SinkEditor run={run} onChange={onChange} />}
+      {!isWall && <SinkEditor run={run} onChange={emit} />}
       {Math.abs(sum - run.width) >= 0.05
         ? <div className="warn">Modules add up to {sum} cm but the run is {run.width} cm — the builder {sum < run.width ? 'fills the gap with a filler' : 'scales every module down to fit'}. Use "fit to modules" to match.</div>
         : <div className="ok">Modules add up to the run's width ({sum} cm).</div>}
@@ -243,7 +252,7 @@ function SinkEditor({ run, onChange }) {
   return (
     <div style={{ marginTop: 12 }}>
       <label className="f"><input type="checkbox" checked={!!sk}
-        onChange={e => onChange(Object.assign({}, run, { sink: e.target.checked ? { at: Math.round(run.width / 2), width: 95, depth: 50, bowl: 'inset', drainer: 'right' } : null }))} />
+        onChange={e => onChange(Object.assign({}, run, { sink: e.target.checked ? { at: Math.round(run.width / 2), width: 90, depth: 50, bowl: 'inset', drainer: 'right' } : null }))} />
         sink along the run (may span modules)</label>
       {sk && <div className="row">
         <label className="f">centre at <input type="number" step="1" value={sk.at} onChange={e => set('at', Number(e.target.value))} /> cm from left</label>
@@ -268,6 +277,7 @@ function FridgeEditor({ f, onChange }) {
       <span>freezer door</span><span><input type="number" step="1" value={f.freezerHeight} onChange={e => set('freezerHeight', Number(e.target.value))} /> cm</span>
       <span>plinth</span><span><input type="number" step="1" value={f.plinthHeight} onChange={e => set('plinthHeight', Number(e.target.value))} /> cm
         {' '}<label className="f" style={{ display: 'inline-flex' }}><input type="checkbox" checked={!!f.plinthLed} onChange={e => set('plinthLed', e.target.checked)} />LED</label></span>
+      <span>top LED</span><span><label className="f" style={{ display: 'inline-flex' }}><input type="checkbox" checked={!!f.topLed} onChange={e => set('topLed', e.target.checked)} />carry the wall runs' top strip over it</label></span>
       <span>hinge</span><span><select value={f.hinge} onChange={e => set('hinge', e.target.value)}><option value="right">right</option><option value="left">left</option></select></span>
     </div>
   );
@@ -332,8 +342,9 @@ function App() {
           <div className="legend">
             Run A owns the corner (blind corner unit at its left end; its worktop runs to the side wall). Run B stops at A's
             front face; the two may differ in depth, and A's <i>other run's depth</i> must match B's so its plinth return and
-            LED turn at B's plinth; the same goes for wall run A and B. Wall units hang from one top line, so a 56 cm unit
-            sits higher than a 72. The tap and splashback are the only parts that rise above a base run's height. One LED
+            LED turn at B's plinth; the same goes for wall run A and B. Wall units hang from one top line, so a 55 cm unit
+            sits higher than a 70. Every piece's height is its whole envelope: a base run with a tap is worktop + tap, and a
+            wall run with a hood splashback reaches down to the worktop. One LED
             colour everywhere keeps the kitchen at four draws; each further colour costs one.
           </div>
         </div>
@@ -345,7 +356,7 @@ function App() {
           </div>
           {tab === 'fridge'
             ? <FridgeEditor f={t.fridge} onChange={v => setItem('fridge', v)} />
-            : <RunEditor run={t[tab]} isWall={tab === 'wall'} onChange={v => setItem(tab, v)} />}
+            : <RunEditor run={t[tab]} isWall={tab === 'wall' || tab === 'wallB'} onChange={v => setItem(tab, v)} />}
 
           <h2 style={{ marginTop: 20 }}>Finish (every piece)</h2>
           <div className="kv">
