@@ -736,6 +736,8 @@
 
         { "if": { "properties": { "type": { "const": "gaming-chair" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_gaming-chair" } } } },
 
+        { "if": { "properties": { "type": { "const": "hex-panel-cluster" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_hex-panel-cluster" } } } },
+
         { "if": { "properties": { "type": { "const": "kitchen-base-run" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_kitchen-base-run" } } } },
 
         { "if": { "properties": { "type": { "const": "kitchen-wall-run" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_kitchen-wall-run" } } } },
@@ -878,6 +880,70 @@
       "description": "PLACEHOLDER for `gaming-chair`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
     },
 
+    "furnitureParams_hex-panel-cluster": {
+      "type": "object",
+      "description": "Params for `hex-panel-cluster` (src/furniture/wall-panels.js): a honeycomb cluster of regular hexagon felt panels, one merged geometry per cluster. Each `default` equals wall-panels.js TYPES['hex-panel-cluster'].DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). `width`, `height` and `depth` are DERIVED from `side`, `rows` and `thickness` (the cluster's own bbox) -- the validator cannot run JavaScript, so these three carry the pre-computed values for the DEFAULT cluster only; a house that changes `side` or `rows` gets the real derived bbox at render time, and the footprint checks that read `width`/`height` from a placed item's schema defaults will be approximate for a customised cluster.",
+      "properties": {
+        "side": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 18,
+          "description": "cm, one hexagon's side length."
+        },
+        "rows": {
+          "type": "array",
+          "description": "Hex count per row, top to bottom. The living-room default is a 29-hex cluster: 3,4,5,4,4,4,3,2.",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minItems": 1,
+          "default": [3, 4, 5, 4, 4, 4, 3, 2]
+        },
+        "offsets": {
+          "type": ["array", "null"],
+          "description": "Optional per-row shift, in half-hex units, added on top of the automatic per-row centring. Same length as `rows`, or null (every row simply centred, which is the default cluster's layout).",
+          "items": {
+            "type": "number"
+          },
+          "default": null
+        },
+        "thickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1,
+          "description": "cm, panel depth off the wall."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1c1815"
+        },
+        "finish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "matte"
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 155.88,
+          "description": "cm. DERIVED from `side` + `rows` (the cluster's bbox) -- do not set independently of them. Value shown is the default cluster's own bbox width."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 225,
+          "description": "cm. DERIVED from `side` + `rows` (the cluster's bbox) -- do not set independently of them. Value shown is the default cluster's own bbox height."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1,
+          "description": "cm. Equals `thickness`."
+        }
+      },
+      "additionalProperties": false
+    },
+
     "furnitureParams_kitchen-base-run": {
       "type": "object",
       "x-placeholder": true,
@@ -928,8 +994,64 @@
 
     "furnitureParams_slat-panel": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `slat-panel`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `slat-panel` (src/furniture/wall-panels.js): vertical slat panelling over a felt backing, ported from the acoustic-panel look in src/home3d-scene.js. Each `default` equals wall-panels.js TYPES['slat-panel'].DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 240,
+          "description": "cm, along the wall."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 250,
+          "description": "cm, floor (or `elevation`) to top."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 2.1,
+          "description": "cm. DERIVED: `backingDepth` + `slatDepth` (the felt backing plus how far the slats protrude off it) -- do not set independently of them."
+        },
+        "slatWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 5.6,
+          "description": "cm, each slat's face width. Slats are fit to the whole `width`, redistributing any remainder into the gap so the run starts and ends on a slat."
+        },
+        "pitch": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 7.5,
+          "description": "cm, nominal centre-to-centre spacing (slat width + gap). The actual pitch is adjusted slightly so a whole number of slats fits `width`."
+        },
+        "slatDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1.2,
+          "description": "cm, how far each slat protrudes off the felt backing."
+        },
+        "backingDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 0.9,
+          "description": "cm, the felt backing's own thickness, behind the slats."
+        },
+        "slatColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#322e29"
+        },
+        "backingColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#0e0b09"
+        },
+        "finish": {
+          "$ref": "#/$defs/furnitureFinish",
+          "default": "matte"
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_sofa": {
