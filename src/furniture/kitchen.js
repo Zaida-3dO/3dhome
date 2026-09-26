@@ -15,10 +15,14 @@
  * placer's business, never the author's.
  *
  *   base run:  { kind, width }  kind = cabinet | drawers | oven | hob | sink |
- *              dishwasher | washer | filler | corner
- *     cabinet / sink / corner   hinge: 'left' | 'right' (single door; the
- *                               handle goes on the other edge). Over 60 cm
- *                               wide a cabinet or sink gets two doors.
+ *              dishwasher | washer | filler | corner | gap
+ *     cabinet / sink            hinge: 'left' | 'right' | 'top' -- one door
+ *                               (or a lift-up flap for 'top') whatever its
+ *                               width, handle on the opening edge and a
+ *                               hinge line on the other. With no hinge, over
+ *                               60 cm wide gets two doors.
+ *     gap                       a bare space under the worktop: no carcass,
+ *                               front or plinth (a freestanding appliance)
  *     oven                      hob: true puts a hob in the worktop above it
  *     sink                      a sink centred on this one module (bowl,
  *                               drainer, tap as for the run-level `sink`)
@@ -30,14 +34,21 @@
  *              sink can span a cabinet and the dishwasher beside it. `at` is
  *              cm from the run's left end to the sink's centre.
  *
- *   wall run:  { kind, width, height? }  kind = cabinet | open | hood |
- *              filler | corner. `height` defaults to the run's height and may
+ *   wall run:  { kind, width, height?, at? }  kind = cabinet | open | hood |
+ *              filler | gap. Wall runs do NOT corner: each unit hangs whole
+ *              on its own wall (a `corner` param or module is ignored, with a
+ *              warning). A wall run need not be full: `at` places a module
+ *              (cm from the run's left end), and unused width is BARE wall
+ *              unless `fill: 'filler'`. See layoutWallModules().
+ *              `height` defaults to the run's height and may
  *              differ per module (70 next to 55, say). Module TOPS align at
  *              the run's top and each module's bottom follows from its own
  *              height; the placer sets `elevation` for the run's bottom (the
  *              bottom of its tallest module) -- elevationForTop() turns a
  *              top line into that number.
- *     cabinet / corner / filler underLed: true (a strip under it, lighting
+ *     cabinet                   hinge: 'left' | 'right' | 'top', as on a
+ *                               base run; the side handle sits low
+ *     cabinet / filler          underLed: true (a strip under it, lighting
  *                               the worktop), topLed: true (one on top)
  *     hood                      splashback: <cm> -- a metal panel hung on
  *                               the wall under the hood, down toward the
@@ -52,9 +63,12 @@
  *
  * WIDTH IS AUTHORITATIVE. `params.width` is the run's footprint (the
  * validator reads it too, so a run cannot quietly be wider than it says).
- * When the modules add up to less, a filler closes the gap at the end away
- * from the corner; when they add up to more, every module is scaled down to
- * fit. Either way a warning names the mismatch.
+ * On a BASE run, when the modules add up to less, a filler closes the gap
+ * at the end away from the corner; when they add up to more, every module is
+ * scaled down to fit. Either way a warning names the mismatch. A WALL run
+ * leaves unused width bare, so its drawn parts can be narrower than `width`
+ * -- always INSIDE it, never outside: the envelope still contains everything
+ * drawn, it is just not full.
  *
  * CORNERS. `corner: 'left' | 'right'` says this run OWNS the corner at that
  * end: it ends in a blind corner unit (a `corner` module, whose blind panel
@@ -76,7 +90,9 @@
  * cannot clash.
  *
  * HEIGHT IS THE ENVELOPE, always: every run's bounding box is exactly its
- * width x depth x height, whatever its modules. A base run's worktop top is
+ * width x depth x height, whatever its modules -- save that a wall run with
+ * bare wall in it is CONTAINED by that box rather than filling its width
+ * (nothing is ever drawn outside it). A base run's worktop top is
  * `worktopHeight`; when a sink has a tap, the tap rises from the worktop to
  * exactly `height` (baseRunHeight() gives worktopHeight + TAP_RISE), and
  * with no tap the worktop is drawn at `height`. A wall run's `height` runs
@@ -153,6 +169,7 @@ function materials(THREE, p) {
     steel: makeFinish(THREE, 'metal', '#c3c6c9'),
     dark: makeFinish(THREE, 'gloss', '#141518'),
     burner: makeFinish(THREE, 'matte', '#303134'),
+    seam: makeFinish(THREE, 'matte', '#5c5a55'),
     glass: makeFinish(THREE, 'glass', '#d6e6ea'),
     smoked: makeFinish(THREE, 'gloss', '#3a3f44'),
     led: makeFinish(THREE, 'emissive', p.ledColor || '#ffb45a'),
@@ -226,13 +243,13 @@ function addHandle(THREE, g, mats, style, f, where, edge, zFace) {
   else if (edge === 'right') x = f.x1 - inset;
   else x = (f.x0 + f.x1) / 2;
   if (style === 'knob') {
-    const y = where === 'v-bot' ? f.y0 + 5 : f.y1 - 5;
+    const y = where === 'v-bot' || where === 'h-bot' ? f.y0 + 5 : f.y1 - 5;
     add(g, box(THREE, mats.handle, x - 0.9, x + 0.9, y - 0.9, y + 0.9, zFace, zFace + 2.2, 'handle'));
     return;
   }
-  if (where === 'h-top') {
+  if (where === 'h-top' || where === 'h-bot') {
     const len = Math.min(24, w * 0.5);
-    const y = f.y1 - Math.min(4, h / 4);
+    const y = where === 'h-bot' ? f.y0 + Math.min(4, h / 4) : f.y1 - Math.min(4, h / 4);
     add(g, box(THREE, mats.handle, x - len / 2, x + len / 2, y - 0.6, y + 0.6, zFace, zFace + 2.2, 'handle'));
     return;
   }
@@ -254,20 +271,66 @@ function frontPanel(THREE, g, mat, x0, x1, y0, y1, z0, z1, name) {
  * Narrow doors -- a half-width 30, even a 15 -- keep the handle inset
  * proportional so it never crosses the door's edge.
  */
+/**
+ * The hinge cue: a thin dark line on the face of a door along the edge it
+ * hangs from -- the door-gap shadow that reads, at a distance, as "this edge
+ * does not open". Paired with the handle on the opening edge, it says which
+ * way every door swings, on base and wall runs alike.
+ */
+function hingeLine(THREE, g, mats, f, edge, zFace) {
+  const t = 0.5;
+  let b;
+  if (edge === 'left') b = [f.x0 + GAP, f.x0 + GAP + t, f.y0 + GAP, f.y1 - GAP];
+  else if (edge === 'right') b = [f.x1 - GAP - t, f.x1 - GAP, f.y0 + GAP, f.y1 - GAP];
+  else b = [f.x0 + GAP, f.x1 - GAP, f.y1 - GAP - t, f.y1 - GAP];     // top
+  add(g, box(THREE, mats.seam, b[0], b[1], b[2], b[3], zFace, zFace + 0.1, 'door-gap'));
+}
+
+const HINGES = ['left', 'right', 'top'];
+
+/**
+ * The door(s) of a cabinet-like module.
+ *   hinge 'left' | 'right'  one door, whatever its width: handle on the
+ *                           opening edge, hinge line on the other.
+ *   hinge 'top'             one lift-up flap: handle along its bottom edge,
+ *                           hinge line along its top.
+ *   no hinge                one door up to 60 cm (hung left); two doors over
+ *                           it, handles at the meeting edges.
+ * Narrow doors -- a half-width 30, even a 15 -- keep the handle inset
+ * proportional so it never crosses the door's edge. `where` places a side
+ * handle near the door's top ('v-top', base units) or bottom ('v-bot', wall
+ * units).
+ */
 function doors(THREE, g, mats, style, detail, m, y0, y1, z0, z1, where) {
   const full = detail !== 'low';
-  if (m.x1 - m.x0 > 60.5) {
+  const f = { x0: m.x0, x1: m.x1, y0: y0, y1: y1 };
+  let hinge = m.hinge;
+  if (hinge !== undefined && HINGES.indexOf(hinge) === -1) {
+    warn('hinge ' + JSON.stringify(hinge) + ' is not left/right/top -- using "left"');
+    hinge = 'left';
+  }
+  if (hinge === undefined && m.x1 - m.x0 > 60.5) {
     const xm = (m.x0 + m.x1) / 2;
     frontPanel(THREE, g, mats.front, m.x0, xm, y0, y1, z0, z1, 'door');
     frontPanel(THREE, g, mats.front, xm, m.x1, y0, y1, z0, z1, 'door');
     if (full) {
       addHandle(THREE, g, mats, style, { x0: m.x0, x1: xm, y0: y0, y1: y1 }, where, 'right', z1);
       addHandle(THREE, g, mats, style, { x0: xm, x1: m.x1, y0: y0, y1: y1 }, where, 'left', z1);
+      hingeLine(THREE, g, mats, { x0: m.x0, x1: xm, y0: y0, y1: y1 }, 'left', z1);
+      hingeLine(THREE, g, mats, { x0: xm, x1: m.x1, y0: y0, y1: y1 }, 'right', z1);
     }
     return;
   }
-  frontPanel(THREE, g, mats.front, m.x0, m.x1, y0, y1, z0, z1, 'door');
-  if (full) addHandle(THREE, g, mats, style, { x0: m.x0, x1: m.x1, y0: y0, y1: y1 }, where, m.hinge === 'right' ? 'left' : 'right', z1);
+  hinge = hinge || 'left';
+  frontPanel(THREE, g, mats.front, m.x0, m.x1, y0, y1, z0, z1, hinge === 'top' ? 'flap' : 'door');
+  if (!full) return;
+  if (hinge === 'top') {
+    addHandle(THREE, g, mats, style, f, 'h-bot', 'centre', z1);
+    hingeLine(THREE, g, mats, f, 'top', z1);
+  } else {
+    addHandle(THREE, g, mats, style, f, where, hinge === 'right' ? 'left' : 'right', z1);
+    hingeLine(THREE, g, mats, f, hinge, z1);
+  }
 }
 
 /**
@@ -309,7 +372,7 @@ function checkCorner(corner, type) {
 
 // ---- kitchen-base-run ----------------------------------------------------------
 
-const BASE_KINDS = ['cabinet', 'drawers', 'oven', 'hob', 'sink', 'dishwasher', 'washer', 'filler', 'corner'];
+const BASE_KINDS = ['cabinet', 'drawers', 'oven', 'hob', 'sink', 'dishwasher', 'washer', 'filler', 'corner', 'gap'];
 
 // Kept equal to houses/schema.json $defs/furnitureParams_kitchen-base-run by
 // scripts/test-furniture-defaults.mjs.
@@ -598,17 +661,22 @@ function buildBaseRun(THREE, params, opts) {
   const fTop = style === 'rail' ? yW - 4 : yW;          // fronts' top edge
   const fBot = P;
 
-  // The carcass, cut down under each sink so the bowl reads from above.
-  const sinkX = sinks.map(sk => [Math.max(-W / 2, sk.cx - sk.width / 2), Math.min(W / 2, sk.cx + sk.width / 2)])
-    .sort((a, b) => a[0] - b[0]);
-  let cx0 = -W / 2;
-  sinkX.forEach(([a, b]) => {
-    if (a > cx0) add(g, box(THREE, mats.front, cx0, a, P, yW, 0, zF0, 'carcass'));
-    add(g, box(THREE, mats.front, Math.max(a, cx0), b, P, Math.max(P + 1, H - SINK_DEPTH - 1), 0, zF0, 'carcass'));
-    cx0 = Math.max(cx0, b);
-  });
-  if (cx0 < W / 2) add(g, box(THREE, mats.front, cx0, W / 2, P, yW, 0, zF0, 'carcass'));
-  add(g, box(THREE, mats.front, -W / 2, W / 2, 0, P, 0, D - 8, 'plinth'));
+  // The carcass and plinth, in intervals along the run: none under a `gap`
+  // (a bare space under the worktop, e.g. for a freestanding appliance), cut
+  // down under a sink so the bowl reads from above, full height elsewhere.
+  const gapX = mods.filter(m => m.kind === 'gap').map(m => [m.x0, m.x1]);
+  const sinkX = sinks.map(sk => [Math.max(-W / 2, sk.cx - sk.width / 2), Math.min(W / 2, sk.cx + sk.width / 2)]);
+  const cuts = [-W / 2, W / 2];
+  gapX.concat(sinkX).forEach(([a, b]) => cuts.push(a, b));
+  const xs = Array.from(new Set(cuts.map(v => Math.round(v * 1000) / 1000))).sort((a, b) => a - b);
+  const within = (list, x) => list.some(([a, b]) => x > a && x < b);
+  for (let i = 0; i + 1 < xs.length; i++) {
+    const a = xs[i], b = xs[i + 1], mid = (a + b) / 2;
+    if (b - a < 0.01 || within(gapX, mid)) continue;
+    const top = within(sinkX, mid) ? Math.max(P + 1, H - SINK_DEPTH - 1) : yW;
+    add(g, box(THREE, mats.front, a, b, P, top, 0, zF0, 'carcass'));
+    add(g, box(THREE, mats.front, a, b, 0, P, 0, D - 8, 'plinth'));
+  }
   if (style === 'rail' && full) {
     // Handleless: one continuous recessed metal J-rail under the worktop.
     add(g, box(THREE, mats.handle, -W / 2, W / 2, fTop + 0.5, yW - 0.5, zF0 - 1, zF0, 'handle-rail'));
@@ -646,6 +714,8 @@ function buildBaseRun(THREE, params, opts) {
       frontPanel(THREE, g, mats.front, m.x0, m.x1, fBot, fTop, zF0, zF1, 'filler');
     } else if (m.kind === 'corner') {
       blindCorner(THREE, g, mats, style, detail, m, blindSide(m, corner), cornerDepth, fBot, fTop, zF0, zF1, 'v-top');
+    } else if (m.kind === 'gap') {
+      // Nothing: the worktop runs over a bare space.
     } else {  // cabinet, sink
       doors(THREE, g, mats, style, detail, m, fBot, fTop, zF0, zF1, 'v-top');
     }
@@ -687,7 +757,58 @@ function buildBaseRun(THREE, params, opts) {
 
 // ---- kitchen-wall-run ----------------------------------------------------------
 
-const WALL_KINDS = ['cabinet', 'open', 'hood', 'filler', 'corner'];
+/**
+ * Lay out a WALL run's modules. Unlike a base run, a wall run need not be
+ * full: a hood alone on a stretch of bare wall is normal. So:
+ *   - a module may give `at` (cm from the run's left end to its left edge);
+ *     one without `at` follows the module before it (the first starts at 0);
+ *   - kind `gap` takes up width and draws nothing;
+ *   - width the modules leave unused is BARE by default (`fill: 'bare'`),
+ *     or closed with filler panels (`fill: 'filler'`).
+ * A module that would overlap the one before it is pushed right; one that
+ * would run past the end is cut short. Both warn. Never throws.
+ */
+export function layoutWallModules(modules, W, fill) {
+  const list = [];
+  (Array.isArray(modules) ? modules : []).forEach((m, i) => {
+    if (!m || typeof m !== 'object' || !(typeof m.width === 'number' && m.width > 0)) {
+      warn('kitchen-wall-run: module ' + i + ' has no positive width -- skipped');
+      return;
+    }
+    let kind = m.kind;
+    if (kind === 'corner') {
+      warn('kitchen-wall-run: wall runs do not corner -- module ' + i + ' is drawn as a cabinet');
+      kind = 'cabinet';
+    } else if (WALL_KINDS.indexOf(kind) === -1) {
+      warn('kitchen-wall-run: module ' + i + ' kind ' + JSON.stringify(kind) + ' is unknown -- drawn as "cabinet"');
+      kind = 'cabinet';
+    }
+    list.push(Object.assign({}, m, { kind: kind }));
+  });
+  const out = [];
+  let cursor = -W / 2;
+  list.forEach(m => {
+    let x0 = typeof m.at === 'number' ? -W / 2 + m.at : cursor;
+    if (x0 < cursor - 0.01) {
+      warn('kitchen-wall-run: a ' + m.kind + ' at ' + m.at + ' cm overlaps the module before it -- moved to ' + (cursor + W / 2) + ' cm');
+      x0 = cursor;
+    }
+    let x1 = x0 + m.width;
+    if (x1 > W / 2 + 0.01) {
+      warn('kitchen-wall-run: a ' + m.kind + ' runs past the end of the ' + W + ' cm run -- cut short');
+      x1 = W / 2;
+    }
+    if (x1 - x0 < 0.5) return;
+    if (fill === 'filler' && x0 - cursor > 0.05) out.push({ kind: 'filler', width: x0 - cursor, x0: cursor, x1: x0 });
+    out.push(Object.assign(m, { x0: x0, x1: x1 }));
+    cursor = x1;
+  });
+  if (fill === 'filler' && W / 2 - cursor > 0.05) out.push({ kind: 'filler', width: W / 2 - cursor, x0: cursor, x1: W / 2 });
+  return out;
+}
+
+
+const WALL_KINDS = ['cabinet', 'open', 'hood', 'filler', 'gap'];
 
 // Kept equal to houses/schema.json $defs/furnitureParams_kitchen-wall-run.
 const WALL_DEFAULTS = deepFreeze({
@@ -699,8 +820,7 @@ const WALL_DEFAULTS = deepFreeze({
     { kind: 'hood', width: 60, style: 'chimney', visor: 'smoked' },
     { kind: 'cabinet', width: 60, hinge: 'right' },
   ],
-  corner: 'none',
-  cornerDepth: 30,
+  fill: 'bare',
   frontColor: '#f2f0ea',
   frontFinish: 'gloss',
   handleStyle: 'bar',
@@ -727,19 +847,22 @@ function buildWallRun(THREE, params, opts) {
   const detail = opts && opts.detail === 'low' ? 'low' : 'full';
   const full = detail === 'full';
   const W = p.width, D = p.depth, H = p.height;
-  const corner = checkCorner(p.corner, 'kitchen-wall-run');
-  const cornerDepth = Math.max(10, Math.min(W, typeof p.cornerDepth === 'number' ? p.cornerDepth : 30));
+  // Wall units do not corner: each hangs whole on its own wall, however the
+  // base runs below them meet. A `corner` given here is ignored.
+  if (p.corner !== undefined && p.corner !== 'none') {
+    warn('kitchen-wall-run: wall runs do not corner -- `corner` ' + JSON.stringify(p.corner) + ' is ignored');
+  }
+  const corner = 'none', cornerDepth = 0;
   let style = handleStyleOf(p);
   if (style === 'rail') style = 'none';   // wall units have no J-rail: handleless
   const mats = materials(THREE, p);
-  const mods = layoutModules(p.modules, W, { kinds: WALL_KINDS, type: 'kitchen-wall-run', corner: corner });
-  growCorner(mods, corner, cornerDepth, 'kitchen-wall-run');
+  const mods = layoutWallModules(p.modules, W, p.fill === 'filler' ? 'filler' : 'bare');
 
   const g = new THREE.Group();
   g.name = 'furniture:kitchen-wall-run';
   // Handles stand 2.5 cm proud of the fronts; without handles the fronts
   // come forward to the run's front plane.
-  const zF1 = D - (style === 'bar' || style === 'knob' ? 2.5 : 0), zF0 = zF1 - 2;
+  const zF1 = D - (style === 'bar' || style === 'knob' ? 2.5 : 0.1), zF0 = zF1 - 2;
 
   mods.forEach(m => {
     let mh = typeof m.height === 'number' && m.height > 0 ? m.height : H;
@@ -748,6 +871,8 @@ function buildWallRun(THREE, params, opts) {
       mh = H;
     }
     const y0 = H - mh, w = m.x1 - m.x0;
+
+    if (m.kind === 'gap') return;       // bare wall
 
     if (m.kind === 'hood') {
       // A splashback hangs on the wall under the hood, down to the worktop.
@@ -794,12 +919,11 @@ function buildWallRun(THREE, params, opts) {
     const cy0 = y0 + (m.underLed === true ? 1 : 0), cy1 = H - (m.topLed === true ? 0.5 : 0);
     add(g, box(THREE, mats.front, m.x0, m.x1, cy0, cy1, 0, zF0, 'carcass'));
     if (m.kind === 'filler') frontPanel(THREE, g, mats.front, m.x0, m.x1, y0, H, zF0, zF1, 'filler');
-    else if (m.kind === 'corner') blindCorner(THREE, g, mats, style, detail, m, blindSide(m, corner), cornerDepth, y0, H, zF0, zF1, 'v-bot');
     else doors(THREE, g, mats, style, detail, m, y0, H, zF0, zF1, 'v-bot');
   });
 
   // LEDs only where there is a carcass to recess them into.
-  const lit = mods.filter(m => m.kind === 'cabinet' || m.kind === 'corner' || m.kind === 'filler');
+  const lit = mods.filter(m => m.kind === 'cabinet' || m.kind === 'filler');
   const hOf = m => Math.min(H, typeof m.height === 'number' && m.height > 0 ? m.height : H);
   const zBack = D - zF0 + 1.5;
   ledStrips(THREE, g, lit, corner, cornerDepth, W, D, {
@@ -921,7 +1045,9 @@ export function exampleLPoses(items) {
     a: { type: 'kitchen-base-run', x: a.width / 2, y: 0, z: 0, rotY: 0 },
     b: { type: 'kitchen-base-run', x: 0, y: 0, z: a.depth + b.width / 2, rotY: Math.PI / 2 },
     wall: { type: 'kitchen-wall-run', x: w.width / 2, y: elevationForTop(top, w), z: 0, rotY: 0 },
-    wallB: { type: 'kitchen-wall-run', x: 0, y: elevationForTop(top, wb), z: w.depth + wb.width / 2, rotY: Math.PI / 2 },
+    // Each wall run measured from the same (left) end as the base run under
+    // it, so a module's `at` lines up with the base modules below.
+    wallB: { type: 'kitchen-wall-run', x: 0, y: elevationForTop(top, wb), z: a.depth + b.width - wb.width / 2, rotY: Math.PI / 2 },
     fridge: { type: 'fridge-freezer', x: a.width + 1 + f.width / 2, y: 0, z: 0, rotY: 0 },
   };
 }
@@ -939,7 +1065,7 @@ export const EXAMPLE_L = deepFreeze({
       { kind: 'corner', width: 70, plinthLed: true },
       { kind: 'drawers', width: 50, plinthLed: true },
       { kind: 'oven', width: 60, hob: true },
-      { kind: 'cabinet', width: 60, hinge: 'right' },
+      { kind: 'cabinet', width: 60, hinge: 'top' },
     ],
   },
   b: {
@@ -958,22 +1084,22 @@ export const EXAMPLE_L = deepFreeze({
   },
   wall: {
     width: 240,
-    corner: 'left',
     // From the worktop (the splashback's bottom) to the 210 top line.
     height: 121.5,
     modules: [
-      { kind: 'corner', width: 70, height: 70, underLed: true, topLed: true },
+      // One 70 cm door from the wall: a hinge given means one door.
+      { kind: 'cabinet', width: 70, height: 70, hinge: 'left', underLed: true, topLed: true },
       { kind: 'cabinet', width: 50, height: 70, hinge: 'right', underLed: true, topLed: true },
       { kind: 'hood', width: 60, height: 60, style: 'chimney', visor: 'smoked', splashback: 61.5 },
-      { kind: 'cabinet', width: 60, height: 55, hinge: 'right', underLed: true, topLed: true },
+      { kind: 'cabinet', width: 60, height: 55, hinge: 'top', underLed: true, topLed: true },
     ],
   },
   wallB: {
     width: 160,
+    // Two cabinets with 40 cm of bare wall between them (`at`, no filler).
     modules: [
-      { kind: 'cabinet', width: 40, height: 55, hinge: 'left', underLed: true, topLed: true },
-      { kind: 'cabinet', width: 60, hinge: 'left', underLed: true, topLed: true },
-      { kind: 'cabinet', width: 60, hinge: 'right', underLed: true, topLed: true },
+      { kind: 'cabinet', width: 60, height: 55, hinge: 'left', underLed: true, topLed: true },
+      { kind: 'cabinet', width: 60, at: 100, hinge: 'right', underLed: true, topLed: true },
     ],
   },
   fridge: { topLed: true },
@@ -1006,4 +1132,84 @@ export function paramsDiff(type, params) {
     if (keepWidth || !sameValue(v, impl.DEFAULTS[k])) out[k] = v;
   });
   return out;
+}
+
+/**
+ * Why `params` cannot be built as `type`, as a list of messages -- empty when
+ * it can. For data arriving from outside (the spec page's Load JSON): the
+ * builders shrug off a bad field with a warning, but a list that is not a
+ * list, or a module that is not an object, is not something to draw.
+ *   - width / depth / height / worktopHeight: positive numbers when given
+ *   - modules: an array of objects, each with a string `kind` and a positive
+ *     numeric `width`; `hinge` one of left/right/top (left/right on a fridge);
+ *     `height`, `at`, `splashback` numbers when given
+ *   - sink: null or an object with numeric fields
+ */
+export function validateParams(type, params) {
+  const errs = [];
+  if (!TYPES[type]) return ['unknown type ' + JSON.stringify(type)];
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return ['params must be an object'];
+  const posNum = v => typeof v === 'number' && isFinite(v) && v > 0;
+  const num = v => typeof v === 'number' && isFinite(v);
+  ['width', 'depth', 'height', 'worktopHeight'].forEach(k => {
+    if (params[k] !== undefined && !posNum(params[k])) errs.push(k + ' must be a positive number');
+  });
+  if (type === 'fridge-freezer') {
+    if (params.hinge !== undefined && ['left', 'right'].indexOf(params.hinge) === -1) errs.push('hinge must be left or right');
+    return errs;
+  }
+  if (params.modules !== undefined) {
+    if (!Array.isArray(params.modules)) errs.push('modules must be an array');
+    else params.modules.forEach((m, i) => {
+      const at = 'modules[' + i + ']';
+      if (!m || typeof m !== 'object' || Array.isArray(m)) { errs.push(at + ' must be an object'); return; }
+      if (typeof m.kind !== 'string') errs.push(at + '.kind must be a string');
+      if (!posNum(m.width)) errs.push(at + '.width must be a positive number');
+      if (m.hinge !== undefined && HINGES.indexOf(m.hinge) === -1) errs.push(at + '.hinge must be left, right or top');
+      ['height', 'at', 'splashback'].forEach(k => {
+        if (m[k] !== undefined && !num(m[k])) errs.push(at + '.' + k + ' must be a number');
+      });
+    });
+  }
+  if (type === 'kitchen-base-run' && params.sink !== undefined && params.sink !== null) {
+    if (typeof params.sink !== 'object' || Array.isArray(params.sink)) errs.push('sink must be null or an object');
+    else ['at', 'width', 'depth'].forEach(k => {
+      if (params.sink[k] !== undefined && !num(params.sink[k])) errs.push('sink.' + k + ' must be a number');
+    });
+  }
+  return errs;
+}
+
+/**
+ * Read what the spec page's Copy JSON gives -- an array of {type, params} in
+ * slot order -- back into params, or THROW with a message naming the entry.
+ * Nothing is returned unless every entry validates (validateParams) AND a
+ * trial build of every piece succeeds, so a caller can swap its state only
+ * on success and keep what it had on failure. A wall run's `corner` /
+ * `cornerDepth` (from an older export) are dropped: wall runs do not corner.
+ *
+ * @param {string} text
+ * @param {string[]} slots  the type expected at each position
+ * @param {Object} THREE    for the trial build
+ * @returns {Object[]} one params object per entry given (merged over DEFAULTS)
+ */
+export function parseKitchenJson(text, slots, THREE) {
+  const arr = JSON.parse(text);
+  if (!Array.isArray(arr)) throw new Error('expected an array, as Copy JSON gives');
+  return arr.map((entry, i) => {
+    const type = slots[i];
+    if (!type) throw new Error('entry ' + (i + 1) + ' has no slot (there are ' + slots.length + ' pieces)');
+    if (!entry || entry.type !== type) throw new Error('entry ' + (i + 1) + ' should be a ' + type);
+    const params = JSON.parse(JSON.stringify(entry.params === undefined ? {} : entry.params));
+    if (type === 'kitchen-wall-run' && params && typeof params === 'object') { delete params.corner; delete params.cornerDepth; }
+    const errs = validateParams(type, params);
+    if (errs.length) throw new Error('entry ' + (i + 1) + ': ' + errs.slice(0, 3).join('; '));
+    const full = Object.assign(JSON.parse(JSON.stringify(TYPES[type].DEFAULTS)), params);
+    try {
+      TYPES[type].build(THREE, full, { detail: 'low' });
+    } catch (e) {
+      throw new Error('entry ' + (i + 1) + ' does not build: ' + (e && e.message ? e.message : e));
+    }
+    return full;
+  });
 }

@@ -1593,9 +1593,10 @@
                   "dishwasher",
                   "washer",
                   "filler",
-                  "corner"
+                  "corner",
+                  "gap"
                 ],
-                "description": "`sink` is a sink centred on this one module; for one spanning modules use the run-level `sink`."
+                "description": "`sink` is a sink centred on this one module (for one spanning modules use the run-level `sink`). `gap` is a bare space under the worktop: no carcass, front or plinth."
               },
               "width": {
                 "type": "number",
@@ -1606,9 +1607,10 @@
                 "type": "string",
                 "enum": [
                   "left",
-                  "right"
+                  "right",
+                  "top"
                 ],
-                "description": "cabinet / sink / corner: which edge a single door hangs from; the handle goes on the other. Over 60 cm wide a cabinet or sink has two doors."
+                "description": "cabinet / sink: `left` or `right` is one door hung from that edge, whatever its width (handle on the other edge); `top` is one lift-up flap (handle along its bottom). With no hinge a cabinet over 60 cm has two doors."
               },
               "hob": {
                 "type": "boolean",
@@ -1792,7 +1794,7 @@
 
     "furnitureParams_kitchen-wall-run": {
       "type": "object",
-      "description": "Params for `kitchen-wall-run` (src/furniture/kitchen.js): wall units of mixed heights with their tops aligned, plus an extractor hood. `elevation` (set by the placer) is the bottom of the tallest module. Each `default` equals kitchen.js DEFAULTS.",
+      "description": "Params for `kitchen-wall-run` (src/furniture/kitchen.js): wall units of mixed heights with their tops aligned, plus an extractor hood. `elevation` (set by the placer) is the bottom of the tallest module. Each `default` equals kitchen.js DEFAULTS. Wall runs do not corner: each unit hangs whole on its own wall.",
       "properties": {
         "width": {
           "type": "number",
@@ -1826,13 +1828,19 @@
                   "open",
                   "hood",
                   "filler",
-                  "corner"
-                ]
+                  "gap"
+                ],
+                "description": "`gap` takes up width and draws nothing (bare wall)."
               },
               "width": {
                 "type": "number",
                 "exclusiveMinimum": 0,
                 "description": "cm."
+              },
+              "at": {
+                "type": "number",
+                "minimum": 0,
+                "description": "cm from the run's LEFT end to this module's left edge. Without it a module follows the one before (the first starts at 0). Lets a hood sit over the oven on an otherwise bare wall."
               },
               "height": {
                 "type": "number",
@@ -1843,9 +1851,10 @@
                 "type": "string",
                 "enum": [
                   "left",
-                  "right"
+                  "right",
+                  "top"
                 ],
-                "description": "cabinet: which edge a single door hangs from."
+                "description": "cabinet: `left` or `right` is one door hung from that edge, whatever its width; `top` is one lift-up flap. With no hinge a cabinet over 60 cm has two doors."
               },
               "style": {
                 "type": "string",
@@ -1904,21 +1913,14 @@
           ],
           "description": "Left to right as you stand facing the run (local +x)."
         },
-        "corner": {
+        "fill": {
           "type": "string",
           "enum": [
-            "left",
-            "right",
-            "none"
+            "bare",
+            "filler"
           ],
-          "default": "none",
-          "description": "As for `kitchen-base-run`: which end holds a blind corner unit."
-        },
-        "cornerDepth": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 30,
-          "description": "cm, the depth of the other wall run at this run's corner: how much of the blind corner unit it hides."
+          "default": "bare",
+          "description": "What the width the modules leave unused shows: `bare` wall (a hood alone on a wall) or `filler` panels."
         },
         "frontColor": {
           "$ref": "#/$defs/hexColor",
