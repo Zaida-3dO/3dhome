@@ -362,10 +362,13 @@ export function buildCurtain(THREE, cur, fadeable) {
   const pleats = curtainPleatsPerHalf(cur);
   const outerPleats = Math.min(pleats, Math.max(0, cur.outerPleats | 0));
   const P = {
-    // The heading stops CURTAIN_HEAD_GAP under `top`, below the cornice
-    // lid, so the fabric's top edge never pokes up through it (it would
-    // show as a wavy line on the closed lid). The hem stays where it was.
-    width: W, drop: Math.max(0.01, DROP - CURTAIN_HEAD_GAP), bottom: TOP - DROP, pleats,
+    // A heading that hangs in a cornice (its own, or -- a sheer -- another
+    // curtain's: cur.underCornice, set by the loader) stops CURTAIN_HEAD_GAP
+    // under `top`, below the lid, so its top edge never pokes up through it.
+    // The hem stays where it was. A curtain with no cornice over it keeps
+    // its full drop.
+    width: W, drop: (cn || cur.underCornice) ? Math.max(0.01, DROP - CURTAIN_HEAD_GAP) : DROP,
+    bottom: TOP - DROP, pleats,
     ampBase: 0.055, thickness: 0.02,
     // What decides the fully-open stack (curtainStackWidth; cm).
     stack: { stackWidth: cur.stackWidth, stackPerPleat: cur.stackPerPleat,
@@ -454,49 +457,66 @@ export function buildCurtain(THREE, cur, fadeable) {
 
   if (!cn) return { group, fadeMeshes, setOpen, getOpen, corniceStrip: null };
 
-  // ---- cornice: front face (+ optional ends) + lid, top flush with `top` ----
+  // ---- cornice: a light-tight box -- lid over front (+ ends) ----
+  // Built so that no exterior view can find a crack to see the lit inside
+  // through: nothing merely BUTTS against anything else.
+  //   * The lid is the top of the box. It overhangs the front face's outer
+  //     surface (and the side faces') by CORNICE_LID_LIP, and runs
+  //     CORNICE_WALL_TUCK back into the host wall.
+  //   * The front and side faces stop CORNICE_FACE_TUCK below the lid's
+  //     top, i.e. their tops are buried inside the lid, so the only thing
+  //     seen from above is the lid's one top face.
+  //   * The side faces also run CORNICE_WALL_TUCK back into the wall; a
+  //     wall-to-wall cornice runs CORNICE_WALL_TUCK into each side wall.
+  // No two faces are coplanar: every overlap is a few millimetres deep.
   const cH = cn.height * CM;
   const s = localXSign(cur);
   let cWidth, cOffset;
   if (cn.sideFaces) {
     cWidth = W * 1.04; cOffset = 0;
   } else {
-    // Wall-to-wall: span the room along this wall, wherever the curtain sits.
-    cWidth = (cur.roomSpan[1] - cur.roomSpan[0]) * CM;
+    // Wall-to-wall: span the room along this wall, wherever the curtain
+    // sits -- plus a tuck into each side wall so no end gap can open.
+    cWidth = (cur.roomSpan[1] - cur.roomSpan[0]) * CM + 2 * CORNICE_WALL_TUCK;
     cOffset = s * (((cur.roomSpan[0] + cur.roomSpan[1]) / 2) - cur.c) * CM;
   }
   const cMat = new THREE.MeshStandardMaterial({ color: cn.color, roughness: 0.7, transparent: !!fadeable, opacity: 1 });
-  const cMidY = TOP - cH / 2;
-  const front = new THREE.Mesh(new THREE.BoxGeometry(cn.sideFaces ? cWidth + 0.02 : cWidth, cH, 0.02), cMat);
-  front.position.set(cOffset, cMidY, cDepth);
+  const lidTop = TOP - CORNICE_LID_GAP;
+  const faceTop = lidTop - CORNICE_FACE_TUCK;
+  const faceH = faceTop - (TOP - cH);
+  const faceMidY = faceTop - faceH / 2;
+  const outerW = cn.sideFaces ? cWidth + 0.02 : cWidth;   // front face, side-face outer to outer
+  const front = new THREE.Mesh(new THREE.BoxGeometry(outerW, faceH, 0.02), cMat);
+  front.position.set(cOffset, faceMidY, cDepth);
   add(group, front).name = 'corniceFront';
   if (cn.sideFaces) {
+    const sideD = cDepth + CORNICE_WALL_TUCK;
     [-1, 1].forEach(sx => {
-      const sideFace = new THREE.Mesh(new THREE.BoxGeometry(0.02, cH, cDepth), cMat);
-      sideFace.position.set(cOffset + sx * cWidth / 2, cMidY, cDepth / 2);
+      const sideFace = new THREE.Mesh(new THREE.BoxGeometry(0.02, faceH, sideD), cMat);
+      sideFace.position.set(cOffset + sx * cWidth / 2, faceMidY, cDepth - sideD / 2);
       add(group, sideFace).name = 'corniceSide';
     });
   }
   // Lid: closes the box from above, so a hidden or faded ceiling shows a
   // shut pelmet rather than the fabric heading and the LED strip inside it.
-  // It fills the inside of the box (wall -> inner face of the front, and
-  // between the side faces when there are any) and sits CORNICE_LID_GAP
-  // under `top`, so it neither z-fights the ceiling nor shares a face with
-  // the front/side tops.
-  const lidW = cn.sideFaces ? cWidth - 0.02 : cWidth;
-  const lidD = cDepth - 0.01;
-  const lid = new THREE.Mesh(new THREE.BoxGeometry(lidW, CORNICE_LID_T, lidD), cMat);
-  lid.position.set(cOffset, TOP - CORNICE_LID_GAP - CORNICE_LID_T / 2, lidD / 2);
+  // CORNICE_LID_GAP under `top` so it never z-fights the ceiling.
+  const lidW = cn.sideFaces ? outerW + 2 * CORNICE_LID_LIP : cWidth;
+  const lidFront = cDepth + 0.01 + CORNICE_LID_LIP, lidBack = -CORNICE_WALL_TUCK;
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(lidW, CORNICE_LID_T, lidFront - lidBack), cMat);
+  lid.position.set(cOffset, lidTop - CORNICE_LID_T / 2, (lidFront + lidBack) / 2);
   add(group, lid).name = 'corniceTop';
   if (cn.light) {
     // The emissive strip is what you see; the light it throws is a row of
     // downlights the SCENE adds from corniceSpotLayout() (gated on its
     // quality tier -- this builder never adds a light source).
     const lc = new THREE.Color(cn.lightColor);
+    // The inside run of the box (a wall-to-wall cornice's end tucks are in
+    // the side walls, not the room).
+    const innerW = cn.sideFaces ? cWidth : cWidth - 2 * CORNICE_WALL_TUCK;
     // Tucked into the inside top-front corner: just under the lid, just
     // behind the front face (the strip is 2 cm tall, 3 cm deep).
-    const stripY = TOP - CORNICE_LID_GAP - CORNICE_LID_T - 0.012;
-    const strip = new THREE.Mesh(new THREE.BoxGeometry(cWidth * 0.96, 0.02, 0.03),
+    const stripY = TOP - CORNICE_LID_GAP - CORNICE_LID_T - CORNICE_STRIP_DROP;
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(innerW * 0.96, 0.02, 0.03),
       new THREE.MeshStandardMaterial({ color: lc, emissive: lc, emissiveIntensity: 1.5, transparent: !!fadeable, opacity: 1 }));
     strip.position.set(cOffset, stripY, cDepth - 0.025);
     add(group, strip).name = 'corniceLightStrip';
@@ -504,9 +524,10 @@ export function buildCurtain(THREE, cur, fadeable) {
     // The colour this cornice rests at before any Home Assistant state
     // arrives, its length, and the box the downlights must stay inside.
     strip.userData.restColor = lc.getHex();
-    strip.userData.stripLength = cWidth * 0.96;
+    strip.userData.stripLength = innerW * 0.96;
     strip.userData.cornice = {
-      width: cWidth, offset: cOffset, top: TOP, height: cH, depth: cDepth,
+      width: innerW, offset: cOffset,
+      top: TOP, height: cH, depth: cDepth,
       stripY, stripZ: cDepth - 0.025, sideFaces: !!cn.sideFaces
     };
     return { group, fadeMeshes, setOpen, getOpen, corniceStrip: strip };
@@ -524,24 +545,61 @@ export function buildCurtain(THREE, cur, fadeable) {
 //     tilted back toward the wall by CORNICE_SPOT_TILT, with a cone half-
 //     angle CORNICE_SPOT_ANGLE smaller than the tilt -- so even the cone's
 //     front edge leans toward the wall and never reaches the front face,
-//     and no ray points up at the lid;
+//     and (tilt + angle < 90 degrees) no ray points up at the lid;
 //   * the end lights are held in from the ends by at least the furthest
 //     sideways any ray can travel before it leaves the box (through the
 //     bottom or into the wall), so the side faces stay dark too.
 // The old single unshadowed PointLight sat in FRONT of the fascia and lit
 // its outer face as a hotspot; a point light cannot be aimed at all.
-export const CORNICE_LID_T = 0.01;        // m
-export const CORNICE_LID_GAP = 0.002;     // m below `top`
-export const CORNICE_WIDE_CM = 250;
-// How far under `top` a curtain's heading stops: clear of the lid's
-// underside (gap + thickness) by 3 mm.
-export const CURTAIN_HEAD_GAP = CORNICE_LID_GAP + CORNICE_LID_T + 0.003;       // at or above: 5 lights
-export const CORNICE_SPOT_TILT = 47 * Math.PI / 180;
-export const CORNICE_SPOT_ANGLE = 42 * Math.PI / 180;
+//
+// They are unshadowed, so they are held to CORNICE_SPOT_RANGE and the cone's
+// back edge is kept 12 degrees below horizontal: what little reaches past
+// the wall plane is within ~1 m of the light and falling.
+
+// Cornice box, metres.
+export const CORNICE_LID_T = 0.01;        // lid thickness
+export const CORNICE_LID_GAP = 0.001;     // lid top below `top`: clear of the ceiling, 1 mm of wall face above it
+export const CORNICE_LID_LIP = 0.002;     // lid overhang past the front/side outer faces
+export const CORNICE_FACE_TUCK = 0.003;   // front/side tops buried this far below the lid top
+export const CORNICE_WALL_TUCK = 0.01;    // lid + sides (and wall-to-wall ends) run into the walls
+export const CORNICE_STRIP_DROP = 0.012;  // strip centre below the lid's underside
+// How far under `top` a heading that hangs in a cornice stops: clear of the
+// lid's underside (gap + thickness) by 3 mm.
+export const CURTAIN_HEAD_GAP = CORNICE_LID_GAP + CORNICE_LID_T + 0.003;
+// Downlights.
+export const CORNICE_WIDE_CM = 250;       // a cornice at least this wide gets 5, else 3
+export const CORNICE_SPOT_TILT = 42 * Math.PI / 180;
+export const CORNICE_SPOT_ANGLE = 36 * Math.PI / 180;
+// Far enough to light the heading and the upper wall, no further: the
+// lights are unshadowed, so reach is also how far they could shine through
+// the wall they hang on.
+export const CORNICE_SPOT_RANGE = 1.2;
 
 /** 3 downlights on a narrow cornice, 5 on a wide (>= 250 cm) one. */
 export function corniceLightCount(widthCm) {
   return widthCm >= CORNICE_WIDE_CM ? 5 : 3;
+}
+
+/**
+ * Share a total cap of cornice lights between cornices. `counts` is each
+ * cornice's wanted count (corniceLightCount); returns the counts to build,
+ * same order. Over the cap, the cornice with the most lights gives one up
+ * (5 -> 4 -> 3 -> 2 -> 1) until it fits; if even one each is too many, the
+ * later cornices get none (their strips still glow). Fewer lights never
+ * means a leak: corniceSpotLayout keeps any count inside the box.
+ */
+export function corniceLightBudget(counts, cap) {
+  const out = counts.slice();
+  const limit = cap == null ? Infinity : Math.max(0, cap | 0);
+  const total = () => out.reduce((a, b) => a + b, 0);
+  while (total() > limit) {
+    let best = -1;
+    out.forEach((n, i) => { if (n > 1 && (best < 0 || n > out[best])) best = i; });
+    if (best < 0) break;
+    out[best]--;
+  }
+  for (let i = out.length - 1; i >= 0 && total() > limit; i--) out[i] = 0;
+  return out;
 }
 
 /**
@@ -569,7 +627,7 @@ export function corniceSpotLayout(box, n) {
     const x = box.offset - box.width / 2 + margin + (count > 1 ? run * i / (count - 1) : run / 2);
     spots.push({ x, y, z, tx: x, ty: y + dy, tz: z + dz });
   }
-  return { angle: CORNICE_SPOT_ANGLE, spots };
+  return { angle: CORNICE_SPOT_ANGLE, range: CORNICE_SPOT_RANGE, spots };
 }
 
 // ===== Daylight through a window, gated by whatever hangs in front of it =====

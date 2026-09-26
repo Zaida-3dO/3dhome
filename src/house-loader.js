@@ -575,6 +575,24 @@ export const HouseLoader = (() => {
   }
 
   /**
+   * Mark a cornice-less curtain that hangs INSIDE another curtain's cornice
+   * (a sheer behind a blackout): same wall, overlapping along it, and hung
+   * closer to the wall than that cornice is deep. Its heading must then stop
+   * under the cornice lid like the owner's does (wall-fittings buildCurtain).
+   */
+  function markUnderCornice(curtains) {
+    curtains.forEach(c => {
+      c.underCornice = !c.cornice && curtains.some(o => {
+        if (o === c || !o.cornice || String(o.wallId) !== String(c.wallId)) return false;
+        const lo = o.cornice.sideFaces ? o.c - o.w * 0.52 : o.roomSpan[0];
+        const hi = o.cornice.sideFaces ? o.c + o.w * 0.52 : o.roomSpan[1];
+        return c.c + c.w / 2 > lo && c.c - c.w / 2 < hi && c.offset < o.cornice.depth;
+      });
+    });
+    return curtains;
+  }
+
+  /**
    * A curtain hung on the room face of a wall. Colours are data (they are the
    * thing an owner most wants to change), so every one of them is a profile
    * field with CurtainSpec's defaults behind it. A sheer is the same curtain
@@ -1004,6 +1022,7 @@ export const HouseLoader = (() => {
       if (compiled) curtains.push(compiled);
     });
     stackCurtains(curtains);
+    markUnderCornice(curtains);
 
     // ---- Furniture (schemaVersion 1.2) --------------------------------------
     // Optional; an older engine ignores the key, and a profile without it
@@ -1393,6 +1412,7 @@ export const HouseLoader = (() => {
     polygonArea: polygonArea,
     extendWallsForCorners: extendWallsForCorners,
     stackCurtains: stackCurtains,
+    markUnderCornice: markUnderCornice,
     wallSide: wallSide,
     probeWallSide: probeWallSide,
     faceGap: faceGap,

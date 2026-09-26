@@ -75,7 +75,7 @@
    its TOP touches the CEILING, its SIDE-BACKS touch the BACK WALL (no
    render gap) — see ROOM SHELL below.
 
-   ROOM SHELL — a CEILING (bottom face at curtain-height) and a BACK WALL
+   ROOM SHELL — a CEILING (bottom face at curtain-height; hidden unless "Show ceiling" is on) and a BACK WALL
    (front face at z=0, i.e. flush with the cornice side-backs) are added
    so the cornice has real surfaces to sit against. The curtain itself is
    anchored HALFWAY through the cornice depth (mid-depth), not at the
@@ -121,7 +121,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "corniceColor": "#ffffff",
   "corniceLightOn": true,
   "corniceLightColor": "#ffe6bd",
-  "corniceLightIntensity": 1.5
+  "corniceLightIntensity": 1.5,
+  "showCeiling": false
 }/*EDITMODE-END*/;
 
 const CM = 0.01;
@@ -153,8 +154,20 @@ function halfSpanCm(halfCm, S, openN) {
 // nothing points up at the lid, and the end lights sit in from the ends by
 // the furthest sideways reach of any ray inside the box. Metres. ----
 const CORNICE_WIDE_CM = 250;
-const CORNICE_SPOT_TILT = 47 * Math.PI / 180;
-const CORNICE_SPOT_ANGLE = 42 * Math.PI / 180;
+const CORNICE_SPOT_TILT = 42 * Math.PI / 180;
+const CORNICE_SPOT_ANGLE = 36 * Math.PI / 180;
+const CORNICE_SPOT_RANGE = 1.2;
+// The light-tight box (metres) — MIRRORS the CORNICE_* constants in
+// src/wall-fittings.js: the lid is the box top, overhanging the front/side
+// outer faces by a lip; front and side tops are buried in the lid; lid and
+// sides run into the back wall. No face merely butts against another.
+const CORNICE_LID_T = 0.01;
+const CORNICE_LID_GAP = 0.001;
+const CORNICE_LID_LIP = 0.002;
+const CORNICE_FACE_TUCK = 0.003;
+const CORNICE_WALL_TUCK = 0.01;
+const CORNICE_STRIP_DROP = 0.012;
+const CURTAIN_HEAD_GAP = 0.014;
 function corniceSpotLayout(box) {
   const count = box.width / CM >= CORNICE_WIDE_CM ? 5 : 3;
   const bottom = box.top - box.height;
@@ -328,10 +341,10 @@ function buildCurtain(t, group, THREE, ctx) {
   // the actual pleat count.
   const outerPleats = Math.min(pleats, Math.max(0, t.outerPleats | 0));
   const P = {
-    // the heading stops 1.5 cm under the ceiling line, clear of the cornice
+    // the heading stops 1.4 cm under the ceiling line, clear of the cornice
     // lid's underside, so its top edge never pokes up through the lid.
     // The hem stays on the floor. (CURTAIN_HEAD_GAP in wall-fittings.js)
-    width, height: height - 0.015, pleats,
+    width, height: height - CURTAIN_HEAD_GAP, pleats,
     ampBase: 0.055,          // base fold depth (m)
     thickness: 0.02,         // fabric front→back offset (m)
     // what decides the fully-open stack (halfSpanCm; cm)
@@ -419,7 +432,13 @@ function buildCurtain(t, group, THREE, ctx) {
   const cHeight = t.corniceHeight * CM;
   const cWidth = t.hasSideFaces ? width * 1.04 : t.wallWidth * CM;
   const cMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(t.corniceColor), roughness: 0.7 });
-  const cMidY = height - cHeight / 2;   // box top lands exactly at y=height (ceiling line)
+  // Front + side faces run from the cornice bottom up INTO the lid (their
+  // tops are buried CORNICE_FACE_TUCK below the lid top), so from above the
+  // only surface is the lid's — no seam to see the lit inside through.
+  const lidTop = height - CORNICE_LID_GAP;
+  const faceTop = lidTop - CORNICE_FACE_TUCK;
+  const faceH = faceTop - (height - cHeight);
+  const cMidY = faceTop - faceH / 2;
 
   // fix (v3): frontFace used to span exactly `cWidth`, landing its L/R
   // edges on the SIDE FACES' CENTRELINE (x=±cWidth/2) rather than their
@@ -428,7 +447,7 @@ function buildCurtain(t, group, THREE, ctx) {
   // widen the front face by the side panel's full thickness (0.02) so its
   // edges land exactly on the sides' outer faces → a clean sharp 90°.
   const frontFaceW = t.hasSideFaces ? cWidth + 0.02 : cWidth;
-  const frontFace = new THREE.Mesh(new THREE.BoxGeometry(frontFaceW, cHeight, 0.02), cMat);
+  const frontFace = new THREE.Mesh(new THREE.BoxGeometry(frontFaceW, faceH, 0.02), cMat);
   frontFace.name = 'corniceFront';
   frontFace.position.set(0, cMidY, cDepth);
   frontFace.castShadow = true;
@@ -436,30 +455,28 @@ function buildCurtain(t, group, THREE, ctx) {
 
   if (t.hasSideFaces) {
     for (const sx of [-1, 1]) {
-      // depth cDepth, centred at z=cDepth/2 → back edge exactly at z=0
-      // (the back-wall face), front edge exactly at z=cDepth (flush
-      // with the front face) — no render gap either end.
-      const sideFace = new THREE.Mesh(new THREE.BoxGeometry(0.02, cHeight, cDepth), cMat);
+      // runs from CORNICE_WALL_TUCK inside the back wall to z=cDepth
+      // (inside the front face) — overlaps at both ends, no seam.
+      const sideD = cDepth + CORNICE_WALL_TUCK;
+      const sideFace = new THREE.Mesh(new THREE.BoxGeometry(0.02, faceH, sideD), cMat);
       sideFace.name = `corniceSide_${sx < 0 ? 'L' : 'R'}`;
-      sideFace.position.set(sx * cWidth / 2, cMidY, cDepth / 2);
+      sideFace.position.set(sx * cWidth / 2, cMidY, cDepth - sideD / 2);
       sideFace.castShadow = true;
       group.add(sideFace);
     }
   }
 
-  // LID — closes the box from above so, with the ceiling hidden or faded,
-  // looking down shows a shut pelmet, not the fabric heading + LED strip.
-  // Fills the inside of the box (wall → inner face of the front, between
-  // the side faces) and sits 2 mm under the ceiling line so it never
-  // z-fights the ceiling or shares a face with the front/side tops.
+  // LID — the TOP of the box, so with the ceiling hidden or faded, looking
+  // down shows a shut pelmet, not the fabric heading + LED strip. It
+  // overhangs the front/side outer faces by a lip, runs into the back wall,
+  // and sits 1 mm under the ceiling line so it never z-fights the ceiling.
   // Mirrors buildCurtain in src/wall-fittings.js.
   {
-    const LID_T = 0.01, LID_GAP = 0.002;
-    const lidW = t.hasSideFaces ? cWidth - 0.02 : cWidth;
-    const lidD = cDepth - 0.01;
-    const lid = new THREE.Mesh(new THREE.BoxGeometry(lidW, LID_T, lidD), cMat);
+    const lidW = t.hasSideFaces ? frontFaceW + 2 * CORNICE_LID_LIP : cWidth;
+    const lidFront = cDepth + 0.01 + CORNICE_LID_LIP, lidBack = -CORNICE_WALL_TUCK;
+    const lid = new THREE.Mesh(new THREE.BoxGeometry(lidW, CORNICE_LID_T, lidFront - lidBack), cMat);
     lid.name = 'corniceTop';
-    lid.position.set(0, height - LID_GAP - LID_T / 2, lidD / 2);
+    lid.position.set(0, lidTop - CORNICE_LID_T / 2, (lidFront + lidBack) / 2);
     lid.castShadow = true;
     group.add(lid);
   }
@@ -470,7 +487,7 @@ function buildCurtain(t, group, THREE, ctx) {
   if (t.corniceLightOn) {
     const lc = new THREE.Color(t.corniceLightColor);
     const inten = t.corniceLightIntensity;
-    const lightY = height - 0.002 - 0.01 - 0.012;        // under the lid (gap + thickness + half the strip)
+    const lightY = height - CORNICE_LID_GAP - CORNICE_LID_T - CORNICE_STRIP_DROP;   // just under the lid
     const lightZ = cDepth - 0.025;                        // just inside the front face
     const strip = new THREE.Mesh(
       new THREE.BoxGeometry(cWidth * 0.96, 0.02, 0.03),
@@ -487,7 +504,7 @@ function buildCurtain(t, group, THREE, ctx) {
     const layout = corniceSpotLayout({ width: cWidth, offset: 0, top: height, height: cHeight,
       depth: cDepth, stripY: lightY, stripZ: lightZ });
     for (const sp of layout.spots) {
-      const spot = new THREE.SpotLight(lc, inten, 2.5, layout.angle, 1, 2);
+      const spot = new THREE.SpotLight(lc, inten, CORNICE_SPOT_RANGE, layout.angle, 1, 2);
       spot.name = 'corniceGlow';
       spot.position.set(sp.x, sp.y, sp.z);
       spot.target.position.set(sp.tx, sp.ty, sp.tz);
@@ -533,7 +550,10 @@ function buildCurtain(t, group, THREE, ctx) {
   // bottom (room-facing) face stays at y=height; the box grows upward.
   ceiling.position.set(0, height + CEILING_THICKNESS / 2, roomDepth / 2);
   ceiling.receiveShadow = true;
-  group.add(ceiling);
+  // Hidden by default so you can look down on the cornice lid; the Tweaks
+  // "Show ceiling" toggle brings it back as the contact reference. Nothing
+  // else depends on it: the cornice is built the same either way.
+  if (t.showCeiling) group.add(ceiling);
 
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(shellSpan, roomDepth),
@@ -643,6 +663,8 @@ function App() {
           onChange={v => setTweak('backColor', v)} />
 
         <TweakSection label="Cornice / pelmet — white, touches ceiling + wall" />
+        <TweakToggle label="Show ceiling" value={t.showCeiling}
+          onChange={v => setTweak('showCeiling', v)} />
         <TweakToggle label="Side faces (box)" value={t.hasSideFaces}
           onChange={v => setTweak('hasSideFaces', v)} />
         {!t.hasSideFaces &&

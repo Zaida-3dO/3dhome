@@ -436,16 +436,21 @@ pinch-pleat, under a white cornice with a glowing strip light.
   through a curtain hung behind it.
 - `cornice.sideFaces: false` gives a wall-to-wall cornice spanning the whole
   room along that wall instead of a box just wider than the curtain.
-- Every cornice has a **lid**: a top panel inside the box just under the
-  ceiling, so looking down with the ceiling hidden shows a closed pelmet, not
-  the fabric heading and the LED strip.
+- Every cornice has a **lid**: the top of the box, just under the ceiling, so
+  looking down with the ceiling hidden shows a closed pelmet, not the fabric
+  heading and the LED strip. The box is built light-tight: the lid overhangs
+  the front and side faces and runs into the wall, and a wall-to-wall cornice
+  runs into both side walls. A curtain hanging in a cornice (its own, or a
+  sheer behind a blackout) stops 1.4 cm short of the ceiling, under the lid.
 - The strip light glows (emissive) and, on the mid and ultra tiers, throws
   light through a row of **unshadowed downlights** — 3 on a cornice under
   250 cm wide, 5 on one 250 cm or wider — spaced along the strip. They are
   aimed down and back out of the cornice's open bottom onto the curtain
   heading and the wall, with a cone that clears the front face, the lid and
-  the side faces, so the cornice itself never glows from the room. The low
-  tier (256 fragment uniforms) keeps the glowing strip but adds no light.
+  the side faces, so the cornice itself never glows from the room. They reach
+  1.2 m. The mid tier caps the house at 12 of them (the fullest cornices give
+  lights up first); the low tier (256 fragment uniforms) keeps the glowing
+  strip but adds no light.
   Bind its own light entity in
   `rooms.json` (`sensors.corniceLights`). **Do not also list the cornice as a
   strip under the room's `ambient` channel**: the cornice is already drawn by
