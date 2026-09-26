@@ -140,6 +140,31 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   check('slat-panel: real Acupanel geometry defaults (2.7/4.0/1.0/0.9cm)',
     D.slatWidth === 2.7 && D.pitch === 4.0 && D.slatDepth === 1.0 && D.backingDepth === 0.9 && near(D.depth, 1.9),
     { slatWidth: D.slatWidth, pitch: D.pitch, slatDepth: D.slatDepth, backingDepth: D.backingDepth, depth: D.depth });
+
+  // finish: satin on the slats (roughness parity with the bedroom's
+  // hard-coded panel, roughness 0.55 -- satin's 0.6 is the closest palette
+  // match, added by fix/chair-leather-satin, merged v0.20.0/PR #42), matte
+  // on the backing ALWAYS -- the backing colour is hard-coded to 'matte' in
+  // buildSlatPanel and is never driven by the `finish` param, so this is a
+  // real behavioural check (actual material.roughness), not just an echo
+  // of the params object back at itself.
+  check('slat-panel: DEFAULTS.finish is satin', D.finish === 'satin', D.finish);
+  const gFinish = build(THREE, Object.assign({}, D), { detail: 'full' });
+  const slatMatsFinish = meshesByFinishColor(gFinish, slatColorInt).map(m => Array.isArray(m.material) ? m.material[0] : m.material);
+  const backingMatsFinish = meshesByFinishColor(gFinish, backingColorInt).map(m => Array.isArray(m.material) ? m.material[0] : m.material);
+  check('slat-panel: slat material roughness is satin (0.6)',
+    slatMatsFinish.length > 0 && slatMatsFinish.every(m => near(m.roughness, Fin.FINISH_PARAMS.satin.roughness)),
+    slatMatsFinish.map(m => m.roughness));
+  check('slat-panel: backing material roughness stays matte (0.8) regardless of the finish param',
+    backingMatsFinish.length > 0 && backingMatsFinish.every(m => near(m.roughness, Fin.FINISH_PARAMS.matte.roughness)),
+    backingMatsFinish.map(m => m.roughness));
+  // Even when a caller overrides `finish` to something else entirely, the
+  // backing is unaffected -- proves the hard-coding, not just today's default.
+  const gFinishOverride = build(THREE, Object.assign({}, D, { finish: 'gloss' }), { detail: 'full' });
+  const backingMatsOverride = meshesByFinishColor(gFinishOverride, backingColorInt).map(m => Array.isArray(m.material) ? m.material[0] : m.material);
+  check('slat-panel: backing stays matte even when finish is overridden to gloss',
+    backingMatsOverride.length > 0 && backingMatsOverride.every(m => near(m.roughness, Fin.FINISH_PARAMS.matte.roughness)),
+    backingMatsOverride.map(m => m.roughness));
 }
 
 // ---- hex-panel-cluster: the living-room preset ------------------------------

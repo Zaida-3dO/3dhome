@@ -2381,7 +2381,8 @@
         },
         "finish": {
           "$ref": "#/$defs/furnitureFinish",
-          "default": "matte"
+          "default": "satin",
+          "description": "Applies to the slat mesh only -- the felt backing is always `matte`, hard-coded in the builder. Default `satin` (roughness 0.6) matches the bedroom's hard-coded panel (roughness 0.55) more closely than `matte` (0.8) would."
         },
         "grainMap": {
           "type": "boolean",

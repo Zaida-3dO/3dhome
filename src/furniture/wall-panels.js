@@ -44,7 +44,14 @@ const SLAT_DEFAULTS = Object.freeze({
   backingDepth: 0.9,
   slatColor: '#322e29',
   backingColor: '#0e0b09',
-  finish: 'matte',
+  // ROUGHNESS PARITY: the bedroom's hard-coded panel (buildAcousticPanelWall25)
+  // uses roughness 0.55; the palette's `satin` finish (0.6, added by
+  // fix/chair-leather-satin, PR #42, merged in v0.20.0) is the closest
+  // match, so both slat presets use it here rather than `matte` (0.8),
+  // which would sit visibly duller than the real panel. The backing stays
+  // `matte` regardless -- it is hard-coded in buildSlatPanel below, not
+  // driven by this `finish` param, which only ever reaches the slat mesh.
+  finish: 'satin',
   // Subtle low-contrast vertical streaks on the slat faces, matching the
   // bedroom panel's procedural oak-grain roughness map (home3d-scene.js
   // makeOakGrainTexture, ~L736 -- that module already declares this
@@ -55,13 +62,6 @@ const SLAT_DEFAULTS = Object.freeze({
   // default (only the oak preset wants it); a builder opting in departs
   // from "every material is exactly what makeFinish() returns" -- see the
   // note on grainMap below.
-  //
-  // ROUGHNESS PARITY (not exact): the bedroom's hard-coded panel uses
-  // roughness 0.55; the palette's `matte` finish (used here) is 0.8, so the
-  // grain map's shading sits on a duller base than the real panel. A
-  // `satin` finish (0.6, closer to 0.55) is landing via fix/chair-leather-satin
-  // but is not on main yet -- do NOT depend on an unmerged branch.
-  // TODO(finish-palette): switch the oak preset to `satin` once it lands.
   grainMap: false
 });
 
