@@ -53,18 +53,19 @@ const quiet = fn => { const w = console.warn; console.warn = () => {}; try { ret
 
 // A rectangular room whose bbox min corner is NOT the origin, specifically so
 // a test that forgot to add the bbox offset back on would fail rather than
-// coincidentally pass. Kitchen-shaped: 341x290cm, bbox min at (303, 10.2).
+// coincidentally pass. Wholly invented dimensions: a plain 300x300cm room
+// with its bbox min at a round, obviously fictional (500, 500).
 function houseDoc(footstepZone) {
   return {
     kind: 'geometry', schemaVersion: '1.1', id: 't', name: 't', units: 'cm',
     coordinateTransform: { originX: 0, originY: 0, scale: 0.01 },
     defaults: { wallHeight: 250, wallThickness: 10 },
     walls: { segments: [
-      { id: 1, start: [303, 10.2], end: [644, 10.2], exterior: true, thickness: 10 },
-      { id: 2, start: [303, 10.2], end: [303, 300.6], exterior: true, thickness: 10 }
+      { id: 1, start: [500, 500], end: [800, 500], exterior: true, thickness: 10 },
+      { id: 2, start: [500, 500], end: [500, 800], exterior: true, thickness: 10 }
     ] },
     rooms: [Object.assign(
-      { id: 'kitchen', label: 'Kitchen', polygon: [[303, 10.2], [644, 10.2], [644, 300.6], [303, 300.6]] },
+      { id: 'kitchen', label: 'Kitchen', polygon: [[500, 500], [800, 500], [800, 800], [500, 800]] },
       footstepZone ? { footstepZone } : {}
     )]
   };
@@ -84,17 +85,17 @@ function houseDoc(footstepZone) {
 //    added back on, corners sorted regardless of authoring order.
 // ---------------------------------------------------------------------------
 {
-  // bbox min is (303, 10.2). from/to authored relative to it; to is
+  // bbox min is (500, 500). from/to authored relative to it; to is
   // deliberately given as the SMALLER corner to prove sorting, not just offset.
   const h = quiet(() => HouseLoader.compile(
     houseDoc({ from: [141, 218], to: [40, 90], relativeTo: 'room' }), ''
   ));
   const z = h.rooms.kitchen.footstepZone;
   check('zone resolved (not null)', z !== null, z);
-  check('x1 = bbox.x1 + min(fromX,toX)', z && Math.abs(z.x1 - (303 + 40)) < 1e-9, z);
-  check('y1 = bbox.y1 + min(fromY,toY)', z && Math.abs(z.y1 - (10.2 + 90)) < 1e-9, z);
-  check('x2 = bbox.x1 + max(fromX,toX)', z && Math.abs(z.x2 - (303 + 141)) < 1e-9, z);
-  check('y2 = bbox.y1 + max(fromY,toY)', z && Math.abs(z.y2 - (10.2 + 218)) < 1e-9, z);
+  check('x1 = bbox.x1 + min(fromX,toX)', z && Math.abs(z.x1 - (500 + 40)) < 1e-9, z);
+  check('y1 = bbox.y1 + min(fromY,toY)', z && Math.abs(z.y1 - (500 + 90)) < 1e-9, z);
+  check('x2 = bbox.x1 + max(fromX,toX)', z && Math.abs(z.x2 - (500 + 141)) < 1e-9, z);
+  check('y2 = bbox.y1 + max(fromY,toY)', z && Math.abs(z.y2 - (500 + 218)) < 1e-9, z);
 }
 
 // ---------------------------------------------------------------------------
@@ -122,8 +123,8 @@ function houseDoc(footstepZone) {
 //    reduces to once you take the DOM and THREE out of the picture.
 // ---------------------------------------------------------------------------
 {
-  const ROOM_POLY = [[303, 10.2], [644, 10.2], [644, 300.6], [303, 300.6]]; // 341x290
-  const ZONE = { x1: 343, y1: 100.2, x2: 583, y2: 220.2 };                  // 240x120, well inside
+  const ROOM_POLY = [[500, 500], [800, 500], [800, 800], [500, 800]]; // 300x300, wholly invented
+  const ZONE = { x1: 540, y1: 590, x2: 780, y2: 710 };                // 240x120, well inside
   const zonePoly = [[ZONE.x1, ZONE.y1], [ZONE.x2, ZONE.y1], [ZONE.x2, ZONE.y2], [ZONE.x1, ZONE.y2]];
 
   const { STEP_CM, STRIDE_CM } = WALK_DEFAULTS;
@@ -142,7 +143,7 @@ function houseDoc(footstepZone) {
   // must NOT reach floor that is inside the room polygon but OUTSIDE the zone
   // (e.g. the counter run this zone was drawn to avoid). Pick a point inside
   // ROOM_POLY, outside ZONE.
-  const outsideZoneButInRoom = [320, 30]; // near the room's own corner, far from the zone
+  const outsideZoneButInRoom = [510, 510]; // near the room's own corner, far from the zone
   check('sanity: that point is inside the room polygon',
         insidePoly(ROOM_POLY, ...outsideZoneButInRoom));
   check('sanity: that point is OUTSIDE the zone',

@@ -194,10 +194,10 @@ wrong once you can see it rendered.
 {
   "id": "kitchen",
   "label": "Kitchen",
-  "polygon": [[303, 10.2], [644, 10.2], [644, 300.6], [303, 300.6]],
+  "polygon": [[0, 0], [400, 0], [400, 300], [0, 300]],
   "footstepZone": {
-    "from": [40, 90],
-    "to": [280, 210],
+    "from": [40, 40],
+    "to": [280, 140],
     "relativeTo": "room"
   }
 }
