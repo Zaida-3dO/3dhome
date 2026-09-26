@@ -1,0 +1,385 @@
+#!/usr/bin/env node
+/**
+ * Furniture data layer: placement, the loader's compileFurniture, the finish
+ * palette, the box builder and the registry. No framework, no install:
+ * `node scripts/test-furniture-core.mjs`.
+ *
+ * WHAT THIS GUARDS
+ *
+ *   1. Wall anchors in all four wall orientations: the back lands on the
+ *      room face (+ offset) and the front faces into the room. A sign error
+ *      here puts every wall item backwards, and in a house nobody looks at
+ *      from behind the wall it would survive review.
+ *   2. Free anchors: `rotation` is CLOCKWISE in plan, 0 = front faces south
+ *      (+y). 90 faces WEST, 270 EAST, 180 NORTH -- the Sweet Home 3D
+ *      convention. `at` is the footprint CENTRE, so the back is
+ *      at - front * depth / 2.
+ *   3. Every malformed entry is skipped with a warning, never thrown.
+ *   4. The finish palette stamps userData.finish; the box meets the builder
+ *      contract (bbox == params, back at z = 0, bottom at y = 0).
+ *   5. The registry: lazy load, missing module = warn + skip, multi-type
+ *      modules, and the ?v= cache-bust on every builder URL.
+ *
+ * Builds real three.js geometry from the vendored module (no DOM needed).
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const url = rel => pathToFileURL(path.join(root, rel)).href;
+const imp = rel => import(url(rel));
+const { HouseLoader } = await imp('src/house-loader.js');
+const THREE = await imp('vendor/three-r160/three.module.min.js');
+const P = await imp('src/furniture/place.js');
+const Fin = await imp('src/furniture/finishes.js');
+const Box = await imp('src/furniture/box.js');
+const R = await imp('src/furniture/registry.js');
+
+let failures = 0, passes = 0;
+function check(name, cond, detail) {
+  if (cond) { passes++; return; }
+  failures++;
+  console.error('FAIL ' + name + (detail !== undefined ? ' -- ' + JSON.stringify(detail) : ''));
+}
+const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
+const nearPt = (p, q, eps = 1e-6) => near(p[0], q[0], eps) && near(p[1], q[1], eps);
+function quietly(fn) {
+  const warnings = [];
+  const w = console.warn;
+  console.warn = m => warnings.push(String(m));
+  try { return { value: fn(), warnings: warnings }; } finally { console.warn = w; }
+}
+async function quietlyAsync(fn) {
+  const warnings = [];
+  const w = console.warn;
+  console.warn = m => warnings.push(String(m));
+  try { return { value: await fn(), warnings: warnings }; } finally { console.warn = w; }
+}
+
+// A plain 400 x 300 room (x 100..500, y 100..400) inside four 10 cm walls.
+function house(furniture) {
+  return {
+    kind: 'geometry', schemaVersion: '1.2', id: 't', name: 't', units: 'cm',
+    coordinateTransform: { originX: 0, originY: 0, scale: 0.01 },
+    defaults: { wallHeight: 250, wallThickness: 10 },
+    walls: { segments: [
+      { id: 1, start: [95, 95], end: [505, 95], exterior: true },   // north, room south of it
+      { id: 2, start: [95, 405], end: [505, 405], exterior: true }, // south, room north of it
+      { id: 3, start: [95, 95], end: [95, 405] },                   // west, room east of it
+      { id: 4, start: [505, 95], end: [505, 405] },                 // east, room west of it
+      { id: 9, start: [0, 0], end: [50, 60] }                        // diagonal
+    ] },
+    rooms: [{ id: 'r', label: 'R', polygon: [[100, 100], [500, 100], [500, 400], [100, 400]] }],
+    furniture: furniture
+  };
+}
+const compileF = furniture => quietly(() => HouseLoader.compile(house(furniture), ''));
+
+// ---- 1. wall anchors, all four orientations ---------------------------------
+{
+  const { value: h, warnings } = compileF([
+    { id: 'n', room: 'r', type: 'box', wall: 1, centre: 200, offset: 3, elevation: 17 },
+    { id: 's', room: 'r', type: 'box', wall: 2, centre: 250 },
+    { id: 'w', room: 'r', type: 'box', wall: 3, centre: 150, offset: 2 },
+    { id: 'e', room: 'r', type: 'box', wall: 4, centre: 350 }
+  ]);
+  const f = id => h.furniture.find(x => x.id === id);
+  check('wall anchors: all four compile', h.furniture.length === 4, warnings);
+  check('north wall: back at room face + offset', f('n').x === 200 && f('n').y === 103, f('n'));
+  check('north wall: faces south (0)', f('n').rotationDeg === 0, f('n'));
+  check('north wall: origin back, host wall and exterior recorded',
+    f('n').origin === 'back' && f('n').hostWallId === 1 && f('n').exterior === true, f('n'));
+  check('elevation passes through', f('n').elevation === 17, f('n'));
+  check('south wall: back on room face', f('s').x === 250 && f('s').y === 400, f('s'));
+  check('south wall: faces north (180)', f('s').rotationDeg === 180, f('s'));
+  check('west wall: back at room face + offset', f('w').x === 102 && f('w').y === 150, f('w'));
+  check('west wall: faces east (270)', f('w').rotationDeg === 270, f('w'));
+  check('west wall: interior host is not exterior', f('w').exterior === false, f('w'));
+  check('east wall: back on room face', f('e').x === 500 && f('e').y === 350, f('e'));
+  check('east wall: faces west (90)', f('e').rotationDeg === 90, f('e'));
+  // The front of each wall item must point at the room's centre (300, 250).
+  ['n', 's', 'w', 'e'].forEach(id => {
+    const it = f(id), fr = P.frontVector(it.rotationDeg);
+    const toCentre = [300 - it.x, 250 - it.y];
+    check(id + ' wall: front points into the room', fr[0] * toCentre[0] + fr[1] * toCentre[1] > 0, { fr, toCentre });
+  });
+  // resolvePlacement leaves a wall-anchored back where the loader put it.
+  const rp = P.resolvePlacement(f('n'), { depth: 60 });
+  check('resolvePlacement: wall anchor back unchanged by depth', rp.x === 200 && rp.y === 103, rp);
+}
+
+// ---- 2. free anchors ---------------------------------------------------------
+{
+  const { value: h, warnings } = compileF([
+    { id: 'r0', room: 'r', type: 'box', at: [300, 250] },
+    { id: 'r90', room: 'r', type: 'box', at: [300, 250], rotation: 90 },
+    { id: 'r180', room: 'r', type: 'box', at: [300, 250], rotation: 180 },
+    { id: 'r270', room: 'r', type: 'box', at: [300, 250], rotation: 270 },
+    { id: 'neg', room: 'r', type: 'box', at: [300, 250], rotation: -90 },
+    { id: 'big', room: 'r', type: 'box', at: [300, 250], rotation: 450 }
+  ]);
+  const f = id => h.furniture.find(x => x.id === id);
+  check('free anchors: all compile', h.furniture.length === 6, warnings);
+  check('free: origin centre, x/y = at', f('r0').origin === 'centre' && f('r0').x === 300 && f('r0').y === 250, f('r0'));
+  check('free: no host wall', f('r0').hostWallId === null && f('r0').exterior === false, f('r0'));
+  check('free: rotation defaults to 0', f('r0').rotationDeg === 0, f('r0'));
+  check('free: -90 normalises to 270', f('neg').rotationDeg === 270, f('neg'));
+  check('free: 450 normalises to 90', f('big').rotationDeg === 90, f('big'));
+
+  check('rotation 0 faces south (+y)', nearPt(P.frontVector(0), [0, 1]), P.frontVector(0));
+  check('rotation 90 faces WEST', nearPt(P.frontVector(90), [-1, 0]), P.frontVector(90));
+  check('rotation 180 faces NORTH', nearPt(P.frontVector(180), [0, -1]), P.frontVector(180));
+  check('rotation 270 faces EAST', nearPt(P.frontVector(270), [1, 0]), P.frontVector(270));
+
+  // back = at - front * depth / 2
+  const d = 60;
+  const b0 = P.resolvePlacement(f('r0'), { depth: d });
+  check('resolvePlacement 0: back is north of centre', near(b0.x, 300) && near(b0.y, 220), b0);
+  const b90 = P.resolvePlacement(f('r90'), { depth: d });
+  check('resolvePlacement 90 (faces west): back is EAST of centre', near(b90.x, 330) && near(b90.y, 250), b90);
+  const b180 = P.resolvePlacement(f('r180'), { depth: d });
+  check('resolvePlacement 180: back is south of centre', near(b180.x, 300) && near(b180.y, 280), b180);
+  const b270 = P.resolvePlacement(f('r270'), { depth: d });
+  check('resolvePlacement 270 (faces east): back is WEST of centre', near(b270.x, 270) && near(b270.y, 250), b270);
+
+  // The footprint of a free item is centred on `at`.
+  const fp = P.footprintRect(b90.x, b90.y, 90, 100, d);
+  const cx = fp.reduce((s, p) => s + p[0], 0) / 4, cy = fp.reduce((s, p) => s + p[1], 0) / 4;
+  check('footprint of a free item is centred on at', near(cx, 300) && near(cy, 250), { cx, cy });
+  check('footprint at 90: width runs along y, depth along x',
+    near(Math.max(...fp.map(p => p[1])) - Math.min(...fp.map(p => p[1])), 100) &&
+    near(Math.max(...fp.map(p => p[0])) - Math.min(...fp.map(p => p[0])), d), fp);
+  const fp0 = P.footprintRect(200, 103, 0, 80, 40);
+  check('footprint at 0: BL, BR, FR, FL', nearPt(fp0[0], [160, 103]) && nearPt(fp0[1], [240, 103]) &&
+    nearPt(fp0[2], [240, 143]) && nearPt(fp0[3], [160, 143]), fp0);
+}
+
+// ---- 3. rejections: warn and skip, never throw -------------------------------
+{
+  const cases = [
+    [{ id: 'both', room: 'r', type: 'box', at: [300, 250], wall: 1, centre: 200 }, /both `at` and `wall`/],
+    [{ id: 'none', room: 'r', type: 'box' }, /neither `at` nor `wall`/],
+    [{ id: 'rotwall', room: 'r', type: 'box', wall: 1, centre: 200, rotation: 90 }, /`rotation` with a wall anchor/],
+    [{ id: 'noroom', room: 'attic', type: 'box', at: [1, 1] }, /room "attic"/],
+    [{ id: 'nowall', room: 'r', type: 'box', wall: 77, centre: 1 }, /wall 77, which does not exist/],
+    [{ id: 'diag', room: 'r', type: 'box', wall: 9, centre: 10 }, /not axis-aligned/],
+    [{ id: 'badfade', room: 'r', type: 'box', at: [300, 250], fade: { wall: 77 } }, /fade.wall names wall 77/],
+    [{ id: 'fadestr', room: 'r', type: 'box', at: [300, 250], fade: 'sometimes' }, /is not "auto", "never"/],
+    [{ id: 'badtype', room: 'r', type: 'Box!', at: [300, 250] }, /no valid type/],
+    [{ id: 'badat', room: 'r', type: 'box', at: [1] }, /`at` is not \[x, y\]/],
+    [{ id: 'nocentre', room: 'r', type: 'box', wall: 1 }, /no numeric `centre`/]
+  ];
+  cases.forEach(([item, re]) => {
+    let out;
+    try { out = compileF([item]); } catch (e) { check(item.id + ': does not throw', false, String(e)); return; }
+    check(item.id + ': skipped', out.value.furniture.length === 0, out.value.furniture);
+    check(item.id + ': warns ' + re, out.warnings.some(w => re.test(w)), out.warnings);
+  });
+  const { value: h, warnings } = compileF([
+    { id: 'dup', room: 'r', type: 'box', at: [300, 250] },
+    { id: 'dup', room: 'r', type: 'box', at: [200, 200] }
+  ]);
+  check('duplicate id: keeps the first', h.furniture.length === 1 && h.furniture[0].x === 300, h.furniture);
+  check('duplicate id: warns', warnings.some(w => /duplicate id/.test(w)), warnings);
+
+  const { value: none } = compileF(undefined);
+  check('no furniture key -> []', Array.isArray(none.furniture) && none.furniture.length === 0);
+}
+
+// ---- 4. pass-through: fade, priority, params ---------------------------------
+{
+  const params = { width: 80, color: '#112233' };
+  const { value: h } = compileF([
+    { id: 'a', room: 'r', type: 'box', at: [300, 250], fade: { wall: 2 }, priority: 'minor', params: params, label: 'A' },
+    { id: 'b', room: 'r', type: 'box', at: [300, 250], fade: 'never' },
+    { id: 'c', room: 'r', type: 'box', at: [300, 250] }
+  ]);
+  const f = id => h.furniture.find(x => x.id === id);
+  check('fade {wall} passes through', f('a').fade && f('a').fade.wall === 2, f('a').fade);
+  check('fade never passes through', f('b').fade === 'never');
+  check('fade defaults to auto', f('c').fade === 'auto');
+  check('priority minor passes through; default normal', f('a').priority === 'minor' && f('c').priority === 'normal');
+  check('params copied, not aliased', f('a').params.width === 80 && f('a').params !== params);
+  check('params default to {}', f('c').params && Object.keys(f('c').params).length === 0);
+}
+
+// ---- 5. pickFadeWall ----------------------------------------------------------
+{
+  const walls = [
+    { id: 1, x1: 95, y1: 95, x2: 505, y2: 95, thickness: 10, outer: 1 },
+    { id: 3, x1: 95, y1: 95, x2: 95, y2: 405, thickness: 10, outer: 0 },
+    { id: 5, x1: 600, y1: 0, x2: 600, y2: 400, thickness: 10, outer: 1 }
+  ];
+  // A fridge 10 cm off the north exterior wall.
+  const near1 = P.footprintRect(300, 110, 0, 60, 65);
+  check('pickFadeWall: exterior wall within 30 cm', P.pickFadeWall(near1, walls) === 1, near1);
+  const far1 = P.footprintRect(300, 140, 0, 60, 65);
+  check('pickFadeWall: 40 cm away -> null', P.pickFadeWall(far1, walls) === null);
+  // Against the interior west wall only: interior walls never fade.
+  const byInterior = P.footprintRect(110, 250, 270, 60, 65);
+  check('pickFadeWall: interior wall ignored', P.pickFadeWall(byInterior, walls) === null);
+  // Nearest wins: 5 cm from wall 5 (x 595 face) and 20 cm from wall 1.
+  const corner = [[520, 120], [590, 120], [590, 200], [520, 200]];
+  const walls2 = walls.concat([{ id: 6, x1: 500, y1: 95, x2: 700, y2: 95, thickness: 10, outer: 1 }]);
+  check('pickFadeWall: nearest face wins', P.pickFadeWall(corner, walls2) === 5, P.pickFadeWall(corner, walls2));
+  // A rotated (non-axis) footprint has no parallel edge.
+  check('pickFadeWall: rotated footprint -> null', P.pickFadeWall(P.footprintRect(300, 110, 30, 60, 65), walls) === null);
+  // Tie on distance: the longer overlap wins.
+  const tieWalls = [
+    { id: 7, x1: 0, y1: 0, x2: 110, y2: 0, thickness: 10, outer: 1 },
+    { id: 8, x1: 110, y1: 0, x2: 400, y2: 0, thickness: 10, outer: 1 }
+  ];
+  check('pickFadeWall: tie goes to the longer overlap',
+    P.pickFadeWall([[100, 10], [200, 10], [200, 50], [100, 50]], tieWalls) === 8);
+}
+
+// ---- 6. finishes ---------------------------------------------------------------
+{
+  Fin.FINISHES.forEach(name => {
+    const m = Fin.makeFinish(THREE, name, '#336699');
+    check('finish ' + name + ': stamped', m.userData.finish === name, m.userData);
+    check('finish ' + name + ': MeshStandardMaterial', m.isMeshStandardMaterial === true);
+  });
+  check('palette is the six finishes', JSON.stringify(Fin.FINISHES) ===
+    JSON.stringify(['matte', 'gloss', 'metal', 'glass', 'mirror', 'emissive']), Fin.FINISHES);
+  const matte = Fin.makeFinish(THREE, 'matte', '#336699');
+  check('matte: roughness 0.8, metalness 0', matte.roughness === 0.8 && matte.metalness === 0);
+  check('colour from hex string', matte.color.getHex() === 0x336699, matte.color.getHex());
+  const gloss = Fin.makeFinish(THREE, 'gloss', 0x112233);
+  check('gloss: roughness 0.25; colour from int', gloss.roughness === 0.25 && gloss.color.getHex() === 0x112233);
+  const metal = Fin.makeFinish(THREE, 'metal');
+  check('metal: roughness 0.35, metalness 0.9', metal.roughness === 0.35 && metal.metalness === 0.9);
+  const glass = Fin.makeFinish(THREE, 'glass', '#ffffff');
+  check('glass: transparent, opacity 0.25, no depthWrite, roughness 0.05',
+    glass.transparent === true && glass.opacity === 0.25 && glass.depthWrite === false && glass.roughness === 0.05);
+  const mirror = Fin.makeFinish(THREE, 'mirror', '#000000');
+  check('mirror: roughness 0.02, metalness 1, light grey whatever colour is asked',
+    mirror.roughness === 0.02 && mirror.metalness === 1 && mirror.color.getHex() !== 0);
+  const em = Fin.makeFinish(THREE, 'emissive', '#ff8800');
+  check('emissive: emissive equals the colour', em.emissive.getHex() === 0xff8800, em.emissive.getHex());
+  check('matte is not emissive', matte.emissive.getHex() === 0);
+  const { value: bad, warnings } = quietly(() => Fin.makeFinish(THREE, 'shiny', '#123456'));
+  check('unknown finish falls back to matte, stamped matte', bad.userData.finish === 'matte' && bad.roughness === 0.8);
+  check('unknown finish warns', warnings.some(w => /unknown finish "shiny"/.test(w)), warnings);
+  check('kept finishes: glass, mirror, emissive', ['glass', 'mirror', 'emissive'].every(Fin.isKeptFinish) &&
+    !['matte', 'gloss', 'metal'].some(Fin.isKeptFinish));
+}
+
+// ---- 7. the box meets the builder contract -----------------------------------
+function bboxCm(group) {
+  group.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(group);
+  return { minX: b.min.x * 100, maxX: b.max.x * 100, minY: b.min.y * 100, maxY: b.max.y * 100, minZ: b.min.z * 100, maxZ: b.max.z * 100 };
+}
+{
+  check('box: TYPE', Box.TYPE === 'box');
+  check('box: DEFAULTS frozen with width/depth/height', Object.isFrozen(Box.DEFAULTS) &&
+    ['width', 'depth', 'height'].every(k => typeof Box.DEFAULTS[k] === 'number'));
+  [undefined, { width: 120, depth: 35, height: 75 }, { width: 13, depth: 90, height: 201.5 }].forEach(params => {
+    const p = Object.assign({}, Box.DEFAULTS, params || {});
+    const g = Box.build(THREE, params, { detail: 'full' });
+    const b = bboxCm(g);
+    const tag = 'box ' + JSON.stringify(params || 'defaults');
+    check(tag + ': is a Group', g.isGroup === true);
+    check(tag + ': width == params within 0.5 cm, centred on x',
+      Math.abs((b.maxX - b.minX) - p.width) <= 0.5 && Math.abs(b.maxX + b.minX) <= 0.5, b);
+    check(tag + ': height == params, bottom at y = 0', Math.abs(b.minY) <= 0.5 && Math.abs(b.maxY - p.height) <= 0.5, b);
+    check(tag + ': back at z = 0, depth == params toward +z', Math.abs(b.minZ) <= 0.5 && Math.abs(b.maxZ - p.depth) <= 0.5, b);
+  });
+  const g = Box.build(THREE, { finish: 'glass' });
+  let finishes = [], kept = true;
+  g.traverse(o => { if (o.isMesh) { finishes.push(o.material.userData.finish); kept = kept && o.userData.keep === true; } });
+  check('box: materials come from the palette', finishes.length > 0 && finishes.every(f => Fin.FINISHES.includes(f)), finishes);
+  check('box: a glass box is flagged keep', kept);
+  const low = Box.build(THREE, {}, { detail: 'low' });
+  check('box: detail low still builds', low.isGroup === true && low.children.length > 0);
+}
+
+// ---- 8. the registry -------------------------------------------------------------
+{
+  const types = Object.keys(R.REGISTRY);
+  check('registry is alphabetical', JSON.stringify(types) === JSON.stringify(types.slice().sort()), types);
+  types.forEach(t => {
+    const e = R.REGISTRY[t];
+    check('registry ' + t + ': path is a .js file in this directory', typeof e.path === 'string' && /^[a-z][a-z0-9-]*\.js$/.test(e.path), e);
+    check('registry ' + t + ': key is null or a string', e.key === null || typeof e.key === 'string', e);
+    check('registry ' + t + ': spec is null or a Spec page name', e.spec === null || /^[A-Z][A-Za-z]*Spec$/.test(e.spec), e);
+  });
+  check('registry: box is registered', R.registryEntry('box') && R.registryEntry('box').path === 'box.js');
+  check('registry: unknown type -> null', R.registryEntry('spaceship') === null);
+  check('registry: no prototype leaks', R.registryEntry('toString') === null);
+
+  // The ?v= cache-bust.
+  const u1 = R.moduleUrl('radiator', { version: '1.4.2' });
+  check('moduleUrl: carries the explicit version', /\/src\/furniture\/radiator\.js\?v=1\.4\.2$/.test(u1), u1);
+  const u2 = R.moduleUrl('clock', { version: '9' });
+  check('moduleUrl: a multi-type entry resolves to its module file', /\/small-items\.js\?v=9$/.test(u2), u2);
+  delete globalThis.HOME3D_CONFIG;
+  check('moduleUrl: no version anywhere -> no ?v=', !/\?v=/.test(R.moduleUrl('box')), R.moduleUrl('box'));
+  globalThis.HOME3D_CONFIG = { version: '2.0.1' };
+  check('moduleUrl: falls back to HOME3D_CONFIG.version', /box\.js\?v=2\.0\.1$/.test(R.moduleUrl('box')), R.moduleUrl('box'));
+  globalThis.HOME3D_CONFIG = { version: '__' + 'VERSION' + '__' };
+  check('moduleUrl: an unstamped placeholder is not a version', !/\?v=/.test(R.moduleUrl('box')), R.moduleUrl('box'));
+  delete globalThis.HOME3D_CONFIG;
+  // Imported the way index.html imports everything -- with ?v= on the URL --
+  // the registry passes its own version on to the builders it loads.
+  const Rv = await import(url('src/furniture/registry.js') + '?v=7.7.7');
+  const u3 = Rv.moduleUrl('sofa');
+  check('moduleUrl: inherits the ?v= the registry was imported with', /\/sofa\.js\?v=7\.7\.7$/.test(u3), u3);
+  check('moduleUrl: explicit version beats the inherited one', /\?v=8$/.test(Rv.moduleUrl('sofa', { version: '8' })));
+  check('moduleUrl: unregistered type -> null', R.moduleUrl('spaceship') === null);
+
+  // Loading.
+  const warnings = [];
+  const box = await R.loadBuilder('box', { warnings });
+  check('loadBuilder box: loads the real module', box && box.type === 'box' && typeof box.build === 'function' &&
+    box.DEFAULTS === Box.DEFAULTS, box);
+  const missingW = [];
+  const { value: missing } = await quietlyAsync(() => R.loadBuilder('bed', {
+    warnings: missingW, registry: { bed: { path: 'no-such-module-here.js', key: null, spec: null } }
+  }));
+  check('loadBuilder: a module that does not exist -> null, no throw', missing === null);
+  check('loadBuilder: ... and warns', missingW.some(w => /"bed" has no builder yet/.test(w)), missingW);
+  const unregW = [];
+  const { value: unreg } = await quietlyAsync(() => R.loadBuilder('spaceship', { warnings: unregW }));
+  check('loadBuilder: unregistered -> null', unreg === null && unregW.some(w => /not registered/.test(w)), unregW);
+
+  // Multi-type modules: TYPES[key].
+  const fakeKitchen = {
+    TYPES: {
+      'kitchen-base-run': { DEFAULTS: { width: 1, depth: 2, height: 3 }, build: () => 'base' },
+      'fridge-freezer': { DEFAULTS: { width: 4, depth: 5, height: 6 }, build: () => 'fridge' }
+    }
+  };
+  const seen = [];
+  const importer = u => { seen.push(u); return Promise.resolve(fakeKitchen); };
+  const base = await R.loadBuilder('kitchen-base-run', { importer, version: '3' });
+  const fridge = await R.loadBuilder('fridge-freezer', { importer, version: '3' });
+  check('multi-type: picks TYPES[key]', base && base.build() === 'base' && base.DEFAULTS.width === 1, base);
+  check('multi-type: another key from the same module', fridge && fridge.build() === 'fridge', fridge);
+  check('multi-type: imported from kitchen.js with ?v=', seen.length === 2 && seen.every(u => /\/kitchen\.js\?v=3$/.test(u)), seen);
+  const wrongW = [];
+  const { value: wrong } = await quietlyAsync(() => R.loadBuilder('kitchen-wall-run', { importer, warnings: wrongW }));
+  check('multi-type: a key the module lacks -> null + warning',
+    wrong === null && wrongW.some(w => /TYPES\["kitchen-wall-run"\]/.test(w)), wrongW);
+  const flatW = [];
+  const { value: flat } = await quietlyAsync(() => R.loadBuilder('sofa', { importer: () => Promise.resolve({ TYPE: 'sofa' }), warnings: flatW }));
+  check('single-type: a module without build/DEFAULTS -> null + warning',
+    flat === null && flatW.some(w => /does not export DEFAULTS and build/.test(w)), flatW);
+
+  const { value: many } = await quietlyAsync(() => R.loadBuilders(['box', 'box', 'spaceship']));
+  check('loadBuilders: dedupes and keeps only what loaded', many.size === 1 && many.has('box'), [...many.keys()]);
+}
+
+// ---- 9. no file in src/furniture imports three ------------------------------------
+{
+  const dir = path.join(root, 'src/furniture');
+  fs.readdirSync(dir).filter(f => f.endsWith('.js')).forEach(f => {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8');
+    check(f + ': does not import three (THREE is injected)', !/^\s*import[^;]*?['"]three['"]/m.test(src));
+  });
+}
+
+console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
+process.exit(failures ? 1 : 0);

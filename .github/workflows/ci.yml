@@ -186,6 +186,12 @@ jobs:
           # broken-GPU user gets the tabs advice. That case is pinned here.
           set -euo pipefail
           node scripts/test-webgl-reason.mjs
+      - name: Furniture placement, finishes, box builder and registry
+        run: node scripts/test-furniture-core.mjs
+      - name: Wall side is probed at the item, not from the room's bbox
+        run: node scripts/test-wall-side.mjs
+      - name: Furniture drift (registry, schema params blocks, builder DEFAULTS)
+        run: node scripts/test-furniture-defaults.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail
@@ -248,6 +254,8 @@ jobs:
             dirs+=("$(dirname "$p")")
           done
           python scripts/validate-house.py "${dirs[@]}"
+      - name: Furniture schema and validator checks
+        run: python scripts/test-validate-furniture.py
 
   # --- Docker dry run (path-gated) -----------------------------------------
 

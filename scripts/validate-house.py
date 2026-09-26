@@ -26,6 +26,7 @@ import sys
 import json
 import glob
 import math
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -120,8 +121,12 @@ def shoelace_area_cm2(polygon):
     return abs(total) / 2.0
 
 
-def check_geometry(geo, report):
-    """Cross-reference and semantic checks a JSON Schema cannot express."""
+def check_geometry(geo, report, schema=None):
+    """Cross-reference and semantic checks a JSON Schema cannot express.
+
+    `schema` is only read for the furniture types' `default` params (footprint
+    checks); without it those checks are skipped with a warning.
+    """
     rooms = geo.get("rooms", [])
     room_ids = set()
     for room in rooms:
@@ -222,7 +227,9 @@ def check_geometry(geo, report):
                 f"check this is really unobstructed",
             )
 
-    check_wall_fittings(geo, wall_ids, room_ids, report)
+    rooms_by_id = {r.get("id"): r for r in rooms}
+    check_wall_fittings(geo, wall_ids, room_ids, report, rooms_by_id)
+    check_furniture(geo, wall_ids, rooms_by_id, report, schema)
 
     seen_channels = set()
     for entry in geo.get("lights", []):
@@ -283,7 +290,7 @@ def _wall_axis(wall):
     return horizontal, lo, hi
 
 
-def check_wall_fittings(geo, wall_ids, room_ids, report):
+def check_wall_fittings(geo, wall_ids, room_ids, report, rooms_by_id=None):
     """Windows and curtains: the references the schema cannot follow.
 
     Both are positioned like a door (wall id + centre along it), so the same
@@ -339,6 +346,9 @@ def check_wall_fittings(geo, wall_ids, room_ids, report):
                     where,
                     f"span ({centre - half:.1f}..{centre + half:.1f}) overhangs wall {wid}'s span ({lo}..{hi})",
                 )
+            room = (rooms_by_id or {}).get(rid)
+            if room is not None:
+                check_wall_side(where, room, wall_ids[wid], centre, item.get("width"), geo, report)
             if kind == "windows":
                 for tid in item.get("throughWalls", []):
                     if tid not in wall_ids:
@@ -361,6 +371,319 @@ def check_wall_fittings(geo, wall_ids, room_ids, report):
                 pleats = item.get("outerPleats", 5) + item.get("innerPleats", 2)
                 if pleats < 2:
                     report.error(where, "outerPleats + innerPleats must be at least 2")
+
+
+# --- The wall-side probe ----------------------------------------------------
+# A port of probeWallSide() in src/house-loader.js -- keep the two in step.
+# Which side of an axis-aligned wall a room is on is found by stepping a short
+# way off each face AT THE ITEM'S POSITION along the wall and asking which of
+# the two points is inside the room polygon. The old rule (the side the room's
+# bounding-box midpoint is on) put items on the wrong face of any wall that
+# bounds one arm of an L-shaped room.
+WALL_SIDE_PROBE_CM = (5, 10, 20, 40)
+
+
+def inside_poly(poly, px, py):
+    """Even-odd ray cast; the same test as insidePoly() in src/footstep-walk.js."""
+    inside = False
+    j = len(poly) - 1
+    for i in range(len(poly)):
+        xi, yi = poly[i][0], poly[i][1]
+        xj, yj = poly[j][0], poly[j][1]
+        if (yi > py) != (yj > py) and px < (xj - xi) * (py - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def probe_wall_side(poly, horizontal, at, thickness, span, centre, width=None):
+    """Returns 'plus' | 'minus' | 'both' | 'neither'. See probeWallSide() in house-loader.js."""
+    lo, hi = min(span), max(span)
+
+    def clamp(v):
+        return max(lo, min(hi, v))
+
+    c = centre if isinstance(centre, (int, float)) else (lo + hi) / 2.0
+    alongs = [clamp(c)]
+    if isinstance(width, (int, float)) and width > 2:
+        alongs += [clamp(c - (width / 2.0 - 1)), clamp(c + (width / 2.0 - 1))]
+    saw_both = False
+    for along in alongs:
+        for d in WALL_SIDE_PROBE_CM:
+            e = thickness / 2.0 + d
+            if horizontal:
+                in_plus, in_minus = inside_poly(poly, along, at + e), inside_poly(poly, along, at - e)
+            else:
+                in_plus, in_minus = inside_poly(poly, at + e, along), inside_poly(poly, at - e, along)
+            if in_plus != in_minus:
+                return "plus" if in_plus else "minus"
+            if in_plus and in_minus:
+                saw_both = True
+    return "both" if saw_both else "neither"
+
+
+def _wall_thickness(wall, geo):
+    t = wall.get("thickness")
+    if t is None:
+        t = (geo.get("defaults") or {}).get("wallThickness", 10)
+    return t
+
+
+def wall_side(room, wall, centre, width, geo):
+    """(result, inDir) with the engine's fallback applied: 'both' takes the
+    side of the room's bounding-box midpoint, 'neither' gives inDir 0."""
+    poly = room.get("polygon") or []
+    axis = _wall_axis(wall)
+    if len(poly) < 3 or axis is None:
+        return "neither", 0
+    horizontal, lo, hi = axis
+    at = wall["start"][1] if horizontal else wall["start"][0]
+    result = probe_wall_side(poly, horizontal, at, _wall_thickness(wall, geo), (lo, hi), centre, width)
+    if result == "plus":
+        return result, 1
+    if result == "minus":
+        return result, -1
+    if result == "both":
+        ks = [p[1] if horizontal else p[0] for p in poly]
+        return result, (1 if (min(ks) + max(ks)) / 2.0 >= at else -1)
+    return result, 0
+
+
+def check_wall_side(where, room, wall, centre, width, geo, report):
+    """Error on 'neither side', warn on 'both'. Returns inDir (1/-1), or 0 for neither."""
+    result, in_dir = wall_side(room, wall, centre, width, geo)
+    if result == "neither":
+        report.error(
+            where,
+            f"room '{room.get('id')}' is on neither side of wall {wall.get('id')} at centre {centre} -- "
+            f"the wall does not bound this room there, and the engine skips the item",
+        )
+    elif result == "both":
+        report.warn(
+            where,
+            f"room '{room.get('id')}' is on both sides of wall {wall.get('id')} at centre {centre} -- "
+            f"the engine falls back to the room's bounding-box midpoint to pick the side; check it",
+        )
+    return in_dir
+
+
+# --- Furniture (schemaVersion 1.2) -------------------------------------------
+
+REGISTRY_PATH = REPO_ROOT / "src" / "furniture" / "registry.js"
+# One registry entry per line, exactly as registry.js documents:
+#   'type': { path: 'x.js', key: ..., spec: ... },
+# scripts/test-furniture-defaults.mjs asserts this regex finds every entry.
+REGISTRY_LINE_RE = re.compile(r"^\s*'([a-z][a-z0-9-]*)':\s*\{\s*path:\s*'([^']+)'", re.M)
+
+
+def load_registry():
+    """{type: module path relative to src/furniture/}, or None if unreadable."""
+    try:
+        text = REGISTRY_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return dict(REGISTRY_LINE_RE.findall(text))
+
+
+def schema_param_defaults(schema, ftype):
+    """The `default` of every param in $defs/furnitureParams_<type>."""
+    block = ((schema or {}).get("$defs") or {}).get(f"furnitureParams_{ftype}") or {}
+    props = block.get("properties") or {}
+    return {k: v["default"] for k, v in props.items() if isinstance(v, dict) and "default" in v}
+
+
+def _front(rot):
+    r = math.radians(rot)
+    return (-math.sin(r), math.cos(r))
+
+
+def footprint_rect(bx, by, rot, width, depth):
+    """Port of footprintRect() in src/furniture/place.js: BL, BR, FR, FL."""
+    r = math.radians(rot)
+    f, u = _front(rot), (math.cos(r), math.sin(r))
+    hw = width / 2.0
+    bl = (bx - u[0] * hw, by - u[1] * hw)
+    br = (bx + u[0] * hw, by + u[1] * hw)
+    return [bl, br, (br[0] + f[0] * depth, br[1] + f[1] * depth), (bl[0] + f[0] * depth, bl[1] + f[1] * depth)]
+
+
+def overlap_depth(a, b):
+    """Separating-axis test for two convex quads: penetration in cm, <= 0 if apart."""
+    depth = float("inf")
+    for poly in (a, b):
+        for i in range(len(poly)):
+            p, q = poly[i], poly[(i + 1) % len(poly)]
+            ex, ey = q[0] - p[0], q[1] - p[1]
+            ln = math.hypot(ex, ey)
+            if ln < 1e-9:
+                continue
+            nx, ny = -ey / ln, ex / ln
+            pa = [pt[0] * nx + pt[1] * ny for pt in a]
+            pb = [pt[0] * nx + pt[1] * ny for pt in b]
+            ov = min(max(pa), max(pb)) - max(min(pa), min(pb))
+            if ov <= 0:
+                return ov
+            depth = min(depth, ov)
+    return depth
+
+
+def _furniture_placement(item, wall_ids, room, geo, where, report):
+    """(backX, backY, rotationDeg), or None after reporting why not."""
+    if "wall" in item:
+        wid = item.get("wall")
+        wall = wall_ids.get(wid)
+        if wall is None:
+            report.error(where, f"references wall {wid}, which does not exist")
+            return None
+        axis = _wall_axis(wall)
+        if axis is None:
+            report.error(where, f"wall {wid} is not axis-aligned; a wall-anchored item needs a wall along x or y")
+            return None
+        horizontal, lo, hi = axis
+        centre = item.get("centre")
+        if not isinstance(centre, (int, float)):
+            report.error(where, "wall-anchored but has no numeric `centre`")
+            return None
+        if not (lo - 1e-6 <= centre <= hi + 1e-6):
+            report.error(where, f"centre {centre} is outside wall {wid}'s span ({lo}..{hi})")
+            return None
+        if room is None:
+            return None
+        width_hint = (item.get("params") or {}).get("width")
+        in_dir = check_wall_side(where, room, wall, centre, width_hint, geo, report)
+        if in_dir == 0:
+            return None
+        at = wall["start"][1] if horizontal else wall["start"][0]
+        perp = at + in_dir * (_wall_thickness(wall, geo) / 2.0 + (item.get("offset") or 0))
+        if horizontal:
+            return centre, perp, (0 if in_dir > 0 else 180)
+        return perp, centre, (270 if in_dir > 0 else 90)
+    at = item.get("at")
+    if not (isinstance(at, list) and len(at) == 2):
+        return None
+    return at[0], at[1], (item.get("rotation") or 0) % 360   # CENTRE; moved to the back below
+
+
+def check_furniture(geo, wall_ids, rooms_by_id, report, schema):
+    """furniture[]: the checks a JSON Schema cannot express. See docs/house-profile.md."""
+    items = geo.get("furniture") or []
+    if not items:
+        return
+
+    # The schema accepts `furniture` whatever version a profile declares, so
+    # this is the only check tying the key to 1.2. An error, not a warning (as
+    # windows/curtains are): an engine older than 1.2 silently draws none of it.
+    version = str(geo.get("schemaVersion") or "")
+    try:
+        major, minor = (int(part) for part in version.split(".", 1))
+    except ValueError:
+        major = minor = -1
+    if (major, minor) < (1, 2):
+        report.error(
+            "geometry.json/schemaVersion",
+            f"`furniture` needs schemaVersion 1.2 or newer, but this profile declares '{version}' -- bump it",
+        )
+
+    registry = load_registry()
+    if registry is None:
+        report.warn("furniture", "could not read src/furniture/registry.js -- type checks skipped")
+    defaults = geo.get("defaults") or {}
+    ceiling = defaults.get("ceilingHeight", defaults.get("wallHeight", 250))
+
+    seen = set()
+    placed = []   # (where, id, type, footprint, bottom, top)
+    for item in items:
+        iid = item.get("id", "?")
+        where = f"furniture/{iid}"
+        if iid in seen:
+            report.error(where, "duplicate furniture id")
+        seen.add(iid)
+        ftype = item.get("type")
+        rid = item.get("room")
+        room = rooms_by_id.get(rid)
+        if room is None:
+            report.error(where, f"room '{rid}' is not a room in this profile")
+
+        if ("at" in item) == ("wall" in item):
+            report.error(where, "give exactly one anchor: `at` (free) or `wall` + `centre` (wall-anchored)")
+            continue
+        if "wall" in item and "rotation" in item:
+            report.error(where, "`rotation` is not allowed with a wall anchor -- the item always faces into its room")
+
+        fade = item.get("fade")
+        if isinstance(fade, dict) and "wall" in fade:
+            fw = wall_ids.get(fade["wall"])
+            if fw is None:
+                report.error(where, f"fade.wall {fade['wall']} does not exist")
+            elif not fw.get("exterior"):
+                report.error(where, f"fade.wall {fade['wall']} is not an exterior wall -- only exterior walls fade")
+
+        if registry is not None and ftype is not None:
+            if ftype not in registry:
+                report.warn(where, f"type '{ftype}' is not registered in src/furniture/registry.js -- the engine skips it")
+            elif not (REGISTRY_PATH.parent / registry[ftype]).exists():
+                report.warn(
+                    where, f"type '{ftype}' has no builder yet (src/furniture/{registry[ftype]}) -- the engine skips it"
+                )
+
+        placement = _furniture_placement(item, wall_ids, room, geo, where, report)
+        if placement is None:
+            continue
+
+        # The footprint checks need a width, depth and height: authored in
+        # params, or the type's schema defaults (kept equal to the builder's
+        # DEFAULTS by scripts/test-furniture-defaults.mjs).
+        dims = dict(schema_param_defaults(schema, ftype))
+        dims.update(item.get("params") or {})
+        w, d, h = dims.get("width"), dims.get("depth"), dims.get("height")
+        if not all(isinstance(v, (int, float)) for v in (w, d, h)):
+            report.warn(
+                where,
+                f"type '{ftype}' has no schema defaults for width/depth/height and params do not give them "
+                f"-- footprint, overlap and ceiling checks skipped",
+            )
+            continue
+        x, y, rot = placement
+        if "at" in item:
+            f = _front(rot)
+            x, y = x - f[0] * d / 2.0, y - f[1] * d / 2.0
+        rect = footprint_rect(x, y, rot, w, d)
+        bottom = item.get("elevation") or 0
+        top = bottom + h
+        if top > ceiling + 1e-6:
+            report.warn(where, f"top at {top:g} cm is above the ceiling ({ceiling:g} cm)")
+        if room is not None and len(room.get("polygon") or []) >= 3:
+            # Pull each corner 1 cm toward the footprint centre first: a
+            # wall-anchored back sits ON the wall face, and a room polygon is
+            # often traced a hair off it.
+            cx = sum(p[0] for p in rect) / 4.0
+            cy = sum(p[1] for p in rect) / 4.0
+            inset = []
+            for px, py in rect:
+                ln = math.hypot(cx - px, cy - py) or 1.0
+                inset.append((px + (cx - px) / ln, py + (cy - py) / ln))
+            if not all(inside_poly(room["polygon"], px, py) for px, py in inset):
+                report.warn(where, f"footprint reaches outside room '{rid}'s polygon")
+        placed.append((where, iid, ftype, rect, bottom, top))
+
+    for i in range(len(placed)):
+        for j in range(i + 1, len(placed)):
+            wa, _ia, ta, ra, a0, a1 = placed[i]
+            _wb, ib, tb, rb, b0, b1 = placed[j]
+            depth = overlap_depth(ra, rb)
+            if ta == "kitchen-base-run" and tb == "kitchen-base-run":
+                # Two runs meeting at a corner: the non-owning run should stop
+                # at the owner's front face, so any real overlap is a worktop
+                # passing through a worktop.
+                if depth > 1.0:
+                    report.warn(
+                        wa,
+                        f"worktop overlaps kitchen run '{ib}' by {depth:.1f} cm -- the run that does not own "
+                        f"the corner should stop at the owner's front face",
+                    )
+                continue
+            if depth > 0.5 and min(a1, b1) - max(a0, b0) > 0.5:
+                report.warn(wa, f"overlaps '{ib}' ({depth:.1f} cm in plan, and their heights intersect)")
 
 
 def _check_texture(texture, profile_dir, where, report):
@@ -471,7 +794,7 @@ def validate_target(target, schema):
         if geo is not None:
             used_schema = schema_validate(geo, schema, report, "geometry.json")
             geo["__dir__"] = str(target)
-            check_geometry(geo, report)
+            check_geometry(geo, report, schema)
             geo.pop("__dir__", None)
         if rooms_path.exists():
             rooms_doc = load_json(rooms_path, report)
@@ -488,7 +811,7 @@ def validate_target(target, schema):
         used_schema = schema_validate(doc, schema, report, target.name)
         if doc.get("kind") == "geometry":
             doc["__dir__"] = str(target.parent)
-            check_geometry(doc, report)
+            check_geometry(doc, report, schema)
             doc.pop("__dir__", None)
     return report, used_schema
 

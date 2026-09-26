@@ -76,7 +76,7 @@ const windowsDoc = [
     height: 210, sill: 5, doorSide: 'west', frameColor: '#102030' },
   { id: 'ghost', room: 'living', wall: 99, centre: 1, width: 1, height: 1 },
   { id: 'nowhere', room: 'attic', wall: 4, centre: 1, width: 1, height: 1 },
-  { id: 'badend', kind: 'balcony', room: 'living', wall: 4, centre: 700, width: 100, height: 100, doorSide: 'north' },
+  { id: 'badend', kind: 'balcony', room: 'living', wall: 4, centre: 450, width: 60, height: 100, doorSide: 'north' },
   { id: 'crosscut', room: 'living', wall: 4, throughWalls: [7], centre: 300, width: 50, height: 50 }
 ];
 const h = quiet(() => HouseLoader.compile(house({ windows: windowsDoc }), ''));
@@ -120,7 +120,7 @@ const curtainsDoc = [
     outerColor: '#224466', innerColor: '#cc8844', openPct: 0, cornice: { sideFaces: false } },
   { id: 'sheer', room: 'living', wall: 4, centre: 250, width: 300, offset: 3.5, opacity: 0.4, openPct: 0,
     outerColor: '#eeddaa', innerColor: '#eeddaa', cornice: { enabled: false } },
-  { id: 'plainc', room: 'living', wall: 4, centre: 700, width: 100 },
+  { id: 'plainc', room: 'living', wall: 4, centre: 450, width: 60 },
   { id: 'lost', room: 'living', wall: 123, centre: 1, width: 1 }
 ];
 const hc = quiet(() => HouseLoader.compile(house({ curtains: curtainsDoc }), ''));
