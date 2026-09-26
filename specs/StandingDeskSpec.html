@@ -37,17 +37,20 @@
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 <script type="text/babel" src="spec-three.jsx"></script>
 
-<!-- The desk geometry itself lives in src/standing-desk.js -- the SAME pure
-     builder module the house scene will call once desks are placed (item
-     78f2b614, out of scope here). Loaded as a real ES module (it's genuine
-     ESM, exported for a plain Node unit test too) and stashed on window so
-     the Babel-transpiled app below -- which targets the global `THREE` from
-     ../vendor/three.js, matching every other spec page -- can call it. Two
-     different THREE builds never meet: this module never touches THREE
-     itself, it only receives whichever build its caller passes in. -->
+<!-- The desk geometry itself lives in src/furniture/standing-desk.js -- the
+     SAME pure builder module the house scene will call once desks are placed
+     (item 78f2b614, out of scope here), following the furniture-system
+     builder contract (ESM, THREE injected, TYPE/DEFAULTS/build, metres,
+     back face at z=0, bottom at y=0). Loaded as a real ES module (it's
+     genuine ESM, exported for a plain Node unit test too) and stashed on
+     window so the Babel-transpiled app below -- which targets the global
+     `THREE` from ../vendor/three.js, matching every other spec page -- can
+     call it. Two different THREE builds never meet: this module never
+     touches THREE itself, it only receives whichever build its caller
+     passes in. -->
 <script type="module">
-  import { buildStandingDesk, clampHeight } from '../src/standing-desk.js';
-  window.__standingDesk = { buildStandingDesk, clampHeight };
+  import * as M from '../src/furniture/standing-desk.js';
+  window.FurnitureStandingDesk = M;
 </script>
 
 <script type="text/babel">
@@ -70,10 +73,14 @@
    column visibly telescopes as it moves.
 
    The geometry itself is NOT built here -- it lives in
-   src/standing-desk.js (buildStandingDesk), loaded above as a real ES
-   module and unit-tested by scripts/test-standing-desk.mjs. This page is a
-   thin harness: tweaks in, THREE.Group out, via the same reusable
-   ThreeView every other spec page uses.
+   src/furniture/standing-desk.js (build / TYPE / DEFAULTS), loaded above as
+   a real ES module and unit-tested by scripts/test-standing-desk.mjs. This
+   page is a thin harness: tweaks in, THREE.Group out, via the same reusable
+   ThreeView every other spec page uses. The builder's frame is metres, back
+   face at z=0, bottom at y=0 -- this page's ThreeView camera/orbit target is
+   adjusted below to account for that (every other spec page centres its
+   item on z=0; this one does not, because a wall-anchored furniture item's
+   back sits at the wall).
    ===================================================================== */
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "width": 120,
@@ -87,9 +94,12 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 }/*EDITMODE-END*/;
 
 // ============== Desk model (delegates to the shared builder) ==============
-function buildDesk(t, group, THREE, ctx) {
-  const { buildStandingDesk } = window.__standingDesk;
-  const { group: deskGroup, clampedHeight } = buildStandingDesk(THREE, {
+// The builder's own frame already matches the furniture contract (metres,
+// back at z=0, bottom at y=0), so the params object IS the "differs from
+// DEFAULTS" params a house's furniture[].params would carry -- deskParams()
+// below is reused by both buildDesk and the Copy-JSON button.
+function deskParams(t) {
+  return {
     width: t.width,
     depth: t.depth,
     height: t.height,
@@ -98,16 +108,47 @@ function buildDesk(t, group, THREE, ctx) {
     topThickness: t.topThickness,
     topColor: t.topColor,
     frameColor: t.frameColor,
-  });
+  };
+}
+function buildDesk(t, group, THREE, ctx) {
+  const { build } = window.FurnitureStandingDesk;
+  const deskGroup = build(THREE, deskParams(t));
+  // The builder's own frame is the furniture contract's (back face at z=0,
+  // not centred) so every other spec page's z=0-centred camera/orbit target
+  // would clip the desk in half. Shift the desk back by depth/2 here, in
+  // the page only, so ThreeView's existing target.set(0, h/2, 0) still
+  // frames it -- the builder's OUTPUT (what a house or a unit test sees) is
+  // untouched.
+  deskGroup.position.z = -t.depth * 0.01 / 2;
   group.add(deskGroup);
-  ctx.clampedHeight = clampedHeight;
+  ctx.clampedHeight = deskGroup.userData.clampedHeight;
+}
+
+// Only the keys that differ from DEFAULTS, per the furniture builder
+// contract's "Copy as furniture JSON" button.
+function diffFromDefaults(params) {
+  const { DEFAULTS } = window.FurnitureStandingDesk;
+  const out = {};
+  for (const k of Object.keys(params)) {
+    if (params[k] !== DEFAULTS[k]) out[k] = params[k];
+  }
+  return out;
 }
 
 // ============== App ==============
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const { clampHeight } = window.__standingDesk;
+  const { clampHeight } = window.FurnitureStandingDesk;
   const clamped = clampHeight(t.height, t.minHeight, t.maxHeight);
+  const [copied, setCopied] = React.useState(false);
+  const copyAsJSON = () => {
+    const json = JSON.stringify({ type: window.FurnitureStandingDesk.TYPE, params: diffFromDefaults(deskParams(t)) }, null, 2);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(json).catch(() => {});
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
   return (
     <>
       <h1>Standing Desk Spec</h1>
@@ -130,7 +171,7 @@ function App() {
           </table>
           <div className="legend">
             The height requested from the slider is clamped into [minHeight, maxHeight] before it reaches the geometry
-            (buildStandingDesk / clampHeight in src/standing-desk.js) — the same clamp a Home Assistant height entity would be
+            (build / clampHeight in src/furniture/standing-desk.js) — the same clamp a Home Assistant height entity would be
             subject to once the desk is placed in a room and bound (out of scope for this spec — see item 78f2b614).
           </div>
         </div>
@@ -142,7 +183,14 @@ function App() {
             stages: a fixed lower sleeve sized to the desk's lowest reach, and an upper stage that visibly
             extends further out of it as the desk stands taller) rising from a flat foot bar that runs the
             full depth, front to back. A horizontal crossbar sits under the top between the two legs, and a
-            small control panel sits on the front edge, centred.
+            small control panel sits on the front edge, centred (dropped at low detail).
+          </div>
+          <div className="row">
+            <button className="btn" onClick={copyAsJSON}>{copied ? 'Copied!' : 'Copy as furniture JSON'}</button>
+          </div>
+          <div className="legend">
+            Emits <code>{'{type, params}'}</code> with only the keys that differ from this builder's DEFAULTS —
+            the shape a house's <code>furniture[]</code> entry carries once desks are placed (out of scope here).
           </div>
         </div>
 
