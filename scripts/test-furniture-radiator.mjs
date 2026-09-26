@@ -52,6 +52,7 @@
  * Builds real three.js geometry from the vendored module, so it exercises
  * the same code the spec page runs rather than a copy of it.
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -59,6 +60,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const imp = rel => import(pathToFileURL(path.join(root, rel)).href);
 const THREE = await imp('vendor/three-r160/three.module.min.js');
 const R = await imp('src/furniture/radiator.js');
+const schema = JSON.parse(fs.readFileSync(path.join(root, 'houses/schema.json'), 'utf8'));
 
 let failures = 0, passes = 0;
 function check(name, cond, detail) {
@@ -119,12 +121,29 @@ function raycastSlatGaps(THREE, group, params) {
     typeof R.DEFAULTS.width === 'number' && typeof R.DEFAULTS.depth === 'number' && typeof R.DEFAULTS.height === 'number',
     R.DEFAULTS);
   check('DEFAULTS match the standard house radiator', R.DEFAULTS.width === 80 && R.DEFAULTS.height === 60 &&
-    R.DEFAULTS.depth === 12 && R.DEFAULTS.thickness === 10 && R.DEFAULTS.elevation === 17 && R.DEFAULTS.cover === 'none', R.DEFAULTS);
+    R.DEFAULTS.depth === 12 && R.DEFAULTS.thickness === 10 && R.DEFAULTS.cover === 'none', R.DEFAULTS);
   check('wallGapOf(12, 10) === 2', R.wallGapOf(12, 10) === 2);
   check('build is a function', typeof R.build === 'function');
   check('buildRadiator alias === build', R.buildRadiator === R.build);
   check('PRESETS has 5 generic, publishable entries', Array.isArray(R.PRESETS) && R.PRESETS.length === 5 &&
     R.PRESETS.every(p => typeof p.name === 'string' && !/[A-Z][a-z]+ [A-Z]/.test(p.name)), R.PRESETS);
+
+  // FIX 2bc314c9 (option a): params.elevation was DEAD -- nothing in the
+  // loader/placer/validator ever read it, so its documented default of 17
+  // was never applied. Removed rather than wired up, since every other
+  // furniture type uses only the item-level `elevation` field. Assert both
+  // sides of the removal: DEFAULTS carries no elevation key, and the
+  // schema's own furnitureParams_radiator block carries no elevation
+  // property either -- if either one silently grew it back, this fails.
+  check('DEFAULTS has no elevation key (removed -- dead param, use the item-level field)',
+    !Object.prototype.hasOwnProperty.call(R.DEFAULTS, 'elevation'), R.DEFAULTS);
+  const radiatorSchema = schema.$defs && schema.$defs.furnitureParams_radiator;
+  check('schema furnitureParams_radiator exists', !!radiatorSchema);
+  if (radiatorSchema) {
+    check('schema furnitureParams_radiator has no elevation property (removed -- dead param, use the item-level field)',
+      !radiatorSchema.properties || !Object.prototype.hasOwnProperty.call(radiatorSchema.properties, 'elevation'),
+      radiatorSchema.properties && Object.keys(radiatorSchema.properties));
+  }
 }
 
 // ---- 1. bbox reflects width/height/depth to within 0.5cm, on pure defaults
@@ -222,6 +241,25 @@ function raycastSlatGaps(THREE, group, params) {
     moreBodyDepth.min > base.min, { base, moreBodyDepth });
   check('decreasing thickness alone (same bodyDepth) ALSO grows wallGap the same way as increasing bodyDepth',
     near(lessThickness.min, moreBodyDepth.min, 0.05), { lessThickness, moreBodyDepth });
+
+  // INFO (round-4 nit, d9fb9d55 item 8): when the derived wallGap is under
+  // 0.4cm, the bracket must NEVER extend past the panel's own back face —
+  // a fixed 0.4cm minimum bracket depth used to overshoot a tight gap and
+  // pierce the panel. Force depth == thickness (wallGap == 0) to exercise
+  // the tightest case.
+  function bracketZRange(params) {
+    const g = R.build(THREE, params, {});
+    g.updateMatrixWorld(true);
+    let bracket = null;
+    g.traverse(o => { if (o.name === 'radiatorBracket_L') bracket = o; });
+    const b = new THREE.Box3().setFromObject(bracket);
+    return { min: b.min.z / CM, max: b.max.z / CM };
+  }
+  const tightGapParams = { width: 80, height: 60, depth: 12, bodyDepth: 12, thickness: 12 }; // wallGap = 0
+  const tightBracket = bracketZRange(tightGapParams);
+  const tightPanel = panelZRange(tightGapParams);
+  check('bracket never extends past the panel\'s own back face, even at wallGap = 0',
+    tightBracket.max <= tightPanel.min + 0.01, { tightBracket, tightPanel });
 }
 
 // ---- 4. valve corner placement, all four options + diagonal lockshield ----
@@ -531,6 +569,76 @@ for (const c of R.VALVE_CORNERS) {
   check('shelf spans the ENVELOPE width (75), not the smaller body width (50) — catches "shelf sized to body"',
     Math.abs((hsBox.max.x - hsBox.min.x) / CM - 75) <= 0.5 && (hsBox.max.x - hsBox.min.x) / CM > 60,
     { shelfWidthCm: (hsBox.max.x - hsBox.min.x) / CM });
+}
+
+// ---- 9c. LOW (follow-up d9fb9d55, nit 3): three more round-4 fixes that
+// mutation testing showed survived with 187/187 still passing — each of
+// these asserts a real geometric relationship that the named mutation would
+// break, rather than re-deriving the mutated value from the same formula.
+{
+  // (i) The valve assemblies' depth ceiling must be the box BACKING's inner
+  // face, not the outer envelope (ENV_D) — reverting that fix would let a
+  // valve on a box cover pierce the backing. Assert the valve's outermost
+  // point (the tail's far face, its own position plus radius) sits at or
+  // before the backing's own inner face.
+  {
+    const params = { width: 80, height: 62, depth: 16, cover: 'box', valveCorner: 'bottom-right' };
+    const g = R.build(THREE, params, { detail: 'full' });
+    g.updateMatrixWorld(true);
+    let smartValve = null, backing = null;
+    g.traverse(o => {
+      if (o.name === 'radiatorValveSmart') smartValve = o;
+      if (o.name === 'coverBacking') backing = o;
+    });
+    check('box cover: smart valve group present (sanity)', !!smartValve);
+    check('box cover: backing present (sanity)', !!backing);
+    if (smartValve && backing) {
+      const backingBox = new THREE.Box3().setFromObject(backing);
+      let valveMaxZ = -Infinity;
+      smartValve.traverse(o => {
+        if (!o.isMesh) return;
+        const b = new THREE.Box3().setFromObject(o);
+        if (b.max.z > valveMaxZ) valveMaxZ = b.max.z;
+      });
+      check('box cover: valve assembly max Z is AT OR BEFORE the backing panel\'s own inner (back) face — never pierces it',
+        valveMaxZ <= backingBox.min.z + 1e-6, { valveMaxZ, backingInnerFace: backingBox.min.z });
+    }
+  }
+
+  // (ii) The "explicit body params are clamped the same way the snug
+  // default is" requirement (round 3) must hold even for an EXPLICIT,
+  // oversized bodyHeight on a cover — not just the snug/omitted case
+  // already covered by the width sweep above. Reverting the clamp to skip
+  // when bodyHeight is explicit would let this specific case pierce the
+  // shelf.
+  {
+    const params = { width: 80, height: 62, depth: 12, cover: 'shelf', bodyHeight: 200 };
+    const g = R.build(THREE, params, {});
+    g.updateMatrixWorld(true);
+    let panel = null, shelfMesh = null;
+    g.traverse(o => { if (o.name === 'radiatorPanel') panel = o; if (o.name === 'coverShelf') shelfMesh = o; });
+    const panelBox = new THREE.Box3().setFromObject(panel);
+    const shelfBox = new THREE.Box3().setFromObject(shelfMesh);
+    check('an EXPLICIT oversized bodyHeight (200) on a shelf cover is clamped identically to the snug default — body stays strictly below the shelf',
+      panelBox.max.y < shelfBox.min.y - 1e-6, { panelTop: panelBox.max.y, shelfBottom: shelfBox.min.y });
+  }
+
+  // (iii) The shelf's FASCIA_CLEARANCE_CM must be its full, correctly-
+  // derived value (1.5 + FASCIA_SETBACK_CM = 1.9), not a shrunk value like
+  // 1.1 that would let the body's front face creep past the lip's own back
+  // face. Assert the actual geometric relationship (panel front strictly
+  // behind the lip's own back face) rather than re-deriving the constant.
+  {
+    const params = { width: 80, height: 62, depth: 12, cover: 'shelf' };
+    const g = R.build(THREE, params, {});
+    g.updateMatrixWorld(true);
+    let panel = null, fascia = null;
+    g.traverse(o => { if (o.name === 'radiatorPanel') panel = o; if (o.name === 'coverFascia') fascia = o; });
+    const panelBox = new THREE.Box3().setFromObject(panel);
+    const fasciaBox = new THREE.Box3().setFromObject(fascia);
+    check('shelf: body panel front face sits STRICTLY BEHIND the fascia lip\'s own back face (catches a shrunk clearance constant)',
+      panelBox.max.z < fasciaBox.min.z - 1e-6, { panelFront: panelBox.max.z, fasciaBack: fasciaBox.min.z });
+  }
 }
 
 // ---- 10. FIX 444c3a1e, round 2 — no fin/panel visible through ANY box
