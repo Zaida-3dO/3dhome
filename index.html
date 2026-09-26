@@ -816,6 +816,11 @@
       //   ~40-57s. See docs/perf-cold-start.md.
       const shadows = params.get('shadows') || (isPreview ? 'low' : (isEmbed ? 'low' : 'auto'));
       const fpsParam = parseInt(params.get('fps'), 10);
+      // ?furniture=0 (or false/off): start with the furniture hidden AND
+      // unbuilt, for a bare plan or an A/B cost check. The Settings "Show
+      // furniture" switch builds and shows it later. Default: shown.
+      const furnitureParam = (params.get('furniture') || '').toLowerCase();
+      const furnitureOn = !(furnitureParam === '0' || furnitureParam === 'false' || furnitureParam === 'off');
       const maxFps = Number.isFinite(fpsParam) ? fpsParam : (isPreview ? 15 : 60);
       const scenePixelRatio = isPreview ? 1 : Math.min(window.devicePixelRatio, 2);
 
@@ -1160,6 +1165,7 @@
         rotateSpeed: rotateSpeed,
         initialState: initialState,
         shadows: shadows,
+        furniture: furnitureOn,
         maxFps: maxFps,
         pixelRatio: scenePixelRatio,
         antialias: !isPreview,
@@ -1238,7 +1244,9 @@
         footstepDebug: roomId => home.getFootstepDebug(roomId),
         // Per-outer-wall fade state. The only way to check which walls faded:
         // the canvas cannot be read back (preserveDrawingBuffer:false).
-        wallFadeDebug: () => home.getWallFadeDebug()
+        wallFadeDebug: () => home.getWallFadeDebug(),
+        // What the furniture built and when it attached (see getFurnitureInfo).
+        furniture: () => home.getFurnitureInfo()
       };
 
       // Dev-only wall-numbering debug overlay -- SINGLE call site, fully
@@ -1980,6 +1988,15 @@
             '<button class="toggle ' + (doorNums.isEnabled() ? 'on' : '') + '" id="panel-door-numbers-toggle"><div class="toggle-knob"></div></button>' +
             '</div>';
 
+          // Show furniture — hides every furniture mesh and its shadow (the
+          // scene's setFurnitureVisible). Only offered when the house has any.
+          if (Home3DScene.FURNITURE.length && typeof home.setFurnitureVisible === 'function') {
+            html += '<div class="panel-toggle-row">' +
+              '<span class="panel-toggle-label">Show furniture</span>' +
+              '<button class="toggle ' + (home.getFurnitureVisible() ? 'on' : '') + '" id="panel-furniture-toggle"><div class="toggle-knob"></div></button>' +
+              '</div>';
+          }
+
           // Toggles contributed by a profile's `extraOverlays`. A built-in
           // overlay gets a hand-written row above because the engine knows what
           // it is; an extra overlay is by definition unknown here, so it
@@ -2052,6 +2069,13 @@
           const panelDoorNumbersToggle = document.getElementById('panel-door-numbers-toggle');
           if (panelDoorNumbersToggle) {
             panelDoorNumbersToggle.addEventListener('click', () => { doorNums.toggle(); renderPanel(); });
+          }
+          const panelFurnitureToggle = document.getElementById('panel-furniture-toggle');
+          if (panelFurnitureToggle) {
+            panelFurnitureToggle.addEventListener('click', () => {
+              home.setFurnitureVisible(!home.getFurnitureVisible());
+              renderPanel();
+            });
           }
           // Wire the profile-contributed rows rendered above. Each row's id is
           // derived from its key, so the lookup matches overlayToggleRow().

@@ -291,6 +291,8 @@ jobs:
         run: node scripts/test-furniture-kitchen.mjs
       - name: Small items -- envelope, facing and finish tags per type x preset x detail
         run: node scripts/test-small-items.mjs
+      - name: Furniture renderer (placement, merge buckets, shadow proxies, fade, attach)
+        run: node scripts/test-furniture-render.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

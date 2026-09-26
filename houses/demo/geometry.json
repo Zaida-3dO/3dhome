@@ -1,6 +1,6 @@
 {
   "kind": "geometry",
-  "schemaVersion": "1.1",
+  "schemaVersion": "1.2",
   "id": "demo",
   "name": "Demo Flat",
   "description": "A wholly fictional seven-room flat, invented for this repository. It exists so the app is runnable and evaluable straight after a clone, and so every feature of the engine has something to render: an L-shaped room, a pillar, interior and exterior walls, a cupboard door with a small swing, several lighting channels per room and both forms of rug. It is not anyone's home and no part of it is measured from one.",
@@ -607,6 +607,34 @@
       "openPct": 60,
       "notes": "CurtainSpec's default pink/blue two-tone."
     }
+  ],
+  "furniture": [
+    { "id": "study_desk", "room": "study", "type": "box", "wall": 1, "centre": 760, "offset": 0,
+      "params": { "width": 140, "depth": 70, "height": 74, "color": "#8a6a4a" },
+      "label": "Desk", "notes": "A plain box standing in for a desk until a desk type is placed." },
+    { "id": "study_screen", "room": "study", "type": "box", "wall": 1, "centre": 760, "offset": 20, "elevation": 74,
+      "params": { "width": 60, "depth": 4, "height": 36, "color": "#3a6e9e", "finish": "emissive" },
+      "label": "Screen", "notes": "Emissive finish: kept as its own draw, never merged into the matte bucket." },
+    { "id": "study_chair", "room": "study", "type": "gaming-chair", "at": [760, 125], "rotation": 180,
+      "label": "Desk chair" },
+    { "id": "lounge_slats", "room": "lounge", "type": "slat-panel", "wall": 4, "centre": 140,
+      "params": { "width": 180, "height": 240 },
+      "label": "Slat panelling", "notes": "Tall and on an exterior wall: fades with wall 4." },
+    { "id": "lounge_hexes", "room": "lounge", "type": "hex-panel-cluster", "wall": 5, "centre": 140, "elevation": 110,
+      "params": { "rows": [2, 3, 2], "width": 94, "height": 90 },
+      "label": "Hex panels" },
+    { "id": "lounge_sideboard", "room": "lounge", "type": "box", "wall": 1, "centre": 150,
+      "params": { "width": 160, "depth": 45, "height": 75, "color": "#5b4a3c" },
+      "label": "Sideboard", "notes": "Under 100 cm: stays solid when the north wall fades." },
+    { "id": "kitchen_glass_case", "room": "kitchen", "type": "box", "wall": 1, "centre": 430,
+      "params": { "width": 80, "depth": 40, "height": 180, "color": "#cfe3ea", "finish": "glass" },
+      "label": "Glass case", "notes": "Glass never joins a wall fade; it keeps its own opacity." },
+    { "id": "bedroom_wardrobe", "room": "bedroom", "type": "box", "at": [858, 560], "rotation": 90,
+      "params": { "width": 120, "depth": 60, "height": 200, "color": "#d9d2c5" },
+      "label": "Wardrobe", "notes": "A FREE item beside the east shell: fade auto picks wall 2." },
+    { "id": "store_crate", "room": "store", "type": "box", "at": [100, 640], "priority": "minor",
+      "params": { "width": 50, "depth": 40, "height": 35, "color": "#9c8a6e" },
+      "label": "Crate", "notes": "priority minor: dropped on the low GPU tier." }
   ],
   "lights": [
     {
