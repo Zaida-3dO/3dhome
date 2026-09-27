@@ -18,9 +18,15 @@
  *      solid panel on that side (and only that side; +x is right).
  *   5. The glass railing's panes are glass and kept.
  *   6. Triangle caps at DEFAULTS: full <= 1500, low <= 450, low <= 0.6 x full.
- *   7. The decking floor (the default): boards run along x, with real gaps,
+ *   7. The decking floor (an option): boards run along x, with real gaps,
  *      deck top at slabThickness, kept; a metal edge trim; 'slab' and low
  *      detail fall back to one slab box.
+ *   8. The grating floor (the default): one kept, two-plane, alpha-cutout
+ *      mesh in a satin (not metal) near-black, with real holes, load bars
+ *      running along z at gratingPitch and cross bars along x; max-alpha
+ *      mips so it never vanishes at a distance; top at slabThickness; a
+ *      metal perimeter frame it meets edge to edge; no solid slab under it;
+ *      it survives the renderer's merge as a textured kept part.
  *
  * Each check names the one-line mutation of balcony.js it catches.
  */
@@ -120,7 +126,10 @@ const frontMaxGap = g => runMaxGap(g, 'front');
     ['deep and tall', { width: 320, depth: 240, height: 125, slabThickness: 25, railingThickness: 8 }],
     ['glass', { railing: 'glass' }],
     ['solid left, open right', { leftSide: 'solid', rightSide: 'none' }],
-    ['both open', { leftSide: 'none', rightSide: 'none', width: 400 }]
+    ['both open', { leftSide: 'none', rightSide: 'none', width: 400 }],
+    ['decking', { floor: 'decking' }],
+    ['slab', { floor: 'slab' }],
+    ['grating, 11 slab, tiny', { slabThickness: 11, width: 30, depth: 20, height: 40 }]
   ];
   for (const [tag, params] of cases) {
     const p = Object.assign({}, B.DEFAULTS, params);
@@ -241,7 +250,7 @@ const frontMaxGap = g => runMaxGap(g, 'front');
 
 // ---- 6. triangle caps -------------------------------------------------------------
 {
-  for (const [tag, p] of [['bars', {}], ['glass', { railing: 'glass' }]]) {
+  for (const [tag, p] of [['bars', {}], ['glass', { railing: 'glass' }], ['decking', { floor: 'decking' }], ['slab', { floor: 'slab' }]]) {
     const tf = triangles(B.build(THREE, p, { detail: 'full' }));
     const tl = triangles(B.build(THREE, p, { detail: 'low' }));
     // PERF-BUDGET AMENDMENT: 1500 / 450 is above the furniture audit's
@@ -259,11 +268,11 @@ const frontMaxGap = g => runMaxGap(g, 'front');
   check('no lights', lights.length === 0, lights);
 }
 
-// ---- 7. decking floor ---------------------------------------------------------------
+// ---- 7. decking floor (an option since the grating became the default) -----------
 {
   const P = B.DEFAULTS;
-  check("DEFAULTS floor is 'decking'", P.floor === 'decking');
-  const g = B.build(THREE, {}, { detail: 'full' });
+  const DK = { floor: 'decking' };
+  const g = B.build(THREE, DK, { detail: 'full' });
   const deck = byName(g, 'deck-boards');
   check('decking: a deck-boards mesh', !!deck);
   const boardsZ = deck ? boxIntervalsAlong(deck, 'z') : [];
@@ -312,15 +321,140 @@ const frontMaxGap = g => runMaxGap(g, 'front');
     Math.abs(bboxCm(ss).maxY - P.slabThickness) <= 0.05);
 
   // Low detail: one charcoal slab box, no boards (the triangle cap holds).
-  const l = B.build(THREE, {}, { detail: 'low' });
+  const l = B.build(THREE, DK, { detail: 'low' });
   const ls = byName(l, 'slab');
   // Mutation: low using DECK_UNDER or slabColor -> fails.
   check('decking low: no boards, slab in deckColor to the deck top', !byName(l, 'deck-boards') &&
     ls.material.color.getHex() === parseInt(P.deckColor.slice(1), 16) && Math.abs(bboxCm(ls).maxY - P.slabThickness) <= 0.05);
 
   // The placement's 11 cm slab keeps the deck top at 11.
-  const h = byName(B.build(THREE, { slabThickness: 11 }, { detail: 'full' }), 'deck-boards');
+  const h = byName(B.build(THREE, { floor: 'decking', slabThickness: 11 }, { detail: 'full' }), 'deck-boards');
   check('decking: slabThickness 11 -> deck top 11', Math.abs(bboxCm(h).maxY - 11) <= 0.05, bboxCm(h));
+}
+
+// ---- 8. grating floor (the default) --------------------------------------------------
+{
+  const P = B.DEFAULTS;
+  // Mutation: DEFAULTS floor back to 'decking' -> fails.
+  check("DEFAULTS floor is 'grating'", P.floor === 'grating');
+  const g = B.build(THREE, {}, { detail: 'full' });
+  const gr = byName(g, 'grating');
+  check('grating: a grating mesh', !!gr);
+  // Two planes (top and bottom of the bars), 2 triangles each: one draw.
+  check('grating: 4 triangles (two textured planes)', !!gr && gr.geometry.index.count / 3 === 4, gr && gr.geometry.index.count);
+  const m = gr ? gr.material : {};
+  // Mutation: makeFinish(THREE, 'metal', ...) for the grating -> fails (the
+  // live scene has no env map; the owner's note asks for satin, not metal).
+  check('grating: satin, not metal, in gratingColor', m.userData && m.userData.finish === 'satin' && m.metalness === 0 &&
+    m.color.getHex() === parseInt(P.gratingColor.slice(1), 16), m.userData);
+  // Mutation: drop `gm.alphaTest = ...` -> the holes draw solid -> fails.
+  check('grating: alpha-cutout (map + alphaTest)', !!m.map && m.alphaTest > 0 && m.alphaTest < 1 && m.transparent !== true, { a: m.alphaTest });
+  // Mutation: drop `gm.side = DoubleSide` -> invisible from below -> fails.
+  check('grating: double-sided', m.side === THREE.DoubleSide);
+  // Mutation: drop the grating keep line -> fails.
+  check('grating: kept', !!gr && Fin.partKeep(gr).keep === true);
+
+  // The tile: real holes, and the load bar runs the whole tile along v (z).
+  const { levels } = B.gratingTile();
+  const L0 = levels[0];
+  const alphaAt = (lv, u, v) => lv.data[(v * lv.width + u) * 4 + 3];
+  const cover = lv => { let n = 0; for (let i = 3; i < lv.data.length; i += 4) if (lv.data[i] >= B.GRATING_ALPHA_TEST * 255) n++; return n / (lv.width * lv.height); };
+  const c0 = cover(L0);
+  // Mutation: `bar = u < TILE_U || ...` (no holes) or `u < 0 && v < 0` (no bars) -> fails.
+  check('grating tile: mostly open, but with bars (20-40 % metal)', c0 >= 0.2 && c0 <= 0.4, c0);
+  let loadBarWhole = true, crossBarWhole = true;
+  for (let v = 0; v < L0.height; v++) if (alphaAt(L0, 0, v) !== 255) loadBarWhole = false;
+  for (let u = 0; u < L0.width; u++) if (alphaAt(L0, u, 0) !== 255) crossBarWhole = false;
+  // Mutation: swap the u and v tests in `bar` -> the bars change axis -> fails.
+  check('grating tile: column 0 is a whole load bar (along v) and row 0 a whole cross bar (along u)', loadBarWhole && crossBarWhole);
+  // The bar thicknesses in cm: a hole row crosses the load bar (the tile's u
+  // spans gratingPitch), a hole column crosses the cross bar (v spans 10 cm).
+  // Both are real bar sections, about half a centimetre.
+  let rowMetal = 0, colMetal = 0;
+  const midV = L0.height >> 1, midU = L0.width >> 1;
+  for (let u = 0; u < L0.width; u++) if (alphaAt(L0, u, midV) === 255) rowMetal++;
+  for (let v = 0; v < L0.height; v++) if (alphaAt(L0, midU, v) === 255) colMetal++;
+  const loadCm = rowMetal / L0.width * P.gratingPitch, crossCm = colMetal / L0.height * 10;
+  // Mutation: swap the u and v tests in `bar` (load 2 px of 16, cross 3 of
+  // 32) -> 0.38 / 0.94 cm -> fails.
+  check('grating tile: load bar ~0.56 cm, cross bar ~0.63 cm', loadCm >= 0.45 && loadCm <= 0.7 && crossCm >= 0.5 && crossCm <= 0.75, { loadCm, crossCm });
+  check('grating tile: power-of-two, a full mip chain to 1x1', L0.width === 16 && L0.height === 32 &&
+    levels[levels.length - 1].width === 1 && levels[levels.length - 1].height === 1 && m.map && m.map.mipmaps.length === levels.length &&
+    m.map.generateMipmaps === false, levels.map(l => l.width + 'x' + l.height));
+  // Mutation: average the alpha instead of max -> coverage falls with each
+  // level and the 1x1 mip is below the alpha test (the floor VANISHES at a
+  // distance) -> fails.
+  let monotone = true;
+  for (let i = 1; i < levels.length; i++) if (cover(levels[i]) < cover(levels[i - 1]) - 1e-9) monotone = false;
+  check('grating mips: coverage never drops with distance, and the 1x1 mip is solid', monotone && cover(levels[levels.length - 1]) === 1,
+    levels.map(cover));
+
+  // The uvs: one tile per gratingPitch along x, one per 10 cm along z.
+  const uvPitch = (grp, name) => {
+    const mesh = byName(grp, name);
+    const pos = mesh.geometry.attributes.position, uv = mesh.geometry.attributes.uv;
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      x0 = Math.min(x0, pos.getX(i)); x1 = Math.max(x1, pos.getX(i)); z0 = Math.min(z0, pos.getZ(i)); z1 = Math.max(z1, pos.getZ(i));
+      u0 = Math.min(u0, uv.getX(i)); u1 = Math.max(u1, uv.getX(i)); v0 = Math.min(v0, uv.getY(i)); v1 = Math.max(v1, uv.getY(i));
+    }
+    return { alongX: (x1 - x0) * 100 / (u1 - u0), alongZ: (z1 - z0) * 100 / (v1 - v0) };
+  };
+  const up = uvPitch(g, 'grating');
+  // Mutation: u computed with CROSS_PITCH (or v with pitchCm) -> fails.
+  check('grating: a load bar every gratingPitch along x, a cross bar every 10 cm along z',
+    Math.abs(up.alongX - P.gratingPitch) <= 1e-3 && Math.abs(up.alongZ - 10) <= 1e-3, up);
+  const up5 = uvPitch(B.build(THREE, { gratingPitch: 5 }, { detail: 'full' }), 'grating');
+  // Mutation: gratingPitch ignored (DEFAULTS.gratingPitch used) -> fails.
+  check('grating: gratingPitch 5 -> a load bar every 5 cm', Math.abs(up5.alongX - 5) <= 1e-3, up5);
+
+  // Height: top at slabThickness (level with the threshold), bottom plane 3 below.
+  const gb = gr && bboxCm(gr);
+  // Mutation: yTop = (slabT + 1) -> fails.
+  check('grating: top at slabThickness, bars 3 deep', !!gb && Math.abs(gb.maxY - P.slabThickness) <= 0.05 &&
+    Math.abs(gb.maxY - gb.minY - 3) <= 0.05, gb);
+  const g11 = bboxCm(byName(B.build(THREE, { slabThickness: 11 }, { detail: 'full' }), 'grating'));
+  check('grating: slabThickness 11 -> top 11', Math.abs(g11.maxY - 11) <= 0.05, g11);
+
+  // The frame: metal, round all four edges, slab bottom to deck top.
+  const fr = byName(g, 'grating-frame');
+  const fb = fr && bboxCm(fr);
+  // Mutation: frame in mats.slab -> finish fails.
+  check('grating: a metal frame in railColor, full width x depth, 0 .. slabThickness', !!fr &&
+    fr.material.userData.finish === 'metal' && fr.material.color.getHex() === parseInt(P.railColor.slice(1), 16) &&
+    Math.abs(fb.maxX - fb.minX - P.width) <= 0.05 && Math.abs(fb.minZ) <= 0.05 && Math.abs(fb.maxZ - P.depth) <= 0.05 &&
+    Math.abs(fb.minY) <= 0.05 && Math.abs(fb.maxY - P.slabThickness) <= 0.05, fb);
+  // Mutation: drop the back member -> 4 boxes -> fails.
+  check('grating: frame is five boxes (front, back, two ends, a mid beam)', !!fr && boxIntervalsX(fr).length === 5);
+  // The grating meets the frame's inner edges exactly: no gap, no overlap.
+  // Mutation: grating x0 = -W/2 (overlapping the end frame) -> fails.
+  check('grating: fills the frame edge to edge (4 cm frame)', !!gb && Math.abs(gb.minX + P.width / 2 - 4) <= 0.05 &&
+    Math.abs(P.width / 2 - gb.maxX - 4) <= 0.05 && Math.abs(gb.minZ - 4) <= 0.05 && Math.abs(P.depth - gb.maxZ - 4) <= 0.05, gb);
+  // See-through: nothing solid under the grating but the frame.
+  // Mutation: also adding the solid slab box under the grating -> fails.
+  check('grating: no solid slab under it (you can see through)', !byName(g, 'slab'), meshes(g).map(o => o.name));
+  // The mid beam stays below the bars' bottom plane (no coplanar faces).
+  const beam = boxIntervalsAlong(fr, 'z').filter(([lo, hi]) => lo > 10 && hi < P.depth - 10);
+  check('grating: one mid beam, inside the depth', beam.length === 1, beam);
+
+  // Low detail: one gratingColor slab box, satin.
+  const l = B.build(THREE, {}, { detail: 'low' });
+  const ls = byName(l, 'slab');
+  // Mutation: low using slabColor -> fails.
+  check('grating low: no grating, one satin gratingColor slab to the deck top', !byName(l, 'grating') && !byName(l, 'grating-frame') &&
+    ls.material.userData.finish === 'satin' && ls.material.color.getHex() === parseInt(P.gratingColor.slice(1), 16) &&
+    Math.abs(bboxCm(ls).maxY - P.slabThickness) <= 0.05);
+
+  // The renderer's merge keeps it as a textured part WITH its uvs (a merge
+  // into the vertex-coloured palette bucket would lose the cutout).
+  const Merge = await imp('src/furniture/merge.js');
+  const flat = Merge.flattenGroup(THREE, B.build(THREE, {}, { detail: 'full' }));
+  const gp = flat.parts.filter(pt => pt.material && pt.material.alphaTest > 0);
+  check('grating: survives the merge as a kept, textured part with uvs', gp.length === 1 && Merge.bucketClass(gp[0]) === 'kept' &&
+    gp[0].textured && !!gp[0].geometry.attributes.uv, gp.map(pt => ({ keep: pt.keep, textured: pt.textured })));
+
+  // An unknown floor value falls back to the default, not to the old slab.
+  check("unknown floor -> grating", !!byName(B.build(THREE, { floor: 'lava' }, { detail: 'full' }), 'grating'));
 }
 
 // ---- toFurnitureJSON ----------------------------------------------------------------

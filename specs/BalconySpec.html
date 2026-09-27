@@ -40,7 +40,7 @@
 <script type="application/json" id="spec-manifest">
 {
   "title": "Balcony",
-  "description": "All units cm. A cantilevered balcony: a charcoal decking floor (or a plain slab) and a balustrade of black metal bars or glass panels; each end a railing, a solid panel or open. Pick a variant, then fine-tune in the Tweaks panel.",
+  "description": "All units cm. A cantilevered balcony: a black metal grating floor (or charcoal decking, or a plain slab) and a balustrade of black metal bars or glass panels; each end a railing, a solid panel or open. Pick a variant, then fine-tune in the Tweaks panel.",
   "objects": [
     { "id": "balcony", "label": "Balcony", "types": ["balcony"] }
   ]
@@ -91,7 +91,9 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "depth": 155,
   "height": 125,
   "slabThickness": 15,
-  "floor": "decking",
+  "floor": "grating",
+  "gratingColor": "#161618",
+  "gratingPitch": 3,
   "deckColor": "#2e2e30",
   "boardWidth": 14.5,
   "boardGap": 0.6,
@@ -110,13 +112,15 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // The balcony's VARIANTS (same controls, different values), picked from the
 // shared picker bar (<SpecVariants>). Each sets only the keys it names.
 const PRESETS = [
-  { name: 'Black bars, railing both ends', edits: { railing: 'bars', leftSide: 'railing', rightSide: 'railing', floor: 'decking' } },
-  // The owner's balcony (photo 2026-09-27): dark charcoal grooved composite
-  // decking with gaps, boards parallel to the facade, a dark metal edge trim,
-  // thin black bars. Deck level with the door threshold (the house places it
-  // with an 11 cm slab). Board width / gap are typical composite figures,
-  // not measured.
-  { name: "Owner's balcony (charcoal decking, 11 slab)", edits: { railing: 'bars', leftSide: 'railing', rightSide: 'railing', floor: 'decking', deckColor: '#2e2e30', slabThickness: 11 } },
+  { name: 'Black bars, railing both ends', edits: { railing: 'bars', leftSide: 'railing', rightSide: 'railing', floor: 'grating' } },
+  // The owner's balcony (2026-09-27): black metal open grating in a dark
+  // metal frame, thin black bars. Deck level with the door threshold (the
+  // house places it with an 11 cm slab). The grating pitch is a typical
+  // 30 x 100 mm bar grating, not measured.
+  { name: "Owner's balcony (black grating, 11 slab)", edits: { railing: 'bars', leftSide: 'railing', rightSide: 'railing', floor: 'grating', gratingColor: '#161618', gratingPitch: 3, slabThickness: 11 } },
+  // Charcoal composite decking: boards parallel to the facade with gaps and
+  // a dark metal edge trim. Board width / gap are typical, not measured.
+  { name: 'Charcoal decking', edits: { floor: 'decking', deckColor: '#2e2e30' } },
   { name: 'Plain concrete slab', edits: { floor: 'slab' } },
   { name: 'Glass panels', edits: { railing: 'glass', leftSide: 'railing', rightSide: 'railing' } },
   { name: 'Recessed (solid both ends)', edits: { railing: 'bars', leftSide: 'solid', rightSide: 'solid' } },
@@ -187,6 +191,7 @@ function App() {
               <tr><td>Depth <span style={{opacity:0.6}}>(building face to railing front)</span></td><td className="num">{t.depth.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Height <span style={{opacity:0.6}}>(slab bottom to rail top)</span></td><td className="num">{t.height.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Slab thickness <span style={{opacity:0.6}}>(= deck top)</span></td><td className="num">{t.slabThickness.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Grating <span style={{opacity:0.6}}>(load bars out from the building)</span></td><td className="num">{t.floor === 'grating' ? t.gratingPitch.toFixed(1) + ' × 10' : '—'}</td><td><b>Variable</b> pitch; cross bars every 10 (typical, not measured)</td></tr>
               <tr><td>Decking boards <span style={{opacity:0.6}}>(along the facade)</span></td><td className="num">{t.floor === 'decking' ? boards : '—'}</td><td>derived from depth, board width and gap</td></tr>
               <tr><td>Board width / gap</td><td className="num">{t.floor === 'decking' ? t.boardWidth.toFixed(1) + ' / ' + t.boardGap.toFixed(1) : '—'}</td><td><b>Variable</b> (typical, not measured)</td></tr>
               <tr><td>Railing above the slab</td><td className="num">{(t.height - t.slabThickness).toFixed(0)}</td><td>derived</td></tr>
@@ -207,7 +212,12 @@ function App() {
         <div className="card">
           <h2>Look</h2>
           <div className="legend">
-            Decking (the default): dark charcoal composite boards running parallel to the facade, with narrow dark
+            Grating (the default): black open metal bar grating -- load bars running out from the building, tied
+            by cross bars parallel to the facade, with open holes you see straight through -- inside a dark metal
+            frame round all four edges with one support beam under the middle. It is drawn satin near-black, not
+            shiny metal: the house has no reflections to show. Its top is the slab thickness, so it sits level with
+            a door threshold. From far away the holes close up and it reads as a dark plate; low detail draws one
+            dark slab. Or decking: dark charcoal composite boards running parallel to the facade, with narrow dark
             gaps between them and fine grooves along each board, on a dark structure, finished by a dark metal edge
             trim round the front and both ends. The deck top is the slab thickness, so it can sit level with a door
             threshold. Low detail draws one charcoal slab. Or a plain light concrete slab. Either way there is a
@@ -245,8 +255,10 @@ function App() {
           onChange={v => setTweak('slabThickness', v)} />
 
         <TweakSection label="Floor" />
-        <TweakRadio label="Floor" value={t.floor} options={['decking', 'slab']}
+        <TweakRadio label="Floor" value={t.floor} options={['grating', 'decking', 'slab']}
           onChange={v => setTweak('floor', v)} />
+        <TweakSlider label="Grating pitch" value={t.gratingPitch} min={1} max={10} step={0.5} unit="cm"
+          onChange={v => setTweak('gratingPitch', v)} />
         <TweakSlider label="Board width" value={t.boardWidth} min={8} max={30} step={0.5} unit="cm"
           onChange={v => setTweak('boardWidth', v)} />
         <TweakSlider label="Board gap" value={t.boardGap} min={0} max={2} step={0.1} unit="cm"
@@ -267,6 +279,8 @@ function App() {
           onChange={v => setTweak('rightSide', v)} />
 
         <TweakSection label="Colours" />
+        <TweakColor label="Grating" value={t.gratingColor}
+          onChange={v => setTweak('gratingColor', v)} />
         <TweakColor label="Decking boards" value={t.deckColor}
           onChange={v => setTweak('deckColor', v)} />
         <TweakColor label="Slab (plain floor)" value={t.slabColor}

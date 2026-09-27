@@ -1128,11 +1128,23 @@
         "floor": {
           "type": "string",
           "enum": [
+            "grating",
             "decking",
             "slab"
           ],
-          "default": "decking",
-          "description": "`decking` = dark charcoal composite boards running along the facade (parallel to x) with gaps between them and fine longitudinal grooves, over a dark structure, with a dark metal edge trim (railColor) round the front and both ends; the deck top is still at slabThickness. `slab` = the plain slab in slabColor."
+          "default": "grating",
+          "description": "`grating` = black open metal bar grating: load bars running out from the building (along z) tied by cross bars parallel to the facade, with open holes you see through, in a matte-satin near-black (gratingColor), inside a dark metal perimeter frame (railColor) with one support beam at mid-depth; the grating top is at slabThickness. `decking` = dark charcoal composite boards running along the facade (parallel to x) with gaps between them and fine longitudinal grooves, over a dark structure, with a dark metal edge trim (railColor) round the front and both ends; the deck top is still at slabThickness. `slab` = the plain slab in slabColor."
+        },
+        "gratingColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#161618",
+          "description": "The grating (floor `grating`), drawn satin rather than metal because the live scene has no environment map."
+        },
+        "gratingPitch": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 3,
+          "description": "cm, the centre spacing of the grating's load bars (floor `grating`); cross bars are every 10 cm. Clamped to 1 .. 10. A typical figure, not measured."
         },
         "deckColor": {
           "$ref": "#/$defs/hexColor",
