@@ -161,14 +161,22 @@ def check_geometry(geo, report, schema=None):
             if isinstance(fp, dict) and isinstance(fp.get("points"), list):
                 x1 = min(p[0] for p in poly)
                 y1 = min(p[1] for p in poly)
+                pts_ok = True
                 for i, pt in enumerate(fp["points"]):
-                    if (isinstance(pt, list) and len(pt) == 2
-                            and not inside_poly(poly, x1 + pt[0], y1 + pt[1])):
+                    if not (isinstance(pt, list) and len(pt) == 2
+                            and all(isinstance(v, (int, float)) for v in pt)):
+                        pts_ok = False
+                        continue
+                    if not inside_poly(poly, x1 + pt[0], y1 + pt[1]):
+                        pts_ok = False
                         report.error(
                             f"rooms/{rid}/footstepPath/points/{i}",
                             f"waypoint {pt} (relative to the bbox min corner) lies outside the room "
                             f"polygon -- the engine would ignore the whole path",
                         )
+                if pts_ok and len(fp["points"]) >= 2:
+                    check_footstep_path(rid, poly, [[x1 + p[0], y1 + p[1]] for p in fp["points"]],
+                                        fp.get("smooth", True) is not False, geo, report)
 
     walls = geo.get("walls", {})
     segments = walls.get("segments", [])
@@ -410,6 +418,103 @@ def inside_poly(poly, px, py):
             inside = not inside
         j = i
     return inside
+
+
+# --- footstepPath -----------------------------------------------------------
+# A port of walkPath()/smoothPolyline()/doorOpenings() in src/footstep-walk.js
+# -- keep them in step. Used only to WARN: a path whose segments leave the room
+# (e.g. cutting across a notch between two in-room waypoints), and a path the
+# door gap strips of every print, which the engine renders as nothing at all.
+FOOTSTEP_STEP_CM = 34
+FOOTSTEP_STRIDE_CM = 17
+FOOTSTEP_DOOR_GAP_CM = 40
+
+
+def _smooth_polyline(points, passes=2):
+    pts = [list(p) for p in points]
+    if len(pts) < 3:
+        return pts
+    for _ in range(passes):
+        out = [pts[0]]
+        for i in range(len(pts) - 1):
+            (ax, ay), (bx, by) = pts[i], pts[i + 1]
+            if i > 0:
+                out.append([ax * 0.75 + bx * 0.25, ay * 0.75 + by * 0.25])
+            if i < len(pts) - 2:
+                out.append([ax * 0.25 + bx * 0.75, ay * 0.25 + by * 0.75])
+        out.append(pts[-1])
+        pts = out
+    return pts
+
+
+def _dist_to_segment(px, py, ax, ay, bx, by):
+    vx, vy = bx - ax, by - ay
+    l2 = vx * vx + vy * vy
+    t = 0.0 if l2 == 0 else max(0.0, min(1.0, ((px - ax) * vx + (py - ay) * vy) / l2))
+    return math.hypot(px - (ax + vx * t), py - (ay + vy * t))
+
+
+def _door_openings(geo):
+    walls = {w.get("id"): w for w in geo.get("walls", {}).get("segments", [])}
+    out = []
+    for d in geo.get("doors", []):
+        w = walls.get(d.get("wall"))
+        if not w or "centre" not in d or "width" not in d:
+            continue
+        (x1, y1), (x2, y2) = w["start"], w["end"]
+        half = d["width"] / 2
+        if abs(y1 - y2) < abs(x1 - x2):
+            out.append((d["centre"] - half, y1, d["centre"] + half, y1))
+        else:
+            out.append((x1, d["centre"] - half, x1, d["centre"] + half))
+    return out
+
+
+def check_footstep_path(rid, poly, points, smooth, geo, report):
+    where = f"rooms/{rid}/footstepPath"
+    # (b) segments must stay on the floor, not just the waypoints.
+    for i in range(len(points) - 1):
+        (ax, ay), (bx, by) = points[i], points[i + 1]
+        n = max(1, int(math.hypot(bx - ax, by - ay) // 5))
+        if any(not inside_poly(poly, ax + (bx - ax) * k / n, ay + (by - ay) * k / n) for k in range(n + 1)):
+            report.warn(where, f"segment {i}->{i + 1} leaves the room polygon -- prints along it "
+                               f"outside the room are dropped; add a waypoint to route round the corner")
+    # (a) would the door gap (and the room outline) leave any print at all?
+    pts = _smooth_polyline(points) if smooth else points
+    segs, total = [], 0.0
+    for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+        ln = math.hypot(bx - ax, by - ay)
+        if ln > 1e-6:
+            segs.append((ax, ay, (bx - ax) / ln, (by - ay) / ln, total, ln))
+            total += ln
+    if not segs:
+        report.warn(where, "path has zero length -- the room will show no footsteps")
+        return
+    intervals = max(1, round(total / FOOTSTEP_STEP_CM))
+    step = total / intervals
+    openings = _door_openings(geo)
+    kept = dropped_door = 0
+    si = 0
+    for k in range(intervals + 1):
+        s = min(total, k * step)
+        while si < len(segs) - 1 and s > segs[si][4] + segs[si][5]:
+            si += 1
+        ax, ay, ux, uy, s0, _ = segs[si]
+        side = 1 if k % 2 == 0 else -1
+        x = ax + ux * (s - s0) - uy * side * FOOTSTEP_STRIDE_CM / 2
+        y = ay + uy * (s - s0) + ux * side * FOOTSTEP_STRIDE_CM / 2
+        if not inside_poly(poly, x, y):
+            continue
+        if any(_dist_to_segment(x, y, *o) < FOOTSTEP_DOOR_GAP_CM for o in openings):
+            dropped_door += 1
+            continue
+        kept += 1
+    if kept == 0:
+        report.warn(where, f"no print survives (door gap {FOOTSTEP_DOOR_GAP_CM}cm / room outline) -- "
+                           f"the room will show NO footsteps; move the path away from its doors")
+    elif dropped_door:
+        report.warn(where, f"{dropped_door} print(s) fall inside the {FOOTSTEP_DOOR_GAP_CM}cm door gap "
+                           f"and are not drawn; start/end the path further from the door")
 
 
 WALL_SIDE_CONTACT_CM = 10

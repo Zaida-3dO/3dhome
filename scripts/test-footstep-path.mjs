@@ -59,13 +59,16 @@ const RECT = [[1000, 1000], [1600, 1000], [1600, 1300], [1000, 1300]];
 {
   const pts = [[1100, 1150], [1500, 1150]];            // 400 cm due east
   const { prints } = walkPath({ points: pts, poly: RECT });
-  const expected = Math.floor(400 / STEP_CM) + 1;
-  check('straight path: one print per stride over the whole line', prints.length === expected,
+  const expected = Math.round(400 / STEP_CM) + 1;
+  check('straight path: one print per (fitted) stride over the whole line', prints.length === expected,
         { got: prints.length, expected });
   check('straight path: first print starts at the first waypoint (along the line)',
         near(prints[0].x, 1100), prints[0]);
-  check('straight path: last print within one stride of the last waypoint',
-        prints.at(-1).x <= 1500 && 1500 - prints.at(-1).x < STEP_CM, prints.at(-1));
+  check('straight path: last print lands ON the last waypoint (along the line)',
+        near(prints.at(-1).x, 1500), prints.at(-1));
+  const fitted = 400 / (prints.length - 1);
+  check('straight path: fitted stride stays within 15% of STEP_CM',
+        Math.abs(fitted - STEP_CM) / STEP_CM <= 0.15, fitted);
   let steps = true, sides = true, heading = true;
   for (let i = 0; i < prints.length; i++) {
     const p = prints[i];
@@ -73,9 +76,9 @@ const RECT = [[1000, 1000], [1600, 1000], [1600, 1300], [1000, 1300]];
     // Alternates either side of the walking line y = 1150, by STRIDE/2.
     const want = 1150 + ((i % 2 === 0) ? 1 : -1) * STRIDE_CM / 2;
     if (!near(p.y, want)) sides = false;
-    if (i && !near(p.x - prints[i - 1].x, STEP_CM)) steps = false;
+    if (i && !near(p.x - prints[i - 1].x, fitted)) steps = false;
   }
-  check('straight path: consecutive prints exactly one STEP_CM apart', steps);
+  check('straight path: consecutive prints evenly spaced by the fitted stride', steps);
   check('straight path: prints alternate left/right by STRIDE_CM/2', sides, prints.map(p => p.y));
   check('straight path: every print faces along the line (+x)', heading);
 }
@@ -96,6 +99,33 @@ const RECT = [[1000, 1000], [1600, 1000], [1600, 1300], [1000, 1300]];
   // Prints advance monotonically along the travel direction.
   const proj = fwd.map(p => (p.x - 1100) * dx + (p.y - 1100) * dy);
   check('direction: prints are in walking order', proj.every((v, i) => i === 0 || v > proj[i - 1]), proj);
+}
+
+// ---------------------------------------------------------------------------
+// 2b. The trail ARRIVES: the last print is on the last waypoint for any path
+//     length, not up to a stride short of it (a fixed 34cm stride stopped a
+//     real bathroom trail ~20cm short of the bath it was drawn to).
+// ---------------------------------------------------------------------------
+{
+  let worst = 0, worstLen = 0, spacingOk = true;
+  for (let len = 20; len <= 500; len += 7) {
+    const ps = walkPath({ points: [[1050, 1150], [1050 + len, 1150]], poly: RECT }).prints;
+    const miss = Math.abs(ps.at(-1).x - (1050 + len));
+    if (miss > worst) { worst = miss; worstLen = len; }
+    if (len >= 3 * STEP_CM) {
+      for (let i = 1; i < ps.length; i++) {
+        const d = ps[i].x - ps[i - 1].x;
+        if (Math.abs(d - STEP_CM) / STEP_CM > 0.2) spacingOk = false;
+      }
+    }
+  }
+  check('endpoint: last print on the last waypoint for every length 20..500cm', worst < 1e-6, { worst, worstLen });
+  check('endpoint: fitted stride within 20% of STEP_CM once a path is >= 3 strides', spacingOk);
+  // Multi-segment, smoothed: still ends on the last waypoint.
+  const ps = walkPath({ points: [[1100, 1100], [1300, 1100], [1300, 1260]], poly: RECT }).prints;
+  const last = ps.at(-1);
+  check('endpoint: smoothed multi-segment path ends on its last waypoint (within the stride offset)',
+        Math.hypot(last.x - 1300, last.y - 1260) <= STRIDE_CM / 2 + 1e-6, last);
 }
 
 // ---------------------------------------------------------------------------

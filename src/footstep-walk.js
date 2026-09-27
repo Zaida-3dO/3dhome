@@ -338,12 +338,12 @@ export function smoothPolyline(points, passes = 2) {
 /**
  * Lay prints along an authored polyline, in waypoint order.
  *
- * The walking line starts exactly on the first waypoint and advances one
- * stride (`stepCm`) at a time along the polyline, so the trail runs from the
- * first waypoint towards the last — waypoint order IS the direction of travel.
- * Each print sits `strideCm / 2` either side of the line, alternating, and
- * faces along the line's direction at that point. Prints stop at the last
- * stride that fits before the end of the line.
+ * The walking line starts exactly on the first waypoint and ends exactly on
+ * the last, advancing by a stride FITTED to the path length (the whole
+ * division of the path nearest `stepCm`), so the trail runs from the first
+ * waypoint to the last — waypoint order IS the direction of travel. Each
+ * print sits `strideCm / 2` either side of the line, alternating, and faces
+ * along the line's direction at that point.
  *
  * Unlike the automatic walk there is no count cap: the author drew the length
  * they wanted.
@@ -381,8 +381,15 @@ export function walkPath(opts) {
   }
   if (!segs.length) return { prints };
 
+  // Fit the stride to the path so the LAST print lands on the last waypoint:
+  // the author's endpoint (the bath, the radiator) is where the walk should
+  // visibly arrive, and whole fixed strides could stop up to a stride short.
+  // The fitted stride is the nearest whole division of the path, so it stays
+  // within ~15% of stepCm for any path longer than a few strides.
+  const intervals = Math.max(1, Math.round(total / stepCm));
+  const step = total / intervals;
   let si = 0;
-  for (let k = 0, s = 0; s <= total + 1e-6; k++, s = k * stepCm) {
+  for (let k = 0, s = 0; k <= intervals; k++, s = Math.min(total, k * step)) {
     while (si < segs.length - 1 && s > segs[si].s0 + segs[si].len) si++;
     const g = segs[si];
     const t = s - g.s0;

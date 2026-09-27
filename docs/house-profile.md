@@ -238,15 +238,18 @@ to the radiator, under the dining table toward the counters — give the room a
 ```
 
 - **Waypoint order is the direction of travel.** The first print sits on the
-  first waypoint; prints follow one stride apart towards the last, alternating
-  left and right of the line and facing along it. There is no count cap: the
-  length you draw is the length you get.
+  first waypoint and the last print on the last waypoint; in between they are
+  evenly spaced at the stride nearest 34 cm that fits the path exactly,
+  alternating left and right of the line and facing along it. There is no
+  count cap: the length you draw is the length you get.
 - **Coordinates are relative to the room's bbox min corner**, exactly as for
   `footstepZone`, and `relativeTo` must be `"room"`.
 - **Every waypoint must lie inside the room polygon.** If any does not, the
   whole path is ignored with a console warning and the room falls back to its
   `footstepZone` or to automatic placement. `scripts/validate-house.py`
-  reports the offending waypoint as an error.
+  reports the offending waypoint as an error, and WARNS when a segment between
+  two waypoints leaves the room (add a waypoint to route round the corner) or
+  when the door gap would leave the path with no prints at all.
 - `smooth` (default `true`) rounds the corners between waypoints; the
   endpoints never move. Set it to `false` for a sharp turn.
 - **It takes precedence over `footstepZone`**, so a room with a path needs no
