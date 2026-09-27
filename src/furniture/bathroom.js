@@ -22,7 +22,7 @@
  * Builder contract: see box.js and docs/house-profile.md ("Furniture"). Pure
  * ESM, THREE injected, local frame in METRES with y = 0 at the bottom, x
  * centred along the width, the BACK at z = 0 and the front facing +z. Every
- * material comes from makeFinish(): ceramic is `gloss`, chrome `metal`, glass
+ * material comes from makeFinish(): ceramic is `gloss`, chrome a light-grey `gloss` (see CHROME_FINISH), glass
  * `glass` (kept, one draw). Nothing here adds a light or a texture.
  *
  * CURVED CERAMIC. The bath, WC pan, seat, lid, basin and tray are LOFTS: a
@@ -181,7 +181,13 @@ export function rollRings(A, B, lipH, steps) {
 }
 
 const CERAMIC = '#f7f5f0';
-const CHROME = '#eef0f2';
+const CHROME = '#d3d7db';
+// Chrome is drawn `gloss` in a light cool grey, NOT `metal`. The live house has
+// no environment map, and a 0.9-metalness surface with nothing to reflect has
+// almost no diffuse term: taps, valves and rails came out near-black there.
+// A smooth light grey reads as polished chrome under the room lights, and
+// still picks up the spec pages' reflections.
+const CHROME_FINISH = 'gloss';
 
 // ---- bathtub -----------------------------------------------------------------------
 
@@ -224,7 +230,7 @@ function buildBathtub(THREE, params, opts) {
   group.name = 'furniture:bathtub';
   part(THREE, group, loftRR(THREE, profile, { seg, capLast: true }), fin(THREE, 'gloss', p.color), 'bathShell');
   const wasteX = wasteRight ? floor.cx + floor.w / 2 - 0.07 : floor.cx - floor.w / 2 + 0.07;
-  const waste = cylPart(THREE, group, 0.03, 0.03, 0.006, low ? 8 : 12, fin(THREE, 'metal', p.wasteColor), 'bathWaste');
+  const waste = cylPart(THREE, group, 0.03, 0.03, 0.006, low ? 8 : 12, fin(THREE, CHROME_FINISH, p.wasteColor), 'bathWaste');
   waste.position.set(wasteX, floorY + 0.003, D / 2);
   return group;
 }
@@ -253,7 +259,7 @@ function buildToilet(THREE, params, opts) {
   const group = new THREE.Group();
   group.name = 'furniture:toilet';
   const ceramic = fin(THREE, 'gloss', p.color);
-  const chrome = fin(THREE, 'metal', p.plateColor);
+  const chrome = fin(THREE, CHROME_FINISH, p.plateColor);
 
   // Pan: pedestal -> flared body -> rolled rim -> bowl -> water level.
   const outerTop = { y: h - 0.014, w, back: 0, front: dep, rb: 0.02, rf: 0.15 };
@@ -401,7 +407,7 @@ function buildVanity(THREE, params, opts) {
     const floorRing = { y: bowlFloorY, cx: bcx, w: bw * 0.40, back: Math.max(fwdBack + 0.03, bowlBack + 0.12), front: front - 0.10, rb: 0.07, rf: 0.07 };
     profile.push(floorRing);
     part(THREE, group, loftRR(THREE, profile, { seg, capFirst: true, capLast: true }), fin(THREE, 'gloss', p.ceramicColor), 'basinBody');
-    const chrome = fin(THREE, 'metal', p.tapColor);
+    const chrome = fin(THREE, CHROME_FINISH, p.tapColor);
     if (!low) {
       const waste = cylPart(THREE, group, 0.018, 0.018, 0.004, 12, chrome, 'basinWaste');
       waste.position.set(bcx, bowlFloorY + 0.002, (floorRing.back + floorRing.front) / 2);
@@ -459,7 +465,7 @@ const SHOWER_SET_DEFAULTS = deepFreeze({
 /** Parts at their FLOOR heights, x = 0 at the valve's centre. Not yet framed. */
 function rawShowerSet(THREE, p, low) {
   const g = new THREE.Group();
-  const chrome = fin(THREE, 'metal', p.color);
+  const chrome = fin(THREE, CHROME_FINISH, p.color);
   const vy = p.valveHeight * CM, L = p.valveLength * CM, ra = p.riserOffset * CM;
   const rBot = p.riserFrom * CM, rTop = Math.max(rBot + 0.1, p.riserTo * CM);
   const hsY = p.handsetHeight == null ? rTop - 0.22 : p.handsetHeight * CM;
@@ -501,7 +507,7 @@ function rawShowerSet(THREE, p, low) {
   head.position.set(0, 0.09, 0.02);
   head.rotation.x = Math.PI / 2 - 0.25;
   if (!low) {
-    const face = cylPart(THREE, hs, 0.046, 0.046, 0.004, big, fin(THREE, 'metal', p.faceColor), 'showerHandsetFace');
+    const face = cylPart(THREE, hs, 0.046, 0.046, 0.004, big, fin(THREE, CHROME_FINISH, p.faceColor), 'showerHandsetFace');
     face.position.set(0, 0.094, 0.0355);
     face.rotation.x = Math.PI / 2 - 0.25;
   }
@@ -620,7 +626,7 @@ function buildShowerScreen(THREE, params, opts) {
       [a + SASH / 2, b - SASH / 2].forEach(sx => boxPart(THREE, group, SASH, H - 2 * SASH, BT, sx, H / 2, zc, frame, 'screenDoorStile'));
       boxPart(THREE, group, len - 2 * SASH, H - 2 * SASH, 0.008, cx, H / 2, zc, glass, 'screenDoorGlass');
       const latchX = right ? a + SASH * 1.6 : b - SASH * 1.6;
-      boxPart(THREE, group, 0.02, 0.14, HANDLE, latchX, H / 2, FD + HANDLE / 2, fin(THREE, 'metal', CHROME), 'screenDoorHandle');
+      boxPart(THREE, group, 0.02, 0.14, HANDLE, latchX, H / 2, FD + HANDLE / 2, fin(THREE, CHROME_FINISH, CHROME), 'screenDoorHandle');
     } else {
       boxPart(THREE, group, len, H - 2 * SASH, 0.008, cx, H / 2, zc, glass, 'screenFixedGlass');
     }
@@ -652,7 +658,7 @@ function buildShowerTray(THREE, params, opts) {
   group.name = 'furniture:shower-tray';
   part(THREE, group, loftRR(THREE, profile, { seg: low ? 1 : 3, capLast: true }), fin(THREE, 'gloss', p.color), 'trayBody');
   if (!low) {
-    const waste = cylPart(THREE, group, 0.045, 0.045, 0.003, 12, fin(THREE, 'metal', p.wasteColor), 'trayWaste');
+    const waste = cylPart(THREE, group, 0.045, 0.045, 0.003, 12, fin(THREE, CHROME_FINISH, p.wasteColor), 'trayWaste');
     waste.position.set(0, floorY + 0.0015, D / 2);
   }
   return group;
@@ -674,7 +680,7 @@ function buildTowelRail(THREE, params, opts) {
   const W = p.width * CM, H = p.height * CM, D = p.depth * CM;
   const sideR = Math.min(0.012, D / 3), rungR = Math.min(0.009, D / 4);
   const postZ = sideR, rungZ = Math.max(postZ, D - rungR);
-  const chrome = fin(THREE, 'metal', p.color);
+  const chrome = fin(THREE, CHROME_FINISH, p.color);
   const group = new THREE.Group();
   group.name = 'furniture:towel-rail';
   [-1, 1].forEach((sx, i) => {

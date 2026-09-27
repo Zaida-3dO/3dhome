@@ -895,7 +895,7 @@
         },
         "wasteColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#eef0f2"
+          "default": "#d3d7db"
         }
       },
       "additionalProperties": false
@@ -2565,7 +2565,7 @@
         },
         "color": {
           "$ref": "#/$defs/hexColor",
-          "default": "#eef0f2"
+          "default": "#d3d7db"
         },
         "faceColor": {
           "$ref": "#/$defs/hexColor",
@@ -2603,7 +2603,7 @@
         },
         "wasteColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#eef0f2"
+          "default": "#d3d7db"
         }
       },
       "additionalProperties": false
@@ -2832,7 +2832,7 @@
         },
         "plateColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#eef0f2"
+          "default": "#d3d7db"
         }
       },
       "additionalProperties": false
@@ -2868,7 +2868,7 @@
         },
         "color": {
           "$ref": "#/$defs/hexColor",
-          "default": "#eef0f2"
+          "default": "#d3d7db"
         }
       },
       "additionalProperties": false
@@ -3009,7 +3009,7 @@
         },
         "tapColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#eef0f2"
+          "default": "#d3d7db"
         },
         "tileWidth": {
           "type": "number",

@@ -34,6 +34,28 @@ export const FINISH_PARAMS = Object.freeze({
 export const FINISHES = Object.freeze(Object.keys(FINISH_PARAMS));
 
 /**
+ * What the LIVE scene draws a finish with, where it differs from the palette.
+ *
+ * The live house has no environment map (by design: one would relight every
+ * material in the house, every frame). A fully metallic, near-mirror-smooth
+ * surface with nothing to reflect has almost no diffuse term, so the `mirror`
+ * finish rendered SOLID BLACK there -- wardrobe doors, bathroom mirror
+ * cabinets. The merged palette (merge.js makePaletteTexture) therefore draws
+ * a mirror as a smooth, barely metallic light grey: it reads as silvered
+ * glass and catches the room's highlights, at no cost (same texel lookup,
+ * same program, no new draw). Spec pages, which DO install an environment
+ * (specs/spec-three.jsx), keep the true mirror from makeFinish().
+ */
+export const NO_ENV_FINISH_PARAMS = Object.freeze({
+  mirror: Object.freeze({ roughness: 0.12, metalness: 0.15 })
+});
+
+/** The params the live (no-environment) scene draws `finish` with. */
+export function liveFinishParams(finish) {
+  return NO_ENV_FINISH_PARAMS[finish] || FINISH_PARAMS[finish];
+}
+
+/**
  * Finishes the merge must keep as their own draw (with a real material)
  * rather than folding into a vertex-coloured bucket: anything transparent,
  * reflective or glowing. A builder does not need to set `userData.keep` on
