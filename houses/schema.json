@@ -1504,7 +1504,7 @@
 
     "furnitureParams_hex-panel-cluster": {
       "type": "object",
-      "description": "Params for `hex-panel-cluster` (src/furniture/wall-panels.js): a honeycomb cluster of regular hexagon felt panels, one merged geometry per cluster. Each `default` equals wall-panels.js TYPES['hex-panel-cluster'].DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). `width`, `height` and `depth` are DERIVED from `side`, `rows` and `thickness` (the cluster's own bbox) -- the validator cannot run JavaScript, so these three carry the pre-computed values for the DEFAULT cluster only; a house that changes `side` or `rows` gets the real derived bbox at render time, and the footprint checks that read `width`/`height` from a placed item's schema defaults will be approximate for a customised cluster.",
+      "description": "Params for `hex-panel-cluster` (src/furniture/wall-panels.js): a honeycomb cluster of regular hexagon felt panels, one mesh per hex sharing a single geometry instance per cluster (29 meshes sharing one geometry at the living-room default). Each `default` equals wall-panels.js TYPES['hex-panel-cluster'].DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). `width`, `height` and `depth` are DERIVED from `side`, `columns` and `thickness` (the cluster's own bbox) -- the validator cannot run JavaScript, so these three carry the pre-computed values for the DEFAULT cluster only; a house that changes `side` or `columns` gets the real derived bbox at render time, and the footprint checks that read `width`/`height` from a placed item's schema defaults will be approximate for a customised cluster.",
       "properties": {
         "side": {
           "type": "number",
@@ -1512,9 +1512,9 @@
           "default": 18,
           "description": "cm, one hexagon's side length."
         },
-        "rows": {
+        "columns": {
           "type": "array",
-          "description": "Hex count per row, top to bottom. The living-room default is a 29-hex cluster: 3,4,5,4,4,4,3,2.",
+          "description": "Hex count per column, left to right. The living-room default is a 29-hex cluster: 3,4,5,4,4,4,3,2 (flat-top hexes, stacked vertically within a column).",
           "items": {
             "type": "integer",
             "minimum": 0
@@ -1522,13 +1522,13 @@
           "minItems": 1,
           "default": [3, 4, 5, 4, 4, 4, 3, 2]
         },
-        "offsets": {
+        "columnOffsets": {
           "type": ["array", "null"],
-          "description": "Optional per-row shift, in half-hex units, added on top of the automatic per-row centring. Same length as `rows`, or null (every row simply centred, which is the default cluster's layout).",
+          "description": "Optional per-column shift, in half-hex units (positive = down), added on top of the automatic per-column centring. Same length as `columns`, or null (every column simply centred). The living-room default centres every column except column 5 (index 4), shifted down half a hex so it interlocks with columns 4 and 6 (both, like it, 4 hexes -- centring all three would leave them level with no honeycomb notch between them).",
           "items": {
             "type": "number"
           },
-          "default": null
+          "default": [0, 0, 0, 0, 1, 0, 0, 0]
         },
         "thickness": {
           "type": "number",
@@ -1538,23 +1538,36 @@
         },
         "color": {
           "$ref": "#/$defs/hexColor",
-          "default": "#1c1815"
+          "default": "#466e5e",
+          "description": "Dark green felt, tuned for the LIVE APP across FOUR light states (review round 6, 2026-09-27). Round 5's #5a828c was tuned in only one light state (night, warm room light) and did not generalise: it rendered teal in daylight and blue at noon with the lights off, both in the demo house and the real living room the reference photos are of. This value was verified across night-lit, morning-lit, noon-lit and noon-lights-off and held dark green in every one (hue 124-157, brightness 0.25-0.34 of the wall, matching the reference photo's own ~0.23). Earlier values (#1e3228 round 2, #0a2515 round 3-4) were judged on the spec page, which reads noticeably brighter than the app for the same base colour: specs/spec-three.jsx installs a CubeCamera and sets scene.environment, giving every material image-based lighting from the room's own background -- the live app has no such environment map. The spec page renders this value as a lighter sage green (rgb ~80,113,95) due to that environment map -- accepted; aligning the spec page's own lighting with the app is a separate follow-up."
         },
         "finish": {
           "$ref": "#/$defs/furnitureFinish",
           "default": "matte"
         },
+        "bevelWidth": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.9,
+          "description": "cm, how far in from each hex's own outer edge the chamfer starts -- the front (plateau) face is inset by this much on every side. Modelled as a custom prism (NOT THREE.ExtrudeGeometry's own bevelEnabled, which grows the footprint outward): the hex's outer footprint and the column/row layout pitch, both keyed to `side` alone, are unaffected by this or `bevelDepth`."
+        },
+        "bevelDepth": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.5,
+          "description": "cm, how much thinner the rim is than the centre (must be < `thickness`) -- where two hexes meet, this is what forms the visible V-groove border line. About half of the default 1cm `thickness`."
+        },
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 155.88,
-          "description": "cm. DERIVED from `side` + `rows` (the cluster's bbox) -- do not set independently of them. Value shown is the default cluster's own bbox width."
+          "default": 225,
+          "description": "cm. DERIVED from `side` + `columns` (the cluster's bbox) -- do not set independently of them. Value shown is the default cluster's own bbox width. Unaffected by bevelWidth/bevelDepth (the bevel insets the FRONT FACE only, never the outer footprint)."
         },
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 225,
-          "description": "cm. DERIVED from `side` + `rows` (the cluster's bbox) -- do not set independently of them. Value shown is the default cluster's own bbox height."
+          "default": 155.88,
+          "description": "cm. DERIVED from `side` + `columns` (the cluster's bbox) -- do not set independently of them. Value shown is the default cluster's own bbox height."
         },
         "depth": {
           "type": "number",
@@ -2344,25 +2357,25 @@
         "depth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 2.1,
+          "default": 1.9,
           "description": "cm. DERIVED: `backingDepth` + `slatDepth` (the felt backing plus how far the slats protrude off it) -- do not set independently of them."
         },
         "slatWidth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 5.6,
-          "description": "cm, each slat's face width. Slats are fit to the whole `width`, redistributing any remainder into the gap so the run starts and ends on a slat."
+          "default": 2.7,
+          "description": "cm, each slat's face width. Slats are fit to the whole `width`, redistributing any remainder into the gap so the run starts and ends on a slat. Default matches the real Acupanel Contemporary Oak product spec (src/home3d-scene.js's hard-coded bedroom panel)."
         },
         "pitch": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 7.5,
+          "default": 4.0,
           "description": "cm, nominal centre-to-centre spacing (slat width + gap). The actual pitch is adjusted slightly so a whole number of slats fits `width`."
         },
         "slatDepth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 1.2,
+          "default": 1.0,
           "description": "cm, how far each slat protrudes off the felt backing."
         },
         "backingDepth": {
@@ -2381,7 +2394,13 @@
         },
         "finish": {
           "$ref": "#/$defs/furnitureFinish",
-          "default": "matte"
+          "default": "satin",
+          "description": "Applies to the slat mesh only -- the felt backing is always `matte`, hard-coded in the builder. Default `satin` (roughness 0.6) matches the bedroom's hard-coded panel (roughness 0.55) more closely than `matte` (0.8) would."
+        },
+        "grainMap": {
+          "type": "boolean",
+          "default": false,
+          "description": "Adds a subtle procedural oak-grain roughness map to the slats, matching the bedroom's hard-coded panel (src/home3d-scene.js). Off by default; the spec page's oak preset turns it on. A narrow, deliberate exception to the finish palette (src/furniture/finishes.js) -- there is no grained finish key."
         }
       },
       "additionalProperties": false

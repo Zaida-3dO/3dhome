@@ -71,11 +71,13 @@
          "Oak slats"   — the bedroom headboard wall: light oak slats on a
                          black felt backing.
 
-     HEX PANEL CLUSTER — a honeycomb of regular hexagon felt panels, one
-     merged geometry, cheap to draw. The living-room default is 29 hexes
-     (rows 3,4,5,4,4,4,3,2), 18cm side, matching the photo reference named
-     in the plan (living-room-hex-wall-tv.jpg): pointy-top hexes, stacked
-     in an offset honeycomb, each row centred by default.
+     HEX PANEL CLUSTER — a honeycomb of regular hexagon felt panels, 29
+     meshes sharing one geometry, cheap to draw. The living-room default is
+     29 hexes in vertical columns, left to right (3,4,5,4,4,4,3,2), 18cm side, matching
+     the photo reference named in the plan (living-room-hex-wall-tv.jpg):
+     flat-top hexes, stacked in an offset honeycomb, each column centred by
+     default except column 5, shifted down half a hex to interlock with
+     columns 4 and 6.
 
    Both types are built by calling the REAL builder
    (window.__wallPanelsModule.TYPES[type].build), not a page-local copy —
@@ -86,27 +88,55 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "slatPreset": "black",
   "slatWidthCm": 240,
   "slatHeightCm": 250,
-  "slatWidth": 5.6,
-  "pitch": 7.5,
-  "slatDepth": 1.2,
+  "slatWidth": 2.7,
+  "pitch": 4.0,
+  "slatDepth": 1.0,
   "backingDepth": 0.9,
   "hexSide": 18,
   "hexThickness": 1,
-  "hexColor": "#1c1815"
+  "hexColor": "#466e5e",
+  "hexBevelWidth": 0.9,
+  "hexBevelDepth": 0.5
 }/*EDITMODE-END*/;
 
+// Real Acupanel Contemporary Oak product spec (src/home3d-scene.js's
+// hard-coded bedroom panel) -- both presets share these geometry numbers
+// (2026-09-26, WallPanelSpec review criterion 9); only colour (and, for oak,
+// the grain map) differs between them.
 const SLAT_PRESETS = {
-  black: { label: 'Black slats', slatColor: '#322e29', backingColor: '#0e0b09' },
-  oak:   { label: 'Oak slats',   slatColor: '#c9a06a', backingColor: '#1c1815' }
+  black: { label: 'Black slats', slatColor: '#322e29', backingColor: '#0e0b09', grainMap: false },
+  oak:   { label: 'Oak slats',   slatColor: '#c9a06a', backingColor: '#1c1815', grainMap: true }
 };
 
-// The living-room default cluster (29 hexes). Matches
-// wall-panels.js's own HEX_DEFAULT_ROWS — kept as a literal here (rather
-// than reached into the module) so the preset reads clearly as "the real
-// house use", independent of internal module names.
-const HEX_LIVING_ROOM_ROWS = [3, 4, 5, 4, 4, 4, 3, 2];
+// The living-room default cluster (29 hexes), in vertical columns left to
+// right. Matches wall-panels.js's own HEX_DEFAULT_COLUMNS /
+// HEX_DEFAULT_COLUMN_OFFSETS — kept as literals here (rather than reached
+// into the module) so the preset reads clearly as "the real house use",
+// independent of internal module names. Column 5 (index 4) is shifted down
+// half a hex to interlock with columns 4 and 6 (see wall-panels.js).
+const HEX_LIVING_ROOM_COLUMNS = [3, 4, 5, 4, 4, 4, 3, 2];
+const HEX_LIVING_ROOM_COLUMN_OFFSETS = [0, 0, 0, 0, 1, 0, 0, 0];
 
-function countHexes(rows) { return rows.reduce((s, n) => s + n, 0); }
+function countHexes(columns) { return columns.reduce((s, n) => s + n, 0); }
+
+// The cluster's derived bbox height (m), mirroring wall-panels.js's own
+// layoutHexes: each column's flat-top hexes are centred vertically then
+// shifted by its offset (half-hex units, positive = down); the bbox is the
+// min/max of every column's own top/bottom edge -- NOT a formula from the
+// tallest column alone, since a shifted shorter column can exceed it.
+function hexClusterHeightM(sideCm, columns, columnOffsets) {
+  const sideM = sideCm / 100;
+  const rowPitch = Math.sqrt(3) * sideM, halfHex = rowPitch / 2;
+  let minY = Infinity, maxY = -Infinity;
+  columns.forEach((count, c) => {
+    const off = columnOffsets[c] || 0;
+    const y0 = -((count - 1) * rowPitch) / 2 - off * halfHex;
+    const yTop = y0 - rowPitch / 2, yBottom = y0 + (count - 1) * rowPitch + rowPitch / 2;
+    minY = Math.min(minY, yTop);
+    maxY = Math.max(maxY, yBottom);
+  });
+  return maxY - minY;
+}
 
 // ============== Model: calls the REAL builder module ==============
 function buildPanel(t, group, THREE, ctx) {
@@ -124,7 +154,8 @@ function buildPanel(t, group, THREE, ctx) {
       slatDepth: t.slatDepth,
       backingDepth: t.backingDepth,
       slatColor: preset.slatColor,
-      backingColor: preset.backingColor
+      backingColor: preset.backingColor,
+      grainMap: preset.grainMap
     });
     const built = impl.build(THREE, params, { detail: 'full' });
     group.add(built);
@@ -133,17 +164,19 @@ function buildPanel(t, group, THREE, ctx) {
     const impl = mod.TYPES['hex-panel-cluster'];
     const params = Object.assign({}, impl.DEFAULTS, {
       side: t.hexSide,
-      rows: HEX_LIVING_ROOM_ROWS,
-      offsets: null,
+      columns: HEX_LIVING_ROOM_COLUMNS,
+      columnOffsets: HEX_LIVING_ROOM_COLUMN_OFFSETS,
       thickness: t.hexThickness,
-      color: t.hexColor
+      color: t.hexColor,
+      bevelWidth: t.hexBevelWidth,
+      bevelDepth: t.hexBevelDepth
     });
     const built = impl.build(THREE, params, { detail: 'full' });
     group.add(built);
     // heightOf needs the ACTUAL derived bbox height, not a DEFAULTS guess —
-    // recompute it the same way the builder does (side + rows -> bbox).
-    const sideM = t.hexSide / 100;
-    ctx.heightM = (HEX_LIVING_ROOM_ROWS.length - 1) * 1.5 * sideM + 2 * sideM;
+    // recompute it the same way the builder does (side + columns +
+    // columnOffsets -> bbox).
+    ctx.heightM = hexClusterHeightM(t.hexSide, HEX_LIVING_ROOM_COLUMNS, HEX_LIVING_ROOM_COLUMN_OFFSETS);
   }
 }
 
@@ -161,7 +194,7 @@ function App() {
 
   const isSlat = t.panelType === 'slat-panel';
   const preset = SLAT_PRESETS[t.slatPreset] || SLAT_PRESETS.black;
-  const hexCount = countHexes(HEX_LIVING_ROOM_ROWS);
+  const hexCount = countHexes(HEX_LIVING_ROOM_COLUMNS);
 
   return (
     <>
@@ -183,10 +216,10 @@ function App() {
                     onClick={() => setTweak('slatPreset', key)}>{p.label}</button>
                 ))}
               </div>
-              <div className="note">{preset.label}: slat {preset.slatColor}, backing {preset.backingColor}. The oak preset is the bedroom headboard wall — light oak slats on a black felt backing.</div>
+              <div className="note">{preset.label}: slat {preset.slatColor}, backing {preset.backingColor}. The oak preset is the bedroom headboard wall — light oak slats (with a subtle grain map) on a black felt backing; both presets share the real Acupanel geometry (slat 2.7cm wide, 4.0cm pitch, 1.0cm deep, 0.9cm backing).</div>
             </>
           ) : (
-            <div className="note">Living-room default: side {t.hexSide} cm, rows {HEX_LIVING_ROOM_ROWS.join(',')} = {hexCount} hexes, black felt, ~{t.hexThickness} cm thick. Pointy-top, offset honeycomb, each row centred.</div>
+            <div className="note">Living-room default: side {t.hexSide} cm, columns (left to right) {HEX_LIVING_ROOM_COLUMNS.join(',')} = {hexCount} hexes, dark green felt, ~{t.hexThickness} cm thick. Flat-top, offset honeycomb; each column centred except column 5, shifted down half a hex to interlock with columns 4 and 6. Each hex has a chamfered front edge (bevel width {t.hexBevelWidth} cm, bevel depth {t.hexBevelDepth} cm) -- full thickness in the centre, sloping to a thinner rim, so a V-groove line reads where two hexes meet.</div>
           )}
           {!moduleReady && <div className="note">Loading src/furniture/wall-panels.js…</div>}
         </div>
@@ -212,8 +245,10 @@ function App() {
                 <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
                 <tr><td>Hex side</td><td className="num">{t.hexSide.toFixed(1)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Panel thickness</td><td className="num">{t.hexThickness.toFixed(1)}</td><td><b>Variable</b></td></tr>
-                <tr><td>Row counts</td><td className="num">{HEX_LIVING_ROOM_ROWS.join('-')}</td><td>Fixed (living-room preset)</td></tr>
-                <tr><td>Hex count</td><td className="num">{hexCount}</td><td>Derived from rows</td></tr>
+                <tr><td>Bevel width (front inset)</td><td className="num">{t.hexBevelWidth.toFixed(1)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Bevel depth (rim vs. centre)</td><td className="num">{t.hexBevelDepth.toFixed(2)}</td><td><b>Variable</b></td></tr>
+                <tr><td>Column counts (left to right)</td><td className="num">{HEX_LIVING_ROOM_COLUMNS.join('-')}</td><td>Fixed (living-room preset)</td></tr>
+                <tr><td>Hex count</td><td className="num">{hexCount}</td><td>Derived from columns</td></tr>
               </tbody>
             </table>
           )}
@@ -224,7 +259,24 @@ function App() {
           <ThreeView
             t={t}
             buildModel={buildPanel}
-            heightOf={tt => (tt.panelType === 'slat-panel' ? tt.slatHeightCm * 0.01 : (HEX_LIVING_ROOM_ROWS.length - 1) * 1.5 * (tt.hexSide * 0.01) + 2 * (tt.hexSide * 0.01))}
+            heightOf={tt => (tt.panelType === 'slat-panel' ? tt.slatHeightCm * 0.01 : hexClusterHeightM(tt.hexSide, HEX_LIVING_ROOM_COLUMNS, HEX_LIVING_ROOM_COLUMN_OFFSETS))}
+            // A dark-green felt is nearly invisible against ThreeView's
+            // default near-black background (rgb 26,26,28), making the
+            // colour hard to judge on this page. Hex mode gets a pale,
+            // off-white wall colour instead (matching the photo reference
+            // named in the plan comment above). Slat mode is unaffected
+            // (keeps the original dark viewer background). NOTE (round 6,
+            // 2026-09-27): the felt colour default itself is tuned for the
+            // LIVE APP's lighting across four light states (night/morning/
+            // noon-lit/noon-lights-off), not this page's -- this page also
+            // has an environment map (see ThreeView's own comment above)
+            // that makes the same base colour render noticeably lighter and
+            // more sage here (rgb ~80,113,95) than the dark green it reads
+            // as in the app. That is accepted, not a bug; aligning this
+            // page's lighting with the app is a separate follow-up. See
+            // wall-panels.js's HEX_CLUSTER_DEFAULTS.color for the full
+            // account of how the value was chosen.
+            backgroundOf={tt => (tt.panelType === 'hex-panel-cluster' ? '#d8d3c8' : 0x1a1a1c)}
           />
         </div>
       </div>
@@ -269,6 +321,10 @@ function App() {
               onChange={v => setTweak('hexThickness', v)} />
             <TweakColor label="Felt colour" value={t.hexColor}
               onChange={v => setTweak('hexColor', v)} />
+            <TweakSlider label="Bevel width" value={t.hexBevelWidth} min={0} max={3} step={0.1} unit="cm"
+              onChange={v => setTweak('hexBevelWidth', v)} />
+            <TweakSlider label="Bevel depth" value={t.hexBevelDepth} min={0} max={t.hexThickness} step={0.05} unit="cm"
+              onChange={v => setTweak('hexBevelDepth', v)} />
           </>
         )}
       </TweaksPanel>
