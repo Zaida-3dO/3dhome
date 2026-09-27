@@ -326,6 +326,10 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
       window.removeEventListener('resize', onResize);
       cubeRT.dispose();
       renderer.dispose();
+      // Release the WebGL context itself, not just its resources: a spec page
+      // that switches objects (SpecPage in tweaks-panel.jsx) unmounts one
+      // ThreeView and mounts another each time, and browsers cap live contexts.
+      renderer.forceContextLoss();
     };
   }, []);
 

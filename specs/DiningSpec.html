@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Dining Spec — Tweakable</title>
+<title>Dining table &amp; chairs — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -29,6 +29,20 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). The set and a lone chair are two OBJECTS;
+     tucked / pulled-out / larger-table are VARIANTS of the set. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Dining table & chairs",
+  "description": "A space-saving NESTING dining set: a round table on 4 splayed legs (no pedestal) plus 4 quadrant chairs that, tucked in, form the cylinder the white top overhangs like a lid. Renders the REAL src/furniture/dining.js builders. Pick an object and a variant, then fine-tune in the Tweaks panel. (The wall clock has its own page, under Decor & accessories.)",
+  "objects": [
+    { "id": "dining-set",   "label": "Dining set", "types": ["dining-table", "dining-chair"] },
+    { "id": "dining-chair", "label": "Dining chair", "types": ["dining-chair"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -301,22 +315,24 @@ function App() {
   };
   const warnings = t.chairAlone ? [] : collisionRisk(t);
 
+  // OBJECTS: the whole set, or one chair on its own (the old "Chair alone"
+  // toggle). The set's VARIANTS are its presets; the lone chair has none.
+  const SET_VARIANT_LABELS = { 'nested-set': 'Tucked in', 'pulled-out': 'Pulled out', 'larger-table': 'Larger table' };
+  const setVariants = Object.keys(SET_VARIANT_LABELS)
+    .map(id => ({ id, label: SET_VARIANT_LABELS[id], params: PRESETS[id] }));
+
   return (
-    <>
-      <h1>Dining Spec</h1>
-      <div className="sub">A space-saving NESTING dining set: a round table on 4 splayed legs (no pedestal) plus 4 quadrant chairs that, tucked in, form the cylinder the white top overhangs like a lid. Renders the REAL src/furniture/dining.js builders. Use the Tweaks panel, or jump to a preset below. (The wall clock has its own page, ClockSpec.)</div>
+    <SpecPage objectId={t.chairAlone ? 'dining-chair' : 'dining-set'}
+      onObject={id => applyPreset(id === 'dining-chair' ? 'chair-alone' : 'nested-set')}>
+      {!t.chairAlone && <SpecVariants variants={setVariants} values={t} onSelect={applyPreset} />}
 
       <div className="row" style={{ marginBottom: 16 }}>
-        {Object.keys(PRESETS).map(name => (
-          <button key={name} className={'btn' + (t.preset === name ? ' active' : '')}
-            onClick={() => applyPreset(name)}>{name}</button>
-        ))}
         <CopyJSONButton t={t} />
       </div>
 
       {t.chairAlone &&
         <div className="legend" style={{ marginBottom: 16 }}>
-          <b>Chair-alone view</b> -- one dining-chair, no table, no other chairs. Turn off "Chair alone" in the Tweaks panel to see the nested set.
+          <b>Dining chair</b> -- one dining-chair, no table, no other chairs. Pick "Dining set" above to see the nested set.
         </div>}
 
       {warnings.length > 0 &&
@@ -358,17 +374,12 @@ function App() {
               buildModel={buildDiningScene}
               heightOf={tt => (tt.chairAlone ? tt.chairHeight : tt.tableHeight) * CM}
             />}
-          <div className="legend">Drag to orbit, scroll to zoom. Use "Pulled out" to slide the 4 chairs out from the nested cylinder, or "Chair alone" to isolate one.</div>
+          <div className="legend">Drag to orbit, scroll to zoom. Use "Pulled out" to slide the 4 chairs out from the nested cylinder, or pick "Dining chair" above to isolate one.</div>
         </div>
       </div>
 
       <TweaksPanel>
-        <TweakSection label="Presets" />
-        <TweakSelect label="Preset" value={t.preset}
-          options={['custom', ...Object.keys(PRESETS)]}
-          onChange={v => (v === 'custom' ? setTweak('preset', v) : applyPreset(v))} />
-        <TweakToggle label="Chair alone" value={t.chairAlone}
-          onChange={v => setTweak('chairAlone', v)} />
+        <TweakSection label="Render" />
         <TweakRadio label="Detail" value={t.detail}
           options={[{ value: 'full', label: 'Full' }, { value: 'low', label: 'Low' }]}
           onChange={v => setTweak('detail', v)} />
@@ -399,7 +410,7 @@ function App() {
         <TweakSlider label="Pulled out" value={t.pulledOut} min={0} max={1} step={0.05} unit=""
           onChange={v => setTweak('pulledOut', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

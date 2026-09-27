@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Plant Spec — Tweakable</title>
+<title>Plants — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -40,6 +40,21 @@
 <body>
 <div id="root"></div>
 
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). Both are the one `plant` registry type, but a
+     potted plant and a wall planter have different controls and different
+     names, so they are two OBJECTS; the measured presets are their VARIANTS. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Plants",
+  "description": "All units cm. Procedural potted and wall-mounted plants with seeded (deterministic) leaves. Pick an object and a variant, then fine-tune in the Tweaks panel.",
+  "objects": [
+    { "id": "potted-plant", "label": "Potted plant", "types": ["plant"] },
+    { "id": "wall-planter", "label": "Wall planter", "types": ["plant"] }
+  ]
+}
+</script>
+
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
 <script src="../vendor/react-dom.production.min.js"></script>
@@ -74,7 +89,7 @@
    fixture, not a record of any particular building.
    ─────────────────────────────────────────────────────────────────────
 
-   Two kinds, picked from the Tweaks panel:
+   Two kinds, picked as two OBJECTS in the shared picker bar (SpecPage):
      corn-plant    a potted Dracaena fragrans: woven/ribbed tapered pot,
                    several staggered-height canes, each topped with a
                    strap-leaf rosette. Free-standing.
@@ -182,20 +197,20 @@ function App() {
 
   const isWallPlanter = t.kind === 'wall-planter';
 
+  // OBJECT <-> kind; each object's VARIANTS are the presets of its kind.
+  const objectId = isWallPlanter ? 'wall-planter' : 'potted-plant';
+  const kindOf = id => (id === 'wall-planter' ? 'wall-planter' : 'corn-plant');
+  const variantsOf = kind => Object.keys(PRESETS).filter(n => PRESETS[n].kind === kind)
+    .map(n => ({ id: n, label: n, params: PRESETS[n] }));
+
   return (
-    <>
-      <h1>Plant Spec</h1>
-      <div className="sub">All units cm. Procedural potted + wall-mounted plants, seeded (deterministic) leaves. Use the Tweaks panel to switch kind/preset.</div>
+    <SpecPage objectId={objectId}
+      onObject={id => applyPreset(variantsOf(kindOf(id))[0].id)}>
+      <SpecVariants variants={variantsOf(t.kind)} values={t} onSelect={applyPreset} />
 
       <div className="grid">
         <div className="card">
-          <h2>Presets</h2>
-          <div className="row">
-            {Object.keys(PRESETS).map(name => (
-              <button key={name} className={t.preset === name ? 'btn active' : 'btn'}
-                onClick={() => applyPreset(name)}>{name}</button>
-            ))}
-          </div>
+          <h2>Where the variants come from</h2>
           <div className="legend">
             corn-plant-tall is the plant between the two home-office desks (item 889bf6ce): 3 canes,
             56cm woven pot, 110cm plant height, ~40cm widest leaf spread. wall-planter-large/-small are
@@ -257,11 +272,6 @@ function App() {
       </div>
 
       <TweaksPanel>
-        <TweakSection label="Kind" />
-        <TweakSelect label="Kind" value={t.kind}
-          options={['corn-plant', 'wall-planter']}
-          onChange={v => setTweak('kind', v)} />
-
         <TweakSection label="Envelope (final bounding box)" />
         <TweakSlider label="Width" value={t.width} min={8} max={80} step={1} unit="cm"
           onChange={v => setTweak('width', v)} />
@@ -313,7 +323,7 @@ function App() {
           options={[{ value: 'full', label: 'Full' }, { value: 'low', label: 'Low' }]}
           onChange={v => setTweak('detail', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

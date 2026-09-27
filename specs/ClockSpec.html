@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Clock Spec — Tweakable</title>
+<title>Wall clock — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -29,6 +29,22 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). Both are the one `wall-clock` type, but the
+     stick-on word clock has different controls (no face or rim; a second-hand
+     colour), so it is its own OBJECT. DIY numerals and framed share controls,
+     so they are VARIANTS of the wall clock. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Wall clock",
+  "description": "A working wall clock that always shows the time. Renders the REAL src/furniture/wall-clock.js builder. Pick an object and a variant, then fine-tune in the Tweaks panel.",
+  "objects": [
+    { "id": "word-clock", "label": "Word clock (stick-on)", "types": ["wall-clock"] },
+    { "id": "wall-clock", "label": "Wall clock", "types": ["wall-clock"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -325,16 +341,20 @@ function App() {
     setTweak(Object.assign({ preset: name }, p));
   };
 
+  // OBJECT: the stick-on word clock (diy-words) or a wall clock; VARIANTS: the
+  // presets of that object (same controls, different values).
+  const OBJECT_PRESETS = { 'word-clock': ['photo-match-words'], 'wall-clock': ['photo-match', 'framed-clock'] };
+  const VARIANT_LABELS = { 'photo-match-words': 'Words + numerals (photo match)', 'photo-match': 'DIY numerals (photo match)', 'framed-clock': 'Framed' };
+  const objectId = t.clockKind === 'diy-words' ? 'word-clock' : 'wall-clock';
+  const variants = OBJECT_PRESETS[objectId].map(id => ({ id, label: VARIANT_LABELS[id], params: PRESETS[id] }));
   return (
-    <>
-      <h1>Clock Spec</h1>
-      <div className="sub">A working wall clock: `diy-words` (the owner's actual kitchen clock), `diy-numerals` (a living-room photo) or `framed` (a conventional alternative). Renders the REAL src/furniture/wall-clock.js builder. Use the Tweaks panel, or jump to a preset below.</div>
+    <SpecPage objectId={objectId} onObject={id => applyPreset(OBJECT_PRESETS[id][0])}>
+      <SpecVariants variants={variants} values={t} onSelect={applyPreset} />
+      <div className="sub">{objectId === 'word-clock'
+        ? 'A frameless stick-on clock: big numerals at 12/9/6, dots, the words One to Five, tapered hands and a thin red second hand.'
+        : 'A clock with numerals and dots stuck straight on the wall (DIY numerals), or a conventional round face with a rim (Framed).'}</div>
 
       <div className="row" style={{ marginBottom: 16 }}>
-        {Object.keys(PRESETS).map(name => (
-          <button key={name} className={'btn' + (t.preset === name ? ' active' : '')}
-            onClick={() => applyPreset(name)}>{name}</button>
-        ))}
         <CopyJSONButton t={t} />
       </div>
 
@@ -371,14 +391,7 @@ function App() {
       </div>
 
       <TweaksPanel>
-        <TweakSection label="Presets" />
-        <TweakSelect label="Preset" value={t.preset}
-          options={['custom', ...Object.keys(PRESETS)]}
-          onChange={v => (v === 'custom' ? setTweak('preset', v) : applyPreset(v))} />
-
         <TweakSection label="Wall clock" />
-        <TweakRadio label="Kind" value={t.clockKind}
-          options={['diy-words', 'diy-numerals', 'framed']} onChange={v => setTweak('clockKind', v)} />
         <TweakSlider label="Diameter" value={t.clockDiameter} min={20} max={45} step={1} unit="cm"
           onChange={v => setTweak('clockDiameter', v)} />
         <TweakSlider label="Depth" value={t.clockDepth} min={2} max={8} step={0.5} unit="cm"
@@ -399,7 +412,7 @@ function App() {
         <TweakToggle label="Live (real time)" value={t.clockLive}
           onChange={v => setTweak('clockLive', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

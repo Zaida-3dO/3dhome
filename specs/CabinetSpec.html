@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Cabinet Spec — Tweakable</title>
+<title>Cabinets &amp; Wardrobes — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -25,11 +25,31 @@
   textarea.fronts-json { width:100%; min-height:220px; font:inherit; font-size:10.5px; padding:10px;
     border:1px solid #d8d3c8; border-radius:4px; background:#fbfaf7; color:#1a1a1a; resize:vertical; }
   .err { font-size:10px; color:#b23b3b; margin-top:6px; min-height:14px; }
-  select#presetSelect { font:inherit; font-size:11px; padding:6px 10px; border-radius:4px; border:1px solid #d8d3c8; background:#fff; }
 </style>
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). Every object is the one `cabinet` builder, but
+     a wardrobe and a chest of drawers are different things: OBJECTS. Presets of
+     the same thing (a narrow vs a wide bedside table) are its VARIANTS. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Cabinets & Wardrobes",
+  "description": "All units cm. One configurable carcass (src/furniture/cabinet.js) for wardrobes, display cabinets, a TV console, a chest of drawers, bedside tables, a mobile pedestal, open shelving and a bathroom mirror cabinet. Pick an object and a variant, then edit its fronts grid below.",
+  "objects": [
+    { "id": "wardrobe",         "label": "Wardrobe", "types": ["cabinet"] },
+    { "id": "display-cabinet",  "label": "Display cabinet", "types": ["cabinet"] },
+    { "id": "tv-console",       "label": "TV console", "types": ["cabinet"] },
+    { "id": "chest-of-drawers", "label": "Chest of drawers", "types": ["cabinet"] },
+    { "id": "bedside-table",    "label": "Bedside table", "types": ["cabinet"] },
+    { "id": "mobile-pedestal",  "label": "Mobile pedestal", "types": ["cabinet"] },
+    { "id": "open-shelving",    "label": "Open shelving", "types": ["cabinet"] },
+    { "id": "mirror-cabinet",   "label": "Mirror cabinet", "types": ["cabinet"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -282,6 +302,32 @@ const PRESETS = {
   }
 };
 
+// Bathroom mirror cabinets: mirror fronts, no plinth, no handles (moved here
+// from BathroomFittingsSpec, 2026-09-27 -- a mirror cabinet is a `cabinet`, so
+// it is signed off with the other cabinets; same params as it had there).
+function mirrorCabinetParams(w, h, d, doors) {
+  const cells = [];
+  for (let i = 0; i < doors; i++) cells.push({ kind: 'mirror', width: +(w / doors).toFixed(3) });
+  return { width: w, height: h, depth: d, plinth: { type: 'plinth', height: 0 }, handles: false,
+    color: '#f4f1ea', topColor: '#f4f1ea', fronts: [{ height: h, cells }] };
+}
+PRESETS.mirrorCabinet3Door = { label: 'Mirror cabinet, 3 doors', params: mirrorCabinetParams(120, 70, 18, 3) };
+PRESETS.mirrorCabinet2Door = { label: 'Mirror cabinet, 2 doors', params: mirrorCabinetParams(80, 70, 16, 2) };
+
+// OBJECT -> its VARIANTS (preset keys above), in picker order.
+const CABINET_OBJECTS = {
+  'wardrobe':         ['mirroredWardrobe2Door', 'slidingWardrobe4Panel'],
+  'display-cabinet':  ['tallDisplayCabinet', 'tallDisplayCabinetMirror'],
+  'tv-console':       ['tvConsole'],
+  'chest-of-drawers': ['chestOfDrawers'],
+  'bedside-table':    ['bedsideTableLedNarrow', 'bedsideTableLedWide'],
+  'mobile-pedestal':  ['mobilePedestal'],
+  'open-shelving':    ['openShelving2Columns'],
+  'mirror-cabinet':   ['mirrorCabinet3Door', 'mirrorCabinet2Door'],
+};
+const cabinetObjectOf = presetKey =>
+  Object.keys(CABINET_OBJECTS).find(o => CABINET_OBJECTS[o].includes(presetKey));
+
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "preset": "mirroredWardrobe2Door"
 }/*EDITMODE-END*/;
@@ -367,22 +413,29 @@ function App() {
 
   const p = params;
 
+  // Picking a variant always re-seeds the editor, even when it is the preset
+  // already selected (i.e. "reset my edits back to this variant").
+  const pickVariant = (k) => {
+    setTweak('preset', k);
+    lastPresetRef.current = k;
+    setParamsJson(JSON.stringify(PRESETS[k].params, null, 2));
+    setJsonError('');
+  };
+  const objectId = cabinetObjectOf(presetKey);
+  const variants = CABINET_OBJECTS[objectId].map(k => ({ id: k, label: PRESETS[k].label, params: PRESETS[k].params }));
+
   return (
-    <>
-      <h1>Cabinet Spec</h1>
-      <div className="sub">All units cm. One configurable carcass for wardrobes, display cabinets, a TV stand, a chest of drawers, bedside tables and a mobile pedestal.</div>
+    <SpecPage objectId={objectId} onObject={id => pickVariant(CABINET_OBJECTS[id][0])}>
+      <SpecVariants variants={variants} values={params} onSelect={pickVariant} />
 
       <div className="row" style={{ marginBottom: 16 }}>
-        <select id="presetSelect" value={presetKey} onChange={e => setTweak('preset', e.target.value)}>
-          {Object.keys(PRESETS).map(k => <option key={k} value={k}>{PRESETS[k].label}</option>)}
-        </select>
         <button className="btn" onClick={copyJson}>Copy as furniture JSON</button>
         {copyStatus && <span className="legend" style={{ marginTop: 0 }}>{copyStatus}</span>}
       </div>
 
       <div className="grid">
         <div className="card">
-          <h2>Fronts grid (editable JSON)</h2>
+          <h2>Edit — fronts grid (JSON)</h2>
           <textarea className="fronts-json" value={paramsJson}
             onChange={e => setParamsJson(e.target.value)} spellCheck={false} />
           <div className="err">{jsonError}</div>
@@ -413,7 +466,7 @@ function App() {
           />
         </div>
       </div>
-    </>
+    </SpecPage>
   );
 }
 
@@ -426,9 +479,9 @@ window.cabinetModuleReady.then(() => {
 
 // Standalone viewing (opened directly at a /w URL, no design-tool host):
 // the shared TweaksPanel stays closed until it receives __activate_edit_mode.
-// This page has no TweaksPanel controls of its own (the preset picker + JSON
-// editor above serve that role), but the self-post is kept for consistency
-// with the other spec pages in case a future control is added.
+// This page has no TweaksPanel controls of its own (the shared picker bar +
+// the fronts-grid JSON editor serve that role), but the self-post is kept for
+// consistency with the other spec pages in case a future control is added.
 setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
 </script>
 </body>

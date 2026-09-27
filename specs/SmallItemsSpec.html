@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Small Items Spec — Tweakable</title>
+<title>Small items — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -18,18 +18,36 @@
   .btn:hover { background:#333; }
   .btn.active { background:#6b5d4a; }
   .full { grid-column:1 / -1; }
-  .type-picker { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px; }
-  .type-btn { padding:6px 12px; font:inherit; font-size:11px; background:#efeae0; color:#1a1a1a; border:1px solid #d8d3c8; border-radius:14px; cursor:pointer; }
-  .type-btn:hover { background:#e2dccd; }
-  .type-btn.active { background:#1a1a1c; color:#fff; border-color:#1a1a1c; }
-  .preset-picker { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
-  .preset-btn { padding:4px 10px; font:inherit; font-size:10px; background:#fff; color:#1a1a1a; border:1px solid #d8d3c8; border-radius:12px; cursor:pointer; }
-  .preset-btn:hover { background:#f4f1ec; }
-  .preset-btn.active { background:#6b5d4a; color:#fff; border-color:#6b5d4a; }
 </style>
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). The two wall-light kinds are one registry
+     type but different controls, so two OBJECTS; each object's presets are
+     its VARIANTS. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Small items",
+  "description": "The small things across every room -- wall, surface and floor accessories that are not furniture: screens and tech, speakers, lights, wall art and signs, mirrors, shelves and a coat rack. Generic names and dimensions only; a private house's own params carry the real numbers. Pick an object and a variant; Copy JSON emits only the params that differ from the type's DEFAULTS.",
+  "objects": [
+    { "id": "tv",                   "label": "TV", "types": ["tv"] },
+    { "id": "monitor",              "label": "Monitor", "types": ["monitor"] },
+    { "id": "pc-tower",             "label": "PC tower", "types": ["pc-tower"] },
+    { "id": "speaker",              "label": "Speaker", "types": ["speaker"] },
+    { "id": "subwoofer",            "label": "Subwoofer", "types": ["subwoofer"] },
+    { "id": "tube-floor-lamp",      "label": "Tube floor lamp", "types": ["tube-floor-lamp"] },
+    { "id": "wall-light-swing-arm", "label": "Swing-arm wall light", "types": ["wall-sconce"] },
+    { "id": "wall-light-up-down",   "label": "Up/down wall light", "types": ["wall-sconce"] },
+    { "id": "photo-frame",          "label": "Photo frame", "types": ["photo-frame"] },
+    { "id": "wall-sign",            "label": "Wall sign", "types": ["wall-sign"] },
+    { "id": "mirror",               "label": "Mirror", "types": ["mirror"] },
+    { "id": "shelf",                "label": "Shelf", "types": ["shelf"] },
+    { "id": "coat-rack",            "label": "Coat rack", "types": ["coat-rack"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -47,8 +65,19 @@
   window.SmallItems = SmallItems;
   window.dispatchEvent(new Event('small-items-ready'));
 </script>
+<!-- The wall sign and the wall lights (moved here from WallDecorSpec): their
+     builder modules, loaded as real ESM and handed to the Babel code below via
+     a global once ready. -->
+<script type="module">
+  import * as WallSign from '../src/furniture/wall-sign.js';
+  import * as WallSconce from '../src/furniture/wall-sconce.js';
+  window.__wallDecorModules = { WallSign, WallSconce };
+  window.dispatchEvent(new Event('wall-decor-modules-ready'));
+</script>
 
 <script type="text/babel">
+// ---- the small-items.js objects (one component, one object per TYPE).
+(function () {
 /* =====================================================================
    SMALL ITEMS SPEC   ·  one page, one type picker, for every small
    wall/floor fitting src/furniture/small-items.js builds.
@@ -153,6 +182,9 @@ const PRESETS = {
   }
 };
 
+// A variant's URL id: its name, lower-cased, runs of anything else as '-'.
+const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
 function typeDefaults(type) {
   return window.SmallItems.TYPES[type].DEFAULTS;
 }
@@ -209,7 +241,7 @@ function heightOfItem(t) {
   return (t.params.height || 100) / 100;
 }
 
-function App() {
+function SmallItemObject({ type }) {
   const [ready, setReady] = React.useState(!!window.SmallItems);
   React.useEffect(() => {
     if (ready) return;
@@ -218,7 +250,6 @@ function App() {
     return () => window.removeEventListener('small-items-ready', onReady);
   }, [ready]);
 
-  const [type, setType] = React.useState('tv');
   const [presetName, setPresetName] = React.useState(null);
   const [overrides, setOverrides] = React.useState({});
   const [detail, setDetail] = React.useState('full');
@@ -238,11 +269,6 @@ function App() {
   const params = Object.assign({}, baseParams, overrides);
   const t = { type, params, detail, lamp: type === 'tube-floor-lamp' ? lamp : null };
 
-  const selectType = (nt) => {
-    setType(nt);
-    setPresetName(null);
-    setOverrides({});
-  };
   const selectPreset = (pn) => {
     setPresetName(pn);
     setOverrides({});
@@ -263,31 +289,13 @@ function App() {
 
   return (
     <>
-      <h1>Small Items Spec</h1>
-      <div className="sub">
-        One multi-type module (src/furniture/small-items.js) for the small wall/floor
-        fittings across every room: TVs, photo frames, speakers, a subwoofer, a tube
-        floor lamp, a coat rack, mirrors, shelves, monitors and a PC tower. Generic
-        names and dimensions only — the private house's own params
-        carry the real numbers.
-      </div>
-
-      <div className="type-picker">
-        {TYPE_ORDER.map(tp => (
-          <button key={tp} className={'type-btn' + (tp === type ? ' active' : '')}
-            onClick={() => selectType(tp)}>{TYPE_LABELS[tp]}</button>
-        ))}
-      </div>
+      <SpecVariants values={params} onSelect={id => selectPreset(presetNames.find(pn => slug(pn) === id))}
+        variants={presetNames.map(pn => ({ id: slug(pn), label: pn, params: paramsFor(type, pn) }))} />
+      <div className="sub">Built by src/furniture/small-items.js (TYPES['{type}']).</div>
 
       <div className="grid">
         <div className="card">
-          <h2>{TYPE_LABELS[type]} — presets</h2>
-          <div className="preset-picker">
-            {presetNames.map(pn => (
-              <button key={pn} className={'preset-btn' + (pn === activePreset ? ' active' : '')}
-                onClick={() => selectPreset(pn)}>{pn}</button>
-            ))}
-          </div>
+          <h2>{TYPE_LABELS[type]} — params</h2>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', marginTop: '10px' }}>
             <tbody>
               <tr><th style={{ textAlign: 'left', opacity: 0.6 }}>Param</th><th style={{ textAlign: 'right', opacity: 0.6 }}>Value</th></tr>
@@ -358,7 +366,281 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+window.__specObjects = window.__specObjects || {};
+TYPE_ORDER.forEach(tp => { window.__specObjects[tp] = () => <SmallItemObject type={tp} />; });
+})();
+</script>
+
+<script type="text/babel">
+// ---- object "wall-sign" and the two wall lights: moved verbatim from
+// WallDecorSpec.html, wrapped in an IIFE so its top-level names cannot
+// collide with the block above. Edits: its mount lines, <h1> and sign/sconce
+// switchers removed; the object is a prop.
+(function () {
+/* =====================================================================
+   WALL DECOR SPEC   ·   framed wall sign + wall sconce (2 kinds)
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT, not a survey. Sign text is a stock
+   retail sign phrase, not any real house's wording — this is a public
+   repo and carries no real-house text or data. Measure your own item and
+   drive the geometry from the Tweaks panel.
+
+   The sign has TWO depth levels: the outer frame (`depth`, default 3cm,
+   front at z=depth) projects forward past the inner white-washed
+   panel/body (`panelDepth`, default 1.5cm, its own text-bearing front
+   face at z=panelDepth) by their difference (1.5cm by default).
+   ─────────────────────────────────────────────────────────────────────
+
+   This page renders the two builder modules directly
+   (src/furniture/wall-sign.js, src/furniture/wall-sconce.js) via a
+   dynamic ES import bridged onto window.__wallDecorModules above, so the
+   page is always in sync with what the app and the Node tests build —
+   never a re-implementation of the geometry.
+
+   Builder contract: ESM, THREE injected, exports TYPE/DEFAULTS (frozen,
+   with numeric width/height/depth)/build(THREE, params, {detail}),
+   metres, y=0 at the bottom, back face at z=0, front faces +z. Finish
+   contract: every mesh carries userData.finish from the closed palette
+   {matte, gloss, metal, glass, mirror, emissive}; glass/emissive/textured
+   parts carry userData.keep so the live renderer's per-finish mesh merge
+   leaves them as their own draw call.
+
+   wall-sconce.js is ONE registered type ("wall-sconce") with two visual
+   kinds selected by params.kind:
+     - "swing-arm-globe" (default) — brass arm + smoked glass globe + bulb.
+     - "up-down" — a rectangular wall light with a lens at top and bottom,
+       each with a faint up/down beam-cone hint when on.
+   ===================================================================== */
+
+const SIGN_TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "width": 110,
+  "height": 45,
+  "depth": 3,
+  "panelDepth": 1.5,
+  "frameThickness": 2,
+  "frameColor": "#151515",
+  "panelColor": "#f2ede2",
+  "line1": "GIVE IT TO GOD",
+  "line2": "and go to sleep",
+  "textColor": "#1a1a1a"
+}/*EDITMODE-END*/;
+
+// Preset params per sconce kind. Switching the preset replaces the whole
+// tweak object (via setSconceTweak with no key) so stale params from the
+// other kind never leak through onto the new one.
+const SCONCE_PRESETS = {
+  'swing-arm-globe': {
+    label: 'Swing-arm globe',
+    defaults: {
+      kind: 'swing-arm-globe',
+      armLength: 22,
+      dropLength: 18,
+      globeDiameter: 15,
+      metalColor: '#b08d57',
+      glassColor: '#6b4a2a',
+      on: true
+    }
+  },
+  'up-down': {
+    label: 'Up/down wall light (rectangular)',
+    defaults: {
+      kind: 'up-down',
+      width: 12,
+      height: 20,
+      plateThickness: 1,
+      bodyWidth: 6,
+      bodyHeight: 12,
+      bodyDepth: 5,
+      lensDiameter: 3,
+      lensProtrusion: 1,
+      metalColor: '#8a5a3c',
+      on: true
+    }
+  }
+};
+
+const SCONCE_TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "kind": "swing-arm-globe",
+  "armLength": 22,
+  "dropLength": 18,
+  "globeDiameter": 15,
+  "metalColor": "#b08d57",
+  "glassColor": "#6b4a2a",
+  "on": true
+}/*EDITMODE-END*/;
+
+function useModulesReady() {
+  const [ready, setReady] = React.useState(!!window.__wallDecorModules);
+  React.useEffect(() => {
+    if (ready) return;
+    const onReady = () => setReady(true);
+    window.addEventListener('wall-decor-modules-ready', onReady);
+    return () => window.removeEventListener('wall-decor-modules-ready', onReady);
+  }, [ready]);
+  return ready;
+}
+
+// ============== App ==============
+// On Small items the sign and each sconce kind are separate OBJECTS (the two
+// sconce kinds have different controls), so the object is a prop now, where
+// it used to be this page's own sign/sconce + kind switchers.
+function App({ item, sconceKind: kindProp }) {
+  const ready = useModulesReady();
+  const [signT, setSignTweak] = useTweaks(SIGN_TWEAK_DEFAULTS);
+  const [sconceT, setSconceTweak] = useTweaks(kindProp === 'up-down' ? SCONCE_PRESETS['up-down'].defaults : SCONCE_TWEAK_DEFAULTS);
+  const [copied, setCopied] = React.useState(false);
+
+  const sconceKind = sconceT.kind === 'up-down' ? 'up-down' : 'swing-arm-globe';
+
+  const buildSign = React.useCallback((t, group, THREE, ctx) => {
+    const mods = window.__wallDecorModules;
+    if (!mods) return;
+    const built = mods.WallSign.build(THREE, t, { detail: 'full' });
+    group.add(built);
+  }, []);
+
+  const buildSconce = React.useCallback((t, group, THREE, ctx) => {
+    const mods = window.__wallDecorModules;
+    if (!mods) return;
+    const built = mods.WallSconce.build(THREE, t, { detail: 'full' });
+    group.add(built);
+  }, []);
+
+  const copyJson = () => {
+    const mods = window.__wallDecorModules;
+    if (!mods) return;
+    const payload = item === 'sign'
+      ? { type: mods.WallSign.TYPE, params: signT }
+      : { type: mods.WallSconce.TYPE, params: sconceT };
+    const text = JSON.stringify(payload, null, 2);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  if (!ready) {
+    return <div className="sub">Loading builder modules…</div>;
+  }
+
+  const isSign = item === 'sign';
+  const heightOf = sconceKind === 'up-down'
+    ? (tt => (tt.height || 20) * 0.01 + 0.15)
+    : (tt => ((tt.armLength || 22) + (tt.dropLength || 18) + (tt.globeDiameter || 15)) * 0.01 + 0.15);
+
+  return (
+    <>
+      <div className="sub">All units cm unless noted. Framed wall sign + wall sconce (2 kinds). Sign text is a stock retail phrase — no real-house wording ships in this repo. The sign's outer frame (depth) projects forward past its inner panel/body (panelDepth) by their difference.</div>
+
+      <div className="grid">
+        <div className="card full">
+          <h2>3D — {isSign ? 'wall sign' : SCONCE_PRESETS[sconceKind].label}</h2>
+          {isSign ? (
+            <ThreeView
+              key="sign"
+              t={signT}
+              buildModel={buildSign}
+              heightOf={tt => tt.height * 0.01 + 0.2}
+            />
+          ) : (
+            <ThreeView
+              key={'sconce-' + sconceKind}
+              t={sconceT}
+              buildModel={buildSconce}
+              heightOf={heightOf}
+            />
+          )}
+        </div>
+      </div>
+
+      <TweaksPanel>
+        {isSign ? (
+          <>
+            <TweakSection label="Sign — frame" />
+            <TweakSlider label="Width" value={signT.width} min={60} max={200} step={1} unit="cm"
+              onChange={v => setSignTweak('width', v)} />
+            <TweakSlider label="Height" value={signT.height} min={20} max={100} step={1} unit="cm"
+              onChange={v => setSignTweak('height', v)} />
+            <TweakSlider label="Depth (outer frame)" value={signT.depth} min={1} max={8} step={0.5} unit="cm"
+              onChange={v => setSignTweak('depth', v)} />
+            <TweakSlider label="Panel depth (inner body)" value={signT.panelDepth} min={0.5} max={signT.depth} step={0.5} unit="cm"
+              onChange={v => setSignTweak('panelDepth', v)} />
+            <TweakSlider label="Frame thickness" value={signT.frameThickness} min={1} max={10} step={0.5} unit="cm"
+              onChange={v => setSignTweak('frameThickness', v)} />
+            <TweakColor label="Frame colour" value={signT.frameColor}
+              onChange={v => setSignTweak('frameColor', v)} />
+            <TweakColor label="Panel colour" value={signT.panelColor}
+              onChange={v => setSignTweak('panelColor', v)} />
+            <TweakSection label="Sign — text" />
+            <TweakText label="Line 1 (serif caps)" value={signT.line1}
+              onChange={v => setSignTweak('line1', v)} />
+            <TweakText label="Line 2 (script)" value={signT.line2}
+              onChange={v => setSignTweak('line2', v)} />
+            <TweakColor label="Text colour" value={signT.textColor}
+              onChange={v => setSignTweak('textColor', v)} />
+          </>
+        ) : sconceKind === 'up-down' ? (
+          <>
+            <TweakSection label="Up/down — geometry" />
+            <TweakSlider label="Backplate width" value={sconceT.width} min={8} max={24} step={1} unit="cm"
+              onChange={v => setSconceTweak('width', v)} />
+            <TweakSlider label="Backplate height" value={sconceT.height} min={14} max={32} step={1} unit="cm"
+              onChange={v => setSconceTweak('height', v)} />
+            <TweakSlider label="Body height" value={sconceT.bodyHeight} min={6} max={20} step={1} unit="cm"
+              onChange={v => setSconceTweak('bodyHeight', v)} />
+            <TweakSlider label="Lens diameter" value={sconceT.lensDiameter} min={1.5} max={5} step={0.5} unit="cm"
+              onChange={v => setSconceTweak('lensDiameter', v)} />
+            <TweakSection label="Up/down — finish" />
+            <TweakColor label="Metal colour" value={sconceT.metalColor}
+              onChange={v => setSconceTweak('metalColor', v)} />
+            <TweakToggle label="On (glow)" value={sconceT.on}
+              onChange={v => setSconceTweak('on', v)} />
+          </>
+        ) : (
+          <>
+            <TweakSection label="Swing-arm — geometry" />
+            <TweakSlider label="Arm length" value={sconceT.armLength} min={10} max={40} step={1} unit="cm"
+              onChange={v => setSconceTweak('armLength', v)} />
+            <TweakSlider label="Drop length" value={sconceT.dropLength} min={5} max={40} step={1} unit="cm"
+              onChange={v => setSconceTweak('dropLength', v)} />
+            <TweakSlider label="Globe diameter" value={sconceT.globeDiameter} min={8} max={30} step={1} unit="cm"
+              onChange={v => setSconceTweak('globeDiameter', v)} />
+            <TweakSection label="Swing-arm — finish" />
+            <TweakColor label="Metal colour" value={sconceT.metalColor}
+              onChange={v => setSconceTweak('metalColor', v)} />
+            <TweakColor label="Glass colour" value={sconceT.glassColor}
+              onChange={v => setSconceTweak('glassColor', v)} />
+            <TweakToggle label="On (glow)" value={sconceT.on}
+              onChange={v => setSconceTweak('on', v)} />
+          </>
+        )}
+        <TweakSection label="Export" />
+        <TweakButton label={copied ? 'Copied!' : 'Copy as furniture JSON'} onClick={copyJson} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+window.__specObjects = window.__specObjects || {};
+window.__specObjects['wall-sign'] = () => <App item="sign" />;
+window.__specObjects['wall-light-swing-arm'] = () => <App item="sconce" sconceKind="swing-arm-globe" />;
+window.__specObjects['wall-light-up-down'] = () => <App item="sconce" sconceKind="up-down" />;
+})();
+</script>
+
+<script type="text/babel">
+// The family page: one SpecPage; each object its own component (remount mode).
+const ids = JSON.parse(document.getElementById('spec-manifest').textContent).objects.map(o => o.id);
+const render = {};
+ids.forEach(id => { render[id] = () => window.__specObjects[id](); });
+ReactDOM.createRoot(document.getElementById('root')).render(<SpecPage render={render} />);
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// Self-post it so the panel is visible when there's no host driving it.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
 </script>
 </body>
 </html>

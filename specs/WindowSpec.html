@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Window Spec — Tweakable</title>
+<title>Windows — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -28,6 +28,19 @@
 <body>
 <div id="root"></div>
 
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Windows",
+  "description": "All units cm. The house's glazing: a door-height window with a centre-pivot upper sash, and the much wider balcony window with its hinged glass door. Pick an object; use the Tweaks panel to size it and open it.",
+  "objects": [
+    { "id": "pivot-window",   "label": "Pivot window", "types": [] },
+    { "id": "balcony-window", "label": "Balcony window", "types": [] }
+  ]
+}
+</script>
+
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
 <script src="../vendor/react-dom.production.min.js"></script>
@@ -38,6 +51,10 @@
 <script type="text/babel" src="spec-three.jsx"></script>
 
 <script type="text/babel">
+// ---- object "pivot-window": moved verbatim from WindowSpec.html, wrapped in an IIFE so its
+// top-level names (App, TWEAK_DEFAULTS, ...) cannot collide with the
+// other object's on this page. Only its mount lines and <h1> were removed.
+(function () {
 /* =====================================================================
    WINDOW SPEC   ·   floor-standing centre-pivot window (revised)
 
@@ -612,7 +629,6 @@ function App() {
   const g = geom(t);
   return (
     <>
-      <h1>Window Spec</h1>
       <div className="sub">All units cm. Floor-standing, door-height, fixed lower pane + Velux-style centre-pivot upper sash, set in the south two-leaf wall sandwich. Use the Tweaks panel to open it (push the top sash inside-out).</div>
 
       <div className="grid">
@@ -684,8 +700,704 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+window.__specObjects = window.__specObjects || {};
+window.__specObjects['pivot-window'] = App;
+})();
+</script>
 
+<script type="text/babel">
+// ---- object "balcony-window": moved verbatim from BalconyWindowSpec.html, wrapped in an IIFE so its
+// top-level names (App, TWEAK_DEFAULTS, ...) cannot collide with the
+// other object's on this page. Only its mount lines and <h1> were removed.
+(function () {
+/* =====================================================================
+   BALCONY WINDOW SPEC   ·   living-room south glazing (MUCH wider than
+   a normal window — a big south glazed wall of a living room). The
+   default total glazing width here is illustrative; set it to whatever
+   your own opening measures.
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT, not a survey. They are ordinary
+   UK-joinery sizes chosen so the page renders something sensible on
+   first load. This is a design reference for modelling a fixture, not a
+   record of any particular building: measure your own opening and drive
+   the geometry from the Tweaks panel.
+   ─────────────────────────────────────────────────────────────────────
+
+   ---------------------------------------------------------------------
+   THE TWO THINGS THAT MAKE THIS SPEC (vs a plain window):
+
+   1. TWO SECTIONS, SIDE BY SIDE (east/west, not top/bottom like the
+      regular WindowSpec):
+        • EAST  ~3/4 = FIXED massive glass. One big unopenable picture
+          pane — the bulk of the glazed run.
+        • SOUTHWEST ~1/4 = a HINGED glass DOOR on a vertical hinge,
+          swinging OUTWARD / southward, out of the room (param: open
+          angle 0→~110°).
+
+   2. WALL = the SOUTH EXTERNAL TWO-LEAF SANDWICH — same doctrine as the
+      revised WindowSpec:
+        • inner leaf = 30 cm (, toward the room / +z)
+        • outer leaf = 10 cm (, further south / −z)
+        • Combined slab 43 cm; ONE hole cut through BOTH leaves for the
+          glazing run.
+        • The glazing frame's SOUTH face is flush with the inner leaf's SOUTH face
+          (NOT the outer leaf — the outer leaf is the outer skin, further south). The frame
+          protrudes only a little northward into the inner leaf's thickness.
+
+   The WALL is REFERENCE GEOMETRY ONLY (same doctrine as DoorSpec /
+   WindowSpec) — shows how the sandwich is carved to receive the
+   glazing; when inserting into your own house reuse the existing wall.
+
+   Depth convention (matches WindowSpec/DoorSpec): +z = interior / north
+   / room, −z = exterior / south. Door "swings open" = leaf rotates
+   toward −z (OUTWARD, into the exterior / southward) -- confirmed by
+   review. Unlike WindowSpec's inward-opening sash, this
+   door swings out.
+
+   Tweaks panel + ThreeView boilerplate come from the shared harness
+   (tweaks-panel.jsx + spec-three.jsx).
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "openPct": 0,
+  "totalWidth": 300,
+  "totalHeight": 220,
+  "sillHeight": 4,
+  "fixedSplit": 0.75,
+  "frameThickness": 7,
+  "frameDepthIntoWall": 14,
+  "glassInset": 2,
+  "doorOnWest": true,
+  "innerLeafThickness": 30,
+  "outerLeafThickness": 10,
+  "wallWidth": 420,
+  "wallHeight": 250
+}/*EDITMODE-END*/;
+
+// ---- procedural textures (fix: white inside / yellow-brick outside) ----
+// Ported verbatim from WindowSpec.html (same fix, same convention as
+// home3d-scene.js) -- see that file for the full rationale.
+function makeWallRoughnessTexture() {
+  const size = 32;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#d9d9d9';
+  ctx.fillRect(0, 0, size, size);
+  const id = ctx.getImageData(0, 0, size, size);
+  const data = id.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const noise = (Math.random() - 0.5) * 40;
+    const v = Math.max(0, Math.min(255, 217 + noise));
+    data[i] = data[i + 1] = data[i + 2] = v;
+  }
+  ctx.putImageData(id, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 3);
+  return tex;
+}
+
+// Exterior wall face - stacked/running-bond brick coursing in a warm
+// buff/cream palette. Brickwork should NOT read as a single flat colour,
+// so this uses 6 base shades plus a small per-brick random jitter, giving
+// natural variation rather than a repeating 3-tone wash. Swap the six
+// shades below for your own brick. Procedural canvas generator (not a
+// base64/asset file), so it carries zero deploy risk.
+function jitterHex(hex, delta) {
+  const n = parseInt(hex.slice(1), 16);
+  const clamp = v => Math.max(0, Math.min(255, Math.round(v)));
+  const r = clamp(((n >> 16) & 255) + delta);
+  const g = clamp(((n >> 8) & 255) + delta);
+  const b = clamp((n & 255) + delta);
+  return `rgb(${r},${g},${b})`;
+}
+// Standard UK brick module: a 215 x 65 mm brick plus a 10 mm mortar joint
+// gives a 225 x 75 mm module (aspect ~2.92). Used below to size the tile
+// in REAL metres, so the coursing scales correctly against the wall
+// whatever its dimensions.
+const BRICK_MODULE_W = 0.225;   // m (215mm brick + 10mm perpend)
+const BRICK_MODULE_H = 0.075;   // m (65mm brick + 10mm bed joint)
+
+// Deterministic per-brick hash. The previous index formula
+// ((row*7 + col*3 + 11) % 6) was subtly broken: col*3 mod 6 only ever
+// yields {0,3}, so each course alternated between just TWO of the six
+// shades -- which rendered as regular light/dark striping rather than the
+// natural per-brick variation asked for. This spreads all six.
+function hash2(a, b) {
+  let x = (a * 374761393 + b * 668265263) | 0;
+  x = ((x ^ (x >>> 13)) * 1274126177) | 0;
+  return (x ^ (x >>> 16)) >>> 0;
+}
+
+function makeBrickTexture() {
+  // Cell aspect held at exactly BRICK_MODULE_W/H (48/16 = 3.0) so the canvas
+  // is isotropic -- identical texel density on both axes (2.13 px/cm).
+  const brickW = 46, brickH = 14, mortar = 2;   // -> 48 x 16 px cell
+  // 8 cols (not 4) => a 1.8m tile, so the pattern repeats only ~2.3x across
+  // a 4.2m wall instead of ~4.7x -- much less visibly tiled.
+  const cols = 8, rows = 6;
+  const w = cols * (brickW + mortar), h = rows * (brickH + mortar);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  // Mortar/grout, sampled from the photo's joint minima: a vertical scan
+  // shows the recessed joints dipping to ~#806E4F/#85714F between brick
+  // faces at ~#A5936F. Kept darker than every brick shade below so the
+  // joint lines stay legible.
+  ctx.fillStyle = '#857151';
+  ctx.fillRect(0, 0, w, h);
+  // Brick face shades, sampled photo-wide over 70k pixels with the dark
+  // fixtures/shadows excluded: true spread is p10 #927659 .. p90 #C8BCA8,
+  // median #B5A284. Palette centred on that median, spanning ~p20..p90 --
+  // warm buff/cream. (An earlier pass sampled the shadowed regions too and
+  // skewed 2 of 6 shades below p10, rendering the whole wall muddy.)
+  const shades = ['#9d8964', '#a99168', '#b09a7c', '#b5a284', '#bdac92', '#c6b8a2'];
+  for (let row = 0; row < rows; row++) {
+    const offset = (row % 2) * (brickW + mortar) / 2; // running-bond stagger (matches photo's coursing)
+    for (let col = -1; col <= cols; col++) {
+      const x = col * (brickW + mortar) + offset + mortar / 2;
+      const y = row * (brickH + mortar) + mortar / 2;
+      const base = shades[hash2(row, col) % shades.length];
+      ctx.fillStyle = jitterHex(base, (Math.random() - 0.5) * 18); // per-brick tonal variation, not a flat wash
+      ctx.fillRect(x, y, brickW, brickH);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  // WARNING: THREE's ExtrudeGeometry (which builds these walls) generates
+  // UVs in WORLD METRES, not normalised 0..1 -- verified live: a 4.2m-wide
+  // wall shape emits u spanning -2.1..2.1. So `repeat` here means "tiles
+  // per metre", NOT "tiles across the wall". The previous repeat.set(6, 3)
+  // therefore squeezed the whole 4-brick canvas into 1/6 m, rendering
+  // bricks at 4.2 x 5.5cm -- TALLER than wide, which read as a chevron /
+  // moire mess instead of coursing. Size the tile by the real module:
+  tex.repeat.set(1 / (cols * BRICK_MODULE_W), 1 / (rows * BRICK_MODULE_H));
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// ---- shared geometry helper: derive the key spans from the tweaks ----
+function geom(t) {
+  const sill = t.sillHeight;                          // tiny platform at bottom
+  const openBot = sill;
+  const openTop = t.totalHeight;
+  const glazH = openTop - openBot;
+  const split = Math.max(0.6, Math.min(0.85, t.fixedSplit)); // fixed-glass fraction
+  const fixedW = t.totalWidth * split;                 // ~3/4 fixed picture pane
+  const doorW = t.totalWidth - fixedW;                 // ~1/4 hinged door
+  return { sill, openBot, openTop, glazH, split, fixedW, doorW };
+}
+
+// ============== Cross-section SVG (top-down through the glazing) ==============
+// Shows the inner + outer leaf sandwich and the east-fixed / west-hinged split.
+function CrossSection({ t }) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const svg = ref.current;
+    if (!svg) return;
+    svg.innerHTML = '';
+    const ns = 'http://www.w3.org/2000/svg';
+    const W = 560, H = 240;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    const g = geom(t);
+    const GLAZ_W = t.totalWidth;
+    const WALL_W = t.wallWidth;
+    const T4 = t.innerLeafThickness;      // 33
+    const T32 = t.outerLeafThickness;    // 10
+    const FD = t.frameDepthIntoWall;  // frame reach north into the inner leaf
+
+    const margin = 30;
+    const SCALE = (W - 2 * margin) / WALL_W;
+
+    // depth (z) reference, same convention as WindowSpec: draw z increasing
+    // DOWNWARD on screen — north (room) at top, south (exterior) at bottom.
+    // the inner leaf occupies [0 .. T4] from north face, the outer leaf occupies [T4 .. T4+T32].
+    // Frame south face = T4 (= inner leaf south face).
+    const TOTAL = T4 + T32;
+    function pp(x, zDepth) {
+      const ox = W * 0.5;
+      const bandTop = H * 0.42 - (TOTAL * SCALE) / 2;
+      return [ox + x * SCALE, bandTop + zDepth * SCALE];
+    }
+    function rect(x1, z1, x2, z2, fill, stroke = '#888') {
+      const r = document.createElementNS(ns, 'rect');
+      const [a,b] = pp(x1,z1), [c,d] = pp(x2,z2);
+      r.setAttribute('x', Math.min(a,c)); r.setAttribute('y', Math.min(b,d));
+      r.setAttribute('width', Math.abs(c-a)); r.setAttribute('height', Math.abs(d-b));
+      r.setAttribute('fill', fill); r.setAttribute('stroke', stroke);
+      return r;
+    }
+    function txt(x_cm, z_cm, str, opts = {}) {
+      const tt = document.createElementNS(ns, 'text'); const [x,y] = pp(x_cm, z_cm);
+      tt.setAttribute('x', x); tt.setAttribute('y', y);
+      tt.setAttribute('font-size', opts.size || '10'); tt.setAttribute('fill', opts.color || '#333');
+      if (opts.anchor) tt.setAttribute('text-anchor', opts.anchor);
+      tt.textContent = str; return tt;
+    }
+
+    const REVEAL = 4;
+    const openingHalfW = GLAZ_W/2 + REVEAL;
+    // inner leaf (north) segments left + right of opening
+    svg.appendChild(rect(-WALL_W/2, 0, -openingHalfW, T4, '#e8e2d4', '#a89c80'));
+    svg.appendChild(rect(+openingHalfW, 0, +WALL_W/2, T4, '#e8e2d4', '#a89c80'));
+    // outer leaf (south) segments left + right of opening
+    svg.appendChild(rect(-WALL_W/2, T4, -openingHalfW, TOTAL, '#ddd6c4', '#a89c80'));
+    svg.appendChild(rect(+openingHalfW, T4, +WALL_W/2, TOTAL, '#ddd6c4', '#a89c80'));
+
+    // FRAME jambs: south face at z=T4 (= inner leaf south face), reaching NORTH into the inner leaf by FD
+    const frameNorth = T4 - FD;
+    svg.appendChild(rect(-openingHalfW, frameNorth, -GLAZ_W/2, T4, '#f1ede2', '#a89c80'));
+    svg.appendChild(rect(+GLAZ_W/2, frameNorth, +openingHalfW, T4, '#f1ede2', '#a89c80'));
+
+    // mullion between fixed glass (east) and hinged door (west)
+    const doorOnWest = t.doorOnWest !== false;
+    const splitX = doorOnWest ? (-GLAZ_W/2 + g.doorW) : (+GLAZ_W/2 - g.doorW);
+    svg.appendChild(rect(splitX - 2, frameNorth, splitX + 2, T4, '#f1ede2', '#a89c80'));
+
+    // glass lines
+    const glassZ = (frameNorth + T4) / 2;
+    const fixX1 = doorOnWest ? splitX : -GLAZ_W/2;
+    const fixX2 = doorOnWest ? +GLAZ_W/2 : splitX;
+    const doorX1 = doorOnWest ? -GLAZ_W/2 : splitX;
+    const doorX2 = doorOnWest ? splitX : +GLAZ_W/2;
+    svg.appendChild(rect(fixX1, glassZ - 0.4, fixX2, glassZ + 0.4, '#bcd4e6', '#7fa8c4'));
+    svg.appendChild(rect(doorX1, glassZ - 0.4, doorX2, glassZ + 0.4, '#a9d0e0', '#5f9ab8'));
+
+    svg.appendChild(txt((fixX1+fixX2)/2, frameNorth - 3, 'FIXED ~3/4 (E)', { anchor:'middle', color:'#3a6a86', size:'9' }));
+    svg.appendChild(txt((doorX1+doorX2)/2, frameNorth - 3, 'HINGED ~1/4 (SW)', { anchor:'middle', color:'#3a6a86', size:'9' }));
+
+    svg.appendChild(txt(0, TOTAL + 10, `glazing ${GLAZ_W.toFixed(0)} cm`, { anchor:'middle', color:'#444' }));
+    svg.appendChild(txt(WALL_W/2 + 0.6, T4/2, `inner ${T4}`, { color:'#666', size:'9' }));
+    svg.appendChild(txt(WALL_W/2 + 0.6, T4 + T32/2, `outer ${T32}`, { color:'#666', size:'9' }));
+    svg.appendChild(txt(-WALL_W/2 - 1, T4, `inner leaf south face`, { anchor:'end', color:'#888', size:'8' }));
+
+    const head = document.createElementNS(ns, 'text');
+    head.setAttribute('x', 12); head.setAttribute('y', 20);
+    head.setAttribute('font-size', '12'); head.setAttribute('fill', '#333');
+    head.textContent = `Top-down — inner(${T4})+outer(${T32}) sandwich · frame S face flush w/ inner-leaf S face`;
+    svg.appendChild(head);
+    const sub = document.createElementNS(ns, 'text');
+    sub.setAttribute('x', 12); sub.setAttribute('y', H - 8);
+    sub.setAttribute('font-size', '9'); sub.setAttribute('fill', '#888');
+    sub.textContent = `north / room  ↑        ↓  south / exterior`;
+    svg.appendChild(sub);
+  }, [t]);
+  return <svg ref={ref}></svg>;
+}
+
+// ============== Balcony glazing model (buildModel + kinematics) ==============
+function buildBalcony(t, group, THREE, ctx) {
+  const cm = 0.01;
+  const g = geom(t);
+  const GW = t.totalWidth * cm;
+  const SILL = g.sill * cm;
+  const OPEN_BOT = g.openBot * cm;
+  const OPEN_TOP = g.openTop * cm;
+  const GLAZ_H = g.glazH * cm;
+  const FIXED_W = g.fixedW * cm;
+  const DOOR_W = g.doorW * cm;
+  const FT  = t.frameThickness * cm;
+  const FD  = t.frameDepthIntoWall * cm;
+  const GI  = t.glassInset * cm;
+  const T4  = t.innerLeafThickness * cm;
+  const T32 = t.outerLeafThickness * cm;
+  const TOTAL = T4 + T32;
+  const WALL_W = t.wallWidth * cm;
+  const WALL_H = t.wallHeight * cm;
+  const REVEAL = 4 * cm;
+  const doorOnWest = t.doorOnWest !== false;
+  // HANDEDNESS (fixed 2026-09-26). This model's frame is y = up and
+  // +z = NORTH (the room), so +x = up x north = WEST -- not east. The model
+  // used to treat +x as east, which mirrored it: with "door on west" the door
+  // sat on the LEFT seen from inside, when facing south from inside puts west
+  // on the RIGHT. (The top-down SVG above is drawn north-up, where east IS
+  // screen-right, and was correct all along.) Everything below is written in
+  // terms of the local side, so the compass is resolved once, here.
+  const doorAtNegX = !doorOnWest;
+
+  // ---- DEPTH REFERENCE FRAME (matches WindowSpec) ----
+  // Inner leaf SOUTH face at z = 0 — this is where the glazing frame's south face
+  // lines up. the inner leaf extends NORTH (+z) to z = +T4. the outer leaf extends SOUTH (−z)
+  // from z=0 to z = −T32. Room is large +z, exterior is −z.
+  const Z_4_SOUTH = 0;
+  const Z_4_NORTH = +T4;
+  const Z_32_SOUTH = -T32;
+  const frameSouthZ = Z_4_SOUTH;
+  const frameNorthZ = Z_4_SOUTH + FD;
+  const frameMidZ = (frameSouthZ + frameNorthZ) / 2;
+
+  const frameMat = new THREE.MeshStandardMaterial({ color:0xf1ede2, roughness:0.5 });
+  const sashMat  = new THREE.MeshStandardMaterial({ color:0xf6f5f1, roughness:0.55 });
+  // White cill, matching WindowSpec (was a tan/stone tone).
+  const platMat  = new THREE.MeshStandardMaterial({ color:0xf1ede2, roughness:0.65 });
+  const handleMat = new THREE.MeshStandardMaterial({ color:0xeef0f2, roughness:0.18, metalness:0.95 });
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color:0xbcd8e6, roughness:0.05, metalness:0.0,
+    transparent:true, opacity:0.26, transmission:0.0, side:THREE.DoubleSide
+  });
+
+  // =================================================================
+  // GLAZING ASSEMBLY · root group.
+  // =================================================================
+  const asm = new THREE.Group();
+  asm.name = 'balconyGlazingAssembly';
+  group.add(asm);
+
+  // ---- outer frame: extruded rectangle-with-hole spanning the FULL run ----
+  const oHalfW = GW/2 + REVEAL;
+  const oBot   = OPEN_BOT - REVEAL;
+  const oTop   = OPEN_TOP + REVEAL;
+  const iBot   = OPEN_BOT;
+  const iTop   = OPEN_TOP;
+  const frameShape = new THREE.Shape();
+  frameShape.moveTo(-oHalfW, oBot);
+  frameShape.lineTo(+oHalfW, oBot);
+  frameShape.lineTo(+oHalfW, oTop);
+  frameShape.lineTo(-oHalfW, oTop);
+  frameShape.lineTo(-oHalfW, oBot);
+  const frameHole = new THREE.Path();
+  frameHole.moveTo(-GW/2, iBot);
+  frameHole.lineTo(+GW/2, iBot);
+  frameHole.lineTo(+GW/2, iTop);
+  frameHole.lineTo(-GW/2, iTop);
+  frameHole.lineTo(-GW/2, iBot);
+  frameShape.holes.push(frameHole);
+  const frameGeo = new THREE.ExtrudeGeometry(frameShape, { depth: FD, bevelEnabled:false, curveSegments:1 });
+  frameGeo.translate(0, 0, frameSouthZ);
+  const frameMesh = new THREE.Mesh(frameGeo, frameMat);
+  frameMesh.name = 'glazingFrame';
+  frameMesh.castShadow = true; frameMesh.receiveShadow = true;
+  asm.add(frameMesh);
+
+  // ---- tiny platform / sill at the very bottom (step-over), full run ----
+  // fix (2026-09-26, as WindowSpec's): the platform was TOTAL*0.9 deep and
+  // off-centre, overhanging the outside face and stopping short of the inside
+  // one -- an open gap at the room-side foot of the opening. It now spans
+  // exactly the full wall thickness, flush at both faces.
+  const PLAT_H = Math.max(SILL, 2 * cm);
+  const PLAT_D = TOTAL;
+  const platform = new THREE.Mesh(
+    new THREE.BoxGeometry(GW + 2*REVEAL, PLAT_H, PLAT_D), platMat
+  );
+  platform.position.set(0, PLAT_H/2, (Z_32_SOUTH + Z_4_NORTH) / 2);
+  platform.castShadow = true; platform.receiveShadow = true;
+  asm.add(platform);
+
+  // ---- mullion (vertical post) between fixed pane (east) and hinged door (west) ----
+  // local x of the split, measured from centre. WEST = +x, EAST = -x (see HANDEDNESS above).
+  const splitLocalX = doorAtNegX ? (-GW/2 + DOOR_W) : (+GW/2 - DOOR_W);
+  const MULLION_W = Math.max(FT, 4*cm);
+  const mullion = new THREE.Mesh(
+    new THREE.BoxGeometry(MULLION_W, GLAZ_H, FD * 0.9), frameMat
+  );
+  mullion.position.set(splitLocalX, OPEN_BOT + GLAZ_H/2, frameMidZ);
+  mullion.castShadow = true; mullion.receiveShadow = true;
+  asm.add(mullion);
+
+  // =================================================================
+  // FIXED PANE — EAST ~3/4, massive unopenable picture glass.
+  // =================================================================
+  const fixedGroup = new THREE.Group();
+  fixedGroup.name = 'fixedGlassEast';
+  const SASH_FACE = Math.max(FT * 0.8, 3 * cm);
+  // fix (2026-09-26): the far edge was inset by SASH_FACE from the jamb even
+  // though this pane has no stile there, leaving an open sliver between the
+  // glass and the frame. The pane now runs from the mullion face to the
+  // frame's inner edge, where the frame ring covers the join.
+  const fixX1 = doorAtNegX ? (splitLocalX + MULLION_W/2) : (-GW/2);
+  const fixX2 = doorAtNegX ? (+GW/2)                     : (splitLocalX - MULLION_W/2);
+  const fixW  = Math.max(0.01, fixX2 - fixX1);
+  const fixCx = (fixX1 + fixX2) / 2;
+  function fixedBar(w, h, x, y) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, FD*0.5), sashMat);
+    m.position.set(x, y, frameMidZ);
+    m.castShadow = true; m.receiveShadow = true;
+    fixedGroup.add(m);
+  }
+  fixedBar(fixW, SASH_FACE, fixCx, OPEN_BOT + SASH_FACE/2);              // bottom rail
+  fixedBar(fixW, SASH_FACE, fixCx, OPEN_TOP - SASH_FACE/2);              // top rail
+  // fix: the fixed pane has NO left/right stiles (bordered instead by the
+  // mullion on one side and the frame jamb on the other) -- but the glass
+  // was inset by SASH_FACE on left+right anyway, as if stiles existed
+  // there, leaving a visible unglazed gap the frame/mullion didn't cover.
+  // Only the top/bottom rails are real, so only THOSE insets are earned.
+  const fixedGlass = new THREE.Mesh(
+    new THREE.PlaneGeometry(fixW, GLAZ_H - 2*SASH_FACE),
+    glassMat
+  );
+  fixedGlass.position.set(fixCx, OPEN_BOT + GLAZ_H/2, frameMidZ + GI*0.5);
+  fixedGlass.name = 'fixedGlass';
+  fixedGroup.add(fixedGlass);
+  asm.add(fixedGroup);
+
+  // =================================================================
+  // HINGED DOOR LEAF — SOUTHWEST ~1/4. Vertical hinge on the outer
+  // (west) jamb, swings OUTWARD / southward (−z), out of the room --
+  // (NOT inward, unlike a typical inswing
+  // sash). Built in a pivot group at the hinge line; kinematics driven
+  // by animate().
+  // =================================================================
+  const doorX1 = doorAtNegX ? (-GW/2 + 0)              : (splitLocalX + MULLION_W/2);
+  const doorX2 = doorAtNegX ? (splitLocalX - MULLION_W/2) : (+GW/2 - 0);
+  // fix: was `(doorX2-doorX1) - SASH_FACE*0.5` -- an undocumented shrink
+  // that left the leaf permanently ~2.8cm short of the mullion (default
+  // tweaks), even at 0% (rest), not just mid-sweep. doorX1..doorX2 is
+  // already the exact available span from the hinge jamb to the mullion
+  // face -- use it directly so the leaf reaches the mullion exactly.
+  const doorLeafW = Math.max(0.01, doorX2 - doorX1);
+  // hinge sits on the OUTER jamb of the door quarter (SW corner for west door)
+  const hingeX = doorAtNegX ? doorX1 : doorX2;
+  const leafDir = doorAtNegX ? +1 : -1;   // leaf body extends from hinge toward the mullion
+
+  const doorPivot = new THREE.Group();
+  doorPivot.name = 'balconyDoorPivot';
+  doorPivot.position.set(hingeX, 0, frameMidZ);
+  asm.add(doorPivot);
+
+  const leaf = new THREE.Group();
+  leaf.name = 'balconyDoorLeaf';
+  leaf.position.set(leafDir * doorLeafW/2, 0, 0);
+  doorPivot.add(leaf);
+
+  // Leaf group sits at doorPivot's y=0 (the pivot rotates about the true
+  // vertical hinge line); the visible leaf body occupies [OPEN_BOT..OPEN_TOP]
+  // in absolute Y, built inside a child group so the pivot's own Y stays 0.
+  const leafCY = OPEN_BOT + GLAZ_H/2;
+  const leafBody = new THREE.Group();
+  leafBody.name = 'balconyDoorLeafBody';
+  leafBody.position.set(0, 0, 0);
+  leaf.add(leafBody);
+  function leafBar2(w, h, x, y) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, FD*0.5), sashMat);
+    m.position.set(x, y, 0);
+    m.castShadow = true; m.receiveShadow = true;
+    leafBody.add(m);
+  }
+  // leafBody's local x is centered on the leaf (leaf itself is already
+  // offset from the pivot by leafDir*doorLeafW/2), so stiles simply sit at
+  // the leaf's own left/right edges regardless of which side the hinge is on.
+  leafBar2(doorLeafW, SASH_FACE, 0, OPEN_TOP - SASH_FACE/2);                         // top rail
+  leafBar2(doorLeafW, SASH_FACE, 0, OPEN_BOT + SASH_FACE/2);                         // bottom rail
+  leafBar2(SASH_FACE, GLAZ_H - 2*SASH_FACE, -doorLeafW/2 + SASH_FACE/2, leafCY);     // left stile
+  leafBar2(SASH_FACE, GLAZ_H - 2*SASH_FACE, +doorLeafW/2 - SASH_FACE/2, leafCY);     // right stile
+  const leafGlass = new THREE.Mesh(
+    new THREE.PlaneGeometry(doorLeafW - 2*SASH_FACE, GLAZ_H - 2*SASH_FACE),
+    glassMat
+  );
+  leafGlass.position.set(0, leafCY, GI*0.5);
+  leafGlass.name = 'doorLeafGlass';
+  leafBody.add(leafGlass);
+
+  // handle near the latch (non-hinge) edge, room-facing side. Hinge sits at
+  // local x = -leafDir*doorLeafW/2 (see leaf offset above), so the latch
+  // (opposite edge) is at +leafDir*(...).
+  // fix: keyed handle -- matches the rosette+stem+lever chrome style used
+  // by MainEntranceDoorSpec/DoorSpec's addHandle() ("a regular handle"),
+  // differing ONLY by an added key barrel (a euro-cylinder lock sits above
+  // the lever on a real keyed patio handle) -- "a regular handle with a
+  // key this time."
+  const handleX = leafDir * (doorLeafW/2 - SASH_FACE*1.4);
+  const ROSETTE_D = 5.0*cm, ROSETTE_THK = 0.8*cm;
+  const STEM_LEN = 1.6*cm, STEM_SIDE = 2.2*cm;
+  const LEVER_LEN = 13.0*cm, LEVER_SIDE = 1.8*cm;
+  const KEY_BARREL_D = 1.7*cm, KEY_BARREL_LEN = 1.2*cm;
+  const keyMat = new THREE.MeshStandardMaterial({ color:0x1a1a1a, roughness:0.5, metalness:0.4 });
+
+  const handleGroup = new THREE.Group();
+  handleGroup.name = 'balconyDoorHandle';
+
+  const rosette = new THREE.Mesh(
+    new THREE.CylinderGeometry(ROSETTE_D/2, ROSETTE_D/2, ROSETTE_THK, 32), handleMat
+  );
+  rosette.rotation.x = Math.PI/2;
+  rosette.position.set(0, 0, ROSETTE_THK/2);
+  rosette.castShadow = true;
+  handleGroup.add(rosette);
+
+  const stem = new THREE.Mesh(new THREE.BoxGeometry(STEM_SIDE, STEM_SIDE, STEM_LEN), handleMat);
+  stem.position.set(0, 0, ROSETTE_THK + STEM_LEN/2);
+  stem.castShadow = true;
+  handleGroup.add(stem);
+
+  const leverDir = -1;
+  const leverCenterZ = ROSETTE_THK + STEM_LEN + LEVER_SIDE/2;
+  const lever = new THREE.Mesh(new THREE.BoxGeometry(LEVER_LEN, LEVER_SIDE, LEVER_SIDE), handleMat);
+  lever.position.set(leverDir * (LEVER_LEN/2 - STEM_SIDE/2), 0, leverCenterZ);
+  lever.castShadow = true;
+  handleGroup.add(lever);
+
+  // key barrel -- euro-cylinder lock above the lever, dark to contrast
+  // with the chrome handle. The ONLY element differing from a plain lever.
+  const keyBarrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(KEY_BARREL_D/2, KEY_BARREL_D/2, KEY_BARREL_LEN, 24), keyMat
+  );
+  keyBarrel.rotation.x = Math.PI/2;
+  keyBarrel.position.set(0, ROSETTE_D*0.9, KEY_BARREL_LEN/2);
+  keyBarrel.name = 'balconyDoorKeyBarrel';
+  keyBarrel.castShadow = true;
+  handleGroup.add(keyBarrel);
+
+  handleGroup.position.set(handleX, leafCY, FD*0.25 + 1*cm);
+  leafBody.add(handleGroup);
+
+  // ---- kinematics: hinge rotates about the vertical (Y) axis at hingeX ----
+  // Three.js rotation.y follows x' = x·cosθ + z·sinθ, z' = -x·sinθ + z·cosθ.
+  // The door swings OUTWARD (south, −z), NOT into the room. This flips
+  // the sign of both branches below vs the original inward-opening
+  // kinematics.
+  // Door at local -x (hinge on the -x jamb): leaf tip starts at local (x=+d, z=0) (leafDir=+1). Swinging
+  // outward (−z) requires z' < 0 → -d·sinθ < 0 → θ > 0 (positive).
+  // Door at local +x mirrors: leaf tip at (x=-d, z=0) (leafDir=-1); z' = d·sinθ < 0
+  // → θ < 0 (negative).
+  ctx.doorPivot = doorPivot;
+  const openN = Math.max(0, Math.min(100, t.openPct)) / 100;
+  const MAX_ANGLE = (110 * Math.PI) / 180;   // swings ~110° open, OUTWARD (−z / south)
+  ctx.doorTargetAngle = doorAtNegX ? +openN * MAX_ANGLE : -openN * MAX_ANGLE;
+  if (ctx.doorAngle === undefined) ctx.doorAngle = ctx.doorTargetAngle;
+  doorPivot.rotation.y = ctx.doorAngle;
+
+  // =================================================================
+  // WALL — REFERENCE GEOMETRY ONLY · inner + outer leaf SANDWICH.
+  //   Cut ONE hole through BOTH leaves for the full glazing run.
+  // =================================================================
+  // fix: inner leaf = inside face -> white plasterboard. outer leaf = outer
+  // leaf = outside face -> yellow/buff brick. Same convention as
+  // WindowSpec.html / home3d-scene.js (tint in ONE place each).
+  const wall4Mat  = new THREE.MeshStandardMaterial({
+    color: 0xece9e1, roughness: 0.82, roughnessMap: makeWallRoughnessTexture()
+  });
+  const wall32Mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.9, map: makeBrickTexture()
+  });
+
+  function carvedWall(depth, zStart, mat, name) {
+    const shape = new THREE.Shape();
+    shape.moveTo(-WALL_W/2, 0);
+    shape.lineTo(+WALL_W/2, 0);
+    shape.lineTo(+WALL_W/2, WALL_H);
+    shape.lineTo(-WALL_W/2, WALL_H);
+    shape.lineTo(-WALL_W/2, 0);
+    const hHalfW = GW/2 + REVEAL;
+    const hBot   = OPEN_BOT - REVEAL;
+    const hTop   = OPEN_TOP + REVEAL;
+    const hole = new THREE.Path();
+    hole.moveTo(-hHalfW, hBot);
+    hole.lineTo(+hHalfW, hBot);
+    hole.lineTo(+hHalfW, hTop);
+    hole.lineTo(-hHalfW, hTop);
+    hole.lineTo(-hHalfW, hBot);
+    shape.holes.push(hole);
+    const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled:false, curveSegments:1 });
+    geo.translate(0, 0, zStart);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = name;
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+  // inner leaf: from south face (z=0) north to +T4
+  carvedWall(T4, Z_4_SOUTH, wall4Mat, 'wall4_REFERENCE_ONLY');
+  // outer leaf: from its north face (z=0) south to −T32
+  carvedWall(T32, Z_32_SOUTH, wall32Mat, 'wall32_REFERENCE_ONLY');
+}
+
+// per-frame open animation: lerp angle toward target.
+function animateBalcony(t, ctx, k) {
+  if (!ctx.doorPivot) return;
+  ctx.doorAngle += ((ctx.doorTargetAngle ?? 0) - ctx.doorAngle) * k;
+  ctx.doorPivot.rotation.y = ctx.doorAngle;
+}
+
+// ============== App ==============
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const g = geom(t);
+  return (
+    <>
+      <div className="sub">All units cm. The living-room south glazing — MUCH wider than a regular window: east ~3/4 fixed massive glass + southwest ~1/4 hinged glass door, set in the south two-leaf wall sandwich. Use the Tweaks panel to open the door.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Cross-section (top-down)</h2>
+          <CrossSection t={t} />
+          <div className="legend">Wall sandwich: inner leaf {t.innerLeafThickness} cm + outer leaf {t.outerLeafThickness} cm = {t.innerLeafThickness + t.outerLeafThickness} cm. Glazing frame's south face flush with the inner leaf's outer face; frame reaches {t.frameDepthIntoWall} cm into the inner leaf (not the full {t.innerLeafThickness}).</div>
+        </div>
+
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Total glazing width</td><td className="num">{t.totalWidth.toFixed(0)}</td><td><b>Variable</b> — set to your own opening's span</td></tr>
+              <tr><td>Total height</td><td className="num">{t.totalHeight.toFixed(0)}</td><td><b>Variable</b> — floor-standing (balcony)</td></tr>
+              <tr><td>Sill / platform</td><td className="num">{t.sillHeight.toFixed(0)}</td><td>Tiny step-over</td></tr>
+              <tr><td>Fixed glass (east)</td><td className="num">{g.fixedW.toFixed(0)}</td><td>Derived: split × total width — unopenable</td></tr>
+              <tr><td>Hinged door (SW)</td><td className="num">{g.doorW.toFixed(0)}</td><td>Derived — swings open</td></tr>
+              <tr><td>Fixed/door split</td><td className="num">{(t.fixedSplit*100).toFixed(0)}%</td><td><b>Variable</b> — fixed fraction, ~3/4</td></tr>
+              <tr><td>Frame face width</td><td className="num">{t.frameThickness.toFixed(0)}</td><td>Fixed-ish</td></tr>
+              <tr><td>Frame depth into inner leaf</td><td className="num">{t.frameDepthIntoWall.toFixed(0)}</td><td>Protrudes into the inner leaf (&lt; {t.innerLeafThickness})</td></tr>
+              <tr><td>Inner leaf</td><td className="num">{t.innerLeafThickness.toFixed(0)}</td><td>Frame S face = inner-leaf S face</td></tr>
+              <tr><td>Outer leaf</td><td className="num">{t.outerLeafThickness.toFixed(0)}</td><td>Outer skin, further south</td></tr>
+              <tr><td>Door open</td><td className="num">{t.openPct.toFixed(0)}%</td><td>0=closed · 100=~110° open</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div className="card full">
+          <h2>3D — balcony glazing in inner+outer leaf sandwich cutout</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildBalcony}
+            animate={animateBalcony}
+            heightOf={tt => tt.totalHeight * 0.01}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Size" />
+        <TweakSlider label="Total width" value={t.totalWidth} min={220} max={480} step={1} unit="cm"
+          onChange={v => setTweak('totalWidth', v)} />
+        <TweakSlider label="Total height" value={t.totalHeight} min={160} max={260} step={1} unit="cm"
+          onChange={v => setTweak('totalHeight', v)} />
+        <TweakSlider label="Sill / platform" value={t.sillHeight} min={0} max={25} step={1} unit="cm"
+          onChange={v => setTweak('sillHeight', v)} />
+        <TweakSlider label="Fixed fraction (east)" value={t.fixedSplit} min={0.6} max={0.85} step={0.01}
+          onChange={v => setTweak('fixedSplit', v)} />
+        <TweakToggle label="Door on west (SW)" value={t.doorOnWest}
+          onChange={v => setTweak('doorOnWest', v)} />
+
+        <TweakSection label="Frame (in inner leaf)" />
+        <TweakSlider label="Frame face" value={t.frameThickness} min={3} max={12} step={0.5} unit="cm"
+          onChange={v => setTweak('frameThickness', v)} />
+        <TweakSlider label="Frame depth into inner leaf" value={t.frameDepthIntoWall} min={6} max={30} step={1} unit="cm"
+          onChange={v => setTweak('frameDepthIntoWall', v)} />
+
+        <TweakSection label="Wall sandwich" />
+        <TweakSlider label="Inner leaf thickness" value={t.innerLeafThickness} min={20} max={40} step={1} unit="cm"
+          onChange={v => setTweak('innerLeafThickness', v)} />
+        <TweakSlider label="Outer leaf thickness" value={t.outerLeafThickness} min={5} max={20} step={1} unit="cm"
+          onChange={v => setTweak('outerLeafThickness', v)} />
+
+        <TweakSection label="Door swing" />
+        <TweakSlider label="Open" value={t.openPct} min={0} max={100} step={1} unit="%"
+          onChange={v => setTweak('openPct', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+window.__specObjects = window.__specObjects || {};
+window.__specObjects['balcony-window'] = App;
+})();
+</script>
+
+<script type="text/babel">
+// The family page: one SpecPage, each object its own component (remount mode).
+const OBJ = id => () => React.createElement(window.__specObjects[id]);
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <SpecPage render={{ 'pivot-window': OBJ('pivot-window'), 'balcony-window': OBJ('balcony-window') }} />);
 // Standalone viewing (opened directly at a /w URL, no design-tool host):
 // the shared TweaksPanel stays closed until it receives __activate_edit_mode.
 // Self-post it so the panel is visible when there's no host driving it.

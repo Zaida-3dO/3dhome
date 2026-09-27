@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kitchen Spec — Tweakable</title>
+<title>Fitted kitchen — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -42,6 +42,24 @@
 <body>
 <div id="root"></div>
 
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). The kitchen is the one ASSEMBLY page: the 3D
+     view always shows the whole L, the OBJECT row picks which piece the editor
+     acts on, and the VARIANTS are presets of the whole kitchen. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Fitted kitchen",
+  "description": "Fitted kitchen components: a base run of modules under one continuous worktop, a wall run of mixed-height units with an extractor hood, and a fridge-freezer, shown together as an L. Pick the piece to edit in the Object row; the Variant row holds presets of the WHOLE kitchen, so it is the same whichever piece is selected. Every size is an illustrative default. Build a run by adding, removing, reordering and resizing its modules (left to right as you face the run), then use Copy JSON.",
+  "objects": [
+    { "id": "base-run-a",     "label": "Base run A", "types": ["kitchen-base-run"] },
+    { "id": "base-run-b",     "label": "Base run B", "types": ["kitchen-base-run"] },
+    { "id": "wall-run-a",     "label": "Wall run A", "types": ["kitchen-wall-run"] },
+    { "id": "wall-run-b",     "label": "Wall run B", "types": ["kitchen-wall-run"] },
+    { "id": "fridge-freezer", "label": "Fridge-freezer", "types": ["fridge-freezer"] }
+  ]
+}
+</script>
+
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. -->
 <script src="../vendor/react.production.min.js"></script>
 <script src="../vendor/react-dom.production.min.js"></script>
@@ -54,6 +72,7 @@
   import * as K from '../src/furniture/kitchen.js';
   window.FurnitureKitchen = K;
 </script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
 <script type="text/babel" src="spec-three.jsx"></script>
 
 <script type="text/babel">
@@ -372,15 +391,19 @@ function App() {
   };
   const doCopy = () => copyText(json).then(() => setCopied('Copied ' + json.length + ' characters.'), e => setCopied('Copy failed (' + e.message + ') — select the JSON below.'));
 
+  // OBJECT row = which piece the editor acts on (the 3D always shows them all).
+  const OBJECT_KEYS = { 'base-run-a': 'a', 'base-run-b': 'b', 'wall-run-a': 'wall', 'wall-run-b': 'wallB', 'fridge-freezer': 'fridge' };
+  const objectId = Object.keys(OBJECT_KEYS).find(id => OBJECT_KEYS[id] === tab);
+  // VARIANTS = presets of the whole kitchen, compared on every piece's params.
+  const variants = K.KITCHEN_PRESETS.map(p => {
+    const { preset, ...params } = initialState(p.id);
+    return { id: p.id, label: p.label, params };
+  });
+  const pickVariant = id => { setT(initialState(id)); setCopied(''); };
+
   return (
-    <>
-      <h1>Kitchen Spec</h1>
-      <div className="sub">
-        Fitted kitchen components: a <b>base run</b> of modules under one continuous worktop, a <b>wall run</b> of
-        mixed-height units with an extractor hood, and a <b>fridge-freezer</b>. Shown as a generic L. Every size is an
-        illustrative default. Build a run by adding, removing, reordering and resizing its modules (left to right as you
-        face the run), then use Copy JSON.
-      </div>
+    <SpecPage objectId={objectId} onObject={id => setTab(OBJECT_KEYS[id])}>
+      <SpecVariants variants={variants} values={t} onSelect={pickVariant} />
       <div className="grid">
         <div className="card">
           <h2>3D — generic L</h2>
@@ -401,10 +424,7 @@ function App() {
         </div>
 
         <div className="card">
-          <h2>Edit</h2>
-          <div className="row" style={{ marginTop: 0, marginBottom: 12 }}>
-            {ITEMS.map(it => <button key={it.key} className={'btn' + (tab === it.key ? ' active' : '')} onClick={() => setTab(it.key)}>{it.label}</button>)}
-          </div>
+          <h2>Edit — {ITEMS.find(it => it.key === tab).label}</h2>
           {tab === 'fridge'
             ? <FridgeEditor f={t.fridge} onChange={v => setItem('fridge', v)} />
             : <RunEditor run={t[tab]} isWall={tab === 'wall' || tab === 'wallB'} onChange={v => setItem(tab, v)} />}
@@ -426,11 +446,7 @@ function App() {
           <h2>Copy JSON — params that differ from DEFAULTS</h2>
           <div className="row" style={{ marginTop: 0 }}>
             <button className="btn" onClick={doCopy}>Copy JSON</button>
-            <label className="f">preset
-              <select id="preset" value={t.preset} onChange={e => { setT(initialState(e.target.value)); setCopied(''); }}>
-                {K.KITCHEN_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-              </select></label>
-            <button className="btn ghost" onClick={() => { setT(initialState(t.preset)); setCopied(''); }}>Reset to preset</button>
+            <button className="btn ghost" onClick={() => pickVariant(t.preset)}>Reset to {K.KITCHEN_PRESETS.find(p => p.id === t.preset).label}</button>
             <span style={{ fontSize: 11 }}>{copied}</span>
           </div>
           <pre id="json-out">{json}</pre>
@@ -444,7 +460,7 @@ function App() {
           </div>
         </div>
       </div>
-    </>
+    </SpecPage>
   );
 }
 

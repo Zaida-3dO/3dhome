@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Standing Desk Spec — Tweakable</title>
+<title>Standing desk — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -27,6 +27,18 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Standing desk",
+  "description": "All units cm. Sit-stand desk: rectangular top on two T-foot telescoping legs, crossbar between them, control panel on the front edge. Use the Tweaks panel's height slider to move between sit and stand.",
+  "objects": [
+    { "id": "standing-desk", "label": "Standing desk", "types": ["standing-desk"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -164,9 +176,7 @@ function App() {
     setTimeout(() => setCopied(false), 1500);
   };
   return (
-    <>
-      <h1>Standing Desk Spec</h1>
-      <div className="sub">All units cm. Sit-stand desk: rectangular top on two T-foot telescoping legs, crossbar between them, control panel on the front edge. Use the Tweaks panel's height slider to move between sit and stand.</div>
+    <SpecPage>
 
       <div className="grid">
         <div className="card">
@@ -266,7 +276,7 @@ function App() {
         <TweakColor label="LED colour" value={t.ledColor}
           onChange={v => setTweak('ledColor', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

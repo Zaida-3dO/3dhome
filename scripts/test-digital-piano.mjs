@@ -399,10 +399,12 @@ const wbox = o => new THREE.Box3().setFromObject(o);
   check('registry: ottoman points at digital-piano.js with key ottoman',
     REGISTRY['ottoman'].path === 'digital-piano.js' && REGISTRY['ottoman'].key === 'ottoman',
     REGISTRY['ottoman']);
-  check('all three point at the DigitalPianoSpec page',
+  check('piano + bench point at the DigitalPianoSpec page (a set)',
     REGISTRY['digital-piano'].spec === 'DigitalPianoSpec' &&
-    REGISTRY['piano-bench'].spec === 'DigitalPianoSpec' &&
-    REGISTRY['ottoman'].spec === 'DigitalPianoSpec');
+    REGISTRY['piano-bench'].spec === 'DigitalPianoSpec');
+  // The ottoman is upholstered seating, not part of the piano set: its spec is
+  // Beds & Sofas even though its builder shares this module.
+  check('the ottoman points at the BedSpec (Beds & Sofas) page', REGISTRY['ottoman'].spec === 'BedSpec');
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

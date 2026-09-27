@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Curtain Spec — Tweakable</title>
+<title>Curtains — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -28,6 +28,18 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Curtains",
+  "description": "All units cm. One design for every house curtain — floor-to-ceiling blackout pinch-pleat, two-tone, centre-parted slider, under a lit cornice. Only WIDTH, colours + cornice side-faces vary per room. Use the Tweaks panel.",
+  "objects": [
+    { "id": "curtain", "label": "Curtain", "types": [] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -584,9 +596,7 @@ function animateCurtain(t, ctx, k) {
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   return (
-    <>
-      <h1>Curtain Spec</h1>
-      <div className="sub">All units cm. One design for every house curtain — floor-to-ceiling blackout pinch-pleat, two-tone, centre-parted slider, under a lit cornice. Only WIDTH, colours + cornice side-faces vary per room. Use the Tweaks panel.</div>
+    <SpecPage>
 
       <div className="grid">
         <div className="card">
@@ -685,7 +695,7 @@ function App() {
         <TweakSlider label="Light intensity" value={t.corniceLightIntensity} min={0} max={6} step={0.1}
           onChange={v => setTweak('corniceLightIntensity', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

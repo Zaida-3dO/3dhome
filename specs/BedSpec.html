@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bed Spec — Tweakable</title>
+<title>Beds &amp; Sofas — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -35,6 +35,21 @@
 <body>
 <div id="root"></div>
 
+<!-- Which objects this page holds: read by SpecPage (tweaks-panel.jsx) for the
+     title and the OBJECT row, and by scripts/test-spec-pages.mjs to check that
+     every furniture registry type has exactly one spec page. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Beds & Sofas",
+  "description": "Upholstered soft furnishings: beds, ottomans and sofas. All units cm. Every object is drawn by the real furniture builder the house scene uses.",
+  "objects": [
+    { "id": "bed",     "label": "Bed", "types": ["bed"] },
+    { "id": "ottoman", "label": "Ottoman", "types": ["ottoman"] },
+    { "id": "sofa",    "label": "Sofa", "types": ["sofa"] }
+  ]
+}
+</script>
+
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
 <script src="../vendor/react-dom.production.min.js"></script>
@@ -52,9 +67,220 @@
   window.FurnitureBed = M;
   window.dispatchEvent(new Event('furniture-bed-ready'));
 </script>
+<script type="module">
+  import * as S from '../src/furniture/sofa.js';
+  window.FurnitureSofa = S;
+  window.dispatchEvent(new Event('furniture-sofa-ready'));
+</script>
+<!-- The ottoman's builder lives in digital-piano.js (TYPES.ottoman) -- a code
+     home, not a family: the ottoman is upholstered seating, so its spec is
+     here with the bed, not on the piano page. -->
+<script type="module">
+  import * as P from '../src/furniture/digital-piano.js';
+  window.__digitalPianoModule = P;
+  window.dispatchEvent(new Event('__digital_piano_module_ready'));
+</script>
 <!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
 <script type="text/babel" src="tweaks-panel.jsx"></script>
 <script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+// ---- object "sofa": moved verbatim from SofaSpec.html, wrapped in an IIFE so
+// its top-level names (App, TWEAK_DEFAULTS, ...) cannot collide with the bed's.
+// Edits: its mount lines and <h1> removed; its preset buttons became the
+// shared <SpecVariants>.
+(function () {
+/* =====================================================================
+   SOFA SPEC   ·   corner (L) sofa, or a straight sofa
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT (an ordinary retail corner sofa),
+   not a survey. Measure your own sofa and drive the geometry from the
+   Tweaks panel.
+   ─────────────────────────────────────────────────────────────────────
+
+   Look: soft fabric seat and back cushions on a contrasting plinth base; a
+   low arm at the non-chaise end (a plinth-coloured box with a padded
+   fabric top); a chaise running forward to the full depth, with no arm or
+   back on its outer end. The back cushions run the full back length.
+   `chaise` is named as seen from the FRONT (+x is the viewer's right).
+
+   The geometry is NOT built here -- it lives in src/furniture/sofa.js,
+   unit-tested by scripts/test-sofa.mjs. This page is a thin harness.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "width": 275,
+  "depth": 197,
+  "height": 88,
+  "chaise": "right",
+  "seatDepth": 97,
+  "chaiseWidth": 105,
+  "seatHeight": 44,
+  "baseHeight": 24,
+  "backDepth": 22,
+  "armWidth": 20,
+  "armHeight": 64,
+  "cushions": 3,
+  "upholsteryColor": "#1e1e20",
+  "baseColor": "#ecebe7",
+  "baseFinish": "satin",
+  "detail": "full"
+}/*EDITMODE-END*/;
+
+// The sofa's VARIANTS (same controls, different values), picked from the
+// shared picker bar. Each sets only the keys it names.
+const PRESETS = {
+  'L corner, chaise right': { width: 275, depth: 197, seatDepth: 97, chaise: 'right' },
+  'L corner, chaise left': { width: 275, depth: 197, seatDepth: 97, chaise: 'left' },
+  'Straight 3-seater': { width: 220, depth: 97, seatDepth: 97, chaise: 'none' }
+};
+
+// params for the builder = tweaks minus the page-only "detail" key
+function paramsOf(t) {
+  const { detail, ...p } = t;
+  return p;
+}
+
+// See BedSpec.html: set during App's render so the FIRST build's count lands.
+let reportTriangles = null;
+
+function buildSofaModel(t, group, THREE) {
+  const M = window.FurnitureSofa;
+  const sofa = M.build(THREE, paramsOf(t), { detail: t.detail });
+  const b = new THREE.Box3().setFromObject(sofa);
+  sofa.position.z = -(b.min.z + b.max.z) / 2;
+  group.add(sofa);
+  let tris = 0;
+  sofa.traverse(o => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  if (reportTriangles) reportTriangles(tris);
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(2.4, 48), new THREE.MeshStandardMaterial({ color: 0x8a7a64, roughness: 1 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  floor.name = 'floor';
+  group.add(floor);
+}
+
+// ============== App ==============
+function App() {
+  const M = window.FurnitureSofa;
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [copied, setCopied] = React.useState('');
+  const [triangles, setTriangles] = React.useState(null);
+  reportTriangles = setTriangles;
+  const json = M ? JSON.stringify(M.toFurnitureJSON(paramsOf(t)), null, 2) : '';
+  const copy = () => {
+    const done = () => { setCopied('copied'); setTimeout(() => setCopied(''), 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
+    else setCopied('clipboard unavailable — select the JSON below');
+  };
+  const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const L = t.chaise !== 'none';
+  return (
+    <>
+      <SpecVariants values={t}
+        variants={Object.keys(PRESETS).map(n => ({ id: slug(n), label: n, params: PRESETS[n] }))}
+        onSelect={id => setTweak(Object.assign({}, PRESETS[Object.keys(PRESETS).find(n => slug(n) === id)]))} />
+      <div className="sub">All units cm. Corner (L) sofa with a chaise, or a straight sofa: fabric cushions on a plinth base, padded arm(s). Use the Tweaks panel to change size, layout and colours.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Width</td><td className="num">{t.width.toFixed(0)}</td><td><b>Variable</b> -- arm(s) + seats + chaise</td></tr>
+              <tr><td>Depth</td><td className="num">{t.depth.toFixed(0)}</td><td><b>Variable</b> -- {L ? 'back to the chaise front' : 'straight: set it = seat depth'}</td></tr>
+              <tr><td>Height (back top)</td><td className="num">{t.height.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Chaise</td><td className="num">{t.chaise}</td><td>seen from the front</td></tr>
+              <tr><td>Seat depth (main leg)</td><td className="num">{t.seatDepth.toFixed(0)}</td><td>{L ? <b>Variable</b> : 'unused: straight = depth'}</td></tr>
+              <tr><td>Chaise width</td><td className="num">{t.chaiseWidth.toFixed(0)}</td><td>{L ? <b>Variable</b> : 'unused'}</td></tr>
+              <tr><td>Seat height</td><td className="num">{t.seatHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Plinth height</td><td className="num">{t.baseHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Arm height / width</td><td className="num">{t.armHeight.toFixed(0)} / {t.armWidth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            Every part is clamped so any params build to exactly width x depth x height. Low detail draws every
+            part as a plain box.
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Look</h2>
+          <h2 style={{ marginTop: 18 }}>Look</h2>
+          <div className="legend">
+            Soft, rounded fabric seat and back cushions on a contrasting plinth base (roughly the lower half of
+            the seat height). A low arm at the non-chaise end: a plinth-coloured box with a padded fabric top.
+            The chaise runs forward to the full depth with no arm or back on its outer end; the back cushions
+            run the full back length. A straight sofa has an arm at both ends.
+          </div>
+          <div className="row">
+            <button className="btn" onClick={copy}>Copy as furniture JSON</button>
+            {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
+          </div>
+          <pre className="json">{json}</pre>
+        </div>
+
+        <div className="card full">
+          <h2>3D — sofa</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildSofaModel}
+            heightOf={tt => tt.height * 0.006}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Layout" />
+        <TweakRadio label="Chaise" value={t.chaise} options={['left', 'none', 'right']}
+          onChange={v => setTweak('chaise', v)} />
+        <TweakSlider label="Seat cushions" value={t.cushions} min={1} max={4} step={1} unit=""
+          onChange={v => setTweak('cushions', v)} />
+
+        <TweakSection label="Size" />
+        <TweakSlider label="Width" value={t.width} min={120} max={360} step={1} unit="cm"
+          onChange={v => setTweak('width', v)} />
+        <TweakSlider label="Depth" value={t.depth} min={70} max={260} step={1} unit="cm"
+          onChange={v => setTweak('depth', v)} />
+        <TweakSlider label="Height (back top)" value={t.height} min={60} max={110} step={1} unit="cm"
+          onChange={v => setTweak('height', v)} />
+        <TweakSlider label="Seat depth (main leg)" value={t.seatDepth} min={60} max={130} step={1} unit="cm"
+          onChange={v => setTweak('seatDepth', v)} />
+        <TweakSlider label="Chaise width" value={t.chaiseWidth} min={60} max={160} step={1} unit="cm"
+          onChange={v => setTweak('chaiseWidth', v)} />
+        <TweakSlider label="Seat height" value={t.seatHeight} min={30} max={60} step={1} unit="cm"
+          onChange={v => setTweak('seatHeight', v)} />
+        <TweakSlider label="Plinth height" value={t.baseHeight} min={5} max={40} step={1} unit="cm"
+          onChange={v => setTweak('baseHeight', v)} />
+        <TweakSlider label="Back depth" value={t.backDepth} min={10} max={40} step={1} unit="cm"
+          onChange={v => setTweak('backDepth', v)} />
+        <TweakSlider label="Arm width" value={t.armWidth} min={8} max={40} step={1} unit="cm"
+          onChange={v => setTweak('armWidth', v)} />
+        <TweakSlider label="Arm height" value={t.armHeight} min={40} max={90} step={1} unit="cm"
+          onChange={v => setTweak('armHeight', v)} />
+
+        <TweakSection label="Colours" />
+        <TweakColor label="Upholstery (fabric)" value={t.upholsteryColor}
+          onChange={v => setTweak('upholsteryColor', v)} />
+        <TweakColor label="Plinth base" value={t.baseColor}
+          onChange={v => setTweak('baseColor', v)} />
+        <TweakSelect label="Plinth finish" value={t.baseFinish} options={['matte', 'satin', 'gloss']}
+          onChange={v => setTweak('baseFinish', v)} />
+
+        <TweakSection label="Render" />
+        <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
+          onChange={v => setTweak('detail', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+window.__specObjects = window.__specObjects || {};
+window.__specObjects['sofa'] = App;
+})();
+</script>
 
 <script type="text/babel">
 /* =====================================================================
@@ -138,8 +364,8 @@ function buildBedModel(t, group, THREE) {
   group.add(floor);
 }
 
-// ============== App ==============
-function App() {
+// ============== Object: bed ==============
+function BedObject() {
   const M = window.FurnitureBed;
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [copied, setCopied] = React.useState('');
@@ -161,7 +387,6 @@ function App() {
   };
   return (
     <>
-      <h1>Bed Spec</h1>
       <div className="sub">All units cm. A soft upholstered bed, made up: channelled velvet headboard in a padded border, velvet rails, a crowned mattress in a fitted sheet, a draped botanical-print duvet with its top folded back, pillows and a cushion. Use the Tweaks panel to change size, bedding and colours.</div>
 
       <div className="grid">
@@ -266,10 +491,132 @@ function App() {
   );
 }
 
-// The builder module is an ES module script; wait for it if Babel got here first.
-function mount() { ReactDOM.createRoot(document.getElementById('root')).render(<App />); }
-if (window.FurnitureBed) mount();
-else window.addEventListener('furniture-bed-ready', mount, { once: true });
+// ============== Object: ottoman ==============
+// Moved here from DigitalPianoSpec (2026-09-27): the same builder call, the same
+// sliders and ranges, the same defaults -- only the page it lives on changed.
+const OTTOMAN_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "ottomanWidth": 92,
+  "ottomanDepth": 46,
+  "ottomanHeight": 40,
+  "channelCount": 5,
+  "ottomanColor": "#2e6e6b",
+  "legColor": "#3a2f28",
+  "detail": "full"
+}/*EDITMODE-END*/;
+
+function ottomanParams(t) {
+  return { width: t.ottomanWidth, depth: t.ottomanDepth, height: t.ottomanHeight,
+    channelCount: t.channelCount, color: t.ottomanColor, legColor: t.legColor };
+}
+
+let reportOttomanTriangles = null;
+
+function buildOttomanModel(t, group, THREE) {
+  const impl = window.__digitalPianoModule.TYPES['ottoman'];
+  const built = impl.build(THREE, Object.assign({}, impl.DEFAULTS, ottomanParams(t)), { detail: t.detail });
+  // back at z=0 in the builder's frame; centre it on the view target
+  const b = new THREE.Box3().setFromObject(built);
+  built.position.z = -(b.min.z + b.max.z) / 2;
+  group.add(built);
+  let tris = 0;
+  built.traverse(o => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  if (reportOttomanTriangles) reportOttomanTriangles(tris);
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(1.2, 32), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  floor.name = 'floor';
+  group.add(floor);
+}
+
+function OttomanObject() {
+  const impl = window.__digitalPianoModule.TYPES['ottoman'];
+  const [t, setTweak] = useTweaks(OTTOMAN_DEFAULTS);
+  const [triangles, setTriangles] = React.useState(null);
+  reportOttomanTriangles = setTriangles; // set during render -- see BedObject's note
+  const [copied, setCopied] = React.useState('');
+  const p = ottomanParams(t);
+  const diff = {}; Object.keys(p).forEach(k => { if (p[k] !== impl.DEFAULTS[k]) diff[k] = p[k]; });
+  const json = JSON.stringify({ type: 'ottoman', params: diff }, null, 2);
+  const copy = () => {
+    const done = () => { setCopied('copied'); setTimeout(() => setCopied(''), 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
+    else setCopied('clipboard unavailable — select the JSON below');
+  };
+  return (
+    <>
+      <div className="sub">A teal velvet ottoman with a channel-tufted lid, on four short legs. Use the Tweaks panel to change size, channels and colours.</div>
+      <div className="grid">
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Width</td><td className="num">{t.ottomanWidth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Depth</td><td className="num">{t.ottomanDepth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Height</td><td className="num">{t.ottomanHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Channel count</td><td className="num">{t.channelCount.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="card">
+          <h2>Look</h2>
+          <div className="legend">
+            A velvet box with a channel-tufted lid, on four short legs. Built by src/furniture/digital-piano.js
+            (TYPES.ottoman) -- the same builder the house scene calls for an `ottoman` item.
+          </div>
+          <div className="row">
+            <button className="btn" onClick={copy}>Copy as furniture JSON</button>
+            {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
+          </div>
+          <pre className="json">{json}</pre>
+        </div>
+        <div className="card full">
+          <h2>3D — ottoman</h2>
+          <ThreeView t={t} buildModel={buildOttomanModel} heightOf={tt => tt.ottomanHeight * 0.01} />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Size" />
+        <TweakSlider label="Width" value={t.ottomanWidth} min={60} max={130} step={1} unit="cm"
+          onChange={v => setTweak('ottomanWidth', v)} />
+        <TweakSlider label="Depth" value={t.ottomanDepth} min={30} max={65} step={1} unit="cm"
+          onChange={v => setTweak('ottomanDepth', v)} />
+        <TweakSlider label="Height" value={t.ottomanHeight} min={30} max={50} step={1} unit="cm"
+          onChange={v => setTweak('ottomanHeight', v)} />
+        <TweakSlider label="Channel count" value={t.channelCount} min={3} max={9} step={1} unit=""
+          onChange={v => setTweak('channelCount', v)} />
+        <TweakSection label="Colours" />
+        <TweakColor label="Body (velvet)" value={t.ottomanColor}
+          onChange={v => setTweak('ottomanColor', v)} />
+        <TweakColor label="Legs" value={t.legColor}
+          onChange={v => setTweak('legColor', v)} />
+        <TweakSection label="Render" />
+        <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
+          onChange={v => setTweak('detail', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+// ============== Page ==============
+function App() {
+  return <SpecPage render={{ bed: () => <BedObject />, ottoman: () => <OttomanObject />,
+    sofa: () => React.createElement(window.__specObjects.sofa) }} />;
+}
+
+// Both builder modules are ES module scripts; wait for them if Babel got here first.
+let mounted = false;
+function mount() {
+  if (mounted || !window.FurnitureBed || !window.__digitalPianoModule || !window.FurnitureSofa) return;
+  mounted = true;
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+}
+window.addEventListener('furniture-bed-ready', mount);
+window.addEventListener('__digital_piano_module_ready', mount);
+window.addEventListener('furniture-sofa-ready', mount);
+mount();
 
 // Standalone viewing (opened directly at a /w URL, no design-tool host):
 // the shared TweaksPanel stays closed until it receives __activate_edit_mode.

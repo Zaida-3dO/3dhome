@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Robot Vacuum Spec — Tweakable</title>
+<title>Robot vacuum — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -34,6 +34,18 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Robot vacuum",
+  "description": "All units cm. A round robot vacuum on a self-emptying dock: rounded tower with a champagne band, base plate with a ramp, robot with a lidar puck and a status LED. Use the Tweaks panel to change size, dock and colours.",
+  "objects": [
+    { "id": "robot-vacuum", "label": "Robot vacuum", "types": ["robot-vacuum"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -147,9 +159,7 @@ function App() {
   };
   const setDock = on => setTweak(dockEdits(t, on));
   return (
-    <>
-      <h1>Robot Vacuum Spec</h1>
-      <div className="sub">All units cm. A round robot vacuum on a self-emptying dock: rounded tower with a champagne band, base plate with a ramp, robot with a lidar puck and a status LED. Use the Tweaks panel to change size, dock and colours.</div>
+    <SpecPage>
 
       <div className="grid">
         <div className="card">
@@ -237,7 +247,7 @@ function App() {
         <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
           onChange={v => setTweak('detail', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

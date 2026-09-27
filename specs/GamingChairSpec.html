@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gaming Chair Spec — Tweakable</title>
+<title>Gaming chair — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -35,6 +35,18 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). One object; its colourways are VARIANTS. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Gaming chair",
+  "description": "All units cm. Racing-style gaming chair, size L. Colourway on the seat and the backrest front; black back, sides, armrests and base. Pick a colourway variant, or use the Tweaks panel.",
+  "objects": [
+    { "id": "gaming-chair", "label": "Gaming chair", "types": ["gaming-chair"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -161,10 +173,12 @@ function App() {
     else setCopied('clipboard unavailable — select the JSON below');
   };
   const D = M.DEFAULTS, L = M.LIMITS;
+  // Colourways are VARIANTS: the same chair, a different primaryColor.
+  const variants = Object.entries(M.PRESETS).map(([id, p]) => ({ id, label: p.label, params: { primaryColor: p.primaryColor } }));
   return (
-    <>
-      <h1>Gaming Chair Spec</h1>
-      <div className="sub">All units cm. Racing-style gaming chair, size L. Colourway on the seat and the backrest front; black back, sides, armrests and base. Use the presets or the Tweaks panel.</div>
+    <SpecPage>
+      <SpecVariants variants={variants} values={t}
+        onSelect={id => setTweak('primaryColor', M.PRESETS[id].primaryColor)} />
 
       <div className="grid">
         <div className="card">
@@ -194,12 +208,6 @@ function App() {
             </tbody>
           </table>
           <div className="row">
-            {Object.entries(M.PRESETS).map(([id, p]) => (
-              <button key={id} className={'btn' + (presetId === id ? ' active' : '')} data-preset={id}
-                onClick={() => setTweak('primaryColor', p.primaryColor)}>
-                <span className="sw" style={{ background: p.primaryColor }}></span>{p.label}
-              </button>
-            ))}
             <button className="btn" id="copy-json" onClick={copy}>Copy as furniture JSON</button>
             {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
           </div>
@@ -219,10 +227,6 @@ function App() {
 
       <TweaksPanel>
         <TweakSection label="Colourway" />
-        {Object.entries(M.PRESETS).map(([id, p]) => (
-          <TweakButton key={id} label={p.label} secondary={presetId !== id}
-            onClick={() => setTweak('primaryColor', p.primaryColor)} />
-        ))}
         <TweakColor label="Colour (seat + backrest front)" value={t.primaryColor}
           onChange={v => setTweak('primaryColor', v)} />
         <TweakColor label="Back + sides" value={t.backColor}
@@ -244,7 +248,7 @@ function App() {
         <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
           onChange={v => setTweak('detail', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 
