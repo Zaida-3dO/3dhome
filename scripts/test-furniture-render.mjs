@@ -581,6 +581,25 @@ function lightScene() {
   const fading = res.beauty.filter(m => m.userData.fadeWallId === 1);
   check('fade bucket per wall, own transparent material', fading.length === 1 && fading[0].material.transparent &&
     fading[0].material !== res.beauty.find(m => m.userData.fadeWallId == null && m.userData.cls === 'opaque').material);
+  // Item 3d2f067d: a fade bucket draws at renderOrder 0 (depth-sorted among
+  // the fading walls), never at the solid palette's -2 / glow's -1, which
+  // would draw it BEFORE the fading wall behind it and let that wall wash it
+  // out mid-fade. The solid palette keeps -2.
+  const hGlow = compile([
+    { id: 'fp', room: 'r', type: 'box', wall: 1, centre: 200, params: { height: 150 } },
+    { id: 'fg', room: 'r', type: 'box', wall: 1, centre: 300, params: { height: 150, finish: 'emissive', color: '#3366ff' } },
+    { id: 'sp', room: 'r', type: 'box', at: [300, 250], params: { height: 50 } },
+    { id: 'sg', room: 'r', type: 'box', at: [350, 250], params: { height: 50, finish: 'emissive', color: '#3366ff' } }
+  ]);
+  const rGlow = build(hGlow);
+  const bucketOf = (c, fade) => rGlow.beauty.find(m => m.userData.cls === c && (m.userData.fadeWallId != null) === fade);
+  const fadePal = bucketOf('opaque', true), fadeGlow = bucketOf('glow', true);
+  const solidPal = bucketOf('opaque', false), solidGlow = bucketOf('glow', false);
+  check('fade palette and fade glow buckets draw at renderOrder 0; solid ones keep -2 / -1',
+    !!fadePal && !!fadeGlow && !!solidPal && !!solidGlow && fadePal.renderOrder === 0 && fadeGlow.renderOrder === 0 &&
+    solidPal.renderOrder === -2 && solidGlow.renderOrder === -1,
+    rGlow.beauty.map(m => [m.userData.bucket, m.renderOrder]));
+  F.disposeFurniture(rGlow);
   // Glass fades WITH its item (f7324d3f, replacing A3), from and back to its
   // own opacity -- never driven to 1.
   const hg = compile([
@@ -639,6 +658,13 @@ function lightScene() {
   check('scene fade loop drives opacity and depthWrite through wallFadeTarget / wallFadeDepthWrite',
     /const targetOpacity = wallFadeTarget\(dot, b\)/.test(sceneSrc) &&
     /mesh\.material\.depthWrite = wallFadeDepthWrite\(mesh\.material\.opacity, b, baseDepthWrite\)/.test(sceneSrc));
+  // Item 14320d17: `b` must be the REGISTRATION's base (glass 0.25), falling
+  // back to 1 only when none was recorded. `const b = 1` is exactly the A3
+  // regression (glass driven back to opacity 1, turned solid) and used to
+  // survive every check above.
+  check('scene fade loop reads each entry\'s own base (b = base, 1 only when unrecorded)',
+    /wallMeshes\.forEach\(\(\{ mesh, nx, nz, outer, base, baseDepthWrite \}\) => \{/.test(sceneSrc) &&
+    /const b = base == null \? 1 : base;/.test(sceneSrc));
 }
 
 // ---- 6b. everything mounted on a wall fades with that wall (f7324d3f) -------------
@@ -1050,6 +1076,10 @@ const buildFixture = (quality, opts) => quietly(() => F.buildFurnitureSync(THREE
     fixture.furniture.length >= 85 && new Set(fixture.furniture.map(f => f.room)).size === 10 && fixtureBuilders.size >= 20,
     { items: fixture.furniture.length, types: fixtureBuilders.size });
   const u = buildFixture(ULTRA), l = buildFixture(LOW);
+  // Item 3d2f067d: every profile entry BUILDS on ultra (a cabinet with a width
+  // override and the default 100 cm fronts row used to throw and be skipped).
+  check('fixture: every item builds on ultra (none skipped)', u.stats.skipped === 0 && u.stats.items === fixture.furniture.length,
+    { skipped: u.stats.skipped, items: u.stats.items, entries: fixture.furniture.length });
   const fades = u.beauty.filter(m => m.userData.fadeWallId != null).length;
   check('fixture: fade-auto items are in it (fade buckets exist)', fades > 0, fades);
   check('B2 ultra: beauty buckets <= 30', u.stats.beautyDraws <= 30, u.stats);
@@ -1098,31 +1128,54 @@ const buildFixture = (quality, opts) => quietly(() => F.buildFurnitureSync(THREE
   // (flattened parts, buckets, proxies) is freed. Scratch geometry a builder
   // makes inside build() and never puts on a mesh is the builder's own, never
   // reaches the GPU, and is not counted.
-  let inBuilder = false;
-  const made = new Set();
-  const origBG = THREE.BufferGeometry.prototype.dispose;
-  const live = new Set();
-  const Tracked = new Map(Array.from(fixtureBuilders.entries()).map(([t, b]) => [t, { DEFAULTS: b.DEFAULTS,
-    build: (T, p, o) => { inBuilder = true; try { return b.build(T, p, o); } finally { inBuilder = false; } } }]));
-  let n = 0, cancel = false;
-  const origSet = THREE.BufferGeometry.prototype.setAttribute;
-  THREE.BufferGeometry.prototype.setAttribute = function (name, attr) {
-    if (name === 'position' && !inBuilder && !made.has(this)) { made.add(this); live.add(this); }
-    return origSet.call(this, name, attr);
+  const cancelAt = async (at, extra) => {
+    let inBuilder = false;
+    const made = new Set();
+    const origBG = THREE.BufferGeometry.prototype.dispose;
+    const live = new Set();
+    const Tracked = new Map(Array.from(fixtureBuilders.entries()).map(([t, b]) => [t, { DEFAULTS: b.DEFAULTS,
+      build: (T, p, o) => { inBuilder = true; try { return b.build(T, p, o); } finally { inBuilder = false; } } }]));
+    let n = 0, cancel = false;
+    const origSet = THREE.BufferGeometry.prototype.setAttribute;
+    THREE.BufferGeometry.prototype.setAttribute = function (name, attr) {
+      if (name === 'position' && !inBuilder && !made.has(this)) { made.add(this); live.add(this); }
+      return origSet.call(this, name, attr);
+    };
+    THREE.BufferGeometry.prototype.dispose = function () { live.delete(this); return origBG.call(this); };
+    let out;
+    try {
+      out = (await quietlyAsync(() => F.buildFurnitureSliced(THREE, fixture.furniture, Tracked,
+        Object.assign({ tx, tz, quality: ULTRA, walls: fixture.walls, sliceMs: 0, isCancelled: () => cancel,
+          yieldFn: () => { if (++n === at) cancel = true; return Promise.resolve(); } }, extra || {})))).value;
+    } finally {
+      THREE.BufferGeometry.prototype.setAttribute = origSet;
+      THREE.BufferGeometry.prototype.dispose = origBG;
+    }
+    return { out, n, made: made.size, live: live.size };
   };
-  THREE.BufferGeometry.prototype.dispose = function () { live.delete(this); return origBG.call(this); };
-  let out;
-  try {
-    out = (await quietlyAsync(() => F.buildFurnitureSliced(THREE, fixture.furniture, Tracked,
-      { tx, tz, quality: ULTRA, walls: fixture.walls, sliceMs: 0, isCancelled: () => cancel,
-        yieldFn: () => { if (++n === 40) cancel = true; return Promise.resolve(); } }))).value;
-  } finally {
-    THREE.BufferGeometry.prototype.setAttribute = origSet;
-    THREE.BufferGeometry.prototype.dispose = origBG;
+  const c40 = await cancelAt(40);
+  check('sliced: cancelled part-way -> null', c40.out === null && c40.n === 40, { n: c40.n, out: !!c40.out });
+  check('sliced: ...and every geometry it made is freed', c40.made > 0 && c40.live === 0, c40);
+  // Item 3d2f067d: cancels in the BUCKET and PROXY phases too (the one at 40
+  // lands among the items, so a missing made.push in a later phase went
+  // unseen). With sliceMs 0 the yields run: one per built item, one per
+  // bucket, one per low-detail proxy rebuild, one per proxy.
+  const nItems = sync.stats.items, nBuckets = sync.stats.beautyDraws, nProxies = sync.stats.proxyDraws;
+  const nLow = yields - nItems - nBuckets - nProxies;
+  const phaseCancels = [
+    ['first bucket', nItems + 1], ['last bucket', nItems + nBuckets],
+    ['first proxy', nItems + nBuckets + nLow + 1], ['last proxy', yields]
+  ];
+  for (const [label, at] of phaseCancels) {
+    const c = await cancelAt(at);
+    check('sliced: cancelled at the ' + label + ' (yield ' + at + ') -> null, every geometry freed',
+      c.out === null && c.n === at && c.made > 0 && c.live === 0, Object.assign({ at }, c));
   }
-  check('sliced: cancelled part-way -> null', out === null && n === 40, { n, out: !!out });
-  check('sliced: ...and every geometry it made is freed', made.size > 0 && live.size === 0,
-    { made: made.size, live: live.size });
+  // The low-detail proxy rebuild's own geometry: force every room over the
+  // per-room cap, cancel right after the first low rebuild.
+  const cLow = await cancelAt(nItems + nBuckets + 1, { roomTriCap: 1 });
+  check('sliced: cancelled right after a low-detail proxy rebuild -> null, every geometry freed',
+    cLow.out === null && cLow.n === nItems + nBuckets + 1 && cLow.made > 0 && cLow.live === 0, cLow);
   // Wired through the attach sequence: a scene disposed mid-build attaches
   // nothing and never compiles.
   const { ren, calls } = fakeRenderer();
@@ -1151,6 +1204,8 @@ const buildFixture = (quality, opts) => quietly(() => F.buildFurnitureSync(THREE
   const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
   check('the scene builds furniture with buildFurnitureSliced', /buildFurnitureSliced\(THREE, furnitureItems/.test(src) &&
     !/buildFurnitureSync\(THREE, furnitureItems/.test(src));
+  check('the scene passes isCancelled to the sliced build (a disposed scene stops building)',
+    /isCancelled: \(\) => _disposed/.test(src));
   [sync, sliced, res2].forEach(r => r && F.disposeFurniture(r));
 }
 
@@ -1571,14 +1626,104 @@ const buildFixture = (quality, opts) => quietly(() => F.buildFurnitureSync(THREE
   // toward a target by 0.12 per call) directly on the registered dynamic
   // mesh, proving it responds exactly like a beauty bucket would.
   let opacity = 1.0;
-  const targetOpacity = 0.05; // camera facing the wall, per the real fade block
+  const targetOpacity = F.wallFadeTarget(-0.9, dynReg.baseOpacity); // camera facing the wall
   for (let i = 0; i < 60; i++) opacity += (targetOpacity - opacity) * 0.12;
   pointer.material.opacity = opacity;
-  check('dynamic: the SAME fade easing math the scene uses drives this mesh\'s opacity down',
+  check('dynamic: the SAME fade easing math the scene uses drives the dynamic mesh opacity down',
     pointer.material.opacity < 0.1, pointer.material.opacity);
 
   F.disposeFurniture(r);
   F.disposeFurniture(rNoFade);
+
+  // A TRANSLUCENT dynamic part (items c333108d / 14320d17: a future LED
+  // diffuser) registers with its OWN base, recorded before the build marked
+  // it transparent -- so the fade returns it to 0.4, never to 1.
+  const TranslucentDynamic = {
+    DEFAULTS: Object.freeze({ width: 60, depth: 20, height: 150 }),
+    build(T, p) {
+      const g = new T.Group();
+      const w = p.width / 100, d = p.depth / 100, h = p.height / 100;
+      g.add(new T.Mesh(new T.BoxGeometry(w, h, d).translate(0, h / 2, d / 2), Fin.makeFinish(T, 'matte', '#888888')));
+      const mat = new T.MeshBasicMaterial({ color: 0xffeecc, transparent: false, opacity: 0.4, depthWrite: false });
+      const diffuser = new T.Mesh(new T.BoxGeometry(0.2, 0.02, 0.02).translate(0, h / 2, d), mat);
+      diffuser.name = 'diffuser';
+      diffuser.userData.dynamic = true;
+      g.add(diffuser);
+      return g;
+    }
+  };
+  const hT = compile([{ id: 'tDyn', room: 'r', type: 'translucent-dynamic', wall: 1, centre: 200 }]);
+  const rT = build(hT, ULTRA, { 'translucent-dynamic': TranslucentDynamic });
+  const diffuser = rT.dynamicByItemId.tDyn.group.getObjectByName('diffuser');
+  const tReg = F.fadeRegistrations(rT).find(reg => reg.mesh === diffuser);
+  check('dynamic: a translucent dynamic part (opacity 0.4, depthWrite false) registers base 0.4 / false',
+    !!tReg && tReg.wallId === 1 && tReg.baseOpacity === 0.4 && tReg.baseDepthWrite === false &&
+    diffuser.material.transparent === true, tReg && [tReg.baseOpacity, tReg.baseDepthWrite]);
+  // Driven through the scene's own fade math with its wall turned away:
+  // 0.4 (not 1), still not writing depth.
+  let tOp = 0.02, tDepth = null;
+  for (let i = 0; i < 200; i++) {
+    tOp += (F.wallFadeTarget(0.5, tReg.baseOpacity) - tOp) * 0.12;
+    tDepth = F.wallFadeDepthWrite(tOp, tReg.baseOpacity, tReg.baseDepthWrite);
+  }
+  check('dynamic: the translucent part fades back to its own 0.4, not 1', near(tOp, 0.4) && tDepth === false, tOp);
+  F.disposeFurniture(rT);
+
+  // Two dynamic meshes sharing ONE material: registered once, so the fade
+  // loop eases that material once per frame, not twice (item c333108d).
+  const SharedDynamic = {
+    DEFAULTS: Object.freeze({ width: 60, depth: 20, height: 150 }),
+    build(T, p) {
+      const g = new T.Group();
+      const w = p.width / 100, d = p.depth / 100, h = p.height / 100;
+      g.add(new T.Mesh(new T.BoxGeometry(w, h, d).translate(0, h / 2, d / 2), Fin.makeFinish(T, 'matte', '#888888')));
+      const mat = Fin.makeFinish(T, 'matte', '#111111');
+      ['segA', 'segB'].forEach((name, i) => {
+        const m = new T.Mesh(new T.BoxGeometry(0.02, 0.02, 0.02).translate(i * 0.1, h / 2, d), mat);
+        m.name = name;
+        m.userData.dynamic = true;
+        g.add(m);
+      });
+      return g;
+    }
+  };
+  const hS = compile([{ id: 'sDyn', room: 'r', type: 'shared-dynamic', wall: 1, centre: 200 }]);
+  const rS = build(hS, ULTRA, { 'shared-dynamic': SharedDynamic });
+  const sGroup = rS.dynamicByItemId.sDyn.group;
+  const segA = sGroup.getObjectByName('segA'), segB = sGroup.getObjectByName('segB');
+  const sRegs = F.fadeRegistrations(rS).filter(reg => reg.mesh === segA || reg.mesh === segB);
+  check('dynamic: two dynamic meshes sharing one material are registered once',
+    segA.material === segB.material && sRegs.length === 1 && sRegs[0].baseOpacity === 1 && sRegs[0].baseDepthWrite === true,
+    sRegs.length);
+  F.disposeFurniture(rS);
+}
+
+// ---- 10g. disposeFurniture frees every texture exactly once (item 1c7f8a6d) ---------------
+{
+  // A texture on a dynamic part's OWN material (never bucketed, so never in
+  // result.materials) is freed -- and the palette texture, reachable both
+  // through the palette material's map and through extraDisposables, is
+  // freed once, not twice.
+  const h = compile([{ id: 'texDyn', room: 'r', type: 'dynamic-marker', at: [200, 200] }]);
+  const r = build(h, ULTRA, {});
+  const pointer = r.dynamicByItemId.texDyn.group.getObjectByName('pointer');
+  const dynTex = new THREE.Texture();
+  pointer.material.map = dynTex;
+  const palette = r.beauty.find(m => m.userData.cls === 'opaque');
+  const palTex = palette && palette.material.roughnessMap; // the palette texture (roughness + metalness map)
+  const counts = new Map();
+  const origTexDispose = THREE.Texture.prototype.dispose;
+  THREE.Texture.prototype.dispose = function () { counts.set(this, (counts.get(this) || 0) + 1); return origTexDispose.call(this); };
+  try {
+    F.disposeFurniture(r);
+  } finally {
+    THREE.Texture.prototype.dispose = origTexDispose;
+  }
+  check('dispose: a texture on a dynamic part\'s own material is disposed exactly once', counts.get(dynTex) === 1,
+    counts.get(dynTex));
+  check('dispose: the palette texture is disposed exactly once (not via both its material and extraDisposables)',
+    !!palTex && r.extraDisposables.includes(palTex) && counts.get(palTex) === 1, palTex && counts.get(palTex));
+  check('dispose: no texture is disposed twice', Array.from(counts.values()).every(n => n === 1), Array.from(counts.values()));
 }
 
 // ---- 10f. Low-detail shadow-proxy rebuild frees its OWN dynamic parts -----------------
