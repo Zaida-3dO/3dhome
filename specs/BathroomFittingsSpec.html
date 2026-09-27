@@ -97,18 +97,23 @@
 
 // The mirror cabinet: a `cabinet` preset, not a bathroom.js type. Its spec is on
 // CabinetSpec (Cabinets & Wardrobes); it stays in this page's line-up only.
-function mirrorCabinetParams(w, h, d, doors) {
-  const cells = [];
-  for (let i = 0; i < doors; i++) cells.push({ kind: 'mirror', width: +(w / doors).toFixed(3) });
-  return { width: w, height: h, depth: d, plinth: { type: 'plinth', height: 0 }, handles: false,
-    color: '#f4f1ea', topColor: '#f4f1ea', fronts: [{ height: h, cells }] };
+// Reads src/furniture/cabinet.js's own MIRROR_CABINET_PRESETS (item 365c4c72
+// (5): this page and CabinetSpec.html used to each define their own copy of
+// mirrorCabinetParams() and its two presets, verbatim and free to drift; both
+// now read the one export). Computed lazily inside allPresets() -- called
+// only from App()'s render, always after window.FurnitureCabinet is set --
+// rather than at this script's own top level, whose evaluation order
+// relative to the module script above it is not guaranteed (see the mount()
+// readiness gate below, which exists for exactly that reason).
+function extraPresets() {
+  const out = {};
+  Object.values(window.FurnitureCabinet.MIRROR_CABINET_PRESETS).forEach(p => {
+    out[p.label] = { type: 'cabinet', params: p.params };
+  });
+  return out;
 }
-const EXTRA_PRESETS = {
-  'Mirror cabinet, 3 doors': { type: 'cabinet', params: mirrorCabinetParams(120, 70, 18, 3) },
-  'Mirror cabinet, 2 doors': { type: 'cabinet', params: mirrorCabinetParams(80, 70, 16, 2) },
-};
 function allPresets() {
-  return Object.assign({}, window.FurnitureBathroom.PRESETS, EXTRA_PRESETS);
+  return Object.assign({}, window.FurnitureBathroom.PRESETS, extraPresets());
 }
 function impl(type) {
   if (type === 'cabinet') return window.FurnitureCabinet;

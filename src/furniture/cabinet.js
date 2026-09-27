@@ -1185,3 +1185,23 @@ function addLedWrap(THREE, group, width, depth, y) {
     group.add(side);
   });
 }
+
+// ---- mirror-cabinet presets ----------------------------------------------
+// A mirror cabinet is a plain `cabinet` (mirror-fronted, no plinth, no
+// handles) -- both its own spec page (CabinetSpec.html, the "Mirror cabinet"
+// object) and BathroomFittingsSpec.html (which lines it up alongside the
+// other bathroom fittings) need the exact same params, so both READ this one
+// copy instead of each defining their own (item 365c4c72 (5): the two used
+// to duplicate this function and its two presets verbatim, free to drift).
+/** `doors` mirror-fronted cells, evenly split across `w`; no plinth, no handles. */
+export function mirrorCabinetParams(w, h, d, doors) {
+  const cells = [];
+  for (let i = 0; i < doors; i++) cells.push({ kind: 'mirror', width: +(w / doors).toFixed(3) });
+  return { width: w, height: h, depth: d, plinth: { type: 'plinth', height: 0 }, handles: false,
+    color: '#f4f1ea', topColor: '#f4f1ea', fronts: [{ height: h, cells }] };
+}
+
+export const MIRROR_CABINET_PRESETS = {
+  mirrorCabinet3Door: { label: 'Mirror cabinet, 3 doors', params: mirrorCabinetParams(120, 70, 18, 3) },
+  mirrorCabinet2Door: { label: 'Mirror cabinet, 2 doors', params: mirrorCabinetParams(80, 70, 16, 2) },
+};
