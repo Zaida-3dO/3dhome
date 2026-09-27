@@ -2601,48 +2601,19 @@
 
     "furnitureParams_ottoman": {
       "type": "object",
-      "description": "Params for `ottoman` (src/furniture/digital-piano.js, TYPES['ottoman']): a simple velvet ottoman with a channel-tufted lid, on four short legs. Each `default` equals the module's OTTOMAN_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `ottoman` (src/furniture/digital-piano.js, TYPES['ottoman']): a channel-tufted storage bench in velvet -- a plain box under an overhanging, piped-edge lid whose rolls run front to back (a wide centre panel, narrower rolls toward each end), a front pull-tab and tiny recessed feet. Each `default` equals the module's OTTOMAN_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
-        "width": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 92
-        },
-        "depth": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 46
-        },
-        "height": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 40
-        },
-        "channelCount": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 5,
-          "description": "Channel-tufted ridges across the lid, front-to-back."
-        },
-        "channelDepth": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 1.5,
-          "description": "cm, how far each ridge stands proud of the flat lid."
-        },
-        "color": {
-          "$ref": "#/$defs/hexColor",
-          "default": "#2e6e6b",
-          "description": "Teal velvet body and lid."
-        },
-        "legColor": {
-          "$ref": "#/$defs/hexColor",
-          "default": "#3a2f28"
-        },
-        "finish": {
-          "$ref": "#/$defs/furnitureFinish",
-          "default": "matte"
-        }
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 92 },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 46 },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 40 },
+        "sideChannels": { "type": "integer", "minimum": 0, "maximum": 8, "default": 4, "description": "Rolls each side of the centre panel, narrowing toward the ends." },
+        "centreWidth": { "type": "number", "exclusiveMinimum": 0, "default": 27, "description": "cm, the wide flat panel in the middle of the lid (capped at 70% of the lid)." },
+        "channelDepth": { "type": "number", "exclusiveMinimum": 0, "default": 3.5, "description": "cm, how far the rolls rise above the lid." },
+        "lidThickness": { "type": "number", "exclusiveMinimum": 0, "default": 4, "description": "cm, the lid slab under the rolls." },
+        "lidOverhang": { "type": "number", "minimum": 0, "default": 1, "description": "cm, how far the lid overhangs the box all round." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#1b5e6a", "description": "Teal velvet: box, lid, rolls and tab." },
+        "footColor": { "$ref": "#/$defs/hexColor", "default": "#1c1c1c" },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "satin" }
       },
       "additionalProperties": false
     },
@@ -3801,6 +3772,11 @@
         "numeralColor": {
           "$ref": "#/$defs/hexColor",
           "default": "#1a1a1a"
+        },
+        "numeralFinish": {
+          "enum": ["matte", "satin", "gloss", "metal"],
+          "default": "matte",
+          "description": "Finish of the numerals, words, dots and centre disc. A gold clock is numeralColor #c9a13b with 'satin': a soft sheen that still reads gold in the live house, which has no environment map (so 'metal' there renders dull). Hands keep handColor/secondHandColor."
         },
         "handColor": {
           "$ref": "#/$defs/hexColor",

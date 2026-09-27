@@ -500,15 +500,18 @@ const OTTOMAN_DEFAULTS = /*EDITMODE-BEGIN*/{
   "ottomanWidth": 92,
   "ottomanDepth": 46,
   "ottomanHeight": 40,
-  "channelCount": 5,
-  "ottomanColor": "#2e6e6b",
-  "legColor": "#3a2f28",
+  "sideChannels": 4,
+  "centreWidth": 27,
+  "channelDepth": 3.5,
+  "ottomanColor": "#1b5e6a",
+  "footColor": "#1c1c1c",
   "detail": "full"
 }/*EDITMODE-END*/;
 
 function ottomanParams(t) {
   return { width: t.ottomanWidth, depth: t.ottomanDepth, height: t.ottomanHeight,
-    channelCount: t.channelCount, color: t.ottomanColor, legColor: t.legColor };
+    sideChannels: t.sideChannels, centreWidth: t.centreWidth, channelDepth: t.channelDepth,
+    color: t.ottomanColor, footColor: t.footColor };
 }
 
 let reportOttomanTriangles = null;
@@ -546,7 +549,7 @@ function OttomanObject() {
   };
   return (
     <>
-      <div className="sub">A teal velvet ottoman with a channel-tufted lid, on four short legs. Use the Tweaks panel to change size, channels and colours.</div>
+      <div className="sub">A teal plush-velvet storage ottoman: a plain box under a channel-tufted lid -- a wide centre panel with rolls narrowing toward each end. Use the Tweaks panel to change size, channels and colours.</div>
       <div className="grid">
         <div className="card">
           <h2>Numbers</h2>
@@ -556,7 +559,9 @@ function OttomanObject() {
               <tr><td>Width</td><td className="num">{t.ottomanWidth.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Depth</td><td className="num">{t.ottomanDepth.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Height</td><td className="num">{t.ottomanHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
-              <tr><td>Channel count</td><td className="num">{t.channelCount.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Rolls each side</td><td className="num">{t.sideChannels.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Centre panel</td><td className="num">{t.centreWidth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Roll height</td><td className="num">{t.channelDepth.toFixed(1)}</td><td><b>Variable</b></td></tr>
               <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
             </tbody>
           </table>
@@ -564,7 +569,8 @@ function OttomanObject() {
         <div className="card">
           <h2>Look</h2>
           <div className="legend">
-            A velvet box with a channel-tufted lid, on four short legs. Built by src/furniture/digital-piano.js
+            A velvet storage box with an overhanging, piped-edge lid, channel-tufted front to back, a pull-tab
+            at the front and tiny recessed feet. Built by src/furniture/digital-piano.js
             (TYPES.ottoman) -- the same builder the house scene calls for an `ottoman` item.
           </div>
           <div className="row">
@@ -587,13 +593,17 @@ function OttomanObject() {
           onChange={v => setTweak('ottomanDepth', v)} />
         <TweakSlider label="Height" value={t.ottomanHeight} min={30} max={50} step={1} unit="cm"
           onChange={v => setTweak('ottomanHeight', v)} />
-        <TweakSlider label="Channel count" value={t.channelCount} min={3} max={9} step={1} unit=""
-          onChange={v => setTweak('channelCount', v)} />
+        <TweakSlider label="Rolls each side" value={t.sideChannels} min={0} max={6} step={1} unit=""
+          onChange={v => setTweak('sideChannels', v)} />
+        <TweakSlider label="Centre panel" value={t.centreWidth} min={10} max={60} step={1} unit="cm"
+          onChange={v => setTweak('centreWidth', v)} />
+        <TweakSlider label="Roll height" value={t.channelDepth} min={1} max={6} step={0.5} unit="cm"
+          onChange={v => setTweak('channelDepth', v)} />
         <TweakSection label="Colours" />
         <TweakColor label="Body (velvet)" value={t.ottomanColor}
           onChange={v => setTweak('ottomanColor', v)} />
-        <TweakColor label="Legs" value={t.legColor}
-          onChange={v => setTweak('legColor', v)} />
+        <TweakColor label="Feet" value={t.footColor}
+          onChange={v => setTweak('footColor', v)} />
         <TweakSection label="Render" />
         <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
           onChange={v => setTweak('detail', v)} />

@@ -63,7 +63,7 @@
  * round 3 review; see src/furniture/merge.js's own header for the general
  * mechanism (also used by the desk LED strip, item 816d71ee).
  */
-import { makeFinish, isKeptFinish } from './finishes.js';
+import { makeFinish, isKeptFinish, FINISH_PARAMS } from './finishes.js';
 
 const TAU = Math.PI * 2;
 
@@ -78,6 +78,10 @@ export const DEFAULTS = Object.freeze({
   faceColor: '#f5f2ea',
   rimColor: '#1a1a1a',
   numeralColor: '#1a1a1a',
+  // The finish of the numerals, words, dots and centre disc. 'matte' (black
+  // today); a gold clock uses 'satin' -- a soft sheen that still reads gold
+  // in the live house, which has no environment map for 'metal' to reflect.
+  numeralFinish: 'matte',
   handColor: '#1a1a1a',
   secondHandColor: '#c62828', // red, diy-words only -- other kinds' second hand uses handColor
   time: '10:10'            // "HH:MM", the INITIAL hand pose only -- see setClockTime()
@@ -112,6 +116,16 @@ export const DIY_WORDS_DEFAULTS = Object.freeze(Object.assign({}, DEFAULTS, {
   handColor: '#1a1a1a',
   secondHandColor: '#c62828'
 }));
+
+/**
+ * The numerals' finish, limited to the opaque, lit palette entries a
+ * numeral can sensibly be (anything else -- glass, a mirror, an emissive
+ * glow -- falls back to 'matte'), so a typo cannot make the digits vanish.
+ */
+const NUMERAL_FINISHES = ['matte', 'satin', 'gloss', 'metal'];
+export function numeralFinishOf(p) {
+  return NUMERAL_FINISHES.includes(p && p.numeralFinish) ? p.numeralFinish : 'matte';
+}
 
 /**
  * The DEFAULTS a house item of this `kind` starts from, BEFORE its own
@@ -392,7 +406,7 @@ function buildFramedClock(THREE, p, detail, totalDepth) {
     const tickLen = faceR * (isQuarter ? 0.14 : 0.08);
     const tickGeo = new THREE.BoxGeometry(faceR * 0.025, tickLen, 0.004);
     tickGeo.translate(0, faceR * 0.88 - tickLen / 2, 0);
-    const tick = new THREE.Mesh(tickGeo, makeFinish(THREE, 'matte', p.numeralColor));
+    const tick = new THREE.Mesh(tickGeo, makeFinish(THREE, numeralFinishOf(p), p.numeralColor));
     tick.name = 'tick' + i;
     tick.position.z = faceThickness + faceThin;
     tick.rotation.z = -a;
@@ -436,13 +450,13 @@ function buildDiyNumeralsClock(THREE, p, detail, totalDepth) {
     if (numeralPositions.includes(i)) {
       const geo = new THREE.BoxGeometry(numeralHalfW * 2, numeralHalfH * 2, markThickness);
       geo.translate(0, 0, markThickness / 2); // back face at local z = 0
-      mark = new THREE.Mesh(geo, makeFinish(THREE, 'matte', p.numeralColor));
+      mark = new THREE.Mesh(geo, makeFinish(THREE, numeralFinishOf(p), p.numeralColor));
       mark.name = 'numeral' + i;
     } else {
       const geo = new THREE.CylinderGeometry(r * 0.035, r * 0.035, markThickness, detail ? 6 : 10);
       geo.rotateX(Math.PI / 2);
       geo.translate(0, 0, markThickness / 2); // back face at local z = 0
-      mark = new THREE.Mesh(geo, makeFinish(THREE, 'matte', p.numeralColor));
+      mark = new THREE.Mesh(geo, makeFinish(THREE, numeralFinishOf(p), p.numeralColor));
       mark.name = 'dot' + i;
     }
     mark.position.set(x, y, 0);
@@ -807,7 +821,7 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
     const geo = new THREE.CylinderGeometry(dotR, dotR, STANDOFF, detail ? 8 : 20);
     geo.rotateX(Math.PI / 2);
     geo.translate(0, 0, STANDOFF / 2);
-    const dot = new THREE.Mesh(geo, makeFinish(THREE, 'matte', p.numeralColor));
+    const dot = new THREE.Mesh(geo, makeFinish(THREE, numeralFinishOf(p), p.numeralColor));
     dot.name = 'dot' + hour;
     dot.position.set(x + RING_OFFSET_X, y, 0);
     group.add(dot);
@@ -833,7 +847,7 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
   const texHeightPx = Math.round(texPx * (panelH / panelW));
   const texture = buildWordsTexture(THREE, texPx, texHeightPx, p.numeralColor, createCanvas);
   const panelMat = new THREE.MeshStandardMaterial(Object.assign(
-    { roughness: 0.8, metalness: 0, transparent: true, alphaTest: 0.1 },
+    { roughness: FINISH_PARAMS[numeralFinishOf(p)].roughness, metalness: 0, transparent: true, alphaTest: 0.1 },
     texture ? { map: texture } : { color: p.numeralColor, opacity: 0 }
   ));
   const panel = new THREE.Mesh(new THREE.PlaneGeometry(panelW, panelH), panelMat);
@@ -843,7 +857,7 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
   // and keep-tag are still exercised in Node) -- userData.keep excludes it
   // from the live-house merge (same exception wall-sign.js's text panel
   // makes), userData.finish is set for introspection/consistency.
-  panel.userData.finish = 'matte';
+  panel.userData.finish = numeralFinishOf(p);
   panel.userData.keep = true;
   group.add(panel);
 
@@ -876,7 +890,7 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
   const discGeo = new THREE.CylinderGeometry(discR, discR, STANDOFF * 1.5, detail ? 10 : 32);
   discGeo.rotateX(Math.PI / 2);
   discGeo.translate(0, 0, STANDOFF * 1.5 / 2);
-  const disc = new THREE.Mesh(discGeo, makeFinish(THREE, 'matte', p.numeralColor));
+  const disc = new THREE.Mesh(discGeo, makeFinish(THREE, numeralFinishOf(p), p.numeralColor));
   disc.name = 'centreDisc';
   disc.position.set(RING_OFFSET_X, 0, 0);
   group.add(disc);
