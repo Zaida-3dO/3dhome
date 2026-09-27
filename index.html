@@ -3,6 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- The app is dark. Declaring it keeps Chrome's auto dark theme (Android) and
+       Samsung Internet's dark web pages from re-colouring it, and makes the
+       browser draw its own controls and scrollbars dark. -->
+  <meta name="color-scheme" content="dark">
   <title>3dHome</title>
   <script>
     // Favicon: only registered in standalone mode.
@@ -38,6 +42,7 @@
   </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { color-scheme: dark; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f0f1a; color: #fff; overflow: hidden; }
 
     /* Back button */
@@ -239,23 +244,52 @@
     /* Slider */
     .slider-row { margin-bottom: 10px; }
     .slider-label { font-size: 11px; opacity: 0.5; margin-bottom: 4px; }
+    /* Every part of the range is styled, in both engines -- a part left to
+       the browser renders differently per device (see src/tap-popovers.js,
+       .tp-range, which this matches). Filled part: --fill up to --p (set
+       from the value by fillRange() in src/room-panel.js); the rest:
+       --range-track. The input's own box is the hit area; the track and
+       thumb are drawn inside it. */
     .slider {
-      width: 100%; height: 6px; border-radius: 3px;
-      -webkit-appearance: none; appearance: none;
-      background: rgba(255,255,255,0.15); outline: none; cursor: pointer;
+      --p: 50%; --fill: #6366f1; --range-track: rgba(255,255,255,0.30);
+      --thumb: 20px; --track-h: 6px;
+      display: block; width: 100%; height: 28px; margin: -6px 0;
+      -webkit-appearance: none; appearance: none; background: transparent;
+      outline: none; cursor: pointer; accent-color: var(--fill);
     }
+    .slider::-webkit-slider-runnable-track {
+      height: var(--track-h); border-radius: 999px; border: 0;
+      background: linear-gradient(to right, var(--fill) var(--p), var(--range-track) var(--p));
+    }
+    .slider::-moz-range-track { height: var(--track-h); border-radius: 999px; border: 0; background: var(--range-track); }
+    .slider::-moz-range-progress { height: var(--track-h); border-radius: 999px; border: 0; background: var(--fill); }
     .slider::-webkit-slider-thumb {
-      -webkit-appearance: none; width: 14px; height: 14px;
-      border-radius: 50%; background: #fff; cursor: pointer;
+      -webkit-appearance: none; appearance: none; box-sizing: border-box;
+      width: var(--thumb); height: var(--thumb); border-radius: 50%;
+      margin-top: calc((var(--track-h) - var(--thumb)) / 2);
+      background: #fff; border: 3px solid var(--fill); cursor: pointer;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.55);
     }
-    .slider.temp {
-      background: linear-gradient(to right, #ffaa55, #fff, #aaccff);
+    .slider::-moz-range-thumb {
+      box-sizing: border-box; width: var(--thumb); height: var(--thumb); border-radius: 50%;
+      background: #fff; border: 3px solid var(--fill); cursor: pointer;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.55);
     }
+    /* Colour temperature: the whole track is the warm-to-cool scale, so no
+       fill; the ring is neutral so it reads on every part of the scale. */
+    .slider.temp { --fill: #1f2937; }
+    .slider.temp::-webkit-slider-runnable-track { background: linear-gradient(to right, #ffaa55, #fff, #aaccff); }
+    .slider.temp::-moz-range-track { background: linear-gradient(to right, #ffaa55, #fff, #aaccff); }
+    .slider.temp::-moz-range-progress { background: transparent; }
+    /* Touch: a 26px knob in a 44px hit area. */
+    @media (pointer: coarse) { .slider { --thumb: 26px; --track-h: 8px; height: 44px; margin: -12px 0; } }
+    .tp-force-coarse .slider { --thumb: 26px; --track-h: 8px; height: 44px; margin: -12px 0; }
     /* A slider with nothing it can safely command (device unavailable, a
        thermostat that is off). Dimmed and not-allowed so it reads as
        "disconnected, not broken". */
     .slider:disabled { opacity: 0.35; cursor: not-allowed; }
     .slider:disabled::-webkit-slider-thumb { cursor: not-allowed; }
+    .slider:disabled::-moz-range-thumb { cursor: not-allowed; }
 
     /* Status-only rows (door, motion): one line, no controls. */
     .control-group.status-row { margin-bottom: 14px; }
@@ -824,7 +858,7 @@
     import { parseSunTime }   from './src/sun-position.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
              haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml,
-             boundLightChannels, hasAmbientRow, ambientRowLabel }
+             boundLightChannels, hasAmbientRow, ambientRowLabel, fillRange }
                               from './src/room-panel.js?v=__VERSION__';
     // Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
     // Shift+D, or the Settings sidebar "Wall numbers" switch).
@@ -981,6 +1015,10 @@
       const container = document.getElementById('scene-container');
       const panel = document.getElementById('panel');
       const panelBody = document.getElementById('panel-body');
+      // Keep a sidebar slider's filled part under its thumb as it moves. One
+      // delegated, display-only listener: it sends nothing, so it sits outside
+      // wireRoomControls, where every click/input handler must be HA-gated.
+      panelBody.addEventListener('input', e => { if (e.target.matches && e.target.matches('input.slider')) fillRange(e.target); });
       const panelTitle = document.getElementById('panel-title');
       const panelArea = document.getElementById('panel-area');
       const panelBack = document.getElementById('panel-back');
