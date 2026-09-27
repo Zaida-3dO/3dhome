@@ -307,6 +307,14 @@ jobs:
           # the lower sleeve and its overlap stay fixed).
           set -euo pipefail
           node scripts/test-standing-desk.mjs
+      - name: Strip light builder (A/B/C/D techniques)
+        run: |
+          # Asserts src/strip-light.js on the BUILT objects: light counts per
+          # technique, B's lights spread evenly along the tube and set back
+          # behind the mounting plane, conserved total intensity, C's area
+          # light sized and aimed along the strip, D has no light objects.
+          set -euo pipefail
+          node scripts/test-strip-light.mjs
       - name: Robot vacuum builder envelope, dock toggle and caps
         run: |
           # Asserts src/furniture/robot-vacuum.js beyond the generic contract:
