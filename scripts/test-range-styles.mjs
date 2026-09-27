@@ -131,7 +131,7 @@ check('rangeFillPct degenerate range', RP.rangeFillPct(3, 5, 5) === '0%' && RP.r
   const filled = inputs.filter(i => !/class="slider temp"/.test(i));
   check('every sidebar fill slider carries --p', filled.length >= 4 && filled.every(i => /style="--p:[\d.]+%"/.test(i)), filled.filter(i => !/--p:/.test(i)));
   check('curtain 25% -> --p:25%', /value="25" style="--p:25%"/.test(rows));
-  check('index.html keeps --p live on input', /querySelectorAll\('input\.slider'\)\.forEach\(el => el\.addEventListener\('input', \(\) => fillRange\(el\)\)\)/.test(indexHtml));
+  check('index.html keeps --p live on input', /panelBody\.addEventListener\('input', e => \{ if \(e\.target\.matches && e\.target\.matches\('input\.slider'\)\) fillRange\(e\.target\); \}\)/.test(indexHtml));
 }
 
 console.log(`\n${passes} passed, ${failures} failed`);

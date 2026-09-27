@@ -1015,6 +1015,10 @@
       const container = document.getElementById('scene-container');
       const panel = document.getElementById('panel');
       const panelBody = document.getElementById('panel-body');
+      // Keep a sidebar slider's filled part under its thumb as it moves. One
+      // delegated, display-only listener: it sends nothing, so it sits outside
+      // wireRoomControls, where every click/input handler must be HA-gated.
+      panelBody.addEventListener('input', e => { if (e.target.matches && e.target.matches('input.slider')) fillRange(e.target); });
       const panelTitle = document.getElementById('panel-title');
       const panelArea = document.getElementById('panel-area');
       const panelBack = document.getElementById('panel-back');
@@ -2842,8 +2846,6 @@
       function wireRoomControls(root, rid) {
         const s = home.lightState[rid];
         const onWrite = (el, type, fn) => el.addEventListener(type, e => { if (!haOffline(ha)) fn(e); });
-        // Keep each slider's filled part under the thumb as it moves.
-        root.querySelectorAll('input.slider').forEach(el => el.addEventListener('input', () => fillRange(el)));
         root.querySelectorAll('[data-action]').forEach(el => {
           const action = el.dataset.action;
 
