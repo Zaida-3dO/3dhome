@@ -13,7 +13,8 @@ import { detectMobileGpu, resolveTier, capPixelRatio } from './quality-tier.js';
 import { collapseEmitters } from './light-merge.js';
 import { HouseLoader } from './house-loader.js';
 import {
-  insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, printYaw, WALK_DEFAULTS
+  insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, printYaw, WALK_DEFAULTS,
+  doorOpenings, placeTrail, DOOR_GAP_CM
 } from './footstep-walk.js';
 import {
   WINDOW_REVEAL_CM, windowVerticals, placeOnWall, buildWindow, buildCurtain,
@@ -2611,7 +2612,31 @@ export const Home3DScene = (() => {
         return out;
       };
 
+      // Every door opening in the house, for the door gap (DOOR_GAP_CM): no
+      // print of ANY trail -- authored or automatic -- is laid within that
+      // distance of a doorway, so a trail always reads as squarely inside one
+      // room rather than straddling a threshold. See src/footstep-walk.js.
+      const openings = doorOpenings(DOORS);
+
       Object.entries(ROOMS).forEach(([id, rm]) => {
+        // An authored route (schema `rooms[].footstepPath`) beats everything
+        // below: prints go along its waypoints, in order, and neither the
+        // zone nor the door-approach heuristics apply. The loader has already
+        // checked every waypoint lies on this room's floor.
+        // Precedence and the door gap both live in placeTrail() so they are
+        // tested (scripts/test-footstep-path.mjs); this file only renders.
+        const { prints } = placeTrail({
+          room: rm, openings, gapCm: DOOR_GAP_CM,
+          auto: () => autoPrints(id, rm),
+        });
+        if (!prints.length) return;
+        buildTrail(id, prints);
+      });
+
+      // The automatic walk: a zone rectangle if the room has one, else the
+      // room's own polygon entered through its best door. Returns null when
+      // the room has no floor to stand on.
+      function autoPrints(id, rm) {
         // A room may override automatic placement with a manual footstepZone
         // (schema `rooms[].footstepZone`, resolved to absolute plan coordinates
         // by house-loader.js). When present, walk the RECTANGLE instead of the
@@ -2683,7 +2708,7 @@ export const Home3DScene = (() => {
                 if (insidePoly(poly, qx, qy)) { cx = qx; cy = qy; found = true; }
               }
             }
-            if (!found) return;   // degenerate polygon: no floor to stand on
+            if (!found) return null;   // degenerate polygon: no floor to stand on
           }
           const w = bx2 - bx1, h = by2 - by1;
           ux = (w >= h) ? 1 : 0; uy = (w >= h) ? 0 : 1;
@@ -2704,15 +2729,17 @@ export const Home3DScene = (() => {
 
         // WHERE the prints go — pure arithmetic, no geometry. See
         // src/footstep-walk.js, including the turn-at-the-corner rule.
-        const { prints } = walkFootsteps({
+        return walkFootsteps({
           poly,
           bounds: { x1: bx1, y1: by1, x2: bx2, y2: by2 },
           sx, sy, ux, uy, nPrints,
           stepCm: STEP_CM, strideCm: STRIDE_CM,
-        });
-        if (!prints.length) return;
+        }).prints;
+      }
 
-        // ...and what they LOOK like. One flat quad per print.
+      // ...and what they LOOK like. One flat quad per print.
+      function buildTrail(id, prints) {
+        const { PRINT_CM } = WALK_DEFAULTS;
         const geos = prints.map(p => {
           const g = new THREE.PlaneGeometry(PRINT_CM * S * 0.62, PRINT_CM * S);
           // Lay flat, then turn the print to face along the walking line.
@@ -2764,9 +2791,13 @@ export const Home3DScene = (() => {
         // Starts hidden. `visible` is the real on/off; opacity drives the fade.
         mesh.visible = false;
         mesh.renderOrder = 2;
+        // Plan-cm placements, kept for getFootstepDebug(): lets a check read
+        // exactly where each print went without inverting the world transform.
+        mesh.userData.prints = prints.map(p => ({ x: +p.x.toFixed(1), y: +p.y.toFixed(1),
+                                                  dirx: +p.dirx.toFixed(3), diry: +p.diry.toFixed(3) }));
         scene.add(mesh);
         footstepsByRoom[id] = mesh;
-      });
+      }
     }
 
     // (The single house-wide ceiling slab is built up front with the floor slab
@@ -4855,7 +4886,9 @@ export const Home3DScene = (() => {
           inScene: !!m.parent,
           castShadow: m.castShadow,
           receiveShadow: m.receiveShadow,
-          bbox: { min: bb.min.toArray(), max: bb.max.toArray() }
+          bbox: { min: bb.min.toArray(), max: bb.max.toArray() },
+          // Each print's centre and heading in PLAN cm, walking order.
+          placements: m.userData.prints || null
         };
       },
       getPresence(roomId) {

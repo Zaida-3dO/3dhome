@@ -223,6 +223,46 @@ than a carefully measured one; you will be adjusting it anyway.
 A room with no `footstepZone` renders exactly as it did before the field
 existed — this is purely an opt-in override.
 
+#### `footstepPath` — an authored route for the footstep trail
+
+When you know the route people actually take — along the middle of a corridor
+to the radiator, under the dining table toward the counters — give the room a
+`footstepPath`: an ordered list of waypoints the trail walks along.
+
+```json
+"footstepPath": {
+  "points": [[195, 218], [265, 218], [265, 85], [55, 80]],
+  "relativeTo": "room",
+  "smooth": true
+}
+```
+
+- **Waypoint order is the direction of travel.** The first print sits on the
+  first waypoint; prints follow one stride apart towards the last, alternating
+  left and right of the line and facing along it. There is no count cap: the
+  length you draw is the length you get.
+- **Coordinates are relative to the room's bbox min corner**, exactly as for
+  `footstepZone`, and `relativeTo` must be `"room"`.
+- **Every waypoint must lie inside the room polygon.** If any does not, the
+  whole path is ignored with a console warning and the room falls back to its
+  `footstepZone` or to automatic placement. `scripts/validate-house.py`
+  reports the offending waypoint as an error.
+- `smooth` (default `true`) rounds the corners between waypoints; the
+  endpoints never move. Set it to `false` for a sharp turn.
+- **It takes precedence over `footstepZone`**, so a room with a path needs no
+  zone.
+
+The demo house's L-shaped study carries one.
+
+#### The door gap — applies to every trail
+
+No footprint is ever laid within **40 cm** (`DOOR_GAP_CM` in
+`src/footstep-walk.js`) of any door opening, measured from the print's centre
+to the nearest point of the opening. This applies to authored paths and to
+automatic placement alike, so a trail always reads as squarely inside one
+room instead of standing in a doorway. Prints inside the gap are simply not
+drawn — so start and end a path a little way clear of doors.
+
 ### Walls
 
 One entry per straight run, given as **centreline** endpoints plus a thickness:

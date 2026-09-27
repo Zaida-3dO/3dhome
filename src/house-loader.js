@@ -979,6 +979,37 @@ export const HouseLoader = (() => {
         }
       }
 
+      // Optional authored footstep route (schema `footstepPath`): an ordered
+      // list of waypoints, relative to the room's bbox min corner exactly like
+      // footstepZone, resolved here to absolute plan coordinates. Every
+      // waypoint must lie on this room's floor -- a waypoint outside the
+      // polygon means the path was authored against the wrong room or before
+      // the polygon moved, and walking it would draw prints in the next room.
+      // Anything malformed warns and falls back (to footstepZone if present,
+      // else automatic placement). When valid it takes precedence over
+      // footstepZone.
+      let footstepPath = null;
+      const fp = r.footstepPath;
+      if (fp) {
+        const validPt = p => Array.isArray(p) && p.length === 2 &&
+          typeof p[0] === 'number' && typeof p[1] === 'number' &&
+          isFinite(p[0]) && isFinite(p[1]);
+        if (fp.relativeTo !== 'room') {
+          warn('room "' + r.id + '" footstepPath has relativeTo "' + fp.relativeTo + '", which this engine does not understand -- ignored');
+        } else if (!Array.isArray(fp.points) || fp.points.length < 2 || !fp.points.every(validPt)) {
+          warn('room "' + r.id + '" footstepPath needs at least two [x, y] waypoints -- ignored');
+        } else {
+          const abs = fp.points.map(p => [b.x1 + p[0], b.y1 + p[1]]);
+          const bad = poly ? abs.findIndex(p => !insidePoly(poly, p[0], p[1])) : -1;
+          if (bad !== -1) {
+            warn('room "' + r.id + '" footstepPath waypoint ' + bad + ' ' + JSON.stringify(fp.points[bad]) +
+              ' lies outside the room polygon -- ignored');
+          } else {
+            footstepPath = { points: abs, smooth: fp.smooth !== false };
+          }
+        }
+      }
+
       rooms[r.id] = {
         id: r.id,
         name: r.label,
@@ -992,7 +1023,10 @@ export const HouseLoader = (() => {
         // Absolute plan-coordinate rectangle, or null for automatic placement.
         // See src/home3d-scene.js's footstep section for how this overrides the
         // polygon-derived walk.
-        footstepZone: footstepZone
+        footstepZone: footstepZone,
+        // {points: absolute plan-coordinate waypoints, smooth} or null. Takes
+        // precedence over footstepZone in the scene.
+        footstepPath: footstepPath
       };
       roomOrder.push(r.id);
     });

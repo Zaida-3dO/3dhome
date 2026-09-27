@@ -154,6 +154,22 @@ def check_geometry(geo, report, schema=None):
             if len(poly) > 3 and poly[0] == poly[-1]:
                 report.warn(f"rooms/{rid}", "polygon repeats its first point at the end; the ring closes implicitly, drop it")
 
+            # footstepPath waypoints are relative to the bbox min corner and
+            # must land on this room's floor -- the loader ignores the whole
+            # path otherwise (src/house-loader.js), so catch it before deploy.
+            fp = room.get("footstepPath")
+            if isinstance(fp, dict) and isinstance(fp.get("points"), list):
+                x1 = min(p[0] for p in poly)
+                y1 = min(p[1] for p in poly)
+                for i, pt in enumerate(fp["points"]):
+                    if (isinstance(pt, list) and len(pt) == 2
+                            and not inside_poly(poly, x1 + pt[0], y1 + pt[1])):
+                        report.error(
+                            f"rooms/{rid}/footstepPath/points/{i}",
+                            f"waypoint {pt} (relative to the bbox min corner) lies outside the room "
+                            f"polygon -- the engine would ignore the whole path",
+                        )
+
     walls = geo.get("walls", {})
     segments = walls.get("segments", [])
     wall_ids = {}
