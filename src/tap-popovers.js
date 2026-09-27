@@ -705,7 +705,7 @@ export const popoverHtml = {
     const live = !!(r && r.available);
     const watering = live && r.moisture == null && r.watering != null;
     const val = live
-      ? '<span class="tp-pmoist" data-v>' + svg(I.drop) + (watering ? 'Watering <b>' + r.watering + '%</b>' : '<b>' + r.moisture + '%</b>') + '</span>'
+      ? '<span class="tp-pmoist" data-v>' + svg(I.drop) + (watering ? 'Countdown <b>' + r.watering + '%</b>' : '<b>' + r.moisture + '%</b>') + '</span>'
       : '<span class="tp-pmoist muted" data-v>' + svg(I.drop) + '<b>' + (level === 'offline' ? 'Offline' : 'No reading') + '</b></span>';
     const tip = !live ? '' : r.fromHa ? ' title="From Home Assistant"' : watering ? ' title="A countdown to the next watering"' :
       ' title="From the moisture reading"';

@@ -190,7 +190,7 @@
     .plant-main { flex: 1; min-width: 0; }
     .plant-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .plant-sub { font-size: 11px; opacity: 0.55; margin-top: 1px; font-variant-numeric: tabular-nums; }
-    .plant-val { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .plant-val { flex: none; white-space: nowrap; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
     .plant-val.muted { font-size: 12px; font-weight: 500; opacity: 0.55; }
     .plant-st { flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid transparent; }
     .plant-st.ok { color: #bbf7d0; background: rgba(34,197,94,0.16); border-color: rgba(34,197,94,0.4); }
@@ -2687,13 +2687,16 @@
         const live = !!(r && r.available);
         const name = b.name || vacuumLabels.get(id) || 'Plant';
         const val = live
-          ? '<span class="plant-val">' + (r.moisture != null ? r.moisture + '%' : 'Watering ' + r.watering + '%') + '</span>'
+          ? '<span class="plant-val">' + (r.moisture != null ? r.moisture : r.watering) + '%</span>'
           : '<span class="plant-val muted">' + (r && r.level === 'offline' ? 'Offline' : 'No reading') + '</span>';
         const ago = r ? agoText(r.updated) : '';
+        // A probe-less plant's % is its watering countdown, not moisture: say so.
+        const sub = (live && r.moisture == null ? 'Countdown' + (ago ? ' · ' : '') : '') +
+          (ago ? (live ? 'Updated ' : 'Last reading ') + ago : '');
         return '<div class="plant-row" data-plant="' + esc(id) + '">' +
           svgIcon(ICONS.plant, live ? 'p-' + r.level : '') +
           '<div class="plant-main"><div class="plant-name">' + esc(name) + '</div>' +
-          (ago ? '<div class="plant-sub">' + (live ? 'Updated ' : 'Last reading ') + esc(ago) + '</div>' : '') + '</div>' +
+          (sub ? '<div class="plant-sub">' + esc(sub) + '</div>' : '') + '</div>' +
           val + (live ? '<span class="plant-st ' + r.level + '">' + esc(plantStatusText(r)) + '</span>' : '') + '</div>';
       }
       function plantBlockHtml() {

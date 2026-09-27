@@ -230,7 +230,7 @@ const st = (entity_id, state, extra) => Object.assign({ entity_id, state: String
   check('card: OFFLINE, never 0%', off.indexOf('Offline') !== -1 && off.indexOf('0%') === -1 && off.indexOf('data-level') === -1, off);
   check('card: offline says when it last reported', off.indexOf('Last reading 3 d ago') !== -1);
   const due = card(R.due);
-  check('card: watering countdown and Water due', due.indexOf('Watering <b>0%</b>') !== -1 && due.indexOf('Water due') !== -1, due);
+  check('card: watering countdown and Water due', due.indexOf('Countdown <b>0%</b>') !== -1 && due.indexOf('Water due') !== -1, due);
   check('card: no reading yet', card(null, { ago: '' }).indexOf('No reading') !== -1);
   // Read-only: no button, slider or input of any kind in the card body.
   // Mutation: add any control to popoverHtml.plant -> fails.

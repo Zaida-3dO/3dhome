@@ -1325,7 +1325,7 @@ The card is **read-only** -- nothing is ever sent -- and shows:
   would say "water me" about a plant that may be fine.
 
 A plant with no probe can bind `watering` instead of `moisture`: a countdown
-helper (100 = watered today, 0 = due), shown as "Watering N%" with **Water
+helper (100 = watered today, 0 = due), shown as "Countdown N%" with **Water
 due** at 0. `moisture` or `watering` is required. The sidebar's Controls view
 lists every bound plant with the same reading. A house with no Home Assistant
 (the demo) shows sample readings, labelled as such. `plants` needs
