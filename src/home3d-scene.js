@@ -25,7 +25,8 @@ import {
 } from './footstep-walk.js';
 import {
   WINDOW_REVEAL_CM, windowVerticals, placeOnWall, buildWindow, buildCurtain,
-  windowDaylight, corniceSpotLayout, corniceLightCount, corniceLightBudget
+  windowDaylight, curtainCoverIntervals, curtainTransmit,
+  corniceSpotLayout, corniceLightCount, corniceLightBudget
 } from './wall-fittings.js';
 import {
   loadFurnitureModules, buildFurnitureSliced, scheduleFurnitureAttach, fadeRegistrations, furnitureItemAt,
@@ -35,7 +36,11 @@ import {
 import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { rugPatternForBox } from './rug-pattern.js';
-import { solarPosition, solarNoon, sunDirection, daylightCurve, windowSunPool, NIGHT } from './sun-position.js';
+import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
+import {
+  solarPosition, solarNoon, sunDirection, daylightCurve, NIGHT,
+  windowLightPieces, windowSegments, poolGainForFloor, colourBrightness
+} from './sun-position.js';
 import {
   FINISH_TYPES, makeFinishTexture, alongToMetres, finishRectOnBox, createFinishBatch, addLongFace,
   addCrossFace, buildFinishGeometry, revealEnds, finishKey, gridOriginY
@@ -1988,11 +1993,6 @@ export const Home3DScene = (() => {
         const half = wn.w / 2;
         const toWorld = ([along, across]) => wn.axis === 'x'
           ? [tx(along), tz(across)] : [tx(across), tz(along)];
-        // Sky pool: four corners in plan cm, [along-wall, across-wall].
-        const skyCorners = [
-          [wn.c - half, roomFace], [wn.c + half, roomFace],
-          [wn.c - half * 1.25, roomFace + wn.inDir * reach], [wn.c + half * 1.25, roomFace + wn.inDir * reach]
-        ].map(toWorld);
         // The opening on each face of the wall, world [x, y, z], in order
         // round the rectangle -- what windowSunPool() projects.
         const faceRect = across => {
@@ -2000,12 +2000,14 @@ export const Home3DScene = (() => {
           return [[a[0], v.openBot, a[1]], [b[0], v.openBot, b[1]],
             [b[0], v.openTop, b[1]], [a[0], v.openTop, a[1]]];
         };
-        // Capacity: the sky pool's 2 triangles plus a sun pool clipped by an
-        // L-shaped room (well under 16 vertices): 48 triangle corners is ample
-        // and fixed, so updating it is a sub-range upload, never a
-        // reallocation. Per-vertex colour carries sun vs sky light, so both
-        // pools are ONE mesh and one draw call per window.
-        const MAX_CORNERS = 48;
+        // Capacity: per curtain opening, a sky-pool slice (2 triangles) and a
+        // sun-pool piece clipped by an L-shaped room (well under 16
+        // vertices). Two curtain layers split a window into at most ~5 runs,
+        // so 240 triangle corners is ample and fixed: updating it is a
+        // sub-range upload, never a reallocation. Per-vertex colour carries
+        // sun vs sky light AND each piece's curtain transmission, so all of it
+        // is ONE mesh and one draw call per window.
+        const MAX_CORNERS = 240;
         const pos = new Float32Array(MAX_CORNERS * 3);
         const uv = new Float32Array(MAX_CORNERS * 2);
         const col = new Float32Array(MAX_CORNERS * 3);
@@ -2015,9 +2017,9 @@ export const Home3DScene = (() => {
         geo.setAttribute('color', new THREE.BufferAttribute(col, 3).setUsage(THREE.DynamicDrawUsage));
         geo.setDrawRange(0, 0);
         const mat = new THREE.MeshBasicMaterial({
-          // color = the curtains' transmission x tint (updateDaylight);
-          // vertex colour = sun or sky light x gain (updateDaylightPools).
-          map: patchTex, color: 0x000000, vertexColors: true, transparent: true,
+          // Vertex colour = sun or sky light x gain x the curtain
+          // transmission and tint of that piece (updateDaylightPools).
+          map: patchTex, color: 0xffffff, vertexColors: true, transparent: true,
           // out = src * dst + dst: the floor's own colour, brightened.
           blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
           blendSrc: THREE.DstColorFactor, blendDst: THREE.OneFactor,
@@ -2031,9 +2033,42 @@ export const Home3DScene = (() => {
         patch.frustumCulled = false;   // the geometry moves; no stale bounds
         scene.add(patch);
         const inward = wn.axis === 'x' ? [0, wn.inDir] : [wn.inDir, 0];
+        // A full-height rectangle on a curtain's hanging plane between two
+        // along-wall positions (plan cm), world corners -- what a curtain gap
+        // or fabric panel is, for windowLightPieces().
+        const curtainRect = (lo, hi, across) => {
+          const a = toWorld([lo, across]), b = toWorld([hi, across]);
+          return [[a[0], 0, a[1]], [b[0], 0, b[1]], [b[0], WH, b[1]], [a[0], WH, a[1]]];
+        };
+        // Sky-pool slice for the window run [lo, hi] (plan cm): the soft
+        // trapezoid cut at the same openings, with u kept across the WHOLE
+        // window so its soft side edges stay at the window's edges.
+        const skySlice = (lo, hi) => {
+          const far = s => wn.c + (s - wn.c) * 1.25;
+          const w = wn.w || 1;
+          const u = s => (s - (wn.c - half)) / w;
+          return {
+            pts: [[lo, roomFace], [hi, roomFace],
+              [far(lo), roomFace + wn.inDir * reach], [far(hi), roomFace + wn.inDir * reach]].map(toWorld),
+            uv: [[u(lo), 0], [u(hi), 0], [u(lo), 1], [u(hi), 1]]
+          };
+        };
+        // The brightest thing on this room's floor (floor colour, rug colour
+        // or its pattern's palette) caps the pool gain: see poolGainForFloor.
+        let floorAlbedo = room ? colourBrightness(room.floor) : 0.6;
+        if (room && room.rug) {
+          if (room.rug.pattern) {
+            const cols = (room.rug.pattern.colors && room.rug.pattern.colors.length)
+              ? room.rug.pattern.colors : RUG_PATTERN_DEFAULTS.colors;
+            cols.forEach(c => { floorAlbedo = Math.max(floorAlbedo, colourBrightness(parseInt(String(c).replace('#', ''), 16))); });
+          } else {
+            floorAlbedo = Math.max(floorAlbedo, colourBrightness(room.rug.color));
+          }
+        }
         const entry = {
           win: wn, curtains, patch, mat, geo, transmit: 1, tint: [1, 1, 1],
-          mode: 'none', poolY: POOL_Y, skyCorners,
+          mode: 'none', poolY: POOL_Y, skySlice, curtainRect, span: [wn.c - half, wn.c + half],
+          floorAlbedo, curtainKey: null,
           outer: faceRect(wn.outerFace), inner: faceRect(roomFace), inward,
           roomPoly: room && Array.isArray(room.poly) ? room.poly.map(p => [tx(p[0]), tz(p[1])]) : null
         };
@@ -3862,62 +3897,114 @@ export const Home3DScene = (() => {
     const daylightSunColor = new THREE.Color(1, 1, 1);
     const daylightSkyColor = new THREE.Color(1, 1, 1);
 
-    // Rebuild each window's floor mesh for the current sun: by day its soft
-    // SKY pool (the diffuse light any window lets in), plus its SUN pool when
-    // direct sun comes in through it. Called when the SUN moves (60 s tick, a
-    // preset, a time override), never per frame; a curtain moving only needs
-    // updateDaylight().
-    function updateDaylightPools() {
+    // Each curtain on a window as a light filter: which along-wall spans its
+    // fabric covers right now, where it hangs, and what gets through it.
+    function curtainLayers(e) {
+      const pctOf = id => (curtainById[id] ? curtainById[id].built.getOpen() : null);
+      return e.curtains.map(cu => {
+        const live = pctOf(cu.id);
+        const pct = live != null ? live : cu.openPct;
+        let tint = [1, 1, 1];
+        if (cu.sheer) {
+          const hex = cu.outerColor | 0;
+          const c = [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255];
+          const m = Math.max(c[0], c[1], c[2]) || 1;
+          tint = c.map(x => x / m);
+        }
+        return {
+          id: cu.id, pct,
+          covered: curtainCoverIntervals(cu, pct),
+          across: cu.roomFace + cu.inDir * cu.offset,
+          transmit: curtainTransmit(cu), tint
+        };
+      });
+    }
+
+    // Rebuild window floor meshes for the current sun and curtains: by day
+    // the soft SKY pool, plus the SUN pool where direct sun comes in -- both
+    // cut to the curtains' OPEN parts, with whatever comes through fabric
+    // (a sheer) dimmed and tinted piece by piece. Runs when the sun moves
+    // (60 s tick, a preset, a time pin) for every window, and when a curtain
+    // moves for that window only, once its openness has changed by a
+    // visible amount (curtainKey) -- never per frame for a still scene.
+    function updateDaylightPools(only) {
       // Direct sun on a floor scales with how high the sun is (a low sun's
       // pool is long and faint), but never so far that a morning pool vanishes.
-      const sunK = daylightDirect * (0.5 + 0.5 * daylightHigh) * DAYLIGHT_SUN_POOL_GAIN;
+      const sunBase = daylightDirect * (0.5 + 0.5 * daylightHigh) * DAYLIGHT_SUN_POOL_GAIN;
       const skyK = daylightSunF * DAYLIGHT_SKY_POOL_GAIN;
       daylight.windows.forEach(e => {
+        if (only && !only.has(e)) return;
+        const layers = curtainLayers(e);
+        e.curtainKey = layers.map(l => Math.round(l.pct * 4)).join(',');
+        // Capped by the room's brightest floor so a light floor keeps its
+        // texture instead of clipping to white (poolGainForFloor).
+        const sunK = sunBase > 0 ? Math.min(sunBase, poolGainForFloor(DAYLIGHT_SUN_POOL_GAIN, e.floorAlbedo)) : 0;
         const posAttr = e.geo.attributes.position, uvAttr = e.geo.attributes.uv, colAttr = e.geo.attributes.color;
         const pos = posAttr.array, uv = uvAttr.array, col = colAttr.array;
         const cap = pos.length / 3;
         let n = 0;
-        const put = (x, z, u, v, c, k) => {
+        const put = (x, z, u, v, c, k, tint) => {
           if (n >= cap) return;
           pos[n * 3] = x; pos[n * 3 + 1] = e.poolY; pos[n * 3 + 2] = z;
           uv[n * 2] = u; uv[n * 2 + 1] = v;
-          col[n * 3] = c.r * k; col[n * 3 + 1] = c.g * k; col[n * 3 + 2] = c.b * k;
+          col[n * 3] = c.r * k * tint[0]; col[n * 3 + 1] = c.g * k * tint[1]; col[n * 3 + 2] = c.b * k * tint[2];
           n++;
         };
         if (skyK > 0.001) {
-          const c = e.skyCorners, UV = [[0, 0], [1, 0], [0, 1], [1, 1]];
-          [0, 2, 1, 1, 2, 3].forEach(i => put(c[i][0], c[i][1], UV[i][0], UV[i][1], daylightSkyColor, skyK));
+          windowSegments(e.span[0], e.span[1], layers).forEach(sg => {
+            const sl = e.skySlice(sg.lo, sg.hi);
+            [0, 2, 1, 1, 2, 3].forEach(i => put(sl.pts[i][0], sl.pts[i][1], sl.uv[i][0], sl.uv[i][1],
+              daylightSkyColor, skyK * sg.transmit, sg.tint));
+          });
         }
-        const poly = (sunK > 0.001 && e.roomPoly)
-          ? windowSunPool({ outer: e.outer, inner: e.inner, inward: e.inward,
-              toSun: daylightToSun, room: e.roomPoly, floorY: 0 })
-          : null;
-        if (poly) {
+        const pieces = (sunK > 0.001 && e.roomPoly)
+          ? windowLightPieces({ outer: e.outer, inner: e.inner, inward: e.inward,
+              toSun: daylightToSun, room: e.roomPoly, floorY: 0,
+              layers, rect: e.curtainRect, span: [e.span[0] - 1000, e.span[1] + 1000] })
+          : [];
+        pieces.forEach(pc => {
           // uv (0.5, 0) is the patch texture's full-strength texel: a sun pool
           // is evenly lit with a sharp edge, as direct sun is.
-          const tris = THREE.ShapeUtils.triangulateShape(poly.map(p => new THREE.Vector2(p[0], p[1])), []);
-          tris.forEach(t => t.forEach(i => put(poly[i][0], poly[i][1], 0.5, 0, daylightSunColor, sunK)));
-        }
-        e.mode = poly ? 'sun' : (skyK > 0.001 ? 'sky' : 'none');
-        e.pool = poly;
-        e.poolK = n ? Math.max(skyK, poly ? sunK : 0) : 0;
+          const tris = THREE.ShapeUtils.triangulateShape(pc.poly.map(p => new THREE.Vector2(p[0], p[1])), []);
+          tris.forEach(t => t.forEach(i => put(pc.poly[i][0], pc.poly[i][1], 0.5, 0,
+            daylightSunColor, sunK * pc.transmit, pc.tint)));
+        });
+        e.mode = pieces.length ? 'sun' : (n ? 'sky' : 'none');
+        e.pool = pieces.length ? pieces.map(pc => pc.poly) : null;
+        e.pieces = pieces.map(pc => ({ transmit: pc.transmit, area: polyArea2(pc.poly) }));
+        e.sunK = sunK;
+        e.patch.visible = n > 0;
         e.geo.setDrawRange(0, n);
         posAttr.needsUpdate = true;
         uvAttr.needsUpdate = true;
         colAttr.needsUpdate = true;
       });
     }
+    function polyArea2(poly) {
+      let a = 0;
+      for (let i = 0; i < poly.length; i++) {
+        const p = poly[i], q = poly[(i + 1) % poly.length];
+        a += p[0] * q[1] - q[0] * p[1];
+      }
+      return Math.abs(a) / 2;
+    }
 
     function updateDaylight() {
       const pctOf = id => (curtainById[id] ? curtainById[id].built.getOpen() : null);
+      // A curtain that moved re-cuts its window's pools (the light comes in
+      // only through the open part); a still one costs a string compare.
+      const moved = new Set();
       daylight.windows.forEach(e => {
         const d = windowDaylight(e.win, e.curtains, pctOf);
         e.transmit = d.transmit;
         e.tint = d.tint;
-        // The light itself is in the vertex colours; the curtains scale it.
-        e.mat.color.setRGB(d.tint[0] * d.transmit, d.tint[1] * d.transmit, d.tint[2] * d.transmit);
-        e.patch.visible = (e.poolK || 0) * d.transmit > 0.001;
+        const key = e.curtains.map(cu => {
+          const live = pctOf(cu.id);
+          return Math.round((live != null ? live : cu.openPct) * 4);
+        }).join(',');
+        if (key !== e.curtainKey) moved.add(e);
       });
+      if (moved.size) updateDaylightPools(moved);
       // The room's shared daylight spot: placed at, and aimed through, the
       // windows actually letting light in -- weighted by width, curtain
       // transmission and whether the sun is coming through that window. The
@@ -5573,9 +5660,10 @@ export const Home3DScene = (() => {
             ground: [ambLight.groundColor.r, ambLight.groundColor.g, ambLight.groundColor.b] },
           windows: daylight.windows.map(e => ({
             id: e.win.id, room: e.win.room, transmit: e.transmit, tint: e.tint.slice(),
-            mode: e.mode, pool: e.pool ? e.pool.map(p => p.slice()) : null,
+            mode: e.mode, pool: e.pool ? e.pool.map(poly => poly.map(p => p.slice())) : null,
+            pieces: e.pieces ? e.pieces.map(pc => Object.assign({}, pc)) : [], sunGain: e.sunK || 0,
             patchVisible: e.patch.visible,
-            patchColor: [e.mat.color.r, e.mat.color.g, e.mat.color.b]
+            drawCorners: e.geo.drawRange.count
           })),
           rooms: Object.keys(daylight.rooms).map(roomId => {
             const r = daylight.rooms[roomId];
