@@ -940,19 +940,19 @@
 
     "furnitureParams_bed": {
       "type": "object",
-      "description": "Params for `bed` (src/furniture/bed.js): an upholstered bed with a tall channel-tufted (vertical padded channel) headboard, a base, a mattress, pillows and an optional duvet. Each `default` equals bed.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). `height` IS the headboard height (floor to its top) -- there is no separate headboardHeight param.",
+      "description": "Params for `bed` (src/furniture/bed.js): a soft upholstered bed, made up -- vertical padded channels inside a padded border on the headboard, upholstered side and foot rails on a dark recessed plinth, a rounded crowned mattress in a fitted sheet, a draped duvet with a folded-back top edge, sleeping pillows, propped accent pillows and a cushion. Each `default` equals bed.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). `height` IS the headboard height (floor to its top) -- there is no separate headboardHeight param.",
       "properties": {
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 161,
-          "description": "cm, the base/mattress footprint width."
+          "description": "cm, the frame's outside width (rails and headboard)."
         },
         "depth": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 220,
-          "description": "cm, the base/mattress footprint depth."
+          "description": "cm, the frame's outside depth, headboard back to foot rail."
         },
         "height": {
           "type": "number",
@@ -963,20 +963,20 @@
         "baseHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 32,
-          "description": "cm, floor to the top of the base (divan/box base)."
+          "default": 38,
+          "description": "cm, floor to the top of the upholstered rails. The mattress sits down inside them."
         },
         "mattressHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 28,
+          "default": 24,
           "description": "cm, mattress thickness."
         },
         "channelCount": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 7,
-          "description": "Vertical padded channels across the headboard width, butted edge-to-edge with a small crease between neighbours."
+          "default": 8,
+          "description": "Vertical padded channels across the headboard, inside its padded border."
         },
         "channelDepth": {
           "type": "number",
@@ -986,29 +986,57 @@
         },
         "headboardColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#8d8f92",
-          "description": "Grey velvet headboard."
+          "default": "#9ba8b3",
+          "description": "Headboard velvet."
         },
         "baseColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#3a3a3d"
+          "default": "#9ba8b3",
+          "description": "The upholstered rails; the same velvet as the headboard by default."
+        },
+        "plinthColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#2b2b2d",
+          "description": "The recessed plinth under the rails."
         },
         "mattressColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#f2efe8"
+          "default": "#efe6d6",
+          "description": "The fitted sheet on the mattress."
         },
         "pillowColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#f7f5f0"
+          "default": "#f7f5f0",
+          "description": "Sleeping pillows."
+        },
+        "accentPillowColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#c9d3b0",
+          "description": "Accent pillows propped against the headboard (full detail)."
+        },
+        "cushionColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#5d6b45",
+          "description": "The cushion in the middle (full detail)."
         },
         "duvet": {
           "type": "boolean",
           "default": true,
-          "description": "Whether a folded duvet is drawn at the foot of the bed."
+          "description": "Whether the duvet is drawn (draped over the foot end, top edge folded back)."
         },
         "duvetColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#e7e3da"
+          "default": "#f4f1ea",
+          "description": "The duvet cover's ground colour."
+        },
+        "beddingPreset": {
+          "type": "string",
+          "enum": [
+            "botanical",
+            "plain"
+          ],
+          "default": "botanical",
+          "description": "'botanical' scatters a leaf-and-flower print over the duvet cover (full detail, drawn as geometry); 'plain' leaves it plain."
         },
         "finish": {
           "$ref": "#/$defs/furnitureFinish",
@@ -1212,46 +1240,59 @@
 
     "furnitureParams_digital-piano": {
       "type": "object",
-      "description": "Params for `digital-piano` (src/furniture/digital-piano.js): a generic white 88-key stage piano on a white stand, with a music rest. Each `default` equals digital-piano.js's PIANO_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `digital-piano` (src/furniture/digital-piano.js): a slim white 88-key digital piano on its matching panel stand (two solid side panels and a back board), with 36 individual black keys, a lit display, speaker grilles and a small music rest. Each `default` equals digital-piano.js's PIANO_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 138
+          "default": 140
         },
         "depth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 46
+          "default": 45
         },
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 97
+          "default": 97,
+          "description": "cm, floor to the top of the music rest -- honoured exactly."
         },
-        "keybedHeight": {
+        "caseTopHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 82,
-          "description": "cm, floor to the top of the white keys."
+          "default": 76,
+          "description": "cm, floor to the top of the case (the control panel). The white keys sit 3 below it."
         },
-        "keybedDepth": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 30,
-          "description": "cm, front-to-back depth of the keybed/body."
-        },
-        "legInset": {
-          "type": "number",
-          "minimum": 0,
-          "default": 8,
-          "description": "cm, how far the stand legs sit in from each end."
-        },
-        "restHeight": {
+        "caseHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 15,
-          "description": "cm, music rest height above the keybed top."
+          "description": "cm, the case itself, top to bottom; the stand runs from the floor to its underside."
+        },
+        "keyDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 15,
+          "description": "cm, front-to-back length of a white key."
+        },
+        "restWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 55,
+          "description": "cm, width of the music rest (a small centred panel)."
+        },
+        "restLean": {
+          "type": "number",
+          "minimum": 0,
+          "default": 12,
+          "description": "Degrees the music rest leans back, away from the player."
+        },
+        "sidePanelDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 40,
+          "description": "cm, front-to-back depth of the stand's solid side panels."
         },
         "bodyColor": {
           "$ref": "#/$defs/hexColor",
@@ -1263,11 +1304,21 @@
         },
         "keyBlackColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#161616"
+          "default": "#151515"
         },
         "standColor": {
           "$ref": "#/$defs/hexColor",
           "default": "#f0f0ec"
+        },
+        "screenColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#6c8cff",
+          "description": "The lit display on the control panel."
+        },
+        "grilleColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#bdbdbd",
+          "description": "The speaker grilles at both ends of the control panel."
         },
         "finish": {
           "$ref": "#/$defs/furnitureFinish",
@@ -2258,12 +2309,12 @@
 
     "furnitureParams_piano-bench": {
       "type": "object",
-      "description": "Params for `piano-bench` (src/furniture/digital-piano.js, TYPES['piano-bench']): a white padded bench on an adjustable-height X-frame or column base. Each `default` equals the module's BENCH_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `piano-bench` (src/furniture/digital-piano.js, TYPES['piano-bench']): a classic adjustable piano bench -- a button-tufted faux-leather seat with rolled edges, an apron with an adjustment knob at each end, four square tapered legs. Each `default` equals the module's BENCH_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 76
+          "default": 58
         },
         "depth": {
           "type": "number",
@@ -2273,29 +2324,32 @@
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 50
+          "default": 50,
+          "description": "cm, floor to the top of the seat."
         },
         "seatThickness": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 8
+          "default": 9
         },
-        "baseStyle": {
-          "type": "string",
-          "enum": ["x", "column"],
-          "default": "x"
+        "apronHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 7,
+          "description": "cm, the apron under the seat (the height mechanism)."
         },
         "seatColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#f7f6f2"
+          "default": "#f3f1ec"
         },
         "baseColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#e9e8e3"
+          "default": "#f7f7f4",
+          "description": "The frame: apron, knobs and legs."
         },
         "finish": {
           "$ref": "#/$defs/furnitureFinish",
-          "default": "matte"
+          "default": "satin"
         }
       },
       "additionalProperties": false
