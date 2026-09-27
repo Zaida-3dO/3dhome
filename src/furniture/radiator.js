@@ -90,6 +90,19 @@
  * SPEC-PAGE-ONLY preview control (it plays the placer role for its 3D
  * preview) and does not correspond to an authorable param.
  *
+ * NOT TAPPABLE (YET) FOR THE CLIMATE POPOVER. Tapping a light, curtain or
+ * door opens its popover (src/tap-popovers.js), but a radiator cannot be
+ * tapped: furniture renders MERGED per room (src/furniture.js /
+ * furniture/merge.js), so a hit on a radiator lands on a shared bucket mesh
+ * carrying no per-item identity. Making it tappable needs a hit-point ->
+ * oriented-footprint lookup: convert the hit point to plan coordinates and
+ * test it against the footprint and height of each climate-bound
+ * `house.furniture[]` radiator -- climate-bound meaning it stands in a room
+ * that rooms.json binds a thermostat to through `sensors.climate[room]`, so
+ * the mapping stays derived, never hand-written. Until then the climate
+ * popover opens only through the ?debug=1 seam. See docs/plans/tap-popovers.md
+ * and Agent Standup item 647fc9bd.
+ *
  * ── DIMENSIONS ARE ILLUSTRATIVE, EXCEPT DEFAULTS ────────────────────────
  * DEFAULTS below are the standard house radiator: 80w x 60h, thickness 10,
  * depth 12 (a 2cm wall gap), no cover. Other rooms vary (remodel.sh3d:

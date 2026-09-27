@@ -28,8 +28,9 @@
  * furniture in front of a light BLOCKS the tap.
  *
  * The pure parts (materialOpacity, resolveTarget, pickFromHits,
- * placePopover, statusKey, climateActivity, lightName) take no DOM and are
- * unit-tested in scripts/test-tap-popovers.mjs.
+ * placePopover, boundsExcluding, statusKey, doorState, curtainUnavailable,
+ * lightUnavailable, hitOverlapPx, climateActivity, lightName) take no DOM and
+ * are unit-tested in scripts/test-tap-popovers.mjs.
  */
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
@@ -150,24 +151,101 @@ export function placePopover(x, y, w, h, bounds, gap, margin) {
 }
 
 /**
+ * Is the HA client in a mode that is actually talking to Home Assistant?
+ * 'connected' (websocket), 'polling' (steady REST fallback) and 'syncing'
+ * (socket open, first get_states in flight) all are; every other status --
+ * or no client at all -- is offline, where changes only preview.
+ */
+export function isLive(conn) {
+  return conn === 'connected' || conn === 'polling' || conn === 'syncing';
+}
+
+/**
  * The status dot for one popover:
  *   ok          green   HA connected over the websocket, entity reporting
- *   connecting  yellow  polling / syncing / reconnecting (dot pulses)
- *   na          yellow  connected, but this entity is unavailable/unknown
- *   motor       yellow  connected, but a curtain motor is unavailable
+ *   polling     green   HA reached over the REST fallback, entity reporting
+ *                       (a steady mode, not a reconnect -- updates every few s)
+ *   connecting  yellow  syncing: the socket is up, first snapshot pending (pulses)
+ *   na          yellow  live, but this entity is unavailable/unknown
+ *   motor       yellow  live, but a curtain motor is unavailable
  *   offline     red     no client, disconnected, auth_failed, sync_failed
  *   offlineMock red     offline AND showing sample values (climate)
  *
+ * Syncing outranks an entity-unavailable flag: until the first snapshot
+ * lands, "this device isn't responding" would be a claim nothing supports.
+ *
  * @param conn    HA client status string, or null when there is no client
- * @param entityUnavailable  true when HA is up but this entity is not
+ * @param entityUnavailable  true when HA is live but this entity is not
  */
 export function statusKey(kind, conn, entityUnavailable, mock) {
-  if (!conn || conn === 'disconnected' || conn === 'auth_failed' || conn === 'sync_failed') {
-    return mock ? 'offlineMock' : 'offline';
-  }
-  if (conn !== 'connected') return 'connecting';
+  if (!isLive(conn)) return mock ? 'offlineMock' : 'offline';
+  if (conn === 'syncing') return 'connecting';
   if (entityUnavailable) return kind === 'curtain' ? 'motor' : 'na';
-  return 'ok';
+  return conn === 'polling' ? 'polling' : 'ok';
+}
+
+/**
+ * The door chip's body, from the sidebar's doorStatus value ('on' | 'off' |
+ * 'unavailable' | null = never heard from) and the connection:
+ *   open / closed  the last reading, live or not (last-known while offline)
+ *   na             "Unavailable": the sensor itself reported unavailable, or
+ *                  HA is live and the door has never reported
+ *   unknown        "Unknown": HA is offline and the door has never reported --
+ *                  nothing says the sensor is broken, we just have no reading
+ */
+export function doorState(status, conn) {
+  if (status === 'on') return 'open';
+  if (status === 'off') return 'closed';
+  if (status === 'unavailable') return 'na';
+  return isLive(conn) ? 'na' : 'unknown';
+}
+
+/**
+ * A curtain's controls are hidden ("Motor unavailable") whenever HA is live
+ * and the sidebar's availability map does not say TRUE -- in every live mode,
+ * the same rule the sidebar slider and curtainSliderCommand apply. Offline,
+ * the controls stay as a preview on the model.
+ */
+export function curtainUnavailable(conn, available) {
+  return isLive(conn) && available !== true;
+}
+
+/**
+ * A light is unavailable when HA is live and its first bound entity's raw
+ * state is missing, 'unavailable' or 'unknown'.
+ */
+export function lightUnavailable(conn, rawState) {
+  return isLive(conn) && (!rawState || isUnavailableState(rawState.state));
+}
+export const isUnavailableState = st => !st || st === 'unavailable' || st === 'unknown';
+
+/**
+ * Placement bounds with the sidebar taken OUT: the visible scene area
+ * (`bounds`) minus the open sidebar's rect. The sidebar is an opaque panel
+ * over the canvas, so a card placed under it is hidden (or, above it in
+ * z-order, covers the controls). Returns the strip of `bounds` left of,
+ * right of, above or below the sidebar that CONTAINS the tap (x, y); if the
+ * tap is in none of them, the largest strip. A sidebar that does not overlap
+ * `bounds` (closed: translated off-screen) changes nothing.
+ *
+ * @param sidebar  {left, top, right, bottom} or null
+ */
+export function boundsExcluding(bounds, sidebar, x, y) {
+  const b = bounds;
+  if (!sidebar) return b;
+  const ix = Math.min(b.right, sidebar.right) - Math.max(b.left, sidebar.left);
+  const iy = Math.min(b.bottom, sidebar.bottom) - Math.max(b.top, sidebar.top);
+  if (ix <= 0 || iy <= 0) return b;
+  const strips = [
+    { left: b.left, top: b.top, right: Math.min(b.right, sidebar.left), bottom: b.bottom },
+    { left: Math.max(b.left, sidebar.right), top: b.top, right: b.right, bottom: b.bottom },
+    { left: b.left, top: b.top, right: b.right, bottom: Math.min(b.bottom, sidebar.top) },
+    { left: b.left, top: Math.max(b.top, sidebar.bottom), right: b.right, bottom: b.bottom },
+  ].filter(r => r.right > r.left && r.bottom > r.top);
+  if (!strips.length) return b;   // sidebar covers everything: last resort, stay on top of it
+  const inside = strips.filter(r => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+  const area = r => (r.right - r.left) * (r.bottom - r.top);
+  return (inside.length ? inside : strips).sort((p, q) => area(q) - area(p))[0];
 }
 
 /**
@@ -233,28 +311,52 @@ const ico = (p, cls) => svg(p, 'tp-ico ' + (cls || ''));
 
 const STATUS = {
   ok: ['ok', 'Live', 'Connected to Home Assistant.'],
-  connecting: ['warn pulse', 'Connecting…', 'Reconnecting to Home Assistant. Changes are still sent.'],
-  na: ['warn', 'Entity unavailable', 'Home Assistant is connected, but this device isn’t responding.'],
+  polling: ['ok', 'Live', 'Connected (updates every few seconds).'],
+  connecting: ['warn pulse', 'Connecting…', 'Syncing with Home Assistant. Changes are still sent.'],
+  na: ['warn', 'Entity unavailable', 'Home Assistant is reachable, but this device isn’t responding.'],
   motor: ['warn', 'Motor unavailable', 'One of this curtain’s motors isn’t responding in Home Assistant.'],
   offline: ['bad', 'Not connected', 'Home Assistant is offline. Changes only preview on the model.'],
   offlineMock: ['bad', 'Not connected', 'Home Assistant is offline. Showing sample temperatures; changes only preview.'],
 };
 
+/**
+ * Control-row geometry (CSS px) for the two pointer sizes. The buttons'
+ * and switch's invisible ::after hit areas reach BELOW the row; the slider
+ * starts `rangeGap` below the row. They may touch, never overlap -- a tap
+ * meant for the slider's top edge must not press Close/Open (or toggle the
+ * light). `hitOverlapPx` checks that; the CSS below is built from these.
+ *   ibH / swH       button / switch height (the row is ibH tall, the switch
+ *                   is centred in it)
+ *   ibHitY / swHitY how far each ::after extends below its control
+ *   rangeGap        the slider's margin-top below the row
+ */
+export const GEOM = {
+  fine:   { ibH: 28, ibHitY: 4, swH: 20, swHitY: 12, rangeGap: 8, rangeH: 20 },
+  coarse: { ibH: 34, ibHitY: 5, swH: 24, swHitY: 10, rangeGap: 5, rangeH: 40 },
+};
+/** Pixels by which a control's hit area overlaps the slider below (<= 0: none). */
+export function hitOverlapPx(g) {
+  const ib = g.ibHitY;                          // below the row's bottom edge
+  const sw = g.swHitY - (g.ibH - g.swH) / 2;    // switch is centred in the row
+  return Math.max(ib, sw) - g.rangeGap;
+}
+
 // Sizes as CSS variables; the coarse set is emitted twice -- under
 // (pointer: coarse), and under .tp-force-coarse for the ?debug=1 seam, since
 // a desktop browser cannot be made to report a coarse pointer.
-const COARSE = '--w:216px;--ib-w:38px;--ib-h:34px;--sw-w:40px;--sw-h:24px;--thumb:20px;';
+const GC = GEOM.coarse, GF = GEOM.fine;
+const COARSE = '--w:216px;--ib-w:38px;--ib-h:' + GC.ibH + 'px;--sw-w:40px;--sw-h:' + GC.swH + 'px;--thumb:20px;';
 const coarseRules = sel => `
 ${sel} .tp-pop { ${COARSE} }
 ${sel} .tp-status::after { inset: -14px; }
 ${sel} .tp-btns { gap: 6px; }
-${sel} .tp-ib::after { inset: -5px -3px; }
-${sel} .tp-sw::after { inset: -10px -2px; }
-${sel} .tp-range { height: 40px; margin: 2px 0 -12px; }
+${sel} .tp-ib::after { inset: -${GC.ibHitY}px -3px; }
+${sel} .tp-sw::after { inset: -${GC.swHitY}px -2px; }
+${sel} .tp-range { height: ${GC.rangeH}px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 10)}px; }
 ${sel} .tp-pop.chip { padding: 10px 12px; }`;
 
 const STYLE = `
-.tp-pop { --w:200px; --ib-w:30px; --ib-h:28px; --sw-w:36px; --sw-h:20px; --thumb:14px;
+.tp-pop { --w:200px; --ib-w:30px; --ib-h:${GF.ibH}px; --sw-w:36px; --sw-h:${GF.swH}px; --thumb:14px;
   --ink:#fff; --ink-2:rgba(255,255,255,0.62); --accent:#6366f1; --ok:#22c55e; --warn:#eab308; --bad:#ef4444;
   --amber:#ffd43b; --heat:#ff8a3d; --door-open:#f59e0b;
   position: fixed; z-index: 60; width: var(--w); padding: 10px 12px; border-radius: 10px;
@@ -305,7 +407,7 @@ const STYLE = `
 .tp-ib { position: relative; width: var(--ib-w); height: var(--ib-h); border-radius: 7px; display: grid; place-items: center;
   border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.07); color: #fff; cursor: pointer; padding: 0; }
 .tp-ib svg { width: 18px; height: 18px; fill: currentColor; }
-.tp-ib::after { content: ''; position: absolute; inset: -4px -2px; }
+.tp-ib::after { content: ''; position: absolute; inset: -${GF.ibHitY}px -2px; }
 .tp-ib:active:not(:disabled) { background: rgba(99,102,241,0.35); }
 .tp-ib:disabled { opacity: 0.35; cursor: not-allowed; }
 @media (hover: hover) {
@@ -316,12 +418,12 @@ const STYLE = `
 .tp-ib:focus-visible, .tp-sw:focus-visible, .tp-status:focus-visible, .tp-range:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
 .tp-sw { position: relative; width: var(--sw-w); height: var(--sw-h); border-radius: 999px; border: 0; padding: 0; cursor: pointer;
   background: rgba(255,255,255,0.18); flex: none; transition: background .2s; }
-.tp-sw::after { content: ''; position: absolute; inset: -12px -4px; }
+.tp-sw::after { content: ''; position: absolute; inset: -${GF.swHitY}px -4px; }
 .tp-sw i { position: absolute; top: 2px; left: 2px; width: calc(var(--sw-h) - 4px); height: calc(var(--sw-h) - 4px); border-radius: 50%; background: #fff; transition: left .2s; }
 .tp-sw.on { background: var(--accent); }
 .tp-sw.on i { left: calc(var(--sw-w) - var(--sw-h) + 2px); }
 .tp-sw:disabled { opacity: 0.35; cursor: not-allowed; }
-.tp-range { --p: 50%; display: block; width: 100%; height: 20px; margin: 6px 0 0; background: transparent;
+.tp-range { --p: 50%; display: block; width: 100%; height: ${GF.rangeH}px; margin: ${GF.rangeGap}px 0 -2px; background: transparent;
   -webkit-appearance: none; appearance: none; cursor: pointer; outline: none; }
 .tp-range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
   background: linear-gradient(to right, var(--fill, var(--accent)) var(--p), rgba(255,255,255,0.16) var(--p)); }
@@ -338,7 +440,7 @@ const STYLE = `
 .tp-pop.chip .st { font-weight: 600; white-space: nowrap; }
 .tp-pop.chip .st.open { color: var(--door-open); }
 .tp-pop.chip .st.closed { color: #4ade80; }
-.tp-pop.chip .st.na { color: var(--ink-2); font-weight: 500; }
+.tp-pop.chip .st.na, .tp-pop.chip .st.unknown { color: var(--ink-2); font-weight: 500; }
 .tp-pop.chip .tp-status { margin-left: 2px; margin-right: 0; }
 @media (pointer: coarse) { ${coarseRules('')} }
 ${coarseRules('.tp-force-coarse')}
@@ -362,7 +464,10 @@ const fillPct = r => ((+r.value - +r.min) / ((+r.max - +r.min) || 1) * 100) + '%
  *   climateEntity(roomId)
  * @param o.curtainSender, o.climateSender  the sidebar's createDragSender instances
  * @param o.onChange        () => void -- repaint the sidebar
- * @param o.debug           expose window.__home3dTap
+ * @param o.sidebar         the room panel element (read-only): its on-screen
+ *                          rect is kept out of placement bounds, and toggling
+ *                          its 'open' class closes the card
+ * @param o.debug           expose window.__home3dTap (removed again on dispose)
  */
 export function attachTapPopovers(o) {
   const { THREE, home, container, Home3DScene } = o;
@@ -386,11 +491,7 @@ export function attachTapPopovers(o) {
   // Commands go out only through a real client that is not known-down; the
   // yellow 'connecting' states still send (polling uses REST, syncing has an
   // open socket). Offline is preview-on-the-model only.
-  const canSend = () => {
-    const h = ha(); const c = h ? h.status : null;
-    return !!h && (c === 'connected' || c === 'polling' || c === 'syncing');
-  };
-  const unavail = st => !st || st === 'unavailable' || st === 'unknown';
+  const canSend = () => { const h = ha(); return !!h && isLive(h.status); };
 
   const styleEl = document.createElement('style');
   styleEl.textContent = STYLE;
@@ -477,7 +578,7 @@ export function attachTapPopovers(o) {
         const st = (home.lightState[t.roomId] || {})[t.channel] || { on: false, bri: 100 };
         const c = conn();
         const r = raw(t.entities[0]);
-        const na = c === 'connected' && (!r || unavail(r.state));
+        const na = lightUnavailable(c, r);
         const lc = ((Home3DScene.LIGHTS || {})[t.roomId] || {})[t.channel];
         return { status: statusKey('light', c, na), na, on: !!st.on, bri: st.bri != null ? st.bri : 100,
           name: lightName(roomName(t.roomId), t.channel, lc && lc.name) };
@@ -512,8 +613,16 @@ export function attachTapPopovers(o) {
             sw.classList.add('on'); sw.setAttribute('aria-checked', 'true');
             const ic = el.querySelector('.tp-ico'); if (ic) ic.outerHTML = ico(I.bulb, 'light-on');
           });
-          const end = () => { if (ctl.dragging) { ctl.dragging = false; onChange(); ctl.refresh(); } };
-          r.addEventListener('change', end); r.addEventListener('pointerup', end); r.addEventListener('pointercancel', end);
+          // 'change' ends the drag at once and repaints the sidebar (the
+          // value itself went out on 'input', debounced, as the sidebar's own
+          // light slider does). pointerup PRECEDES 'change', so its rebuild is
+          // deferred a tick (the sidebar's rule, see curtainSender's onRelease
+          // in index.html) -- rebuilding synchronously replaced the input and
+          // lost the 'change' listener.
+          const finish = () => { if (ctl.dragging) { ctl.dragging = false; onChange(); ctl.refresh(); } };
+          r.addEventListener('change', finish);
+          const end = () => setTimeout(finish, 0);
+          r.addEventListener('pointerup', end); r.addEventListener('pointercancel', end);
         }
       },
     },
@@ -522,7 +631,7 @@ export function attachTapPopovers(o) {
       model(t) {
         const c = conn();
         const avail = S.curtainAvailable ? S.curtainAvailable(t.id) : null;
-        const na = c === 'connected' && avail !== true;
+        const na = curtainUnavailable(c, avail);
         const pct = Math.round((S.curtainPct ? S.curtainPct(t.id) : home.getCurtainOpen(t.id)) || 0);
         return { status: statusKey('curtain', c, na), na, pct, name: curtainNames.get(t.id) || t.id };
       },
@@ -554,7 +663,11 @@ export function attachTapPopovers(o) {
             if (canSend() && sender) sender.commit(t.id, +r.value);
             ctl.dragging = false; onChange(); ctl.refresh();
           });
-          const end = () => { if (sender) sender.end(t.id); if (ctl.dragging) { ctl.dragging = false; ctl.refresh(); } };
+          // Deferred a tick, as for the light: 'change' (commit) follows pointerup.
+          const end = () => {
+            if (sender) sender.end(t.id);
+            setTimeout(() => { if (ctl.dragging) { ctl.dragging = false; ctl.refresh(); } }, 0);
+          };
           r.addEventListener('pointerup', end); r.addEventListener('pointercancel', end);
         }
         const press = cmd => {
@@ -573,7 +686,7 @@ export function attachTapPopovers(o) {
         const eid = t.entities[0];
         let reading = S.climate ? S.climate(t.id) : null;
         const r = raw(eid);
-        const offlineConn = statusKey('climate', c, false) === 'offline';
+        const offlineConn = !isLive(c);
         let mock = false, action;
         if (offlineConn && !reading) {
           // No client, or no reading ever: sample values, clearly marked (red dot tooltip).
@@ -586,9 +699,9 @@ export function attachTapPopovers(o) {
         // last reading of 'unavailable' reads "Unavailable" even while offline,
         // never "Off" (parseClimate folds a null target into off).
         const readingNa = !mock && (!reading || !reading.available);
-        const na = readingNa && (c === 'connected' || !!reading);
+        const na = readingNa && (isLive(c) || !!reading);
         const off = !na && !!(reading && reading.off);
-        return { status: statusKey('climate', c, readingNa && c === 'connected', mock), na, mock, off,
+        return { status: statusKey('climate', c, readingNa && isLive(c), mock), na, mock, off,
           current: reading ? reading.current : null, target: reading ? reading.target : null,
           min: reading ? reading.min : 7, max: reading ? reading.max : 30, step: reading ? reading.step : 0.5,
           activity: climateActivity(action, off), name: sentenceCase(t.label || (roomName(t.id) + ' radiator')) };
@@ -645,14 +758,12 @@ export function attachTapPopovers(o) {
       chip: true,
       model(t) {
         const c = conn();
-        const s = S.doorStatus ? S.doorStatus(t.id) : null;
-        const known = s === 'on' || s === 'off';
-        const na = c === 'connected' && !known;
-        return { status: statusKey('door', c, na), state: s === 'on' ? 'open' : s === 'off' ? 'closed' : 'na',
-          name: doorNames.get(t.id) || t.id };
+        const state = doorState(S.doorStatus ? S.doorStatus(t.id) : null, c);
+        return { status: statusKey('door', c, state === 'na'), state, name: doorNames.get(t.id) || t.id };
       },
       html(m) {
-        const map = { open: [I.doorOpen, 'd-open', 'Open'], closed: [I.doorClosed, 'd-closed', 'Closed'], na: [I.doorClosed, 'dim', 'Unavailable'] }[m.state];
+        const map = { open: [I.doorOpen, 'd-open', 'Open'], closed: [I.doorClosed, 'd-closed', 'Closed'], na: [I.doorClosed, 'dim', 'Unavailable'],
+          unknown: [I.doorClosed, 'dim', 'Unknown'] }[m.state];
         return '<div class="tp-head">' + ico(map[0], map[1]) + '<span class="tp-name">' + esc(m.name) + '</span><span class="sep">·</span>' +
           '<span class="st ' + m.state + '">' + map[2] + '</span>' + dot(m.status) + '</div>';
       },
@@ -661,13 +772,42 @@ export function attachTapPopovers(o) {
   };
 
   // ---- popover lifecycle ------------------------------------------------
-  let pop = null;          // { el, target, x, y, camSnap, sig, ctl, timer }
+  let pop = null;          // { el, target, x, y, camSnap, sig, ctl, timer, returnTo }
   let tipOpen = false, tipTimer = 0;
-  function close() {
+  /** @param restoreFocus  put keyboard focus back where it was before open
+   *  (Escape). A tap-away close leaves focus wherever the tap put it. */
+  function close(restoreFocus) {
     if (!pop) return;
-    clearInterval(pop.timer); clearTimeout(tipTimer); tipOpen = false;
-    if (pop.el.parentNode) pop.el.parentNode.removeChild(pop.el);
+    const p = pop;
+    clearInterval(p.timer); clearTimeout(tipTimer); tipOpen = false;
+    const hadFocus = p.el.contains(document.activeElement);
+    if (p.el.parentNode) p.el.parentNode.removeChild(p.el);
     pop = null;
+    if (restoreFocus === true && hadFocus) {
+      const back = p.returnTo;
+      if (back && back !== document.body && back.isConnected && typeof back.focus === 'function') back.focus({ preventScroll: true });
+      else if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    }
+  }
+  // Focusable controls inside the card, in DOM order (disabled ones skipped).
+  const focusables = el => Array.from(el.querySelectorAll('button:not([disabled]), input:not([disabled])'));
+  // The control keyboard focus lands on at open: the first real control, not
+  // the status dot (which leads the header); the card itself for the
+  // read-only door chip.
+  function focusFirst(el) {
+    const f = focusables(el).filter(c => c.dataset.a !== 'status');
+    (f[0] || el).focus({ preventScroll: true });
+  }
+
+  // The room sidebar (#panel) is an opaque layer over the right of the
+  // canvas. Its rect when it is actually on screen, else null (closed, it is
+  // translated off the right edge).
+  function sidebarRect() {
+    const sb = o.sidebar;
+    if (!sb || !sb.getBoundingClientRect) return null;
+    const r = sb.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0 || r.left >= window.innerWidth || r.right <= 0) return null;
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
   }
   function camSnapshot() { const cam = home.getCamera(); cam.updateMatrixWorld(); return cam.matrixWorld.elements.slice(); }
   function camMoved(snap) {
@@ -679,10 +819,13 @@ export function attachTapPopovers(o) {
   function position() {
     const el = pop.el;
     const r = canvasRect();
-    const bounds = {
+    // The visible scene: the canvas within the viewport, minus the sidebar
+    // when it is open. If the card does not fit the leftover space it is
+    // clamped into it, and z-index 60 (> the panel's 50) keeps it on top.
+    const bounds = boundsExcluding({
       left: Math.max(0, r.left), top: Math.max(0, r.top),
       right: Math.min(window.innerWidth, r.right), bottom: Math.min(window.innerHeight, r.bottom),
-    };
+    }, sidebarRect(), pop.x, pop.y);
     const p = placePopover(pop.x, pop.y, el.offsetWidth, el.offsetHeight, bounds);
     el.style.left = p.left + 'px';
     el.style.top = p.top + 'px';
@@ -704,22 +847,31 @@ export function attachTapPopovers(o) {
     const sig = JSON.stringify(m) + tipOpen;
     if (!force && (sig === pop.sig || pop.ctl.dragging)) return;
     pop.sig = sig;
+    // A rebuild replaces every control: keep keyboard focus on the same one.
+    const ae = document.activeElement;
+    const refocus = pop.el.contains(ae) ? (ae === pop.el ? '' : (ae.dataset && ae.dataset.a) || '') : null;
     pop.el.innerHTML = v.html(m) + '<span class="tp-arrow"></span>';
     pop.el.setAttribute('aria-label', m.name);
     pop.el.querySelectorAll('.tp-range').forEach(r => r.style.setProperty('--p', fillPct(r)));
     v.bind(pop.target, pop.el, pop.ctl);
     position();
+    if (refocus !== null) {
+      const c = refocus && pop.el.querySelector('[data-a="' + refocus + '"]');
+      (c && !c.disabled ? c : pop.el).focus({ preventScroll: true });
+    }
   }
 
   function open(target, x, y) {
+    const returnTo = pop ? pop.returnTo : document.activeElement;
     close();
     const el = document.createElement('div');
     el.className = 'tp-pop' + (VIEWS[target.kind].chip ? ' chip' : '');
     el.dataset.kind = target.kind;
     el.dataset.target = target.id;
     el.setAttribute('role', 'dialog');
+    el.tabIndex = -1;   // focus target for the door chip, and after a rebuild
     document.body.appendChild(el);
-    pop = { el, target, x, y, camSnap: camSnapshot(), sig: null, ctl: { dragging: false } };
+    pop = { el, target, x, y, camSnap: camSnapshot(), sig: null, ctl: { dragging: false }, returnTo };
     pop.ctl.refresh = f => render(!!f);
     // Status dot: tap toggles its tooltip (touch; auto-hides after 4 s),
     // mouse gets it on hover through CSS. Delegated, so it survives rebuilds.
@@ -733,7 +885,19 @@ export function attachTapPopovers(o) {
       }
       if (tipOpen) { tipOpen = false; const d = el.querySelector('[data-a=status]'); if (d) d.classList.remove('tip-open'); }
     });
+    // Tab cycles within the card (it is appended at the end of <body>, so
+    // tabbing off its last control would leave for the browser chrome);
+    // Escape (onKey) closes it and returns focus.
+    el.addEventListener('keydown', e => {
+      if (e.key !== 'Tab') return;
+      const f = focusables(el);
+      if (!f.length) { e.preventDefault(); return; }
+      const i = f.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+      else if (!e.shiftKey && (i === -1 || i === f.length - 1)) { e.preventDefault(); f[0].focus(); }
+    });
     render(true);
+    focusFirst(el);
     // Most live changes repaint the scene (-> onRender below); a reading that
     // moves nothing requests no frame, so a slow DOM-only tick covers it.
     pop.timer = setInterval(() => { try { render(false); } catch (e) { /* ignore */ } }, 1000);
@@ -763,7 +927,7 @@ export function attachTapPopovers(o) {
     }
   };
   const onWheel = e => { if (pop && inCanvas(e)) close(); };
-  const onKey = e => { if (e.key === 'Escape') close(); };
+  const onKey = e => { if (e.key === 'Escape' && pop) close(true); };
   const onResize = () => close();
 
   window.addEventListener('pointerdown', onPointerDown, true);
@@ -773,6 +937,15 @@ export function attachTapPopovers(o) {
   window.addEventListener('wheel', onWheel, { capture: true, passive: true });
   window.addEventListener('keydown', onKey);
   window.addEventListener('resize', onResize);
+
+  // Opening or closing the sidebar moves the space the card was placed in:
+  // close it rather than leave it over (or under) the panel.
+  let sidebarOpen = o.sidebar && o.sidebar.classList ? o.sidebar.classList.contains('open') : false;
+  const sidebarObs = o.sidebar && typeof MutationObserver === 'function' ? new MutationObserver(() => {
+    const now = o.sidebar.classList.contains('open');
+    if (now !== sidebarOpen) { sidebarOpen = now; close(); }
+  }) : null;
+  if (sidebarObs) sidebarObs.observe(o.sidebar, { attributes: true, attributeFilter: ['class'] });
 
   const unsub = home.onRender(() => {
     if (!pop) return;
@@ -815,7 +988,7 @@ export function attachTapPopovers(o) {
       if (spec && spec.reset) { sim.status = undefined; sim.raw.clear(); }
       render(false);
     },
-    close,
+    close: () => close(),
     isOpen: () => !!pop,
     current: () => (pop ? { kind: pop.target.kind, id: pop.target.id, entities: pop.target.entities.slice(), placement: pop.el.dataset.placement,
       status: (pop.el.querySelector('[data-a=status]') || {}).dataset?.st, rect: pop.el.getBoundingClientRect().toJSON() } : null),
@@ -827,8 +1000,12 @@ export function attachTapPopovers(o) {
         return { id: t.id, x: Math.round(r.left + (tmpV.x + 1) / 2 * r.width), y: Math.round(r.top + (1 - tmpV.y) / 2 * r.height) };
       });
     },
+    /** Idempotent: index.html registers it with home.onDispose. */
     dispose() {
+      if (disposed) return;
+      disposed = true;
       close(); unsub();
+      if (sidebarObs) sidebarObs.disconnect();
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('pointerup', onPointerEnd, true);
       window.removeEventListener('pointercancel', onPointerEnd, true);
@@ -837,8 +1014,11 @@ export function attachTapPopovers(o) {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', onResize);
       if (styleEl.parentNode) styleEl.parentNode.removeChild(styleEl);
+      if (window.__home3dTap === api) delete window.__home3dTap;
+      document.documentElement.classList.remove('tp-force-coarse');
     },
   };
+  let disposed = false;
   if (o.debug) {
     window.__home3dTap = api;
     // ?tpCoarse=1 forces touch sizing on a fine-pointer browser (verification only).

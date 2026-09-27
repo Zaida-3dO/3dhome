@@ -1907,8 +1907,10 @@
       // curtain or door and a compact popover controls its entity. It READS
       // the sidebar's own state maps and WRITES through the sidebar's own
       // senders (curtainSender / climateSender share their drag lock, dedupe
-      // and availability guards), then repaints the sidebar.
-      if (!isPreview) attachTapPopovers({
+      // and availability guards), then repaints the sidebar. Its handle is
+      // registered with home.onDispose like the debug overlays above, so one
+      // home.dispose() also drops its window listeners and debug seam.
+      const tapPopovers = isPreview ? null : attachTapPopovers({
         THREE, home, container, Home3DScene, house,
         rooms: rooms || {}, sensors: sensors || {},
         getHa: () => ha, HAClient,
@@ -1923,8 +1925,12 @@
         },
         curtainSender, climateSender,
         onChange: () => renderPanel(),
+        // Read-only: placement keeps the card out of the open sidebar's rect,
+        // and opening/closing the sidebar closes the card.
+        sidebar: panel,
         debug: params.get('debug') === '1',
       });
+      if (tapPopovers) home.onDispose(() => tapPopovers.dispose());
 
       // Phase 3: Send state from 3D controls → HA
       function sendToHA(roomId, group, state, debounceMs) {

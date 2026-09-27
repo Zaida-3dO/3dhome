@@ -1,5 +1,9 @@
 # Tap-an-object popovers — plan (spike)
 
+> **Status:** merged as #47 and refined by the follow-up batch. The sections "What already exists",
+> "The mapping", "Positioning", "Keyboard and lifecycle" and the door kind describe the code as
+> merged; the rest is the original spike plan and its round-2 notes, kept for the reasoning.
+
 **Verdict: doable, with caveats.** Three of the four popover kinds (light, curtain, door) can be
 reached by tapping the 3D object today, on both houses, with no new hand-written map. The fourth
 (climate) is fully buildable but has **no 3D object to tap on `main`**: the radiator model lives on
@@ -11,7 +15,9 @@ per-room buckets** (`src/furniture.js` / `furniture/merge.js`), so a radiator's 
 an individual `userData.furnitureId`, and the ancestor-tag resolution below cannot identify one. The
 production route is to resolve a hit on a merged furniture mesh by its **hit point**: convert it to
 plan coordinates and test it against the oriented footprint and height of each climate-bound
-`house.furniture[]` item. That is still derived from `sensors.climate[furnitureId]`, not a new map.
+`house.furniture[]` radiator in a room bound by `sensors.climate[room]` — still derived, not a new
+map. (Since sidebar v2, `sensors.climate` is keyed by room; see "The mapping" below. Tracked as item
+647fc9bd.)
 (The alternative, tagging radiators `keep` so they stay unmerged, costs draw calls per radiator.)
 Merged furniture is already a correct OCCLUDER for the picker, and the colour-less shadow proxies
 (`colorWrite: false`) are treated as see-through.
@@ -22,17 +28,24 @@ addition reviewed, a pass on phone ergonomics against the owner's phone, and the
 
 ## What already exists (and is reused)
 
+As merged (#47, and this follow-up). The popover module is `src/tap-popovers.js`; everything it
+reads or writes is handed to it by the attach block in `index.html`, which sits after the HA wiring.
+
 | Need | Where it is | Reuse |
 |---|---|---|
 | Scene graph + camera | `home.scene`, `home.getCamera()` (public on the scene handle) | read-only |
 | Per-frame hook | `home.onRender(fn)` — fires after every drawn frame | camera-moved detection, live refresh |
+| Teardown | `home.onDispose(fn)` | `index.html` registers the popover's `dispose()` there, like the debug overlays |
 | Light state + repaint | `home.lightState[room][channel]`, `home.updateLights()` | same object the sidebar mutates |
-| Light → HA | `sendToHA(room, channel, state, debounce)` in `index.html` | passed into the popover module |
-| Curtain state | `home.getCurtainOpen(id)`, `home.setCurtainOpen(id, pct)` | direct |
-| Cover command | `HAClient.coverPositionCommand(pct, entities)` + `ha.callServiceDebounced` | same debounce key as the sidebar (`curtain-<id>`) so the two never double-send |
-| Curtain availability | `ha.getCurtainAvailable(id)` | direct |
-| Door reading | `doorSensorOpen` map in `index.html` (fed by `ha.onDoorChange` and the `?debug=1` seam) | passed in as an accessor |
-| Bindings | `houses/<id>/rooms.json` — `rooms[room][channel]`, `sensors.curtains`, `sensors.doors` | **the mapping is derived from these** |
+| Light → HA | `sendToHA(room, channel, state, debounce)` in `index.html` | passed in as `sendLight` |
+| Light / climate raw state | `ha.getRawState(entityId)` — a read-only raw-state cache in `ha-client.js` | light availability, climate `hvac_action` |
+| Curtain position | `curtainShownPct(id)` / `curtainTarget` in `index.html` (the value the sidebar row paints) | `state.curtainPct`, `state.curtainLocal` accessors |
+| Curtain availability | the sidebar's `curtainAvailableState` map (fed by `ha.onCurtainAvailabilityChange`) | `state.curtainAvailable` accessor — the same `=== true` rule as `curtainSliderCommand` |
+| Curtain / climate writes | the sidebar-v2 `createDragSender` instances `curtainSender` / `climateSender` (`src/room-panel.js`) | shared drag lock, dedupe, availability guards; `HAClient.coverOpenCloseCommand` / `climateTargetCommand` for presses |
+| Door reading | the sidebar's `doorStatus` map — `'on' \| 'off' \| 'unavailable'`, fed by `ha.onSensorStatusChange` | `state.doorStatus` accessor |
+| Climate reading | the sidebar's `climateReading` map (`HAClient.parseClimate` readings, fed by `ha.onClimateChange`) | `state.climate` accessor |
+| Sidebar rect | the `#panel` element | read-only: kept out of placement bounds; toggling its `open` class closes the card |
+| Bindings | `houses/<id>/rooms.json` — `rooms[room][channel]`, `sensors.curtains`, `sensors.doors`, `sensors.climate` | **the mapping is derived from these** |
 
 ## The mapping — derived, not hand-written
 
@@ -40,16 +53,18 @@ A tap target is `{ kind, id, entities }`, resolved from the hit mesh by walking 
 
 | Kind | How the mesh is recognised | Entity source |
 |---|---|---|
-| light | fixture mesh `userData.roomId` + **`userData.lightChannel`** (new, one line in the scene) | `rooms.json rooms[roomId][channel]` |
-| curtain | ancestor group named `curtain:<id>` (already set by `wall-fittings.js`) | `sensors.curtains[id]` |
-| door | door mount **`userData.doorProfileId`** (new; the existing `doorId` holds the display label, not the id) | `sensors.doors[id]` |
-| climate | *spike:* ancestor `userData.furnitureId`; *production:* hit point inside a climate-bound item's footprint (furniture is merged, see above) | **new** `sensors.climate[furnitureId]` |
+| light | fixture mesh `userData.roomId` + `userData.lightChannel` | `rooms.json rooms[roomId][channel]` |
+| curtain | ancestor group named `curtain:<id>` (set by `wall-fittings.js`) | `sensors.curtains[id]` |
+| door | door mount `userData.doorProfileId` (`doorId` holds the display label, not the id) | `sensors.doors[id]` |
+| climate | **not tappable yet** — opens only through the `?debug=1` seam (`__home3dTap.openAt('climate', roomId, x, y)`) | `sensors.climate[room]`, one entity per room (the sidebar's binding) |
 
 Only **bound** objects are targets. An unbound door or curtain falls through to the existing
 tap-a-room behaviour, so nothing that works today changes.
 
-`sensors.climate` is the one new key. `houses/schema.json` has `additionalProperties: false` on
-`sensors`, so it needs a schema entry (added on this branch).
+**Why climate is not tappable.** Furniture renders merged per room, so a radiator mesh carries no
+identity. The route (item 647fc9bd) is a hit-point → oriented-footprint lookup against the
+`house.furniture[]` radiators standing in a room that `sensors.climate` binds — still derived, never
+a hand-written map. `src/furniture/radiator.js` carries the same note in its header.
 
 ## Picking — nearest visible hit only
 
@@ -95,9 +110,18 @@ own `click` handler and can stop that event — no change to the scene's input c
 
 ## Positioning
 
-Anchored to the tap point, preferring **above** it (a finger covers what is below), offset 14 px,
-clamped to the viewport with an 8 px margin; flips below when there is no room above; in the
-wide-screen layout it is clamped to the canvas, not under the always-open 300 px panel.
+Anchored to the tap point: above, then below, then right or left (whichever has room), and only
+then clamped, with an 8 px margin. The bounds are the canvas within the viewport **minus the open
+sidebar's rect** (`boundsExcluding`): the strip beside the sidebar that contains the tap. If the card
+does not fit that strip it is clamped into it, and as a last resort it stays above the sidebar in
+z-order (60 over the panel's 50), never hidden behind it. Opening or closing the sidebar while a card
+is open closes the card.
+
+## Keyboard and lifecycle
+
+On open, focus moves to the card's first control (the card itself for the door chip); Tab cycles
+within the card; Escape closes it and returns focus to where it was. `dispose()` is registered with
+`home.onDispose`, removes every listener, and clears `window.__home3dTap`.
 
 ## Popover kinds
 
@@ -107,14 +131,16 @@ wide-screen layout it is clamped to the canvas, not under the always-open 300 px
   Disabled with "Unavailable" when HA reports a motor down (same rule as the sidebar slider).
 - **Climate** — current temperature, target temperature, −/+ and slider,
   `climate.set_temperature`. Needs a live entity read (current temp is not in any scene state).
-- **Door** — read-only: Open / Closed / Unavailable. Live readings come from the same
-  `doorSensorOpen` map the sidebar uses. **`ha-client.js` folds `unavailable` into "closed"**, so
-  the popover does a one-shot `GET /api/states/<entity>` on open to tell the two apart.
+- **Door** — read-only chip: Open / Closed / Unavailable / Unknown, from the sidebar's `doorStatus`
+  map. "Unavailable" means the sensor reported unavailable, or HA is live and the door has never
+  reported (the sidebar row says the same). "Unknown" means HA is offline and the door has never
+  reported — nothing says the sensor is broken. A last-known reading is kept while offline.
 
 ## Offline / no HA
 
 With HA disabled (the demo) or unreachable, popovers still open and drive the **local scene** —
-the light visibly changes, the curtain visibly moves — and say "Offline preview". This mirrors
+the light visibly changes, the curtain visibly moves — under a red "Not connected" dot whose
+tooltip says changes only preview on the model. This mirrors
 what the sidebar does for lights. It is not live control and is not claimed as such.
 
 ## Risks
@@ -136,10 +162,12 @@ The sidebar, merging, deploying, the server-side real house profile, HA config, 
 
 This round implements the approved visual plan, taking its proposed answer on all six open questions.
 
-- **Yellow means reachable but not fully live.** That is either (a) the connection is polling or
-  syncing, which pulses, or (b) HA is up but this entity, or one curtain motor, is unavailable.
-  **Red** means no client, disconnected, auth failed or sync failed. Changes then only preview on
-  the model.
+- **Green** means HA is live: connected over the websocket, or **polling** (the steady REST
+  fallback — tooltip "Connected (updates every few seconds)"). **Yellow** is either (a) syncing, the
+  first snapshot after a (re)connect, which pulses, or (b) HA is live but this entity, or one curtain
+  motor, is unavailable. Availability is checked in **every** live mode (connected, polling,
+  syncing), so an unavailable curtain hides its controls while polling too. **Red** means no client,
+  disconnected, auth failed or sync failed. Changes then only preview on the model.
 - **Controls stay usable while yellow-connecting.** Commands go through the sidebar's senders and
   are *sent*, not queued: polling uses REST, and syncing has an open socket. This is why the tooltip
   says "Changes are still sent" rather than the plan's "will send once live". A curtain whose
