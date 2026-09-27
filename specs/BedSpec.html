@@ -58,7 +58,7 @@
 
 <script type="text/babel">
 /* =====================================================================
-   BED SPEC   ·   upholstered bed, tall channel-tufted headboard
+   BED SPEC   ·   soft upholstered bed, made up
 
    ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
    Every dimension below is a DEFAULT, not a survey. This is a design
@@ -67,11 +67,16 @@
    panel.
    ─────────────────────────────────────────────────────────────────────
 
-   Look: a base, a mattress, two pillows at the HEAD end and an upholstered
-   headboard with tall vertical padded channels in grey velvet. Default
-   envelope ~161 x 220, headboard ~120 tall (== the `height` param directly
-   -- there is no separate headboardHeight). An optional folded duvet sits
-   across the foot of the bed.
+   Look: a pale blue-grey velvet headboard -- vertical padded channels set
+   inside a padded border that rolls up both sides and across the top --
+   and velvet side and foot rails with rounded tops, floating on a dark
+   recessed plinth. A rounded, crowned mattress in a fitted sheet sits down
+   inside the rails. Made up with a duvet draped over the sides and the foot
+   to the rail tops, its top edge folded back, in a white cover with a
+   leaf-and-flower print (drawn as geometry, not a texture); two sleeping
+   pillows, two sage accent pillows propped against the headboard and an
+   olive cushion. Default envelope ~161 x 220, headboard 120 tall (== the
+   `height` param directly -- there is no separate headboardHeight).
 
    The geometry itself is NOT built here -- it lives in
    src/furniture/bed.js (build / TYPE / DEFAULTS), loaded above as a real
@@ -83,16 +88,20 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "width": 161,
   "depth": 220,
   "height": 120,
-  "baseHeight": 32,
-  "mattressHeight": 28,
-  "channelCount": 7,
+  "baseHeight": 38,
+  "mattressHeight": 24,
+  "channelCount": 8,
   "channelDepth": 3.5,
-  "headboardColor": "#8d8f92",
-  "baseColor": "#3a3a3d",
-  "mattressColor": "#f2efe8",
+  "headboardColor": "#9ba8b3",
+  "baseColor": "#9ba8b3",
+  "plinthColor": "#2b2b2d",
+  "mattressColor": "#efe6d6",
   "pillowColor": "#f7f5f0",
+  "accentPillowColor": "#c9d3b0",
+  "cushionColor": "#5d6b45",
   "duvet": true,
-  "duvetColor": "#e7e3da",
+  "duvetColor": "#f4f1ea",
+  "beddingPreset": "botanical",
   "detail": "full"
 }/*EDITMODE-END*/;
 
@@ -153,7 +162,7 @@ function App() {
   return (
     <>
       <h1>Bed Spec</h1>
-      <div className="sub">All units cm. Upholstered bed: base, mattress, pillows, tall channel-tufted velvet headboard, optional duvet. Use the Tweaks panel to change size, headboard height and colours.</div>
+      <div className="sub">All units cm. A soft upholstered bed, made up: channelled velvet headboard in a padded border, velvet rails, a crowned mattress in a fitted sheet, a draped botanical-print duvet with its top folded back, pillows and a cushion. Use the Tweaks panel to change size, bedding and colours.</div>
 
       <div className="grid">
         <div className="card">
@@ -164,7 +173,7 @@ function App() {
               <tr><td>Width</td><td className="num">{t.width.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Depth</td><td className="num">{t.depth.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Height <span style={{opacity:0.6}}>(= headboard height)</span></td><td className="num">{t.height.toFixed(0)}</td><td><b>Variable</b> -- honoured directly, no separate headboardHeight</td></tr>
-              <tr><td>Base height</td><td className="num">{t.baseHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Rail height</td><td className="num">{t.baseHeight.toFixed(0)}</td><td><b>Variable</b> -- the mattress sits down inside the rails</td></tr>
               <tr><td>Mattress height</td><td className="num">{t.mattressHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Channel count</td><td className="num">{t.channelCount.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Channel depth</td><td className="num">{t.channelDepth.toFixed(1)}</td><td><b>Variable</b></td></tr>
@@ -172,22 +181,26 @@ function App() {
             </tbody>
           </table>
           <div className="legend">
-            The headboard's tall vertical padded channels butt edge-to-edge across the width (only a small crease
-            between neighbours), flush with both panel edges (build() in src/furniture/bed.js). `height` IS the
-            headboard height -- there is no separate headboardHeight param to drift out of sync with it.
+            The channels fill the headboard between the two side rolls of its padded border, butted together with
+            deep creases (build() in src/furniture/bed.js). `height` IS the headboard height -- there is no separate
+            headboardHeight param to drift out of sync with it. Low detail keeps the shape on coarser grids and drops
+            the print, the accent pillows and the cushion.
           </div>
         </div>
 
         <div className="card">
           <h2>Look</h2>
           <div className="legend">
-            A divan-style base with a mattress on top and two pillows at the HEAD end, resting on the mattress
-            against the headboard. Behind it, a tall upholstered headboard in grey velvet with wide vertical
-            padded channels (standing proud of a flat backing panel, butted together with only a thin crease).
-            An optional folded duvet sits across the foot of the bed. Pillows are dropped at low detail.
+            Velvet rails with rounded tops run round the sides and the foot on a dark recessed plinth; the
+            mattress (rounded edges, a crowned top, a fitted sheet) sits down inside them. The duvet covers the
+            foot end, drapes down to the rail tops and is folded back at its top edge. Its print is a scatter of
+            leaf sprigs and small flowers made of a few triangles each, laid on the cloth -- no image texture.
+            Accent pillows are propped against the headboard, the sleeping pillows lie in front of them, and the
+            cushion leans in the middle.
           </div>
           <div className="row">
             <button className="btn" onClick={() => setTweak('duvet', !t.duvet)}>{t.duvet ? 'Remove duvet' : 'Add duvet'}</button>
+            <button className="btn" onClick={() => setTweak('beddingPreset', t.beddingPreset === 'plain' ? 'botanical' : 'plain')}>{t.beddingPreset === 'plain' ? 'Botanical print' : 'Plain cover'}</button>
             <button className="btn" onClick={copy}>Copy as furniture JSON</button>
             {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
           </div>
@@ -212,7 +225,7 @@ function App() {
           onChange={v => setTweak('depth', v)} />
         <TweakSlider label="Height (headboard)" value={t.height} min={80} max={160} step={1} unit="cm"
           onChange={v => setTweak('height', v)} />
-        <TweakSlider label="Base height" value={t.baseHeight} min={15} max={45} step={1} unit="cm"
+        <TweakSlider label="Rail height" value={t.baseHeight} min={20} max={50} step={1} unit="cm"
           onChange={v => setTweak('baseHeight', v)} />
         <TweakSlider label="Mattress height" value={t.mattressHeight} min={15} max={35} step={1} unit="cm"
           onChange={v => setTweak('mattressHeight', v)} />
@@ -226,14 +239,24 @@ function App() {
         <TweakSection label="Colours" />
         <TweakColor label="Headboard (velvet)" value={t.headboardColor}
           onChange={v => setTweak('headboardColor', v)} />
-        <TweakColor label="Base" value={t.baseColor}
+        <TweakColor label="Rails (velvet)" value={t.baseColor}
           onChange={v => setTweak('baseColor', v)} />
-        <TweakColor label="Mattress" value={t.mattressColor}
+        <TweakColor label="Plinth" value={t.plinthColor}
+          onChange={v => setTweak('plinthColor', v)} />
+        <TweakColor label="Fitted sheet" value={t.mattressColor}
           onChange={v => setTweak('mattressColor', v)} />
         <TweakColor label="Pillows" value={t.pillowColor}
           onChange={v => setTweak('pillowColor', v)} />
-        <TweakColor label="Duvet" value={t.duvetColor}
+        <TweakColor label="Accent pillows" value={t.accentPillowColor}
+          onChange={v => setTweak('accentPillowColor', v)} />
+        <TweakColor label="Cushion" value={t.cushionColor}
+          onChange={v => setTweak('cushionColor', v)} />
+        <TweakColor label="Duvet cover" value={t.duvetColor}
           onChange={v => setTweak('duvetColor', v)} />
+
+        <TweakSection label="Bedding" />
+        <TweakRadio label="Duvet cover" value={t.beddingPreset} options={['botanical', 'plain']}
+          onChange={v => setTweak('beddingPreset', v)} />
 
         <TweakSection label="Render" />
         <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}

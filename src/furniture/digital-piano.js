@@ -12,13 +12,16 @@
  * See docs/house-profile.md, "Furniture", and PR8 of
  * plan-furniture-system-r2.md.
  *
- * `digital-piano`: a generic white 88-key stage piano on a white stand, with
- * a music rest. `piano-bench`: a white padded bench on an adjustable-height
- * X-base or column base. `ottoman`: a simple channel-tufted-lid ottoman,
- * included alongside the other two as a cheap third type. All generic, no
- * brands or models -- the repo is public.
+ * `digital-piano`: a slim white 88-key digital piano on its matching panel
+ * stand (solid side panels and a back board), with 36 individual black keys,
+ * a lit display, speaker grilles and a small music rest. `piano-bench`: a
+ * classic adjustable piano bench -- a button-tufted faux-leather seat on an
+ * apron with an adjustment knob at each end, on four square tapered legs.
+ * `ottoman`: a simple channel-tufted-lid ottoman. All generic, no brands or
+ * models -- the repo is public.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { roundedBox, concatGeometries } from './soft.js';
 
 const CM = 0.01;
 
@@ -26,19 +29,35 @@ const CM = 0.01;
 // digital-piano
 // ---------------------------------------------------------------------------
 
+/**
+ * Defaults, in cm: the proportions of a slim portable-style 88-key digital
+ * piano sitting on its own matching panel stand (a common arrangement: the
+ * case is only ~15 cm deep top to bottom and the stand brings its top to
+ * ~76 cm). Illustrative, not a survey of any particular instrument.
+ */
 const PIANO_DEFAULTS = Object.freeze({
-  width: 138,
-  depth: 46,
-  height: 97,
-  keybedHeight: 82,     // floor to the top of the white keys
-  keybedDepth: 30,       // front-to-back depth of the keybed/body
-  legInset: 8,           // how far the stand legs sit in from each end
-  restHeight: 15,        // music rest height above the keybed top
+  width: 140,
+  depth: 45,
+  height: 97,            // floor to the top of the music rest -- honoured exactly
+  caseTopHeight: 76,     // floor to the top of the case (the control panel)
+  caseHeight: 15,        // the case itself, top to bottom
+  keyDepth: 15,          // front-to-back length of a white key
+  restWidth: 55,         // the music rest: a small centred panel, not full width
+  restLean: 12,          // degrees the rest leans back, away from the player
+  sidePanelDepth: 40,    // the stand's solid side panels
   bodyColor: '#f5f5f2',
   keyWhiteColor: '#fdfdfb',
-  keyBlackColor: '#161616',
+  keyBlackColor: '#151515',
   standColor: '#f0f0ec',
+  screenColor: '#6c8cff',
+  grilleColor: '#bdbdbd',
   finish: 'matte'
+});
+
+/** Per-type triangle budgets (perf audit): asserted by scripts/test-digital-piano.mjs. */
+export const TRIANGLE_CAPS = Object.freeze({
+  'digital-piano': Object.freeze({ full: 1500, low: 300 }),
+  'piano-bench': Object.freeze({ full: 1500, low: 300 })
 });
 
 function resolvePianoParams(params) {
@@ -46,20 +65,45 @@ function resolvePianoParams(params) {
 }
 
 /**
- * Build the digital piano: a white slab body on two A-frame (or straight)
- * stand legs, a keybed with alternating white/black key strips (a flat
- * texture-free approximation -- individual keys would be far more geometry
- * for no visible gain at spec-page or room-scale distance), and a music
- * rest panel standing up at the back of the body.
+ * The 88-key layout, A0 to C8: 52 white keys, and a black key after every
+ * white key named A, C, D, F or G except the last -- 36 black keys, grouped
+ * in twos and threes. Returns, for each black key, the index of the white key
+ * it follows (its centre sits on the boundary after that white key).
+ */
+export function blackKeyAfter() {
+  const names = 'ABCDEFG';
+  const out = [];
+  for (let i = 0; i < 51; i++) {
+    const n = names[i % 7];
+    if (n === 'A' || n === 'C' || n === 'D' || n === 'F' || n === 'G') out.push(i);
+  }
+  return out;
+}
+
+/**
+ * Build the digital piano: a slim white case -- a lower tray, end cheeks, a
+ * raised control panel along the back with a lit display and two speaker
+ * grilles, and a recessed keybed in front with 52 white keys (one strip with
+ * key-gap lines) and 36 individual black keys -- on a stand of two solid side
+ * panels joined by a back board, with a small music rest standing at the back
+ * of the panel, leaning away from the player.
  */
 function buildDigitalPiano(THREE, params, opts) {
   const p = resolvePianoParams(params);
   const o = opts || {};
   const full = o.detail !== 'low';
 
-  const widthM = p.width * CM, depthM = p.depth * CM, heightM = p.height * CM;
-  const keybedHM = p.keybedHeight * CM;
-  const keybedDepthM = Math.min(p.keybedDepth * CM, depthM * 0.9);
+  const W = p.width, D = p.depth;
+  const caseTop = Math.max(p.caseHeight + 10, p.caseTopHeight);
+  const caseH = Math.max(6, Math.min(p.caseHeight, caseTop - 10));
+  const caseBottom = caseTop - caseH;
+  const keyDepth = Math.max(5, Math.min(p.keyDepth, D - 12));
+  const whiteTop = caseTop - 3;          // the keybed is recessed below the panel
+  const keyT = 2.5;                      // white key thickness
+  const trayTop = whiteTop - keyT;
+  const cheekW = 5;
+  const panelFront = D - keyDepth - 0.5; // the panel block runs from the back to the key backs
+  const m = v => v * CM;
 
   const group = new THREE.Group();
   group.name = 'furniture:digital-piano';
@@ -67,100 +111,92 @@ function buildDigitalPiano(THREE, params, opts) {
   const bodyMat = makeFinish(THREE, p.finish, p.bodyColor);
   const whiteKeyMat = makeFinish(THREE, 'gloss', p.keyWhiteColor);
   const blackKeyMat = makeFinish(THREE, 'gloss', p.keyBlackColor);
+  const gapMat = makeFinish(THREE, 'matte', '#8e8e8a');
   // 'gloss', not 'metal': the live scene has no environment map, so a
   // metalness-0.9 material reflects only black ambient and renders as dark
-  // grey regardless of its base colour -- wrong for a white stand. 'gloss'
-  // (metalness 0) actually shows the white it's given.
+  // grey regardless of its base colour -- wrong for a white stand.
   const standMat = makeFinish(THREE, 'gloss', p.standColor);
+  const screenMat = makeFinish(THREE, 'emissive', p.screenColor);
+  const grilleMat = makeFinish(THREE, 'matte', p.grilleColor);
 
-  function addMesh(geo, mat, x, y, z) {
+  function add(geo, mat, name, x, y, z) {
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(x, y, z);
+    mesh.name = 'piano:' + name;
+    mesh.position.set(x || 0, y || 0, z || 0);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     if (isKeptFinish(mat.userData.finish)) mesh.userData.keep = true;
     group.add(mesh);
     return mesh;
   }
+  const box = (w, h, d, cx, cy, cz) => new THREE.BoxGeometry(m(w), m(h), m(d)).translate(m(cx), m(cy), m(cz));
 
-  // ---- body slab: a slim slab whose TOP surface is keybedHM (where the
-  // keybed sits -- keybedHeight is measured to the top of the white keys,
-  // i.e. the body's top face). A real stage piano's case is much thinner
-  // than the stand is tall, so the body only occupies the top fraction of
-  // keybedHM, with the stand's legs visible below it. Back at z=0.
-  const bodyHM = Math.max(0.06, Math.min(keybedHM * 0.22, 0.12));
-  const bodyBottomM = keybedHM - bodyHM;
-  addMesh(new THREE.BoxGeometry(widthM, bodyHM, depthM), bodyMat, 0, bodyBottomM + bodyHM / 2, depthM / 2);
-
-  // ---- stand: two straight legs + a crossbar, back at z=0 -------------------
-  // Depth layout: the stand/body run from z=0 (back) to keybedDepthM (front,
-  // the player's edge); the whole item's back face is the legs' own back
-  // face, so a leg is centred at z = depthM/2 with a depth of exactly
-  // depthM -- its back face lands exactly on z=0. Legs run from the floor up
-  // to the underside of the body slab, so they read as visibly supporting it.
-  const legW = 0.05, legSpan = widthM - 2 * p.legInset * CM;
-  const legX = legSpan / 2;
-  const crossbarY = bodyBottomM * 0.35;
+  // ---- case ------------------------------------------------------------------
+  add(box(W, trayTop - caseBottom, D, 0, (caseBottom + trayTop) / 2, D / 2), bodyMat, 'case-tray');
   for (const s of [-1, 1]) {
-    const footGeo = new THREE.BoxGeometry(legW * 3, legW * 0.6, depthM);
-    addMesh(footGeo, standMat, s * legX, legW * 0.3, depthM / 2);
-    const uprightH = Math.max(0.01, bodyBottomM - legW * 0.6);
-    const upright = new THREE.BoxGeometry(legW, uprightH, legW);
-    addMesh(upright, standMat, s * legX, legW * 0.6 + uprightH / 2, depthM / 2);
+    add(box(cheekW, caseTop - trayTop, D, s * (W / 2 - cheekW / 2), (trayTop + caseTop) / 2, D / 2), bodyMat, 'case-cheek');
   }
-  // crossbar between the legs
-  const crossbar = new THREE.BoxGeometry(legSpan, legW * 0.7, legW * 0.7);
-  addMesh(crossbar, standMat, 0, crossbarY, depthM / 2);
+  add(box(W - 2 * cheekW, caseTop - trayTop, panelFront, 0, (trayTop + caseTop) / 2, panelFront / 2), bodyMat, 'case-panel');
 
-  // key strips: one long white strip along the front edge, with a thinner
-  // black strip set back slightly to read as the black-key row -- both
-  // flush with the body's top surface (keybedHM).
-  const keyStripH = 0.02;
-  const whiteKeyDepth = keybedDepthM * 0.55;
-  addMesh(new THREE.BoxGeometry(widthM * 0.97, keyStripH, whiteKeyDepth), whiteKeyMat,
-    0, keybedHM + keyStripH / 2, depthM - whiteKeyDepth / 2 - 0.01);
+  // ---- keys ------------------------------------------------------------------
+  const keyW = W - 2 * cheekW - 1;       // 52 white keys across this
+  const pitch = keyW / 52;
+  const k0 = -keyW / 2;
+  const keyZ0 = panelFront + 0.5, keyZ1 = D;
+  add(box(keyW, keyT, keyZ1 - keyZ0, 0, trayTop + keyT / 2, (keyZ0 + keyZ1) / 2), whiteKeyMat, 'white-keys');
   if (full) {
-    const blackKeyDepth = keybedDepthM * 0.32;
-    addMesh(new THREE.BoxGeometry(widthM * 0.95, keyStripH * 1.4, blackKeyDepth), blackKeyMat,
-      0, keybedHM + keyStripH * 1.4 / 2 + 0.002, depthM - whiteKeyDepth - blackKeyDepth / 2 - 0.01);
+    // 51 key gaps: thin dark lines on top of the white strip, one mesh
+    const gaps = [];
+    const gw = Math.min(0.18, pitch * 0.08);
+    for (let i = 1; i < 52; i++) {
+      const g = new THREE.PlaneGeometry(m(gw), m(keyZ1 - keyZ0));
+      g.rotateX(-Math.PI / 2);
+      g.translate(m(k0 + i * pitch), m(whiteTop + 0.03), m((keyZ0 + keyZ1) / 2));
+      gaps.push(g);
+    }
+    add(concatGeometries(THREE, gaps), gapMat, 'key-gaps');
+    // 36 black keys, one mesh
+    const bw = pitch * 0.58, bl = keyDepth * 0.62, bh = 1.2;
+    const blacks = blackKeyAfter().map(i =>
+      box(bw, bh, bl, k0 + (i + 1) * pitch, whiteTop + bh / 2, keyZ0 + bl / 2));
+    add(concatGeometries(THREE, blacks), blackKeyMat, 'black-keys');
+  } else {
+    // low detail: the black keys collapse into one grey band
+    const bl = keyDepth * 0.62;
+    add(box(keyW, 0.6, bl, 0, whiteTop + 0.3, keyZ0 + bl / 2), makeFinish(THREE, 'matte', '#5a5a5a'), 'black-key-band');
   }
 
-  // ---- music rest: an upright panel standing up from the back of the body --
-  // Upright extent pinned to exactly (heightM - keybedHM), so the overall
-  // envelope always equals DEFAULTS.height. restHeight only affects how far
-  // the panel leans AWAY FROM THE PLAYER (toward -z, back past the body's
-  // own back face) -- visual only, since a reclined rest reads as shallower;
-  // it never changes the panel's own upright reach.
-  const uprightM = Math.max(0.01, heightM - keybedHM);
-  const restLean = Math.min(0.4, (p.restHeight * CM) / Math.max(uprightM, 0.01) * 0.3);
-  const restThickness = 0.02;
-  // A box of length L and thickness T, rotated by `restLean` about X, has
-  // its OWN vertical bbox extent equal to L*cos(restLean) + T*sin(restLean)
-  // -- the thickness contributes too, not just the length -- so L is solved
-  // backward from that so the panel's built vertical projection lands on
-  // exactly uprightM (otherwise leaning shrinks the built bbox below
-  // DEFAULTS.height; confirmed numerically for restHeight in [5,15,40]).
-  const panelLen = (uprightM - restThickness * Math.sin(restLean)) / Math.cos(restLean);
-  const restGeo = new THREE.BoxGeometry(widthM * 0.9, panelLen, restThickness);
-  // Pivot at the bottom-back edge of the panel (body's back-top corner), then
-  // lean it AWAY from the player -- geometry translated so the pivot is at
-  // its own local origin before rotation.
-  restGeo.translate(0, panelLen / 2, restThickness / 2);
-  // NEGATIVE x-rotation swings the panel's top toward -z (away from the
-  // player, who stands at the +z front) -- a POSITIVE rotation here was the
-  // bug: it swung the top toward +z, into the player's space. Leaning
-  // backward pushes the panel's own back-most point past the pivot's z=0,
-  // which would break the furniture contract's "back at z=0" rule (measured
-  // on the whole group) -- so the pivot is shifted forward by exactly that
-  // overshoot (panelLen * sin(restLean)) to compensate, landing the leaned
-  // panel's back-most point back on z=0 without moving anything else.
-  const backOvershoot = panelLen * Math.sin(restLean);
-  const rest = new THREE.Mesh(restGeo, bodyMat);
-  rest.position.set(0, keybedHM, backOvershoot);
-  rest.rotation.x = -restLean;
-  rest.castShadow = true; rest.receiveShadow = true;
-  if (isKeptFinish(bodyMat.userData.finish)) rest.userData.keep = true;
-  group.add(rest);
+  // ---- control panel: a lit display left of centre, speaker grilles ------------
+  if (full) {
+    add(box(10, 0.3, 4, -W * 0.1, caseTop + 0.15, panelFront * 0.55), screenMat, 'display');
+    for (const s of [-1, 1]) {
+      add(box(20, 0.2, 8, s * (W / 2 - cheekW - 12), caseTop + 0.1, panelFront * 0.5), grilleMat, 'grille');
+    }
+  }
+
+  // ---- stand: two solid side panels and a back board -------------------------
+  const spT = 2;
+  const spD = Math.min(p.sidePanelDepth, D);
+  const spX = W / 2 - cheekW / 2;
+  for (const s of [-1, 1]) {
+    add(box(spT, caseBottom, spD, s * spX, caseBottom / 2, (D - spD) / 2 + spD / 2), standMat, 'stand-side');
+  }
+  const bbH = Math.min(13, caseBottom * 0.5);
+  add(box(2 * spX - spT, bbH, 1.5, 0, caseBottom - bbH / 2, (D - spD) / 2 + 1.5), standMat, 'stand-back');
+
+  // ---- music rest ---------------------------------------------------------------
+  // A centred panel standing at the back of the control panel, leaning back
+  // by restLean. Its length is solved so its top lands exactly on `height`;
+  // the lean pushes its back past the pivot, so the pivot moves forward by
+  // that overshoot to keep the item's back at z = 0.
+  const lean = Math.max(0, Math.min(40, p.restLean)) * Math.PI / 180;
+  const restT = 1;
+  const upright = Math.max(1, p.height - caseTop);
+  const panelLen = (upright - restT * Math.sin(lean)) / Math.cos(lean);
+  const restGeo = new THREE.BoxGeometry(m(Math.min(p.restWidth, W)), m(panelLen), m(restT));
+  restGeo.translate(0, m(panelLen / 2), m(restT / 2));
+  const rest = add(restGeo, bodyMat, 'music-rest', 0, m(caseTop), m(panelLen * Math.sin(lean)));
+  rest.rotation.x = -lean;
 
   group.userData = { type: 'digital-piano', params: p, detail: full ? 'full' : 'low' };
   return group;
@@ -170,41 +206,55 @@ function buildDigitalPiano(THREE, params, opts) {
 // piano-bench
 // ---------------------------------------------------------------------------
 
+/**
+ * A classic adjustable piano bench: a padded, button-tufted faux-leather
+ * seat with rolled edges, a shallow apron under it housing the height
+ * mechanism with a round adjustment knob at each end, on four square
+ * tapered legs, slightly splayed, with no stretchers. Defaults in cm.
+ */
 const BENCH_DEFAULTS = Object.freeze({
-  width: 76,
+  width: 58,
   depth: 34,
-  height: 50,
-  seatThickness: 8,
-  baseStyle: 'x',        // 'x' | 'column'
-  seatColor: '#f7f6f2',
-  baseColor: '#e9e8e3',
-  finish: 'matte'
+  height: 50,            // floor to the top of the seat
+  seatThickness: 9,
+  apronHeight: 7,
+  seatColor: '#f3f1ec',
+  baseColor: '#f7f7f4',  // the frame: apron, knobs and legs
+  finish: 'satin'        // the seat: faux leather
 });
 
 function resolveBenchParams(params) {
   return Object.assign({}, BENCH_DEFAULTS, params || {});
 }
 
-/** Build a white padded bench on an adjustable-height X-frame or column base. */
+/** The 2 x 4 tuft-button grid, as [x, z] offsets from the seat centre, cm. */
+export function benchButtons(p) {
+  const out = [];
+  for (const fz of [-0.25, 0.25]) for (const fx of [-0.375, -0.125, 0.125, 0.375]) out.push([fx * (p.width - 6), fz * (p.depth - 4)]);
+  return out;
+}
+
 function buildPianoBench(THREE, params, opts) {
   const p = resolveBenchParams(params);
   const o = opts || {};
   const full = o.detail !== 'low';
-
-  const widthM = p.width * CM, depthM = p.depth * CM, heightM = p.height * CM;
-  const seatTM = p.seatThickness * CM;
+  const W = p.width, D = p.depth, H = p.height;
+  const seatT = Math.max(3, Math.min(p.seatThickness, H / 3));
+  const apronH = Math.max(2, Math.min(p.apronHeight, H / 4));
+  const m = v => v * CM;
 
   const group = new THREE.Group();
   group.name = 'furniture:piano-bench';
 
   const seatMat = makeFinish(THREE, p.finish, p.seatColor);
-  // 'gloss', not 'metal': see the digital-piano stand's note above -- with no
-  // environment map, a metal finish reads as dark grey no matter its colour.
-  const baseMat = makeFinish(THREE, 'gloss', p.baseColor);
+  const frameMat = makeFinish(THREE, 'gloss', p.baseColor);
+  const c = new THREE.Color(p.seatColor).multiplyScalar(0.72);
+  const buttonMat = makeFinish(THREE, p.finish, '#' + c.getHexString());
 
-  function addMesh(geo, mat, x, y, z) {
+  function add(geo, mat, name, x, y, z) {
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(x, y, z);
+    mesh.name = 'bench:' + name;
+    mesh.position.set(x || 0, y || 0, z || 0);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     if (isKeptFinish(mat.userData.finish)) mesh.userData.keep = true;
@@ -212,57 +262,76 @@ function buildPianoBench(THREE, params, opts) {
     return mesh;
   }
 
-  // ---- seat pad, back at z=0 --------------------------------------------------
-  const seatGeo = new THREE.BoxGeometry(widthM, seatTM, depthM);
-  addMesh(seatGeo, seatMat, 0, heightM - seatTM / 2, depthM / 2);
+  // ---- seat: rounded (rolled edges), button-tufted top ------------------------
+  const buttons = benchButtons(p);
+  const dip = 1.3, spread = 3;
+  const tuft = v => {
+    if (!full || v.y <= 0) return;
+    let dd = 0;
+    for (const [bx, bz] of buttons) {
+      const d2 = (Math.pow(v.x / CM - bx, 2) + Math.pow(v.z / CM - bz, 2)) / (spread * spread);
+      dd = Math.max(dd, Math.exp(-d2));
+    }
+    v.y -= m(dip) * dd * Math.min(1, v.y / m(seatT / 2));
+  };
+  const seatGeo = roundedBox(THREE, m(W), m(seatT), m(D), m(Math.min(2.5, seatT / 2)),
+    full ? { bevel: 2, inner: [8, 1, 4], displace: tuft } : { bevel: 1, inner: [1, 1, 1] });
+  add(seatGeo, seatMat, 'seat', 0, m(H - seatT / 2), m(D / 2));
+  if (full) {
+    const bg = [];
+    for (const [bx, bz] of buttons) {
+      const g = new THREE.CircleGeometry(m(0.9), 6);
+      g.rotateX(-Math.PI / 2);
+      g.translate(m(bx), m(H - dip + 0.08), m(D / 2 + bz));
+      bg.push(g);
+    }
+    add(concatGeometries(THREE, bg), buttonMat, 'buttons');
+  }
 
-  const baseTop = heightM - seatTM;
-  if (p.baseStyle === 'column') {
-    const colR = Math.min(widthM, depthM) * 0.12;
-    const col = new THREE.CylinderGeometry(colR, colR, baseTop * 0.85, full ? 16 : 8);
-    addMesh(col, baseMat, 0, baseTop * 0.85 / 2, depthM / 2);
-    const footGeo = new THREE.CylinderGeometry(colR * 2.4, colR * 2.4, baseTop * 0.08, full ? 16 : 8);
-    addMesh(footGeo, baseMat, 0, baseTop * 0.08 / 2, depthM / 2);
-  } else {
-    // X-frame: two crossed flat legs per end, adjustable-height look via a
-    // central turnbuckle-style connector. A rotated box's own AXIS-ALIGNED
-    // bbox reaches slightly past its two endpoints by its cross-section
-    // half-thickness projected onto the rotation -- so the leg's nominal
-    // length (the exact endpoint-to-endpoint span) is drawn slightly SHORT
-    // of the diagonal, by exactly that overshoot, leaving the drawn box's
-    // own bbox landing precisely on [0, baseTop] in y once thickness is
-    // accounted for.
-    const legT = 0.02, legThickZ = legT * 1.5;
-    const runY = baseTop, runZ = depthM * 0.7;
-    const theta = Math.atan2(runZ, runY);
-    const nominalLen = Math.hypot(runY, runZ);
-    // Half-thickness overshoot along y from rotating a legT x legThickZ
-    // cross-section by theta: max(|legT/2 * ? |) -- the box's local x stays
-    // axis-aligned (rotation is about x), so only the y/z cross-section
-    // (legLen x legThickZ, before rotation) contributes: its own half-extents
-    // project onto world y as (legLen/2)*cos(theta) + (legThickZ/2)*sin(theta).
-    // We want that to equal runY/2 exactly, i.e. solve for legLen.
-    const legLen = (runY - legThickZ * Math.sin(theta)) / Math.cos(theta);
-    const legGeo = new THREE.BoxGeometry(legT, legLen, legThickZ);
-    for (const s of [-1, 1]) {
-      const xPos = s * (widthM / 2 - 0.05);
-      const legA = new THREE.Mesh(legGeo, baseMat);
-      legA.position.set(xPos, baseTop / 2, depthM / 2);
-      legA.rotation.x = theta;
-      legA.castShadow = true; legA.receiveShadow = true;
-      if (isKeptFinish(baseMat.userData.finish)) legA.userData.keep = true;
-      group.add(legA);
-      const legB = new THREE.Mesh(legGeo, baseMat);
-      legB.position.set(xPos, baseTop / 2, depthM / 2);
-      legB.rotation.x = -theta;
-      legB.castShadow = true; legB.receiveShadow = true;
-      if (isKeptFinish(baseMat.userData.finish)) legB.userData.keep = true;
-      group.add(legB);
+  // ---- apron with an adjustment knob at each end ------------------------------
+  const knobL = 3, knobR = 3;
+  const apronW = W - 2 * (1.5 + knobL);
+  const apronD = D - 3;
+  const apronTop = H - seatT;
+  add(new THREE.BoxGeometry(m(apronW), m(apronH), m(apronD)), frameMat, 'apron',
+    0, m(apronTop - apronH / 2), m(D / 2));
+  for (const s of [-1, 1]) {
+    const g = new THREE.CylinderGeometry(m(knobR), m(knobR), m(knobL), full ? 12 : 6);
+    g.rotateZ(Math.PI / 2);
+    add(g, frameMat, 'knob', m(s * (apronW / 2 + knobL / 2)), m(apronTop - apronH / 2), m(D / 2));
+  }
+
+  // ---- four square tapered legs, slightly splayed, no stretchers --------------
+  const legTop = apronTop - apronH;
+  const splay = 3 * Math.PI / 180;
+  const lt = 4.5, lb = 3.5;
+  const legLen = legTop / Math.cos(splay);
+  const legGeo = new THREE.CylinderGeometry(m(lt / Math.SQRT2), m(lb / Math.SQRT2), m(legLen), 4, 1, false);
+  legGeo.rotateY(Math.PI / 4);
+  // inset so the splayed feet stay inside the seat's footprint
+  const lx = apronW / 2 - lt / 2, lz = apronD / 2 - lt / 2 - 1.2;
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const leg = add(legGeo, frameMat, 'leg', m(sx * lx), m(legTop / 2), m(D / 2 + sz * lz));
+      // splay the foot outward in x and z; the leg's top stays under the apron
+      leg.rotation.z = sx * splay;
+      leg.rotation.x = -sz * splay;
+      leg.position.x += m(sx * Math.sin(splay) * legLen / 2);
+      leg.position.z += m(sz * Math.sin(splay) * legLen / 2);
+      // the tilt lifts one corner of the foot off the floor and drops the
+      // other through it: rest the lowest corner on the floor exactly
+      leg.updateMatrixWorld(true);
+      leg.position.y -= new THREE.Box3().setFromObject(leg).min.y;
     }
-    if (full) {
-      const bar = new THREE.BoxGeometry(widthM - 0.1, legT * 1.2, legT * 1.2);
-      addMesh(bar, baseMat, 0, baseTop / 2, depthM / 2);
-    }
+  }
+
+  // ---- bbox: bottom on the floor, back at z = 0 --------------------------------
+  group.updateMatrixWorld(true);
+  const bb = new THREE.Box3().setFromObject(group);
+  const dy = -bb.min.y, dz = -bb.min.z, dx = -(bb.min.x + bb.max.x) / 2;
+  if (Math.abs(dy) > 1e-6 || Math.abs(dz) > 1e-6 || Math.abs(dx) > 1e-6) {
+    group.children.forEach(ch => { ch.position.x += dx; ch.position.y += dy; ch.position.z += dz; });
+    group.updateMatrixWorld(true);
   }
 
   group.userData = { type: 'piano-bench', params: p, detail: full ? 'full' : 'low' };

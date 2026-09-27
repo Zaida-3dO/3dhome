@@ -66,11 +66,15 @@
 
    Three independent types, switched with a segmented control:
 
-     DIGITAL PIANO — a generic white 88-key stage piano on a white stand,
-     with a music rest. Default ~138 x 46 x 97.
+     DIGITAL PIANO — a slim white 88-key digital piano on its matching
+     panel stand (two solid side panels and a back board): recessed keybed
+     with 36 individual black keys, a lit display and speaker grilles on the
+     control panel, a small music rest leaning back. Default ~140 x 45 x 97,
+     case top at 76.
 
-     PIANO BENCH — a white padded bench on an adjustable-height base, either
-     an X-frame or a column. Default ~76 x 34 x 50.
+     PIANO BENCH — a classic adjustable bench: a button-tufted faux-leather
+     seat with rolled edges, an apron with an adjustment knob at each end,
+     four square tapered legs. Default ~58 x 34 x 50.
 
      OTTOMAN — a simple channel-tufted-lid ottoman on four short legs,
      included alongside the other two as a cheap third type. Default
@@ -83,20 +87,20 @@
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "itemType": "digital-piano",
 
-  "pianoWidth": 138,
-  "pianoDepth": 46,
+  "pianoWidth": 140,
+  "pianoDepth": 45,
   "pianoHeight": 97,
-  "keybedHeight": 82,
-  "restHeight": 15,
+  "caseTopHeight": 76,
+  "restLean": 12,
   "bodyColor": "#f5f5f2",
   "standColor": "#f0f0ec",
 
-  "benchWidth": 76,
+  "benchWidth": 58,
   "benchDepth": 34,
   "benchHeight": 50,
-  "baseStyle": "x",
-  "seatColor": "#f7f6f2",
-  "baseColor": "#e9e8e3",
+  "apronHeight": 7,
+  "seatColor": "#f3f1ec",
+  "baseColor": "#f7f7f4",
 
   "ottomanWidth": 92,
   "ottomanDepth": 46,
@@ -122,7 +126,7 @@ function buildItemModel(t, group, THREE, ctx) {
     const impl = mod.TYPES['digital-piano'];
     const params = Object.assign({}, impl.DEFAULTS, {
       width: t.pianoWidth, depth: t.pianoDepth, height: t.pianoHeight,
-      keybedHeight: t.keybedHeight, restHeight: t.restHeight,
+      caseTopHeight: t.caseTopHeight, restLean: t.restLean,
       bodyColor: t.bodyColor, standColor: t.standColor
     });
     built = impl.build(THREE, params, { detail: t.detail });
@@ -131,7 +135,7 @@ function buildItemModel(t, group, THREE, ctx) {
     const impl = mod.TYPES['piano-bench'];
     const params = Object.assign({}, impl.DEFAULTS, {
       width: t.benchWidth, depth: t.benchDepth, height: t.benchHeight,
-      baseStyle: t.baseStyle, seatColor: t.seatColor, baseColor: t.baseColor
+      apronHeight: t.apronHeight, seatColor: t.seatColor, baseColor: t.baseColor
     });
     built = impl.build(THREE, params, { detail: t.detail });
     heightM = t.benchHeight * 0.01;
@@ -201,7 +205,7 @@ function App() {
       const impl = mod.TYPES['digital-piano'];
       const p = {
         width: t.pianoWidth, depth: t.pianoDepth, height: t.pianoHeight,
-        keybedHeight: t.keybedHeight, restHeight: t.restHeight,
+        caseTopHeight: t.caseTopHeight, restLean: t.restLean,
         bodyColor: t.bodyColor, standColor: t.standColor
       };
       const out = {}; for (const k of Object.keys(p)) if (p[k] !== impl.DEFAULTS[k]) out[k] = p[k];
@@ -209,7 +213,7 @@ function App() {
     }
     if (isBench) {
       const impl = mod.TYPES['piano-bench'];
-      const p = { width: t.benchWidth, depth: t.benchDepth, height: t.benchHeight, baseStyle: t.baseStyle, seatColor: t.seatColor, baseColor: t.baseColor };
+      const p = { width: t.benchWidth, depth: t.benchDepth, height: t.benchHeight, apronHeight: t.apronHeight, seatColor: t.seatColor, baseColor: t.baseColor };
       const out = {}; for (const k of Object.keys(p)) if (p[k] !== impl.DEFAULTS[k]) out[k] = p[k];
       return { type: 'piano-bench', params: out };
     }
@@ -240,8 +244,8 @@ function App() {
             <button className={isBench ? 'btn active' : 'btn'} onClick={() => setTweak('itemType', 'piano-bench')}>Piano bench</button>
             <button className={isOttoman ? 'btn active' : 'btn'} onClick={() => setTweak('itemType', 'ottoman')}>Ottoman</button>
           </div>
-          {isPiano && <div className="note">A generic white 88-key stage piano on a white stand, with a music rest above the keybed.</div>}
-          {isBench && <div className="note">A white padded bench on an adjustable-height base — an X-frame or a column. Both build to the same envelope.</div>}
+          {isPiano && <div className="note">A slim white 88-key digital piano on its matching panel stand: 36 individual black keys, a lit display, speaker grilles and a small music rest.</div>}
+          {isBench && <div className="note">A classic adjustable piano bench: button-tufted faux-leather seat, an apron with an adjustment knob at each end, four square tapered legs.</div>}
           {isOttoman && <div className="note">A teal velvet ottoman with a channel-tufted lid, on four short legs.</div>}
           {!moduleReady && <div className="note">Loading src/furniture/digital-piano.js…</div>}
         </div>
@@ -255,8 +259,8 @@ function App() {
                 <tr><td>Width</td><td className="num">{t.pianoWidth.toFixed(0)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Depth</td><td className="num">{t.pianoDepth.toFixed(0)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Height</td><td className="num">{t.pianoHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
-                <tr><td>Keybed height</td><td className="num">{t.keybedHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
-                <tr><td>Music rest height</td><td className="num">{t.restHeight.toFixed(0)}</td><td><b>Variable</b> — shares a fixed budget with the body above the keybed</td></tr>
+                <tr><td>Case top height</td><td className="num">{t.caseTopHeight.toFixed(0)}</td><td><b>Variable</b> — the stand brings the case top here; white keys 3 below</td></tr>
+                <tr><td>Music rest lean</td><td className="num">{t.restLean.toFixed(0)}°</td><td><b>Variable</b> — the rest's top always lands on Height</td></tr>
                 <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
               </tbody>
             </table>
@@ -268,7 +272,7 @@ function App() {
                 <tr><td>Width</td><td className="num">{t.benchWidth.toFixed(0)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Depth</td><td className="num">{t.benchDepth.toFixed(0)}</td><td><b>Variable</b></td></tr>
                 <tr><td>Height</td><td className="num">{t.benchHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
-                <tr><td>Base style</td><td className="num">{t.baseStyle}</td><td><b>Variable</b> — x-frame or column</td></tr>
+                <tr><td>Apron height</td><td className="num">{t.apronHeight.toFixed(0)}</td><td><b>Variable</b> — the height mechanism, knobs at each end</td></tr>
                 <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
               </tbody>
             </table>
@@ -317,10 +321,10 @@ function App() {
               onChange={v => setTweak('pianoDepth', v)} />
             <TweakSlider label="Height" value={t.pianoHeight} min={80} max={110} step={1} unit="cm"
               onChange={v => setTweak('pianoHeight', v)} />
-            <TweakSlider label="Keybed height" value={t.keybedHeight} min={70} max={90} step={1} unit="cm"
-              onChange={v => setTweak('keybedHeight', v)} />
-            <TweakSlider label="Music rest height" value={t.restHeight} min={5} max={25} step={1} unit="cm"
-              onChange={v => setTweak('restHeight', v)} />
+            <TweakSlider label="Case top height" value={t.caseTopHeight} min={66} max={86} step={1} unit="cm"
+              onChange={v => setTweak('caseTopHeight', v)} />
+            <TweakSlider label="Music rest lean" value={t.restLean} min={0} max={25} step={1} unit="°"
+              onChange={v => setTweak('restLean', v)} />
             <TweakSection label="Piano colours" />
             <TweakColor label="Body" value={t.bodyColor}
               onChange={v => setTweak('bodyColor', v)} />
@@ -338,12 +342,12 @@ function App() {
               onChange={v => setTweak('benchDepth', v)} />
             <TweakSlider label="Height" value={t.benchHeight} min={40} max={65} step={1} unit="cm"
               onChange={v => setTweak('benchHeight', v)} />
-            <TweakRadio label="Base style" value={t.baseStyle} options={['x', 'column']}
-              onChange={v => setTweak('baseStyle', v)} />
+            <TweakSlider label="Apron height" value={t.apronHeight} min={4} max={10} step={0.5} unit="cm"
+              onChange={v => setTweak('apronHeight', v)} />
             <TweakSection label="Bench colours" />
             <TweakColor label="Seat" value={t.seatColor}
               onChange={v => setTweak('seatColor', v)} />
-            <TweakColor label="Base" value={t.baseColor}
+            <TweakColor label="Frame" value={t.baseColor}
               onChange={v => setTweak('baseColor', v)} />
           </>
         )}
