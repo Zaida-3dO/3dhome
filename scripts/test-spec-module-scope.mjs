@@ -100,39 +100,120 @@ function importAliases(moduleSrc) {
  * safe failure direction, not a false positive), and does not handle an
  * escaped quote inside a string with full generality beyond a single
  * backslash-escape lookback (sufficient for this codebase's own strings).
+ *
+ * Round-4 review (item b5a00233): a `'`/`"` only OPENS a string when the
+ * previous non-whitespace character is an operator-ish one -- one of
+ * `( , = : [ { ? ! & | + ;` -- or the preceding word is the `return`
+ * keyword. Every real string literal in this codebase's Babel blocks is
+ * preceded by one of those (an assignment, an argument list, a property
+ * value, a ternary/logical operand, a return statement, ...); a bare `'`
+ * or `"` anywhere else is JSX TEXT -- an apostrophe in prose like
+ * `<p>Don't</p>` or `the body's own depth` -- and must be left as real
+ * text, not treated as the start of a string that blanks everything up to
+ * the next matching quote (which silently ate real code in two spec pages,
+ * RadiatorSpec.html and BathroomFittingsSpec.html, both of which use a
+ * possessive/contraction apostrophe inside JSX text right next to a real
+ * template literal or string). A backtick always opens a template literal
+ * -- this codebase never uses a bare backtick as JSX text -- but its own
+ * `${...}` interpolations are REAL CODE, not literal text, so their
+ * contents are copied through unchanged (recursively, so a nested string or
+ * backtick inside the interpolation is itself handled correctly) while only
+ * the literal text around them is blanked.
  */
 function stripCommentsAndStrings(src) {
-  let out = '';
-  let i = 0;
-  const n = src.length;
-  while (i < n) {
-    const c = src[i], c2 = src[i + 1];
-    if (c === '/' && c2 === '/') {
-      let j = i;
-      while (j < n && src[j] !== '\n') { out += ' '; j++; }
-      i = j;
-    } else if (c === '/' && c2 === '*') {
-      let j = i;
-      while (j < n && !(src[j] === '*' && src[j + 1] === '/')) { out += (src[j] === '\n' ? '\n' : ' '); j++; }
-      if (j < n) { out += '  '; j += 2; } // consume the closing */
-      i = j;
-    } else if (c === '"' || c === '\'' || c === '`') {
-      const quote = c;
-      out += ' ';
-      let j = i + 1;
-      while (j < n && src[j] !== quote) {
-        if (src[j] === '\\') { out += (src[j] === '\n' ? '\n' : ' '); j++; } // skip the escaped character too
-        out += (src[j] === '\n' ? '\n' : ' ');
-        j++;
-      }
-      if (j < n) { out += ' '; j++; } // consume the closing quote
-      i = j;
-    } else {
-      out += c;
-      i++;
+  // Characters after which a `'`/`"` is judged to OPEN a string (an
+  // operand position), plus start-of-source / start-of-line, which behave
+  // the same way -- a quote at the very start of a script or a line is
+  // always the start of a statement/expression, never trailing JSX text.
+  const OPERAND_BOUNDARY = new Set(['(', ',', '=', ':', '[', '{', '?', '!', '&', '|', '+', ';', '\n', undefined]);
+  const RETURN_RE = /(?:^|[^\w$])return\s*$/;
+
+  /** The last non-space character appended to `out` so far, or undefined at the very start. */
+  function lastNonSpace(out) {
+    for (let k = out.length - 1; k >= 0; k--) {
+      if (out[k] !== ' ' && out[k] !== '\n' && out[k] !== '\t' && out[k] !== '\r') return out[k];
     }
+    return undefined;
   }
-  return out;
+
+  /** Does a `'`/`"` at this point in `out` open a real string (vs. being JSX text like an apostrophe)? */
+  function quoteOpensString(out) {
+    const prev = lastNonSpace(out);
+    if (OPERAND_BOUNDARY.has(prev)) return true;
+    // Look back over `out` (skipping trailing whitespace) for a `return` keyword.
+    const tail = out.slice(Math.max(0, out.length - 200));
+    return RETURN_RE.test(tail);
+  }
+
+  /**
+   * Strip one region of source starting at `start` (an index into `src`),
+   * appending to a fresh output buffer, until either the end of `src` or --
+   * when `stopAtBrace` is true -- an unmatched top-level `}` is reached
+   * (used to find the end of a `${...}` interpolation while still handling
+   * any comments/strings/nested braces INSIDE it correctly). Returns
+   * { out, i } where `i` is the index just past what was consumed (past the
+   * closing `}` when `stopAtBrace`, i.e. never included in `out`).
+   */
+  function stripFrom(start, stopAtBrace) {
+    let out = '';
+    let i = start;
+    let braceDepth = 0;
+    while (i < n) {
+      const c = src[i], c2 = src[i + 1];
+      if (stopAtBrace && c === '}' && braceDepth === 0) {
+        i++; // consume the closing brace, do not include it in `out`
+        break;
+      }
+      if (c === '{') { braceDepth++; out += c; i++; }
+      else if (c === '}') { braceDepth--; out += c; i++; }
+      else if (c === '/' && c2 === '/') {
+        let j = i;
+        while (j < n && src[j] !== '\n') { out += ' '; j++; }
+        i = j;
+      } else if (c === '/' && c2 === '*') {
+        let j = i;
+        while (j < n && !(src[j] === '*' && src[j + 1] === '/')) { out += (src[j] === '\n' ? '\n' : ' '); j++; }
+        if (j < n) { out += '  '; j += 2; } // consume the closing */
+        i = j;
+      } else if (c === '`') {
+        // Template literal: blank the literal text, but keep `${...}`
+        // interpolation contents live by recursing into stripFrom.
+        out += ' ';
+        let j = i + 1;
+        while (j < n && src[j] !== '`') {
+          if (src[j] === '$' && src[j + 1] === '{') {
+            const inner = stripFrom(j + 2, true);
+            out += '$' + '{' + inner.out + '}';
+            j = inner.i;
+            continue;
+          }
+          if (src[j] === '\\') { out += (src[j] === '\n' ? '\n' : ' '); j++; }
+          out += (src[j] === '\n' ? '\n' : ' ');
+          j++;
+        }
+        if (j < n) { out += ' '; j++; } // consume the closing backtick
+        i = j;
+      } else if ((c === '"' || c === '\'') && quoteOpensString(out)) {
+        const quote = c;
+        out += ' ';
+        let j = i + 1;
+        while (j < n && src[j] !== quote) {
+          if (src[j] === '\\') { out += (src[j] === '\n' ? '\n' : ' '); j++; } // skip the escaped character too
+          out += (src[j] === '\n' ? '\n' : ' ');
+          j++;
+        }
+        if (j < n) { out += ' '; j++; } // consume the closing quote
+        i = j;
+      } else {
+        out += c;
+        i++;
+      }
+    }
+    return { out, i };
+  }
+
+  const n = src.length;
+  return stripFrom(0, false).out;
 }
 
 /**
@@ -320,15 +401,34 @@ function stringRef() {
 function paramShadow(WallClock) {
   return WallClock.foo;
 }
+function jsxApostrophe() {
+  const label = <p>Don't show the raw value, it's clamped down -- the module's own default applies</p>;
+  return WallClock.DIY_WORDS_DEFAULTS;
+}
 function realBug() {
   return WallClock.DIY_WORDS_DEFAULTS;
 }
 </script>`;
-  // Intercept check() for the duration of this one call, so the ONE
-  // deliberately-triggered failure (proving realBug is still caught) does
-  // not leak into this script's own overall pass/fail exit code -- this
-  // fixture's outcome is verified and reported here, not left to fail the
-  // whole file.
+  // A SEPARATE fixture for the template-literal-interpolation shape: a bare
+  // alias reference INSIDE a \`\${...}\` interpolation is real code (just like
+  // realBug above), so it must still be CAUGHT, not treated as a 4th
+  // false-positive shape alongside comment/string/paramShadow/jsxApostrophe.
+  const templateFixture = `
+<script type="module">
+  import * as WallClock from '../src/furniture/wall-clock.js';
+  window.__wallClock = WallClock;
+</script>
+<script type="text/babel">
+function templateInterpolation() {
+  const s = \`width \${WallClock.DEFAULTS.width} cm\`;
+  return s;
+}
+</script>`;
+  // Intercept check() for the duration of this one call, so the
+  // deliberately-triggered failures (proving realBug and jsxApostrophe are
+  // still caught) do not leak into this script's own overall pass/fail exit
+  // code -- this fixture's outcome is verified and reported here, not left
+  // to fail the whole file.
   const seen = [];
   const realCheck = check;
   check = (name, cond, detail) => { seen.push({ name, cond, detail }); }; // eslint-disable-line no-func-assign
@@ -338,9 +438,92 @@ function realBug() {
     check = realCheck; // eslint-disable-line no-func-assign
   }
   const failedNames = seen.filter(s => !s.cond).map(s => s.name);
-  const onlyRealBugFailed = failedNames.length === 1 && failedNames[0].includes('realBug()');
-  check('self-test: the hardened guard flags exactly the real bug (realBug) and none of the 3 known false-positive shapes (comment, string, parameter shadow)',
-    onlyRealBugFailed, { failedNames, totalChecksRun: seen.length });
+  // jsxApostrophe() is EXPECTED to fail too: it has a real, uncaught bare
+  // reference to WallClock.DIY_WORDS_DEFAULTS in its return statement, right
+  // after a JSX-text apostrophe/contraction ("Don't", "it's", "module's").
+  // Before the round-4 fix, that leading apostrophe opened a fake string
+  // that blanked the real `return WallClock.DIY_WORDS_DEFAULTS;` below it,
+  // so this function's own real bug went UNDETECTED -- exactly the failure
+  // mode item b5a00233 named. Asserting it DOES fail here is the regression
+  // test: if the apostrophe fix broke, this assertion is what would catch it
+  // going back to being silently swallowed.
+  const onlyExpectedFailed = failedNames.length === 2 &&
+    failedNames.some(n => n.includes('realBug()')) &&
+    failedNames.some(n => n.includes('jsxApostrophe()'));
+  check('self-test: the hardened guard flags exactly the real bugs (realBug, jsxApostrophe) and none of the 3 known false-positive shapes (comment, string, parameter shadow)',
+    onlyExpectedFailed, { failedNames, totalChecksRun: seen.length });
+
+  // The template-literal-interpolation fixture: templateInterpolation()
+  // contains a bare `WallClock.DEFAULTS.width` reference INSIDE a
+  // `${...}` interpolation -- if stripCommentsAndStrings blanked
+  // interpolation contents (rather than keeping them live), this reference
+  // would be invisible and the check for it would never even run, which
+  // would silently PASS rather than fail. Assert it is caught.
+  const seen2 = [];
+  const realCheck2 = check;
+  check = (name, cond, detail) => { seen2.push({ name, cond, detail }); }; // eslint-disable-line no-func-assign
+  try {
+    checkSpecHtml('template-fixture', templateFixture);
+  } finally {
+    check = realCheck2; // eslint-disable-line no-func-assign
+  }
+  const templateFailedNames = seen2.filter(s => !s.cond).map(s => s.name);
+  const templateInterpolationCaught = templateFailedNames.length === 1 && templateFailedNames[0].includes('templateInterpolation()');
+  check('self-test: templateInterpolation() -- a bare reference inside a `${...}` interpolation is still visible to the guard and caught (interpolation contents are not blanked)',
+    templateInterpolationCaught, { templateFailedNames, totalChecksRun: seen2.length });
+}
+
+// ---- Self-test: injection probe (item b5a00233 acceptance) ------------------------
+//      For every REAL spec page with a namespace alias, inject the exact bug
+//      shape from the ClockSpec incident -- `function zzProbe() { return
+//      <alias>.zzProbe; }` -- at the end of its Babel block, and assert the
+//      guard catches it there. This is what actually proves the stripper fix:
+//      a page with a JSX-apostrophe or template-literal shape near the
+//      injection point (RadiatorSpec.html, BathroomFittingsSpec.html) must
+//      still flag the probe, not have it swallowed by a false string.
+//      KitchenSpec.html is exempt: it declares `const K` at its Babel
+//      script's own top level (Pattern 1), so EVERY function in that file,
+//      including an injected zzProbe, legitimately closes over it.
+{
+  const KITCHEN_EXEMPT = new Set(['KitchenSpec.html']);
+  files.forEach(file => {
+    const html = fs.readFileSync(path.join(specDir, file), 'utf8');
+    const moduleBlocks = moduleScriptBlocks(html);
+    const babelBlocks = babelScriptBlocks(html);
+    if (!moduleBlocks.length || !babelBlocks.length) return;
+    const aliases = new Set();
+    moduleBlocks.forEach(src => importAliases(src).forEach(n => aliases.add(n)));
+    if (!aliases.size) return;
+
+    aliases.forEach(alias => {
+      // Inject the probe at the end of the LAST babel block (matches how a
+      // real change would append a new function to the page's own script).
+      const probe = `\nfunction zzProbe() { return ${alias}.zzProbe; }\n`;
+      const injectedBlocks = babelBlocks.slice();
+      injectedBlocks[injectedBlocks.length - 1] = injectedBlocks[injectedBlocks.length - 1] + probe;
+      const injectedHtml = html.replace(
+        babelBlocks[babelBlocks.length - 1],
+        injectedBlocks[injectedBlocks.length - 1]
+      );
+
+      const seen = [];
+      const realCheck = check;
+      check = (name, cond, detail) => { seen.push({ name, cond, detail }); }; // eslint-disable-line no-func-assign
+      try {
+        checkSpecHtml(file, injectedHtml);
+      } finally {
+        check = realCheck; // eslint-disable-line no-func-assign
+      }
+      const zzProbeFailed = seen.some(s => !s.cond && s.name.includes('zzProbe()') && s.name.includes('"' + alias + '"'));
+      if (KITCHEN_EXEMPT.has(file)) {
+        check('injection probe: ' + file + ' -- zzProbe referencing "' + alias + '" is legitimately NOT flagged (top-level redeclaration exempts the whole file)',
+          !zzProbeFailed, { file, alias, seenNames: seen.map(s => s.name) });
+      } else {
+        check('injection probe: ' + file + ' -- injecting `function zzProbe() { return ' + alias + '.zzProbe; }` is caught by the guard',
+          zzProbeFailed, { file, alias, seenNames: seen.map(s => s.name) });
+      }
+    });
+  });
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
