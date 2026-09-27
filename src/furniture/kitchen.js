@@ -1121,21 +1121,21 @@ export const EXAMPLE_L = deepFreeze({
 
 /**
  * A full L kitchen as measured: the preset KitchenSpec opens on.
- * Dimensions only. Run A (65 deep, 275 long) owns the corner and, with the
- * 65 cm fridge-freezer, fills its 340 cm wall; run B (60 deep, 214 long:
- * 60/60/60/34) starts at A's front face, so the leg along B's wall is
- * 65 + 214 = 279. Wall-unit tops meet the fridge top at 219.2. A's `cornerDepth` is B's 60 -- the square B hides -- which
+ * Dimensions only, as measured. Run A (65 deep, 290 long) owns the corner;
+ * run B (60 deep, 214 long: 60/60/60/34) starts at A's front face, so the leg
+ * along B's wall is 65 + 214 = 279. Wall-unit tops meet the fridge top at
+ * 219.2. A's `cornerDepth` is B's 60 -- the square B hides -- which
  * is exactly its 60 cm corner module. Every run's modules fill its width,
  * so it builds with no warnings at all.
  */
 export const FULL_RUN_L = deepFreeze({
   a: {
-    width: 275,
+    width: 290,
     depth: 65,
     height: 118.5,
     modules: [
       {kind: 'corner', width: 60, plinthLed: true},
-      {kind: 'cabinet', width: 35, plinthLed: true},
+      {kind: 'cabinet', width: 50, plinthLed: true},
       {kind: 'cabinet', width: 60, plinthLed: true},
       {kind: 'dishwasher', width: 60, plinthLed: true},
       {kind: 'cabinet', width: 60, hinge: 'bottom', plinthLed: true},
@@ -1155,11 +1155,11 @@ export const FULL_RUN_L = deepFreeze({
     ],
   },
   wall: {
-    width: 275,
+    width: 290,
     height: 121.5,
     modules: [
       {kind: 'cabinet', width: 65, underLed: true, topLed: true, height: 70, hinge: 'left'},
-      {kind: 'cabinet', width: 30, height: 70, underLed: true, topLed: true, hinge: 'left'},
+      {kind: 'cabinet', width: 45, height: 70, underLed: true, topLed: true, hinge: 'left'},
       {kind: 'cabinet', width: 60, height: 55, hinge: 'right', underLed: true, topLed: true},
       {kind: 'cabinet', width: 60, underLed: true, topLed: true, height: 55},
       {kind: 'cabinet', width: 60, height: 70, hinge: 'right', underLed: true, topLed: true},

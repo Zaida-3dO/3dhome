@@ -643,8 +643,8 @@ function contained(g, p) {
   check('default preset: base run B is 214 wide (60/60/60/34) and its modules fill it', preset.b.width === 214 &&
     preset.b.modules.map(m => m.width).join('/') === '60/60/60/34');
   check('default preset: the leg along B is 65 + 214 = 279', preset.a.depth + preset.b.width === 279);
-  check('default preset: run A (275) and the fridge (65) fit a 340.4 cm wall, wall run A no longer than run A',
-    preset.a.width + preset.fridge.width <= 340.4 && preset.wall.width <= preset.a.width, { a: preset.a.width, fridge: preset.fridge.width, wall: preset.wall.width });
+  check('default preset: run A is as measured, 60/50/60/60/60 = 290', preset.a.width === 290 &&
+    preset.a.modules.map(m => m.width).join('/') === '60/50/60/60/60');
   check('default preset: wall-unit tops, the hood and the fridge all meet 219.2', preset.wallTop === 219.2 && preset.fridge.height === 219.2 &&
     near(K.elevationForTop(preset.wallTop, preset.wallB), 88.5, 0.01), K.elevationForTop(preset.wallTop, preset.wallB));
   check('default preset: A is 65 deep, B 60, and A\'s corner module is the 60 B hides', preset.a.depth === 65 &&
