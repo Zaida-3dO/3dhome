@@ -108,8 +108,9 @@ for (const f of specFiles.filter(f => pages[f].stub)) {
 
 // ---------------------------------------------------------- 4. manifests
 // Pages whose objects are not furniture registry types (building fixtures,
-// and the rug, a procedural look that is not a furniture type yet).
-const FIXTURE_PAGES = new Set(['DoorSpec.html', 'WindowSpec.html', 'CurtainSpec.html', 'RugSpec.html']);
+// the rug, a procedural look that is not a furniture type yet, and strip
+// lights, a room light fixture rather than a furniture type).
+const FIXTURE_PAGES = new Set(['DoorSpec.html', 'WindowSpec.html', 'CurtainSpec.html', 'RugSpec.html', 'StripLightSpec.html']);
 for (const f of realPages) {
   const { manifest: mf, manifestError } = pages[f];
   check(f + ' has a parseable spec-manifest', !!mf, manifestError);

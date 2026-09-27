@@ -55,3 +55,23 @@ resolves through the page's importmap (index.html, and specs/ModelSpec.html).
 The import from src/ is `?v=`-stamped at deploy; the import between the two
 vendored files is not (vendor/ is never stamped), which is safe for the same
 reason as above: the revision is in the path.
+
+## `addons/lights/` — RectAreaLightUniformsLib for the strip-light spec
+
+One more file from the same published `three@0.160.0` tarball, **unmodified**,
+at upstream's `examples/jsm/` layout. The tarball was fetched from the npm
+registry and checked against the registry's own `dist.integrity`
+(`sha512-DLU8lc0zNIPkM7rH5/e1Ks1Z8tWCGRq6g8mPowdDJpw1CFBJMU7UoJjC6PefXW7z//SSl0b2+GCw14LB+uDhng==`);
+its `build/three.module.min.js` matches the sha256 recorded above, so it is
+the same tarball.
+
+    package/examples/jsm/lights/RectAreaLightUniformsLib.js -> addons/lights/RectAreaLightUniformsLib.js
+        sha256  08085bc942253cd54948bf936fecb66b54514a135872656e475a1cab09b55214
+
+It carries the LTC (linearly transformed cosines) lookup tables RectAreaLight
+shades with, inline (~300 KB unminified). `RectAreaLightUniformsLib.init()`
+must run ONCE per THREE instance before a RectAreaLight is rendered; it
+patches that instance's `UniformsLib`, which is why specs/StripLightSpec.html
+runs on the ES-module build (the instance its bare `import 'three'` resolves
+to) rather than the UMD one. Only that spec page loads it today; the house
+does not.
