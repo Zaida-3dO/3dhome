@@ -83,6 +83,25 @@ function outwardFraction(geo, inside) {
   const gd = S.roundedBox(THREE, w, h, d, r, { bevel: 2, inner: [2, 1, 2], displace: v => { if (v.y > 0) v.y += 0.015 * (1 - Math.min(1, Math.abs(v.x) / (w / 2))); } });
   gd.computeBoundingBox();
   check('roundedBox: displace moves the top (crown lifts the max y)', gd.boundingBox.max.y > h / 2 + 0.01, gd.boundingBox.max.y);
+
+  // cuts: exact sample positions across a flat middle (a tuft dimple must
+  // land on a vertex at any size). Mutation: ignore `cuts` in axisSamples
+  // (keep the even `inner` split) -> no top vertex at x = 0.123 / z = -0.4.
+  const gc = S.roundedBox(THREE, w, h, d, r, { bevel: 2, inner: [2, 1, 2], cuts: [[0.123, -0.3, 0.123, 9], null, [-0.4]] });
+  const pc = gc.attributes.position;
+  const topAt = (x, z) => { for (let i = 0; i < pc.count; i++) if (near(pc.getX(i), x, 1e-6) && near(pc.getZ(i), z, 1e-6) && pc.getY(i) > 0) return true; return false; };
+  check('roundedBox cuts: a top vertex at every cut crossing', topAt(0.123, -0.4) && topAt(-0.3, -0.4), null);
+  // 2 kept x cuts (0.123 de-duplicated, 9 outside the flat middle dropped),
+  // 1 z cut: sx = 4 + 3, sy = 5, sz = 4 + 2
+  check('roundedBox cuts: replace inner, de-duplicated, outside cuts dropped', S.triCount(gc) === 4 * (7 * 5 + 5 * 6 + 7 * 6), S.triCount(gc));
+  gc.computeBoundingBox();
+  check('roundedBox cuts: bbox unchanged', near(gc.boundingBox.max.x - gc.boundingBox.min.x, w, 1e-5) && near(gc.boundingBox.max.z - gc.boundingBox.min.z, d, 1e-5));
+
+  // omit: a face left out. Mutation: ignore `omit` -> the count stays whole.
+  const go = S.roundedBox(THREE, w, h, d, r, { bevel: 2, inner: [2, 1, 2], omit: ['-y'] });
+  check('roundedBox omit -y: drops exactly the bottom grid (2*sx*sz)', S.triCount(go) === S.triCount(g) - 2 * sx * sz, [S.triCount(go), S.triCount(g)]);
+  const frac2 = outwardFraction(go, () => new THREE.Vector3(0, 0, 0));
+  check('roundedBox omit -y: what is left still faces outward', frac2 === 1, frac2);
 }
 
 // ---- pillow ------------------------------------------------------------------

@@ -105,9 +105,13 @@ function envelope(tag, params) {
   const back = bboxCm(byName(g, 'dock-tower-back'));
   check('tower back block stops at the robot rear', back.maxZ <= rb.minZ + 0.01, { back: back.maxZ, robotRear: rb.minZ });
   const band = byName(g, 'dock-tower-band');
-  // Mutation: band material 'satin' -> fails.
-  check('tower band is metal', band && band.material.userData.finish === 'metal' &&
+  // A light champagne GLOSS band, not metal: metal rendered any champagne as
+  // dark bronze (item 9a0d3553). Mutations: band finish back to 'metal', or
+  // the default back to the dark #b9a88a -> fails.
+  check('tower band is gloss (metalness 0), not metal', band && band.material.userData.finish === 'gloss' &&
+    band.material.metalness === 0 &&
     band.material.color.getHex() === parseInt(V.DEFAULTS.bandColor.slice(1), 16), band && band.material.userData);
+  check('band default is the light champagne #c9b48a', V.DEFAULTS.bandColor === '#c9b48a', V.DEFAULTS.bandColor);
   const bb = bboxCm(band);
   check('band sits between the lower part and the lid', bb.minY > back.maxY - 0.01 && bb.maxY <= lid.minY + 0.01, { band: bb, lid });
 }

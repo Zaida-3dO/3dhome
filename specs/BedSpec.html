@@ -299,9 +299,9 @@ window.__specObjects['sofa'] = App;
    recessed plinth. A rounded, crowned mattress in a fitted sheet sits down
    inside the rails. Made up with a duvet draped over the sides and the foot
    to the rail tops, its top edge folded back, in a white cover with a
-   leaf-and-flower print (drawn as geometry, not a texture); two sleeping
+   dense wildflower print (drawn as geometry, not a texture); two sleeping
    pillows, two sage accent pillows propped against the headboard and an
-   olive cushion. Default envelope ~161 x 220, headboard 120 tall (== the
+   olive faux-fur cushion. Default envelope ~161 x 220, headboard 120 tall (== the
    `height` param directly -- there is no separate headboardHeight).
 
    The geometry itself is NOT built here -- it lives in
@@ -418,10 +418,12 @@ function BedObject() {
           <div className="legend">
             Velvet rails with rounded tops run round the sides and the foot on a dark recessed plinth; the
             mattress (rounded edges, a crowned top, a fitted sheet) sits down inside them. The duvet covers the
-            foot end, drapes down to the rail tops and is folded back at its top edge. Its print is a scatter of
-            leaf sprigs and small flowers made of a few triangles each, laid on the cloth -- no image texture.
-            Accent pillows are propped against the headboard, the sleeping pillows lie in front of them, and the
-            cushion leans in the middle.
+            foot end, drapes down to the rail tops and is folded back at its top edge. Its print is a dense
+            wildflower scatter -- stemmed blossoms, loose blossoms and leaf blades, one to three triangles each,
+            laid on the cloth -- no image texture. Sage accent pillows are propped against the headboard, sized
+            so the channels show above them and nothing ever rises above the headboard; the sleeping pillows lie
+            in front of them, and a faux-fur cushion (a lumpy body with a coat of two-tone strands) leans in the
+            middle.
           </div>
           <div className="row">
             <button className="btn" onClick={() => setTweak('duvet', !t.duvet)}>{t.duvet ? 'Remove duvet' : 'Add duvet'}</button>

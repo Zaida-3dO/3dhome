@@ -227,6 +227,12 @@ function resolveBenchParams(params) {
   return Object.assign({}, BENCH_DEFAULTS, params || {});
 }
 
+/** Tufting, cm: how far each button pulls the seat top down, and the domed button's rim radius and crown. */
+export const BENCH_TUFT_DIP = 2.0;
+const BENCH_TUFT_RING = 3.25;   // the dimple's radius: where the seat is back at full height
+const BENCH_BUTTON_R = 1.1;
+const BENCH_BUTTON_RISE = 1.1;   // crown above the rim: near seat level, so a button shows from a standing eye line
+
 /** The 2 x 4 tuft-button grid, as [x, z] offsets from the seat centre, cm. */
 export function benchButtons(p) {
   const out = [];
@@ -248,7 +254,7 @@ function buildPianoBench(THREE, params, opts) {
 
   const seatMat = makeFinish(THREE, p.finish, p.seatColor);
   const frameMat = makeFinish(THREE, 'gloss', p.baseColor);
-  const c = new THREE.Color(p.seatColor).multiplyScalar(0.72);
+  const c = new THREE.Color(p.seatColor).multiplyScalar(0.6);
   const buttonMat = makeFinish(THREE, p.finish, '#' + c.getHexString());
 
   function add(geo, mat, name, x, y, z) {
@@ -263,26 +269,58 @@ function buildPianoBench(THREE, params, opts) {
   }
 
   // ---- seat: rounded (rolled edges), button-tufted top ------------------------
+  // The seat grid is CUT exactly through every button and through a ring of
+  // lines BENCH_TUFT_RING either side of it, so at any size each button pulls
+  // one vertex down (the dimple) while its ring stays at the seat top. The
+  // ring's vertex normals tilt into the dimple, which is what lets the light
+  // show it; a uniform grid put the buttons between vertices -- a shallow
+  // 13 cm pyramid with the button disc buried in it.
   const buttons = benchButtons(p);
-  const dip = 1.3, spread = 3;
+  const bxs = [...new Set(buttons.map(b => b[0]))].sort((a, b) => a - b);
+  const bzs = [...new Set(buttons.map(b => b[1]))].sort((a, b) => a - b);
+  const pitchX = bxs.length > 1 ? bxs[1] - bxs[0] : W / 2;
+  const pitchZ = bzs.length > 1 ? bzs[1] - bzs[0] : D / 2;
+  const ring = Math.min(BENCH_TUFT_RING, 0.4 * pitchX, 0.4 * pitchZ);
+  const around = cs => cs.flatMap(c => [c - ring, c, c + ring]);
+  const cutX = around(bxs), cutZ = around(bzs);
+  // A button's pull: 1 at the button, 0 from its ring outward.
+  const pull = (x, z) => {
+    let best = 0;
+    for (const [bx, bz] of buttons) {
+      const u = Math.max(Math.abs(x - bx), Math.abs(z - bz)) / ring;
+      if (u < 1) best = Math.max(best, 1 - u);
+    }
+    return best;
+  };
   const tuft = v => {
     if (!full || v.y <= 0) return;
-    let dd = 0;
-    for (const [bx, bz] of buttons) {
-      const d2 = (Math.pow(v.x / CM - bx, 2) + Math.pow(v.z / CM - bz, 2)) / (spread * spread);
-      dd = Math.max(dd, Math.exp(-d2));
-    }
-    v.y -= m(dip) * dd * Math.min(1, v.y / m(seatT / 2));
+    v.y -= m(BENCH_TUFT_DIP) * pull(v.x / CM, v.z / CM) * Math.min(1, v.y / m(seatT / 2));
   };
   const seatGeo = roundedBox(THREE, m(W), m(seatT), m(D), m(Math.min(2.5, seatT / 2)),
-    full ? { bevel: 2, inner: [8, 1, 4], displace: tuft } : { bevel: 1, inner: [1, 1, 1] });
+    full ? { bevel: 2, inner: [8, 1, 4], cuts: [cutX.map(m), null, cutZ.map(m)], displace: tuft } : { bevel: 1, inner: [1, 1, 1] });
   add(seatGeo, seatMat, 'seat', 0, m(H - seatT / 2), m(D / 2));
   if (full) {
+    // Each button: a low domed hexagonal cap (6 triangles) whose rim sits on
+    // the dimple's slope and whose crown stands proud of the dimple floor.
     const bg = [];
+    const rim = BENCH_BUTTON_R;
+    // The seat surface at the rim, above the dimple floor: the grid is linear
+    // between the button vertex and its ring.
+    const rimLift = BENCH_TUFT_DIP * rim / ring;
+    const rise = rimLift + BENCH_BUTTON_RISE;
     for (const [bx, bz] of buttons) {
-      const g = new THREE.CircleGeometry(m(0.9), 6);
-      g.rotateX(-Math.PI / 2);
-      g.translate(m(bx), m(H - dip + 0.08), m(D / 2 + bz));
+      const pos = [], idx = [];
+      const floorY = H - BENCH_TUFT_DIP;
+      pos.push(m(bx), m(floorY + rise), m(D / 2 + bz));
+      for (let k = 0; k < 6; k++) {
+        const a = k / 6 * Math.PI * 2;
+        pos.push(m(bx + rim * Math.cos(a)), m(floorY + rimLift), m(D / 2 + bz + rim * Math.sin(a)));
+      }
+      for (let k = 0; k < 6; k++) idx.push(0, 1 + ((k + 1) % 6), 1 + k);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setIndex(idx);
+      g.computeVertexNormals();
       bg.push(g);
     }
     add(concatGeometries(THREE, bg), buttonMat, 'buttons');
@@ -296,7 +334,7 @@ function buildPianoBench(THREE, params, opts) {
   add(new THREE.BoxGeometry(m(apronW), m(apronH), m(apronD)), frameMat, 'apron',
     0, m(apronTop - apronH / 2), m(D / 2));
   for (const s of [-1, 1]) {
-    const g = new THREE.CylinderGeometry(m(knobR), m(knobR), m(knobL), full ? 12 : 6);
+    const g = new THREE.CylinderGeometry(m(knobR), m(knobR), m(knobL), full ? 8 : 6);
     g.rotateZ(Math.PI / 2);
     add(g, frameMat, 'knob', m(s * (apronW / 2 + knobL / 2)), m(apronTop - apronH / 2), m(D / 2));
   }
