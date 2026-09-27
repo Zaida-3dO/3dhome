@@ -6,12 +6,17 @@
  * `node scripts/test-camera-gestures.mjs`.
  *
  * WHAT THIS GUARDS
- *   1. Wheel zoom-in stops at MIN_DISTANCE and never inverts: the distance
- *      only goes down, never below the minimum, and never crosses zero.
- *      (It used to be additive with a -30 floor, so r crossed zero and the
+ *   1. Wheel zoom-in never inverts and never stops. Over 200 notches the
+ *      camera keeps moving forward along its view ray, by at least a minimum
+ *      step, and the distance to the target stays positive. Past
+ *      PUSH_DISTANCE the target is pushed forward instead ("dolly-through").
+ *      (Zoom used to be additive with a -30 floor, so r crossed zero and the
  *      camera flipped to the far side of the target.)
- *   2. Wheel zoom-out stops at MAX_DISTANCE; line/page deltaMode is scaled.
- *   3. Pinch-in past the minimum stops there, monotonically.
+ *   2. Wheel zoom-out is a plain factor capped at MAX_DISTANCE; line and page
+ *      deltaMode are scaled.
+ *   3. Pinching in forever behaves like the wheel: monotone forward travel,
+ *      no flip, no stop. The target never goes below the floor; it slides
+ *      along it.
  *   4. A two-finger pan whose finger gap drifts by +/-6% produces no zoom
  *      at all, and the pan still moves.
  *   5. A deliberate pinch zooms smoothly: it locks to pinch, every frame
@@ -37,33 +42,76 @@ function check(name, ok, detail) {
 const monotone = (xs, dir) => xs.every((x, i) => i === 0 || (dir < 0 ? x <= xs[i - 1] : x >= xs[i - 1]));
 
 const G = await imp('src/camera-gestures.js');
-const { MIN_DISTANCE, MAX_DISTANCE } = G;
+const { PUSH_DISTANCE, MAX_DISTANCE } = G;
 
-// 1. wheel zoom-in past the minimum -----------------------------------------
+// A camera the way home3d-scene.js drives it: orbit angles th/ph, radius r
+// and a target. zoomBy() is the scene's own composition of dolly() and
+// pushTarget() (the scene also clamps the target to the house's pan bounds).
+function makeCam(th, ph, r, tgt = { x: 0, y: 0, z: 0 }) {
+  const c = { th, ph, r, tgt: { ...tgt } };
+  c.off = () => ({ x: Math.sin(c.ph) * Math.cos(c.th), y: Math.cos(c.ph), z: Math.sin(c.ph) * Math.sin(c.th) });
+  c.pos = () => { const o = c.off(); return { x: c.tgt.x + c.r * o.x, y: c.tgt.y + c.r * o.y, z: c.tgt.z + c.r * o.z }; };
+  c.zoomBy = f => {
+    const d = G.dolly(c.r, f);
+    c.r = d.r;
+    if (d.push > 0) { const o = c.off(); c.tgt = G.pushTarget(c.tgt, { x: -o.x, y: -o.y, z: -o.z }, d.push); }
+    return d;
+  };
+  return c;
+}
+// Forward travel along the INITIAL view ray, sampled after every step.
+function zoomRun(cam, factors) {
+  const o = cam.off(), fwd = { x: -o.x, y: -o.y, z: -o.z }, p0 = cam.pos();
+  const along = p => (p.x - p0.x) * fwd.x + (p.y - p0.y) * fwd.y + (p.z - p0.z) * fwd.z;
+  const s = [{ r: cam.r, a: 0, p: cam.pos(), side: 1, ty: cam.tgt.y }];
+  for (const f of factors) {
+    cam.zoomBy(f);
+    const p = cam.pos(), off = cam.off();
+    const side = Math.sign((p.x - cam.tgt.x) * off.x + (p.y - cam.tgt.y) * off.y + (p.z - cam.tgt.z) * off.z);
+    s.push({ r: cam.r, a: along(p), p, side, ty: cam.tgt.y });
+  }
+  return s;
+}
+const strictlyUp = xs => xs.every((x, i) => i === 0 || x > xs[i - 1]);
+
+// 1. wheel zoom-in: never inverts, never stops ------------------------------
 {
-  let r = 5; const trace = [r];
-  for (let i = 0; i < 80; i++) { r = G.zoomByWheel(r, -100); trace.push(r); }
-  check('wheel in: distance never increases', monotone(trace, -1), trace.slice(0, 12));
-  check('wheel in: never below MIN_DISTANCE, never <= 0', trace.every(x => x >= MIN_DISTANCE && x > 0), Math.min(...trace));
-  check('wheel in: reaches and holds MIN_DISTANCE', trace.slice(-5).every(x => x === MIN_DISTANCE), trace.slice(-5));
-  check('wheel in: the approach is gradual (each notch under 15%)',
-    trace.every((x, i) => i === 0 || x / trace[i - 1] > 0.85), trace.slice(0, 6));
+  // A level view (ph = 90 deg) so the push is not bent by the floor.
+  const notch = G.wheelFactor(-100);
+  const run = zoomRun(makeCam(0.7, Math.PI / 2, 5, { x: 0, y: 1.5, z: 0 }), Array(200).fill(notch));
+  check('wheel in: camera travel is strictly forward on every notch', strictlyUp(run.map(x => x.a)), run.slice(0, 6).map(x => x.a));
+  check('wheel in: distance to target always positive', run.every(x => x.r > 0), Math.min(...run.map(x => x.r)));
+  check('wheel in: never flips to the far side of the target', run.every(x => x.side === 1));
+  check('wheel in: radius settles at PUSH_DISTANCE, never below',
+    run.slice(-50).every(x => x.r === PUSH_DISTANCE) && run.every(x => x.r >= PUSH_DISTANCE - 1e-12));
+  const late = run.slice(-50).map((x, i, a) => i ? x.a - a[i - 1].a : null).slice(1);
+  check('wheel in: late steps keep a minimum size (never stops)',
+    late.every(d => d >= G.MIN_PUSH_PER_LOG * -Math.log(notch) - 1e-9), late.slice(0, 3));
+  check('wheel in: keeps going (> 25 m travelled over 200 notches)', run[run.length - 1].a > 25, run[run.length - 1].a);
+  check('wheel in: each early notch is gradual (< 15% of r)',
+    run.slice(0, 10).every((x, i, a) => i === 0 || (a[i - 1].r - x.r) / a[i - 1].r < 0.15));
+  // Continuity at the hand-over from shortening r to pushing the target.
+  const steps = run.map((x, i, a) => i ? x.a - a[i - 1].a : 0).slice(1);
+  check('wheel in: no jump at the push hand-over (steps never grow)',
+    steps.every((d, i) => i === 0 || d <= steps[i - 1] + 1e-9), steps.slice(0, 20).map(d => +d.toFixed(3)));
   // trackpad: many tiny deltas, same guarantees
-  let t = 3; const tt = [t];
-  for (let i = 0; i < 2000; i++) { t = G.zoomByWheel(t, -3); tt.push(t); }
-  check('trackpad in: monotone and floored', monotone(tt, -1) && tt.every(x => x >= MIN_DISTANCE), tt.slice(-3));
-  // a start distance already inside the minimum (e.g. an old preset) is lifted, not inverted
-  check('wheel in from below the floor clamps up to it', G.zoomByWheel(0.1, -100) === MIN_DISTANCE);
-  check('wheel on a negative r returns a positive distance', G.zoomByWheel(-4, -100) >= MIN_DISTANCE);
+  const tp = zoomRun(makeCam(2, 1.2, 3, { x: 0, y: 2, z: 0 }), Array(3000).fill(G.wheelFactor(-3)));
+  check('trackpad in: strictly forward, positive, no flip',
+    strictlyUp(tp.map(x => x.a)) && tp.every(x => x.r > 0 && x.side === 1));
+  // A radius already inside PUSH_DISTANCE (a preset, setOrbit) pushes at once.
+  const d = G.dolly(0.2, notch);
+  check('inside PUSH_DISTANCE: r kept, whole step pushes', d.r === 0.2 && d.push > 0 && d.push === d.travel, d);
+  check('a non-positive radius is never returned', G.dolly(-4, notch).r > 0 && G.dolly(0, notch).r > 0);
 }
 
 // 2. wheel zoom-out and deltaMode -------------------------------------------
 {
-  let r = 5; const trace = [r];
-  for (let i = 0; i < 80; i++) { r = G.zoomByWheel(r, 100); trace.push(r); }
-  check('wheel out: distance never decreases', monotone(trace, 1));
-  check('wheel out: stops at MAX_DISTANCE', trace[trace.length - 1] === MAX_DISTANCE && trace.every(x => x <= MAX_DISTANCE));
-  check('wheel in then out is symmetric', Math.abs(G.zoomByWheel(G.zoomByWheel(5, -100), 100) - 5) < 1e-9);
+  const run = zoomRun(makeCam(0, 1, 5), Array(80).fill(G.wheelFactor(100)));
+  check('wheel out: radius never decreases', run.every((x, i) => i === 0 || x.r >= run[i - 1].r));
+  check('wheel out: stops at MAX_DISTANCE', run[run.length - 1].r === MAX_DISTANCE && run.every(x => x.r <= MAX_DISTANCE));
+  check('wheel out: target never moves', run.every(x => x.ty === 0));
+  check('wheel in then out is symmetric above PUSH_DISTANCE',
+    Math.abs(G.dolly(G.dolly(5, G.wheelFactor(-100)).r, G.wheelFactor(100)).r - 5) < 1e-9);
   check('deltaMode 0 passes pixels through', G.wheelDeltaPx(-100, 0) === -100);
   check('deltaMode 1 scales lines to px', G.wheelDeltaPx(-3, 1) === -3 * G.WHEEL_LINE_PX);
   check('deltaMode 2 scales pages to px', G.wheelDeltaPx(1, 2) === G.WHEEL_PAGE_PX);
@@ -82,7 +130,7 @@ function runGesture(frames, r0 = 5) {
   const rs = [r], modes = [];
   for (const f of frames.slice(1)) {
     const s = g.move(...f);
-    r = G.clampDistance(r * s.zoom);
+    r = G.dolly(r, s.zoom).r;
     panX += s.panDx; panY += s.panDy;
     rs.push(r); modes.push(s.mode);
   }
@@ -90,14 +138,29 @@ function runGesture(frames, r0 = 5) {
   return { r, rs, modes, panX, panY, mode: modes[modes.length - 1] };
 }
 
-// 3. pinch-in past the minimum -----------------------------------------------
+// 3. pinch in forever, and the floor ----------------------------------------
 {
   const frames = [];
   for (let i = 0; i <= 120; i++) frames.push(pair(400, 300, 100 * Math.pow(1.05, i)));
-  const g = runGesture(frames, 3);
-  check('pinch in: locks to pinch', g.mode === 'pinch', g.modes.slice(0, 5));
-  check('pinch in: distance never increases', monotone(g.rs, -1), g.rs.slice(0, 8));
-  check('pinch in: stops at MIN_DISTANCE, never inverts', g.rs.every(x => x >= MIN_DISTANCE) && g.r === MIN_DISTANCE, g.r);
+  const g = G.createTwoFingerGesture(); g.start(...frames[0]);
+  const factors = frames.slice(1).map(f => g.move(...f).zoom);
+  check('pinch in: locks to pinch', g.mode === 'pinch');
+  // Looking down at the default 0.32*pi: the push meets the floor and slides.
+  const run = zoomRun(makeCam(0.7, Math.PI * 0.32, 3), factors);
+  const moving = run.slice(3); // the first frames are the undecided dead zone
+  check('pinch in: camera travel strictly forward once zooming', strictlyUp(moving.map(x => x.a)), moving.slice(0, 5).map(x => x.a));
+  check('pinch in: positive radius, never flips', run.every(x => x.r > 0 && x.side === 1));
+  check('pinch in: target never below the floor', run.every(x => x.ty >= G.FLOOR_Y - 1e-12), Math.min(...run.map(x => x.ty)));
+  check('pinch in: camera stays above the floor', run.every(x => x.p.y > G.FLOOR_Y), Math.min(...run.map(x => x.p.y)));
+  // pushTarget directly
+  const t = G.pushTarget({ x: 0, y: 0.5, z: 0 }, { x: 0.6, y: -0.8, z: 0 }, 2);
+  check('pushTarget: into the floor keeps its length along it', t.y === 0 && Math.abs(t.x - (0.375 + 1.375)) < 1e-9, t);
+  const top = G.pushTarget({ x: 0, y: 0.5, z: 0 }, { x: 0.01, y: -0.9999, z: 0 }, 2);
+  check('pushTarget: straight down stops at the floor', top.y === 0 && Math.abs(top.x) < 0.01, top);
+  const lvl = G.pushTarget({ x: 1, y: 1, z: 1 }, { x: 0, y: 0, z: -1 }, 3);
+  check('pushTarget: level push goes straight on', lvl.x === 1 && lvl.y === 1 && lvl.z === -2, lvl);
+  const under = G.pushTarget({ x: 0, y: -1, z: 0 }, { x: 1, y: 0, z: 0 }, 1);
+  check('pushTarget: a target already below the floor is not lifted', under.y === -1, under);
 }
 
 // 4. deliberate pan with natural gap drift -----------------------------------
@@ -160,9 +223,12 @@ function runGesture(frames, r0 = 5) {
 {
   const src = read('src/home3d-scene.js');
   check('scene imports the gesture module', /from '\.\/camera-gestures\.js'/.test(src));
-  check('wheel handler uses zoomByWheel', /orb\.r = zoomByWheel\(orb\.r, wheelDeltaPx\(e\.deltaY, e\.deltaMode\)\)/.test(src));
+  check('wheel handler zooms through zoomBy', /zoomBy\(wheelFactor\(wheelDeltaPx\(e\.deltaY, e\.deltaMode\)\)\)/.test(src));
+  check('zoomBy composes dolly + pushTarget', /const d = dolly\(orb\.r, factor\);/.test(src) && /pushTarget\(orb\.tgt, dir, d\.push\)/.test(src));
+  check('push direction is the view ray (minus the camera offset)',
+    src.includes('const dir = { x: -sp * Math.cos(orb.th), y: -Math.cos(orb.ph), z: -sp * Math.sin(orb.th) };'));
   check('no negative zoom floor survives', !/Math\.max\(-30/.test(src));
-  check('touchmove feeds the two-finger gesture', /twoFinger\.move\(/.test(src) && /orb\.r = clampDistance\(orb\.r \* step\.zoom\)/.test(src));
+  check('touchmove feeds the two-finger gesture', /twoFinger\.move\(/.test(src) && /if \(step\.zoom !== 1\) zoomBy\(step\.zoom\)/.test(src));
   check('touchend / touchcancel end the gesture', /"touchend", endTouches/.test(src) && /"touchcancel", endTouches/.test(src));
   check('one-finger rotate formula unchanged',
     src.includes('orb.th += (e.clientX - orb.px) * 0.005;') &&

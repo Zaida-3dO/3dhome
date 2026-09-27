@@ -4,12 +4,22 @@
  * three.js, so node can drive them with synthetic event sequences
  * (scripts/test-camera-gestures.mjs).
  *
- * ZOOM IS MULTIPLICATIVE. The orbit distance used to change additively
- * (`r + deltaY * k`) with a floor of -30, so zooming in far enough carried r
- * through zero. The camera then sat on the far side of the target, still
- * looking at it, and every further zoom-in step made |r| bigger: the view
- * flipped and appeared to zoom out. Scaling r by a positive factor can never
- * cross zero, and the clamp below stops it at MIN_DISTANCE.
+ * ZOOM NEVER INVERTS AND NEVER STOPS. The orbit distance used to change
+ * additively (`r + deltaY * k`) with a floor of -30, so zooming in far enough
+ * carried r through zero. The camera then sat on the far side of the target,
+ * still looking at it, and every further zoom-in step made |r| bigger: the
+ * view flipped and appeared to zoom out. Now:
+ *   - a zoom step is a factor: the camera moves `r * (1 - factor)` along
+ *     its view ray, and never less than MIN_PUSH_PER_LOG * |ln factor|, so
+ *     the step does not shrink to nothing near the target;
+ *   - while r is above PUSH_DISTANCE the step shortens r (ordinary zoom);
+ *   - once it would take r below PUSH_DISTANCE, the rest of the step pushes
+ *     the orbit TARGET forward along the view ray instead ("dolly-through"),
+ *     so the camera flies on into the house at the same speed and later
+ *     orbits around the new target. r is always positive.
+ *   - The target does not go below the floor: a push that would take it
+ *     under FLOOR_Y slides along the floor instead (see pushTarget).
+ *   - Zoom-out is a plain factor on r, capped at MAX_DISTANCE.
  *
  * TWO FINGERS: PAN OR PINCH, NOT BOTH BY ACCIDENT. Fingers dragged together
  * never keep exactly the same gap, and applying every change in the gap as
@@ -26,8 +36,14 @@
  * so a pinch that drifts sideways still feels natural.
  */
 
-/** Closest the camera may come to its orbit target, in metres. */
-export const MIN_DISTANCE = 0.5;
+/** Orbit radius kept while zoom-in pushes the target forward, in metres. */
+export const PUSH_DISTANCE = 1;
+/** Smallest zoom-in travel, in metres per unit of |ln factor| (one wheel notch is about 0.18 m). */
+export const MIN_PUSH_PER_LOG = 1.5;
+/** The orbit target is kept at or above this height (the floor), in metres. */
+export const FLOOR_Y = 0;
+/** Below this horizontal share of the view ray (looking almost straight down), a push cannot slide along the floor. */
+const MIN_SLIDE = 0.15;
 /** Furthest the camera may be from its orbit target, in metres. */
 export const MAX_DISTANCE = 30;
 /** Wheel zoom gain: distance is scaled by exp(deltaPx * this). One 100px notch is about 13%. */
@@ -44,9 +60,10 @@ export const PINCH_UPGRADE = 0.35;
 /** Smallest finger gap used in a ratio, so two touches at one point cannot divide by zero. */
 const MIN_GAP_PX = 1;
 
+/** Keeps an orbit radius positive and within MAX_DISTANCE. */
 export function clampDistance(r) {
-  if (!Number.isFinite(r)) return MIN_DISTANCE;
-  return Math.max(MIN_DISTANCE, Math.min(MAX_DISTANCE, r));
+  if (!Number.isFinite(r) || r <= 0) return PUSH_DISTANCE;
+  return Math.min(MAX_DISTANCE, r);
 }
 
 /** A wheel event's vertical delta in CSS pixels, whatever unit it was reported in. */
@@ -57,14 +74,51 @@ export function wheelDeltaPx(deltaY, deltaMode) {
   return d;
 }
 
-/** New orbit distance after a wheel step. Negative delta (wheel forward / trackpad pinch-out) zooms in. */
-export function zoomByWheel(r, deltaPx) {
-  return clampDistance(clampDistance(r) * Math.exp(deltaPx * WHEEL_ZOOM_PER_PX));
+/** The distance factor for a wheel step: below 1 zooms in (wheel forward, trackpad pinch-out). */
+export function wheelFactor(deltaPx) {
+  return Math.exp(deltaPx * WHEEL_ZOOM_PER_PX);
 }
 
-/** New orbit distance after a pinch step: fingers apart (gap grows) brings the camera closer. */
-export function zoomByPinch(r, prevGap, gap) {
-  return clampDistance(clampDistance(r) * (Math.max(prevGap, MIN_GAP_PX) / Math.max(gap, MIN_GAP_PX)));
+/** The distance factor for a pinch step: fingers apart (the gap grows) is below 1, zoom in. */
+export function pinchFactor(prevGap, gap) {
+  return Math.max(prevGap, MIN_GAP_PX) / Math.max(gap, MIN_GAP_PX);
+}
+
+/**
+ * One zoom step. Returns the new orbit radius and how far (metres) to push
+ * the target forward along the view ray. Zoom-in always moves the camera
+ * forward by `travel` > 0: first by shortening r down to PUSH_DISTANCE, then
+ * by pushing the target.
+ */
+export function dolly(r, factor) {
+  const r0 = clampDistance(r);
+  if (!(factor > 0) || factor === 1) return { r: r0, push: 0, travel: 0 };
+  if (factor > 1) { const r1 = clampDistance(r0 * factor); return { r: r1, push: 0, travel: r0 - r1 }; }
+  const travel = Math.max(r0 * (1 - factor), MIN_PUSH_PER_LOG * -Math.log(factor));
+  const r1 = Math.max(Math.min(r0, PUSH_DISTANCE), r0 - travel);
+  return { r: r1, push: travel - (r0 - r1), travel };
+}
+
+/**
+ * Moves a target point `push` metres along the unit view direction `dir`
+ * (camera towards target), without taking it below FLOOR_Y: a push into the
+ * floor keeps its length but runs along the floor in the view's horizontal
+ * direction. Looking almost straight down there is no such direction, and
+ * the push stops at the floor. Returns a new {x, y, z}.
+ */
+export function pushTarget(tgt, dir, push) {
+  if (!(push > 0)) return { x: tgt.x, y: tgt.y, z: tgt.z };
+  // A target a pan already put below the floor is not lifted back up.
+  const floor = Math.min(FLOOR_Y, tgt.y);
+  const y = tgt.y + dir.y * push;
+  if (y >= floor || dir.y >= 0) return { x: tgt.x + dir.x * push, y, z: tgt.z + dir.z * push };
+  // Down to the floor along the ray, then the rest along the floor.
+  const down = Math.max(0, (tgt.y - floor) / -dir.y);
+  const rest = push - down;
+  const h = Math.hypot(dir.x, dir.z);
+  const at = { x: tgt.x + dir.x * down, y: floor, z: tgt.z + dir.z * down };
+  if (h < MIN_SLIDE) return at;
+  return { x: at.x + dir.x / h * rest, y: floor, z: at.z + dir.z / h * rest };
 }
 
 const gapOf = (a, b) => Math.max(Math.hypot(a.x - b.x, a.y - b.y), MIN_GAP_PX);
@@ -114,7 +168,7 @@ export function createTwoFingerGesture() {
         mode,
         panDx: mid.x - prevMid.x,
         panDy: mid.y - prevMid.y,
-        zoom: mode === 'pinch' ? prevGap / gap : 1
+        zoom: mode === 'pinch' ? pinchFactor(prevGap, gap) : 1
       };
       prevGap = gap; prevMid = mid;
       return out;

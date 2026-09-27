@@ -18,7 +18,7 @@ import {
 import { collapseEmitters } from './light-merge.js';
 import { wallpaperFaceAxis, overlayFace, overlayUOffset } from './wallpaper-face.js';
 import { seedLightState } from './light-state.js';
-import { zoomByWheel, wheelDeltaPx, createTwoFingerGesture, clampDistance } from './camera-gestures.js';
+import { dolly, pushTarget, wheelFactor, wheelDeltaPx, createTwoFingerGesture } from './camera-gestures.js';
 import { HouseLoader } from './house-loader.js';
 import {
   insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, printYaw, WALK_DEFAULTS,
@@ -5123,6 +5123,24 @@ export const Home3DScene = (() => {
       const touchIds = new Set();
       const twoFinger = createTwoFingerGesture();
 
+      // One zoom step (src/camera-gestures.js): a factor below 1 moves the
+      // camera forward along its view ray -- shortening the orbit radius
+      // until PUSH_DISTANCE, then pushing the target itself forward, so
+      // zoom-in never stops and never flips. Above 1 zooms out.
+      function zoomBy(factor) {
+        const d = dolly(orb.r, factor);
+        orb.r = d.r;
+        if (d.push > 0) {
+          const sp = Math.sin(orb.ph);
+          const dir = { x: -sp * Math.cos(orb.th), y: -Math.cos(orb.ph), z: -sp * Math.sin(orb.th) };
+          const t = pushTarget(orb.tgt, dir, d.push);
+          orb.tgt.set(
+            Math.max(PAN_BOUNDS.minX, Math.min(PAN_BOUNDS.maxX, t.x)),
+            Math.min(PAN_BOUNDS.maxY, t.y),
+            Math.max(PAN_BOUNDS.minZ, Math.min(PAN_BOUNDS.maxZ, t.z)));
+        }
+      }
+
       on(container, "pointerdown", e => {
         container.setPointerCapture(e.pointerId);
         if (e.pointerType === "touch") touchIds.add(e.pointerId);
@@ -5180,11 +5198,10 @@ export const Home3DScene = (() => {
       });
       on(container, "wheel", e => {
         e.preventDefault();
-        // Multiplicative zoom, clamped to [MIN_DISTANCE, MAX_DISTANCE] — see
-        // src/camera-gestures.js. The old additive step with a -30 floor let r
+        // See zoomBy above. The old additive step with a -30 floor let r
         // cross zero, which flipped the camera to the far side of the target
         // and turned further zoom-in into zoom-out.
-        orb.r = zoomByWheel(orb.r, wheelDeltaPx(e.deltaY, e.deltaMode));
+        zoomBy(wheelFactor(wheelDeltaPx(e.deltaY, e.deltaMode)));
         updCam();
         wake(250);
       }, { passive: false });
@@ -5200,7 +5217,7 @@ export const Home3DScene = (() => {
           e.preventDefault();
           orb.drag = false;
           const step = twoFinger.move(pt(e.touches[0]), pt(e.touches[1]));
-          if (step.zoom !== 1) orb.r = clampDistance(orb.r * step.zoom);
+          if (step.zoom !== 1) zoomBy(step.zoom);
           if (step.panDx || step.panDy) panCam(step.panDx, step.panDy); // also updCam()s
           else if (step.zoom !== 1) updCam();
           wake(250);
