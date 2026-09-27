@@ -466,6 +466,12 @@ function cornerLine(corner, reach, W) {
  * corner end, picks up. The line is continuous and neither run draws outside
  * its box.
  *
+ * These are a STATIC glow in the builder's own colour: they follow no light
+ * and throw none. In a house whose strips follow Home Assistant, the strips
+ * are room light fixtures on their own channels instead (docs/house-profile.md,
+ * "Kitchen LED strips"), and these flags are turned off so the line is not
+ * drawn twice.
+ *
  * @param {Object} o  { mat, flag, name, zBack (strip's set-back from the
  *   front, cm), dz (its thickness in z), yOf(m) -> [y0, y1] }
  */

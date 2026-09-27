@@ -1742,7 +1742,7 @@
         "plinthLed": {
           "type": "boolean",
           "default": false,
-          "description": "An LED strip on its plinth, to carry a run's plinth strip past it."
+          "description": "An LED strip on its plinth, to carry a run's plinth strip past it. Static emissive in the builder's own colour: it follows no light. A strip that follows a Home Assistant light is a room light fixture on its own channel instead (docs/house-profile.md, \"Kitchen LED strips\"); turn this off then, or the line is drawn twice."
         },
         "ledColor": {
           "$ref": "#/$defs/hexColor",
@@ -1752,7 +1752,7 @@
         "topLed": {
           "type": "boolean",
           "default": false,
-          "description": "An LED strip on its top, to carry a wall run's top strip over it."
+          "description": "An LED strip on its top, to carry a wall run's top strip over it. Static emissive in the builder's own colour: it follows no light. A strip that follows a Home Assistant light is a room light fixture on its own channel instead (docs/house-profile.md, \"Kitchen LED strips\"); turn this off then, or the line is drawn twice."
         },
         "topLedColor": {
           "$ref": "#/$defs/hexColor",
@@ -2032,7 +2032,7 @@
               },
               "plinthLed": {
                 "type": "boolean",
-                "description": "An LED strip on the plinth under this module. Adjacent flagged modules share one strip; on the owner's flagged corner module it turns the corner to meet the other run's strip."
+                "description": "An LED strip on the plinth under this module. Adjacent flagged modules share one strip; on the owner's flagged corner module it turns the corner to meet the other run's strip. Static emissive in the builder's own colour: it follows no light. A strip that follows a Home Assistant light is a room light fixture on its own channel instead (docs/house-profile.md, \"Kitchen LED strips\"); turn this off then, or the line is drawn twice."
               },
               "drainer": {
                 "type": "string",
@@ -2278,11 +2278,11 @@
               },
               "underLed": {
                 "type": "boolean",
-                "description": "cabinet / corner / filler: an LED strip under it, lighting the worktop. Continues round the corner like `plinthLed`."
+                "description": "cabinet / corner / filler: an LED strip under it, lighting the worktop. Continues round the corner like `plinthLed`. Static emissive in the builder's own colour: it follows no light. A strip that follows a Home Assistant light is a room light fixture on its own channel instead (docs/house-profile.md, \"Kitchen LED strips\"); turn this off then, or the line is drawn twice."
               },
               "topLed": {
                 "type": "boolean",
-                "description": "cabinet / corner / filler: an LED strip on top of it."
+                "description": "cabinet / corner / filler: an LED strip on top of it. Static emissive in the builder's own colour: it follows no light. A strip that follows a Home Assistant light is a room light fixture on its own channel instead (docs/house-profile.md, \"Kitchen LED strips\"); turn this off then, or the line is drawn twice."
               },
               "splashback": {
                 "type": "number",

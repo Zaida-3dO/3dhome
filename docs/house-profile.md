@@ -1096,6 +1096,47 @@ geometry fixture, so a room whose ambient light is only a lit cornice and a desk
 strip needs no `ambient` fixture at all -- and should not have one: a fixture
 with no `positions` is auto-placed in the room.
 
+#### Kitchen LED strips
+
+The same pattern, several times over in one room: one `strip` fixture per
+strip **entity**, each on its own named channel, and the room's `ambient`
+binding left as the group that switches them all. A kitchen whose plinth,
+under-cabinet and top strips are three entities under one ambience group:
+
+```json
+// geometry.json, lights[] for the kitchen -- no `ambient` fixture at all
+{ "channel": "strip_top",    "fixtureType": "strip", "positions": [
+    { "at": [170, 20],   "heightCm": 210.5, "size": [340, 1, 0.8], "label": "on the wall units" } ] },
+{ "channel": "strip_under",  "fixtureType": "strip", "positions": [
+    { "at": [165, 28],   "heightCm": 154.5, "size": [110, 1, 0.8], "label": "under the wall units" } ] },
+{ "channel": "strip_plinth", "fixtureType": "strip", "positions": [
+    { "at": [164, 67.6], "heightCm": 12.1,  "size": [223, 1, 0.8], "label": "plinth, north run" },
+    { "at": [52.4, 118], "heightCm": 12.1,  "size": [0.8, 1, 102], "label": "plinth, west run" } ] }
+// rooms.json
+"kitchen": { "main": ["light.example_kitchen"], "ambient": ["light.example_kitchen_ambience"],
+             "strip_top": ["light.example_top"], "strip_under": ["light.example_under"],
+             "strip_plinth": ["light.example_plinth"] }
+```
+
+Put each strip where the real one is, which is **back**, under or behind a
+cabinet's lip -- not on its front edge:
+
+- **plinth**: on the plinth's face (a base run's plinth sits 8 cm behind its
+  front), just under the carcass. From standing height the doors hide it and
+  you see only the glow on the floor.
+- **under the wall units**: hanging 1 cm under their underside, well behind
+  the doors (a 30 cm unit's doors are 27.5 cm off the wall; 18 cm is a good
+  line).
+- **on top**: on the units' top, set back toward the wall.
+
+A strip cannot be rotated: one that runs along the plan's y axis gives its
+length as the third `size` value (`[0.8, 1, 102]`). Each position is one
+point light (strips are never merged), so draw one position per straight run
+rather than one per cabinet. Then turn the kitchen builders' own
+`plinthLed` / `underLed` / `topLed` off: they are a static preview glow, and
+left on they draw each line a second time in a colour that follows nothing.
+Like every accent channel, the strips are dropped on the low GPU tier.
+
 #### Climate
 
 ```json

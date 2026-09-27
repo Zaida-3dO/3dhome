@@ -340,6 +340,16 @@ jobs:
           # entity, with no floor-level fixture.
           set -euo pipefail
           node scripts/test-desk-strip-channel.mjs
+      - name: Kitchen LED strips as room light channels
+        run: |
+          # Asserts a kitchen's strip channels (top, under-cabinet, plinth),
+          # each bound to its own entity, are driven only by that entity and
+          # never by the ambience group; that the room keeps exactly ONE
+          # Ambient row from its binding with no ambient fixture; and that its
+          # accent emitters are exactly the three channels, with only the
+          # plinth runs floor-level.
+          set -euo pipefail
+          node scripts/test-kitchen-strip-channels.mjs
       - name: Wall decor (framed sign + wall sconce, both kinds) builder contract
         run: |
           # Asserts the builder contract for src/furniture/wall-sign.js and
