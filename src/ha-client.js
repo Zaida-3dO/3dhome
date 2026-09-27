@@ -411,6 +411,7 @@ export const HAClient = (() => {
       const key = JSON.stringify(resolved);
       if (fittingResolved[kind].get(targetId) === key) return false;
       fittingResolved[kind].set(targetId, key);
+      markFired(kind + ':' + targetId);
       (kind === 'curtain' ? curtainCallbacks : corniceCallbacks).forEach(cb => {
         try { cb(targetId, resolved); } catch (e) { console.warn('HAClient fittingCb:', e); }
       });
@@ -442,6 +443,7 @@ export const HAClient = (() => {
       const resolvedAvailable = group.every(eid => curtainEntityAvailable.get(eid) === true);
       if (curtainAvailable.get(targetId) === resolvedAvailable) return;
       curtainAvailable.set(targetId, resolvedAvailable);
+      markFired('available:' + targetId);
       curtainAvailabilityCallbacks.forEach(cb => {
         try { cb(targetId, resolvedAvailable); } catch (e) { console.warn('HAClient curtainAvailabilityCb:', e); }
       });
@@ -482,6 +484,7 @@ export const HAClient = (() => {
 
       if (sensorState[kind].get(targetId) === resolved) return false;
       sensorState[kind].set(targetId, resolved);
+      markFired(kind + ':' + targetId);
 
       sensorCallbacksFor(kind).forEach(cb => {
         try { cb(targetId, resolved); } catch (e) { console.warn('HAClient sensorCb:', e); }
@@ -497,6 +500,7 @@ export const HAClient = (() => {
       const status = reduceBinarySensorStates(group.map(eid => sensorEntityRaw.get(eid)));
       if (sensorStatus[kind].get(targetId) === status) return;
       sensorStatus[kind].set(targetId, status);
+      markFired('status:' + kind + ':' + targetId);
       sensorStatusCallbacks.forEach(cb => {
         try { cb(kind, targetId, status); } catch (e) { console.warn('HAClient sensorStatusCb:', e); }
       });
@@ -530,12 +534,64 @@ export const HAClient = (() => {
         const prev = climateResolved.get(roomId);
         if (prev && prev.key === key) return;
         climateResolved.set(roomId, { reading, key });
+        markFired('climate:' + roomId);
         fired = true;
         climateCallbacks.forEach(cb => {
           try { cb(roomId, reading); } catch (e) { console.warn('HAClient climateCb:', e); }
         });
       });
       return fired;
+    }
+
+    // ---- Full resync on every (re)connect ----
+    //
+    // Every path above notifies only on a CHANGE of its resolved value, which
+    // is right for live events (an attribute-only republish must not become a
+    // render) and wrong for a reconnect: if HA's value did not change across
+    // an outage, the reconnect snapshot is swallowed as a no-op, and anything
+    // the UI showed that HA never confirmed -- an optimistic drag, a tap
+    // popover's offline preview -- stays on screen forever ("Open: 30%" while
+    // HA says 100%). So after each get_states snapshot, every target that
+    // did NOT already fire during that snapshot is re-emitted with its current
+    // resolved value, once. On the first connect everything fires during the
+    // snapshot, so this re-emits nothing and first-connect behaviour is
+    // unchanged. Lights need none of this: processStateUpdate always fires
+    // for a snapshot entity (bypassEcho), which is why they already resynced.
+    //
+    // A resync only ever calls the READ callbacks. It never reaches
+    // callService, so it cannot send a command
+    // (scripts/test-ha-resync.mjs pins that: zero call_service on reconnect).
+    let snapshotFired = null;   // Set of target keys fired during the snapshot
+    function markFired(key) { if (snapshotFired) snapshotFired.add(key); }
+
+    function reapplyAll(fired) {
+      const emit = (cbs, args, tag) => cbs.forEach(cb => {
+        try { cb(...args); } catch (e) { console.warn('HAClient ' + tag + ':', e); }
+      });
+      ['curtain', 'cornice'].forEach(kind => {
+        fittingResolved[kind].forEach((key, targetId) => {
+          if (fired.has(kind + ':' + targetId)) return;
+          emit(kind === 'curtain' ? curtainCallbacks : corniceCallbacks, [targetId, JSON.parse(key)], 'fittingCb');
+        });
+      });
+      curtainAvailable.forEach((available, targetId) => {
+        if (fired.has('available:' + targetId)) return;
+        emit(curtainAvailabilityCallbacks, [targetId, available], 'curtainAvailabilityCb');
+      });
+      ['presence', 'door'].forEach(kind => {
+        sensorState[kind].forEach((on, targetId) => {
+          if (fired.has(kind + ':' + targetId)) return;
+          emit(sensorCallbacksFor(kind), [targetId, on], 'sensorCb');
+        });
+        sensorStatus[kind].forEach((st, targetId) => {
+          if (fired.has('status:' + kind + ':' + targetId)) return;
+          emit(sensorStatusCallbacks, [kind, targetId, st], 'sensorStatusCb');
+        });
+      });
+      climateResolved.forEach(({ reading }, roomId) => {
+        if (fired.has('climate:' + roomId)) return;
+        emit(climateCallbacks, [roomId, reading], 'climateCb');
+      });
     }
 
     // Echo suppression
@@ -674,17 +730,23 @@ export const HAClient = (() => {
           ws.close();
         } else if (msg.type === 'result' && msg.id === getStatesId) {
           if (msg.success && Array.isArray(msg.result)) {
-            msg.result.forEach(state => {
-              noteRaw(state);
-              if (entityIndex.has(state.entity_id)) processStateUpdate(state.entity_id, state, true);
-              // Sensors are folded in from the SAME get_states snapshot, so a
-              // room that is already occupied (or a door already open) is
-              // correct on first paint rather than only after the sensor
-              // happens to change.
-              else if (sensorIndex.has(state.entity_id)) processSensorUpdate(state.entity_id, state);
-              if (fittingIndex.has(state.entity_id)) processFittingUpdate(state.entity_id, state);
-              if (climateIndex.has(state.entity_id)) processClimateUpdate(state.entity_id, state);
-            });
+            const fired = snapshotFired = new Set();
+            try {
+              msg.result.forEach(state => {
+                noteRaw(state);
+                if (entityIndex.has(state.entity_id)) processStateUpdate(state.entity_id, state, true);
+                // Sensors are folded in from the SAME get_states snapshot, so a
+                // room that is already occupied (or a door already open) is
+                // correct on first paint rather than only after the sensor
+                // happens to change.
+                else if (sensorIndex.has(state.entity_id)) processSensorUpdate(state.entity_id, state);
+                if (fittingIndex.has(state.entity_id)) processFittingUpdate(state.entity_id, state);
+                if (climateIndex.has(state.entity_id)) processClimateUpdate(state.entity_id, state);
+              });
+            } finally { snapshotFired = null; }
+            // Full resync: re-apply every target the snapshot did not
+            // already fire, BEFORE 'connected' re-enables the controls.
+            reapplyAll(fired);
             setStatus('connected');
           } else {
             setStatus('sync_failed');
@@ -703,6 +765,10 @@ export const HAClient = (() => {
       ws.onclose = () => {
         ws = null;
         authed = false;
+        // Drop every debounced send still pending: it could only fire into a
+        // dead socket now, or -- after a fast reconnect -- replay a value the
+        // user set before the outage. The reconnect resync repaints the UI.
+        cancelAllDebounced();
         if (status !== 'auth_failed') { setStatus('disconnected'); scheduleReconnect(); }
       };
       ws.onerror = () => {};
@@ -731,6 +797,7 @@ export const HAClient = (() => {
       clearTimeout(reconnectTimer);
       if (ws) { ws.onclose = null; ws.close(); ws = null; }
       authed = false;
+      cancelAllDebounced();
       setStatus('disconnected');
     }
 
@@ -790,6 +857,10 @@ export const HAClient = (() => {
       clearTimeout(debounceTimers[debounceKey]);
       delete debounceTimers[debounceKey];
       return pending;
+    }
+
+    function cancelAllDebounced() {
+      Object.keys(debounceTimers).forEach(cancelDebounced);
     }
 
     return {
