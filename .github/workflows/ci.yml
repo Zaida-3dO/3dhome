@@ -547,6 +547,8 @@ jobs:
         # folded pages redirect to a declared object, and every page uses the
         # shared SpecPage/SpecVariants picker with no other switcher.
         run: node scripts/test-spec-pages.mjs
+      - name: Spec harness -- iso view fits the item at any aspect, shadow bias, mirror capture background
+        run: node scripts/test-spec-three.mjs
       - name: Kitchen builders (corner, sink, LEDs, draw budget)
         # What the generic contract cannot see: runs beyond DEFAULTS, the L's
         # worktops meeting without overlap or gap, LED strips continuous round
