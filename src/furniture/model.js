@@ -249,7 +249,11 @@ function findExternalGlbUri(buf) {
   if (dv.getUint32(4, true) !== 2) return bad('version ' + dv.getUint32(4, true) + ', not 2');
   const total = dv.getUint32(8, true);
   if (total < 12 || total > buf.byteLength) return bad('declared length ' + total + ' but the file has ' + buf.byteLength + ' bytes');
-  const isExternal = uri => typeof uri === 'string' && !/^data:/i.test(uri);
+  // Inline only if GLTFLoader itself would treat it as inline: its own test
+  // is /^data:.*,.*$/i (`.` does not match a newline), and anything else --
+  // `data:/../x.bin`, `data:x<newline>,...` -- it resolves against the file's own
+  // directory and FETCHES. A uri present but not a string is refused too.
+  const isExternal = uri => uri !== undefined && !(typeof uri === 'string' && /^data:.*,.*$/i.test(uri));
   const decoder = new TextDecoder('utf-8');
   let jsonChunks = 0;
   for (let at = 12; at < total;) {

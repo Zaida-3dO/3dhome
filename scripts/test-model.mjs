@@ -317,6 +317,16 @@ try {
     write('external-buffer.glb', Object.assign({}, baseDoc, {
       buffers: [{ uri: '../x.bin', byteLength: 0 }]
     }));
+    // data:-PREFIXED but not inline by GLTFLoader's own test (no comma, or a
+    // newline before it): the loader resolves these against the file's
+    // directory and fetches them (code review r2 of PR #82).
+    write('data-prefix-buffer.glb', Object.assign({}, baseDoc, {
+      buffers: [{ uri: 'data:/../../../../../escaped.bin', byteLength: 0 }]
+    }));
+    write('data-newline-image.glb', Object.assign({}, baseDoc, {
+      images: [{ uri: 'data:x\n,/../../../../esc2.png' }],
+      buffers: [{ byteLength: 0 }]
+    }));
     write('data-uri-ok.glb', Object.assign({}, baseDoc, {
       // A data: URI is exactly what a self-contained .glb is meant to embed
       // -- must NOT be refused by this guard (it may still fail to parse for
@@ -336,6 +346,15 @@ try {
       try { M.build(THREE, Object.assign({}, M.DEFAULTS, { src: 'models/external-buffer.glb' }), { assetBase: BASE }); } catch (e) { err = e.message; }
       check('a GLB with an external buffers[].uri is refused', !!err && /buffers\[\]\.uri/.test(err) && /external/.test(err), err);
 
+      for (const [name, kind] of [['data-prefix-buffer.glb', 'buffers'], ['data-newline-image.glb', 'images']]) {
+        M.clearModelCache();
+        await quietlyAsync(() => M.prepare([item('dp-' + kind, { src: 'models/' + name })]));
+        err = null;
+        try { M.build(THREE, Object.assign({}, M.DEFAULTS, { src: 'models/' + name }), { assetBase: BASE }); } catch (e) { err = e.message; }
+        check('a GLB whose ' + kind + '[].uri is data:-prefixed but not inline (' + name + ') is refused',
+          !!err && new RegExp(kind + '\\[\\]\\.uri').test(err) && /external/.test(err), err);
+      }
+
       // A normal GLB (the real demo file) must still load: the guard must not
       // false-positive on a file with no uris at all, or with only data: uris.
       M.clearModelCache();
@@ -350,7 +369,7 @@ try {
       try { M.build(THREE, Object.assign({}, M.DEFAULTS, { src: 'models/data-uri-ok.glb' }), { assetBase: BASE }); } catch (e) { err = e.message; }
       check('a GLB with only a data: buffer uri passes the guard', !!err && !/external|refused/.test(err) && /no full-detail mesh|no scene/.test(err), err);
     } finally {
-      remove('external-image.glb'); remove('external-buffer.glb'); remove('data-uri-ok.glb');
+      remove('external-image.glb'); remove('external-buffer.glb'); remove('data-uri-ok.glb'); remove('data-prefix-buffer.glb'); remove('data-newline-image.glb');
     }
   }
 
