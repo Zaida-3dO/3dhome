@@ -460,13 +460,22 @@ function triangleCount(group) {
     door && outerFaceZ(door));
   check('drawer front face sits at depth - handle allowance', drawer && near(outerFaceZ(drawer), D - HANDLE, 0.002),
     drawer && outerFaceZ(drawer));
-  check('glass door shares the SAME front plane as door/drawer (depth - handle allowance)',
-    glassDoor && near(outerFaceZ(glassDoor), D - HANDLE, 0.002), glassDoor && outerFaceZ(glassDoor));
-  check('mirror door shares the SAME front plane as door/drawer (depth - handle allowance)',
-    mirrorDoor && near(outerFaceZ(mirrorDoor), D - HANDLE, 0.002), mirrorDoor && outerFaceZ(mirrorDoor));
-  check('door and glass front faces are coplanar (no 2.5cm mismatch)',
-    door && glassDoor && near(outerFaceZ(door), outerFaceZ(glassDoor), 0.002),
-    door && glassDoor && { door: outerFaceZ(door), glass: outerFaceZ(glassDoor) });
+  // A glass or mirror front's FRAME (its stiles) is what lies in the plane,
+  // 2 mm behind it (FRAME_BACKSET), and the pane sits 3 mm behind the frame
+  // (PANE_RECESS): the pane used to lie IN the stiles' plane and z-fight
+  // with them (item 19c25304). So: frame within 2.5 mm of the plane, pane
+  // within 1 cm of it and at least 1 mm behind its own frame.
+  const frames = [];
+  g.traverse(o => { if (o.isMesh && o.name === 'cabinetDoorFrame') frames.push(o); });
+  check('glass/mirror frames exist (2 stiles per cell)', frames.length === 4, frames.length);
+  check('glass/mirror frame stiles lie in the shared front plane (within 2.5 mm)',
+    frames.length && frames.every(f => near(outerFaceZ(f), D - HANDLE, 0.0025)), frames.map(outerFaceZ));
+  check('glass door pane sits just behind the shared front plane (<= 1 cm)',
+    glassDoor && outerFaceZ(glassDoor) < D - HANDLE && outerFaceZ(glassDoor) > D - HANDLE - 0.01, glassDoor && outerFaceZ(glassDoor));
+  check('mirror door pane sits just behind the shared front plane (<= 1 cm)',
+    mirrorDoor && outerFaceZ(mirrorDoor) < D - HANDLE && outerFaceZ(mirrorDoor) > D - HANDLE - 0.01, mirrorDoor && outerFaceZ(mirrorDoor));
+  check('every pane is at least 1 mm behind every stile face (no shared plane)',
+    frames.length && [glassDoor, mirrorDoor].every(pn => pn && frames.every(f => outerFaceZ(f) - outerFaceZ(pn) >= 0.001)));
   // None of them sit anywhere near the back (z=0) - the direct regression check.
   [door, drawer, glassDoor, mirrorDoor].forEach((m, i) => {
     check('front cell #' + i + ' is nowhere near the back (z > depth/2)', m && m.position.z > D / 2,
@@ -486,8 +495,12 @@ function triangleCount(group) {
     if (o.name === 'cabinetGlassDoor' && !glassNH) glassNH = o;
     if (o.name === 'cabinetMirrorDoor' && !mirrorNH) mirrorNH = o;
   });
-  [['door', doorNH], ['drawer', drawerNH], ['glass', glassNH], ['mirror', mirrorNH]].forEach(([name, m]) => {
+  [['door', doorNH], ['drawer', drawerNH]].forEach(([name, m]) => {
     check('handleless cabinet: ' + name + ' front sits flush at depth', m && near(outerFaceZ(m), D, 0.002),
+      m && outerFaceZ(m));
+  });
+  [['glass', glassNH], ['mirror', mirrorNH]].forEach(([name, m]) => {
+    check('handleless cabinet: ' + name + ' pane sits just behind depth (<= 1 cm)', m && outerFaceZ(m) < D && outerFaceZ(m) > D - 0.01,
       m && outerFaceZ(m));
   });
   let handleCount = 0;
@@ -616,6 +629,257 @@ function triangleCount(group) {
   const frames4 = [];
   g4.traverse(o => { if (o.isMesh && o.name === 'slidingFrame') frames4.push(o); });
   check('doors: 4 builds 4 doors x 2 stiles = 8 frame stiles', frames4.length === 8, frames4.length);
+}
+
+// ---- 15. the owner's review (items 145a2df1, 19c25304, 7cea6f9f) ----------
+// Every preset on the spec page, from the shared list the z-fighting test
+// also builds.
+const { CABINET_PRESETS } = await imp('scripts/lib-cabinet-presets.mjs');
+const fs = await import('node:fs');
+function meshesNamed(g, name) {
+  const out = [];
+  g.traverse(o => { if (o.isMesh && o.name === name) out.push(o); });
+  return out;
+}
+function mbox(o) { o.updateMatrixWorld(true); return new THREE.Box3().setFromObject(o); }
+
+// 15a. The wide mirrored wardrobe preset is gone (the owner: delete it).
+check('the wide mirrored wardrobe preset is deleted', !CABINET_PRESETS.wideMirroredWardrobe);
+
+// 15b. Triangle caps (perf audit): every preset <= 800 full, <= 400 low.
+Object.keys(CABINET_PRESETS).forEach(k => {
+  const p = CABINET_PRESETS[k].params;
+  const tf = triangleCount(C.build(THREE, p, { detail: 'full' }));
+  const tl = triangleCount(C.build(THREE, p, { detail: 'low' }));
+  check(k + ': full triangles <= 800', tf <= 800, tf);
+  check(k + ': low triangles <= 400', tl <= 400, tl);
+});
+
+// 15c. Mirrors run the full door height (the 2-door mirrored wardrobe had a
+// ~7 cm gap above and below each pane).
+{
+  const p = CABINET_PRESETS.mirroredWardrobe2Door.params;
+  const g = C.build(THREE, p, {});
+  const panes = meshesNamed(g, 'cabinetMirrorDoor');
+  check('mirrored wardrobe: two mirror panes', panes.length === 2, panes.length);
+  const rowBot = p.plinth.height / 100, rowTop = p.height / 100;
+  panes.forEach(pn => {
+    const b = mbox(pn);
+    check('mirror pane reaches within 5 mm of the row top (full height)', b.max.y >= rowTop - 0.005, b.max.y);
+    check('mirror pane reaches within 5 mm of the row bottom (full height)', b.min.y <= rowBot + 0.005, b.min.y);
+  });
+  // Frame stiles never lie in the carcass's outer planes.
+  const stiles = meshesNamed(g, 'cabinetDoorFrame');
+  const W = p.width / 100, H = p.height / 100;
+  check('mirror stiles stay inside the carcass outline (>= 1 mm in)', stiles.every(s => {
+    const b = mbox(s);
+    return b.min.x >= -W / 2 + 0.001 && b.max.x <= W / 2 - 0.001 && b.max.y <= H - 0.001;
+  }));
+}
+
+// 15d. The carcass sides and back stop under the top panel (the TV console's
+// dark top used to share its end faces with the white sides).
+{
+  const p = CABINET_PRESETS.tvConsole.params;
+  const g = C.build(THREE, p, {});
+  const H = p.height / 100;
+  const topY0 = mbox(meshesNamed(g, 'carcassTop')[0]).min.y;
+  const sides = meshesNamed(g, 'carcassSide').concat(meshesNamed(g, 'carcassBack'));
+  check('TV console: sides and back exist', sides.length === 3, sides.length);
+  check('TV console: no side or back runs up into the top panel', sides.every(s => mbox(s).max.y <= topY0 + 1e-6),
+    sides.map(s => mbox(s).max.y));
+  const botY1 = mbox(meshesNamed(g, 'carcassBottom')[0]).max.y;
+  check('TV console: no side or back runs down into the bottom panel', sides.every(s => mbox(s).min.y >= botY1 - 1e-6));
+  check('TV console: the top still spans the full width and reaches the full height',
+    Math.abs(mbox(meshesNamed(g, 'carcassTop')[0]).max.y - H) < 1e-6);
+}
+
+// 15e. Overlay fronts: nothing of the carcass or base stands proud of the
+// fronts -- the tall display cabinet named, glass side panel and plinth
+// included (the owner: "the top and sides overshoot the front doors").
+['tallDisplayCabinet', 'tallDisplayCabinetMirror', 'bedsideTableLedNarrow', 'bedsideTableLedWide'].forEach(k => {
+  const p = CABINET_PRESETS[k].params;
+  const g = C.build(THREE, p, {});
+  const D = p.depth / 100;
+  const faceZ = p.handles === false ? D : D - 0.025;
+  const leaves = meshesNamed(g, 'cabinetDoor').concat(meshesNamed(g, 'drawerFront'));
+  check(k + ': has door/drawer leaves', leaves.length > 0);
+  const leafBack = Math.min(...leaves.map(l => mbox(l).min.z));
+  const carcassNames = ['carcassTop', 'carcassBottom', 'carcassSide', 'carcassBack', 'displaySideGlass', 'displaySideWood'];
+  const proud = [];
+  carcassNames.forEach(n => meshesNamed(g, n).forEach(m => { if (mbox(m).max.z > leafBack + 1e-4) proud.push([n, mbox(m).max.z, leafBack]); }));
+  // The plinth sits UNDER the fronts, set back from their face by its inset
+  // (a shadow recess), never level with or proud of them.
+  meshesNamed(g, 'plinth').forEach(m => { if (mbox(m).max.z > faceZ - 0.005) proud.push(['plinth', mbox(m).max.z, faceZ]); });
+  check(k + ': no carcass, glass-side or plinth part stands proud of the fronts', proud.length === 0, proud);
+  const W = p.width / 100, H = p.height / 100;
+  const outline = new THREE.Box3();
+  leaves.forEach(l => outline.union(mbox(l)));
+  check(k + ': the fronts reach the carcass sides (flush, no side lip)',
+    Math.abs(outline.min.x + W / 2) < 1e-4 && Math.abs(outline.max.x - W / 2) < 1e-4, [outline.min.x, outline.max.x]);
+  check(k + ': the top front reaches the top (flush, no top lip)', Math.abs(outline.max.y - H) < 1e-4, outline.max.y);
+  check(k + ': the leaves sit in the front plane', leaves.every(l => Math.abs(mbox(l).max.z - faceZ) < 1e-4));
+});
+// ... and an overlay cabinet WITH handles still fills its declared depth.
+{
+  const p = CABINET_PRESETS.tallDisplayCabinet.params;
+  const b = bbox(C.build(THREE, p, {}));
+  check('display cabinet: the handles still reach the declared depth', Math.abs(b.max.z - p.depth / 100) < 0.001, b.max.z);
+}
+
+// 15f. The finish param: unset follows `gloss`; an explicit finish wins.
+{
+  const base = { width: 60, height: 80, depth: 40, plinth: { type: 'plinth', height: 0 },
+    fronts: [{ height: 80, cells: [{ kind: 'door', width: 60 }] }] };
+  const finishOf = (g, name) => meshesNamed(g, name)[0].material.userData.finish;
+  check('resolveFinish: unset + gloss:false -> matte', C.resolveFinish({ gloss: false }) === 'matte');
+  check('resolveFinish: unset + gloss:true -> gloss', C.resolveFinish({ gloss: true }) === 'gloss');
+  check('resolveFinish: finish satin wins over gloss:true', C.resolveFinish({ gloss: true, finish: 'satin' }) === 'satin');
+  check('resolveFinish: an unknown finish falls back to gloss', C.resolveFinish({ gloss: false, finish: 'metal' }) === 'matte');
+  const gm = C.build(THREE, Object.assign({}, base, { gloss: false }), {});
+  check('unset finish + gloss:false: carcass and door are matte', finishOf(gm, 'carcassSide') === 'matte' && finishOf(gm, 'cabinetDoor') === 'matte');
+  const gs = C.build(THREE, Object.assign({}, base, { finish: 'satin' }), {});
+  ['carcassTop', 'carcassBottom', 'carcassSide', 'carcassBack', 'cabinetDoor'].forEach(n =>
+    check('finish satin applies to ' + n, finishOf(gs, n) === 'satin', finishOf(gs, n)));
+  const shelving = C.build(THREE, Object.assign({}, CABINET_PRESETS.openShelving2Columns.params, { finish: 'satin' }), {});
+  check('finish satin applies to open-shelving shelves and dividers',
+    meshesNamed(shelving, 'shelf').every(m => m.material.userData.finish === 'satin') &&
+    meshesNamed(shelving, 'columnDivider').every(m => m.material.userData.finish === 'satin'));
+  check('DEFAULTS.finish is null (follow gloss)', C.DEFAULTS.finish === null);
+  check('DEFAULTS.overlayFronts is false (the old look)', C.DEFAULTS.overlayFronts === false);
+}
+
+// 15g. The display interior (scout 80edd3ff): lining, 2 glass shelves at 35
+// and 80, a vertical LED strip, contents that stay INSIDE the section, and
+// no horizontal shelf light.
+['tallDisplayCabinet', 'tallDisplayCabinetMirror'].forEach(k => {
+  const p = CABINET_PRESETS[k].params;
+  const g = C.build(THREE, p, { detail: 'full' });
+  const shelves = meshesNamed(g, 'interiorShelf');
+  check(k + ': two glass shelves', shelves.length === 2 && shelves.every(s => s.material.userData.finish === 'glass'), shelves.length);
+  const floor = meshesNamed(g, 'interiorFloor')[0];
+  check(k + ': an interior floor', !!floor);
+  if (floor && shelves.length === 2) {
+    const fy = mbox(floor).max.y;
+    const hs = shelves.map(s => Math.round((mbox(s).min.y - fy) * 100)).sort((a, b) => a - b);
+    check(k + ': shelves at 35 and 80 cm above the section floor', hs[0] === 35 && hs[1] === 80, hs);
+  }
+  const lining = meshesNamed(g, 'interiorLining').concat(meshesNamed(g, 'interiorDivider'));
+  check(k + ': dark lining (back, ceiling, wall, divider)', lining.length >= 4 &&
+    lining.every(m => m.material.color.getHexString() === '2b2426'), lining.length);
+  const strip = meshesNamed(g, 'interiorLedStrip');
+  check(k + ': one vertical emissive LED strip, pink by default', strip.length === 1 &&
+    strip[0].material.userData.finish === 'emissive' && strip[0].material.color.getHexString() === 'ff4fa0');
+  if (strip.length && floor) {
+    const sb = mbox(strip[0]);
+    check(k + ': the strip runs the section height (> 1 m) at the back', sb.max.y - sb.min.y > 1.0 && sb.min.z < 0.02, sb);
+  }
+  check(k + ': no horizontal shelf light', meshesNamed(g, 'shelfLight').length === 0);
+  // Contents: <= 150 triangles, and every piece inside the section's clear
+  // box (between the lining/divider walls, behind the glass, on or above a
+  // floor/shelf and under the ceiling).
+  const contents = [];
+  g.traverse(o => { if (o.isMesh && /^contents/.test(o.name)) contents.push(o); });
+  const tris = contents.reduce((s, o) => s + (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3, 0);
+  check(k + ': contents present and <= 150 triangles', contents.length > 0 && tris <= 150, { n: contents.length, tris });
+  const walls = lining.concat(strip);
+  const clear = { x0: -Infinity, x1: Infinity };
+  const glassPane = meshesNamed(g, 'cabinetGlassDoor')[0];
+  const paneBack = glassPane ? mbox(glassPane).min.z : Infinity;
+  const ceil = Math.min(...meshesNamed(g, 'interiorLining').map(m => mbox(m).min.y).filter(y => y > 1.0));
+  const W = p.width / 100;
+  const inside = contents.filter(o => {
+    const b = mbox(o);
+    return b.max.z <= paneBack - 0.002 && b.max.y <= ceil + 1e-6 && b.min.y >= mbox(floor).max.y - 0.001 &&
+      b.min.x >= -W / 2 && b.max.x <= W / 2;
+  });
+  check(k + ': every content piece is inside the section (behind the glass, under the ceiling, on the floor)',
+    inside.length === contents.length, contents.filter(o => inside.indexOf(o) === -1).map(o => [o.name, mbox(o)]));
+  // Nothing pokes through a glass shelf: a piece standing on a level stays
+  // below the next shelf's underside.
+  const shelfBottoms = shelves.map(s => mbox(s).min.y), shelfTops = shelves.map(s => mbox(s).max.y);
+  const crossing = contents.filter(o => {
+    const b = mbox(o);
+    return shelves.some((s, i) => b.min.y < shelfTops[i] - 0.001 && b.max.y > shelfBottoms[i] + 0.001);
+  });
+  check(k + ': no content piece passes through a glass shelf', crossing.length === 0, crossing.map(o => o.name));
+  const low = C.build(THREE, p, { detail: 'low' });
+  let lowContents = 0;
+  low.traverse(o => { if (o.isMesh && /^contents/.test(o.name)) lowContents++; });
+  check(k + ': contents dropped at low detail', lowContents === 0, lowContents);
+});
+
+// 15h. The LED bedside tables (scout 80edd3ff): no plinth but a 1 cm shadow
+// recess, drawers 21/18/15, two recessed light channels with independent
+// colours wrapping the front and both sides (never the back), and a glow
+// band on the drawer below each.
+['bedsideTableLedNarrow', 'bedsideTableLedWide'].forEach(k => {
+  const p = CABINET_PRESETS[k].params;
+  const g = C.build(THREE, p, { detail: 'full' });
+  const W = p.width / 100, D = p.depth / 100;
+  const drawers = meshesNamed(g, 'drawerFront');
+  check(k + ': three drawers', drawers.length === 3, drawers.length);
+  const hs = drawers.map(d => mbox(d)).sort((a, b) => b.min.y - a.min.y);
+  check(k + ': drawers top-to-bottom tallest to shortest (21 / 18 / 15 rows)',
+    hs.length === 3 && (hs[0].max.y - hs[0].min.y) > (hs[1].max.y - hs[1].min.y) && (hs[1].max.y - hs[1].min.y) > (hs[2].max.y - hs[2].min.y));
+  const recesses = meshesNamed(g, 'channelRecess');
+  check(k + ': two recessed channels', recesses.length === 2, recesses.length);
+  recesses.forEach(r => {
+    const b = mbox(r);
+    check(k + ': channel set back ~1.5 cm from the front', Math.abs(b.max.z - (D - 0.015)) < 0.001, b.max.z);
+    check(k + ': channel set in ~1.5 cm from each side', Math.abs(b.max.x - (W / 2 - 0.015)) < 0.001 && Math.abs(b.min.x + (W / 2 - 0.015)) < 0.001);
+  });
+  const sides = meshesNamed(g, 'carcassSide');
+  check(k + ': the carcass sides are split round both channels (3 segments a side)', sides.length === 6, sides.length);
+  const fronts = meshesNamed(g, 'channelStripFront'), sideStrips = meshesNamed(g, 'channelStripSide');
+  check(k + ': a front strip per channel and two side strips per channel', fronts.length === 2 && sideStrips.length === 4);
+  const colours = fronts.map(f => f.material.color.getHexString()).sort();
+  check(k + ': the two channels have their own colours', colours.length === 2 && colours[0] !== colours[1], colours);
+  check(k + ': every strip is emissive and kept', fronts.concat(sideStrips).every(s =>
+    s.material.userData.finish === 'emissive' && s.userData.keep === true));
+  check(k + ': no strip reaches the back (never wraps it)', sideStrips.every(s => mbox(s).min.z > 0.015));
+  const glows = meshesNamed(g, 'channelGlow');
+  check(k + ': a glow band on the drawer below each channel, in the drawer\'s own plane', glows.length === 2 &&
+    glows.every(gl => Math.abs(mbox(gl).max.z - D) < 1e-4 && gl.material.userData.finish === 'emissive'), glows.length);
+  const plinth = meshesNamed(g, 'plinth')[0];
+  check(k + ': a 2 cm base set back 1 cm (shadow recess)', plinth && Math.abs(mbox(plinth).max.y - 0.02) < 1e-4 &&
+    Math.abs(mbox(plinth).max.z - (D - 0.01)) < 1e-4 && Math.abs(mbox(plinth).max.x - (W / 2 - 0.01)) < 1e-4);
+  check(k + ': handleless', meshesNamed(g, 'drawerHandle').length === 0);
+  check(k + ': white satin', drawers.every(d => d.material.userData.finish === 'satin'));
+  const b = bbox(g);
+  check(k + ': bbox matches params', near(b.max.x - b.min.x, W, 0.005) && near(b.max.y - b.min.y, p.height / 100, 0.005) &&
+    near(b.max.z - b.min.z, D, 0.005), b);
+});
+
+// 15i. The APPROVED presets did not move (plan review r2, finding 1). Every
+// front, handle, plinth/wheel, top/bottom and shelf part of the chest of
+// drawers, sliding wardrobe, open shelving, mobile pedestal and TV console
+// has exactly the bounding box it had before this change
+// (scripts/fixtures/cabinet-approved-fronts.json, captured from f3e0cb2's
+// builder). Deliberate exceptions: the pedestal's TOP drawer handle, which
+// used to run up into the top panel (its face in the panel's front plane)
+// and now stops under it.
+{
+  const fx = JSON.parse(fs.readFileSync(path.join(root, 'scripts/fixtures/cabinet-approved-fronts.json'), 'utf8'));
+  const KEEP = new Set(['cabinetDoor', 'drawerFront', 'doorHandle', 'drawerHandle', 'slidingWhitePanel', 'slidingRail', 'slidingFrame', 'shelf', 'columnDivider', 'carcassTop', 'carcassBottom', 'plinth', 'wheel', 'leg']);
+  Object.keys(fx.params).forEach(k => {
+    const g = C.build(THREE, fx.params[k], { detail: 'full' });
+    const now = [];
+    g.traverse(o => {
+      if (!o.isMesh || !KEEP.has(o.name)) return;
+      const b = mbox(o);
+      const r = v => Math.round(v * 10000) / 10000;
+      now.push([o.name, o.material.userData.finish, r(b.min.x), r(b.min.y), r(b.min.z), r(b.max.x), r(b.max.y), r(b.max.z)]);
+    });
+    now.sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : 1);
+    const was = fx.parts[k];
+    const exempt = row => k === 'pedestal' && row[0] === 'drawerHandle' && row[7] > 0 && row[6] > 0.55;
+    const a = was.filter(r => !exempt(r)).map(r => JSON.stringify(r));
+    const b = now.filter(r => !exempt(r)).map(r => JSON.stringify(r));
+    const missing = a.filter(x => b.indexOf(x) === -1), extra = b.filter(x => a.indexOf(x) === -1);
+    check('approved preset ' + k + ': every front/handle/base/top/shelf part is exactly where it was',
+      missing.length === 0 && extra.length === 0, { missing: missing.slice(0, 4), extra: extra.slice(0, 4) });
+  });
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
