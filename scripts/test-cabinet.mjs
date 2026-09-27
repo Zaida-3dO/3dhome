@@ -957,19 +957,38 @@ Object.keys(CABINET_PRESETS).forEach(k => {
   ['demo_top', 'demo_bottom'].forEach(ch => {
     check(k + ' ' + ch + ': its three strip meshes follow it', of(ch, 'strip').length === 3 &&
       of(ch, 'strip').every(o => /^channelStrip/.test(o.name)), of(ch, 'strip').map(o => o.name));
-    check(k + ' ' + ch + ': the glow band below follows it, carrying the front colour', of(ch, 'glow').length === 1 &&
-      of(ch, 'glow')[0].name === 'channelGlow' && of(ch, 'glow')[0].userData.baseColor === p.color);
+    const bands = of(ch, 'glow').slice().sort((a, b) => mbox(b).max.y - mbox(a).max.y);
+    check(k + ' ' + ch + ': the drawer below is washed by four bands following it, carrying the front colour',
+      bands.length === 4 && bands.every(b => b.name === 'channelGlow' && b.userData.baseColor === p.color), bands.length);
+    check(k + ' ' + ch + ': the wash fades away from the channel (weights 1 > 0.6 > 0.33 > 0.15, top down)',
+      JSON.stringify(bands.map(b => b.userData.glowWeight)) === JSON.stringify([1, 0.6, 0.33, 0.15]),
+      bands.map(b => b.userData.glowWeight));
+    // The bands sit edge to edge from the channel down, in the drawer's own
+    // plane, over min(8 cm, 45 % of the drawer's height).
+    const top = mbox(bands[0]).max.y, bot = mbox(bands[3]).min.y;
+    const leaf = meshesNamed(g, 'drawerFront').map(mbox).find(b => Math.abs(b.max.y - bot) < 1e-6);
+    const washH = leaf ? Math.min(0.08, (top - leaf.min.y) * 0.45) : -1;
+    // (the leaf's top is its reveal below the channel's bottom: under 1 cm)
+    const recess = meshesNamed(g, 'channelRecess').map(mbox).find(b => b.min.y >= top - 1e-4 && b.min.y - top < 0.01);
+    check(k + ' ' + ch + ': the wash starts right under its channel and spans min(8 cm, 45 % of the drawer)',
+      !!recess && Math.abs((top - bot) - washH) < 0.003 &&
+      bands.every((b, i) => i === 0 || Math.abs(mbox(b).max.y - mbox(bands[i - 1]).min.y) < 1e-6) &&
+      bands.every(b => Math.abs(mbox(b).max.z - p.depth / 100) < 1e-4), [top - bot, washH]);
   });
-  check(k + ': only the strips and bands are dynamic', parts.length === 8, parts.map(o => o.name));
+  check(k + ': only the strips and bands are dynamic', parts.length === 14, parts.map(o => o.name));
+  const front = meshesNamed(g, 'drawerFront');
+  check(k + ': the drawer fronts still reach the channel tops (front + wash = the drawer)',
+    front.length === 3);
   const mats = new Set(parts.map(o => o.material));
   const statics = [];
   g.traverse(o => { if (o.isMesh && !o.userData.dynamic) statics.push(o.material); });
   check(k + ': no light part shares a material with a static part', statics.every(m => !mats.has(m)));
   check(k + ': the two levels never share a material', of('demo_top', 'strip').every(o => of('demo_bottom', 'strip').every(b => b.material !== o.material)));
   const boxes = C.channelStripBoxes(p);
-  check(k + ': lightAt is the strip front, at the level centre, in the recess (behind the fronts)',
+  const leafT = Math.min(1.8, p.depth * 0.06);
+  check(k + ': lightAt is at the level centre, in the plane of the drawer fronts\' back faces',
     boxes.every(b => b.lightAt[0] === 0 && b.lightAt[1] === b.centre[1] &&
-      Math.abs(b.lightAt[2] - (b.centre[2] + b.size[2] / 2)) <= 0.1 && b.lightAt[2] < p.depth), boxes.map(b => b.lightAt));
+      Math.abs(b.lightAt[2] - (p.depth - leafT)) <= 0.1), boxes.map(b => b.lightAt));
 });
 
 // 15l. The mobile pedestal is pink: the pink gaming chair's pink.

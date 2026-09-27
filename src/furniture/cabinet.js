@@ -253,6 +253,12 @@ const CHANNEL_SETBACK = 0.015; // how far the channel's faces sit behind the fro
 const STRIP_PROUD = 0.002;     // the LED strip's face in front of the channel face
 const GLOW_SHARE = 0.35;       // the glow band: this much LED colour over the front's colour
 const GLOW_DIM = 1;            // ... at this brightness (the base white carries the rest)
+// A level that follows a light (channel.light) washes the drawer front below
+// it in WASH_WEIGHTS.length bands over the top WASH_SHARE of that front (at
+// most WASH_MAX_H), strongest at the channel.
+const WASH_WEIGHTS = Object.freeze([1, 0.6, 0.33, 0.15]);
+const WASH_SHARE = 0.45;
+const WASH_MAX_H = 0.08;
 const STRIP_BACK_T = 0.006;    // the carcass back's thickness (full detail): side strips start 2 cm in front of it
 
 /** Is the fronts row a light channel? */
@@ -403,6 +409,23 @@ function leafRect(x0, x1, yBot, yTop, revealY, edges) {
 
 /** A leaf, optionally with a glow band along its top edge (below a light channel). */
 function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor, glowLight) {
+  if (glowColor && glowLight) {
+    // A level that FOLLOWS a light washes the front below it: WASH_WEIGHTS
+    // bands, top down, each a slice of the same front in the same plane,
+    // fading from the channel (light-parts.js scales each by its weight).
+    const base = /^#[0-9a-fA-F]{6}$/.test(baseColor) ? baseColor : '#ffffff';
+    const washH = Math.min(WASH_MAX_H, (r.ly1 - r.ly0) * WASH_SHARE);
+    const step = washH / WASH_WEIGHTS.length;
+    WASH_WEIGHTS.forEach((w, i) => {
+      const band = slab(THREE, group, finish(THREE, 'emissive', glowTint(glowColor, baseColor)),
+        r.lx0, r.lx1, r.ly1 - step * (i + 1), r.ly1 - step * i, faceZ - T, faceZ, 'channelGlow');
+      band.castShadow = false;
+      tagLightPart(band, glowLight, 'glow');
+      band.userData.baseColor = base;
+      band.userData.glowWeight = w;
+    });
+    return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1 - washH, faceZ - T, faceZ, name);
+  }
   if (glowColor) {
     // The glow band is part of the leaf -- the top slice of the same front,
     // in the same plane -- not a plate stuck on in front of it.
@@ -410,10 +433,6 @@ function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor, glo
     const band = slab(THREE, group, finish(THREE, 'emissive', glowTint(glowColor, baseColor)),
       r.lx0, r.lx1, r.ly1 - bandH, r.ly1, faceZ - T, faceZ, 'channelGlow');
     band.castShadow = false;
-    if (glowLight) {
-      tagLightPart(band, glowLight, 'glow');
-      band.userData.baseColor = /^#[0-9a-fA-F]{6}$/.test(baseColor) ? baseColor : '#ffffff';
-    }
     return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1 - bandH, faceZ - T, faceZ, name);
   }
   return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1, faceZ - T, faceZ, name);
@@ -879,12 +898,12 @@ function buildChannel(THREE, group, row, W, faceZ, backZ, y0, y1, fin, color, lo
  *
  *   { row, color, centre: [x, y, z], size: [x, y, z], lightAt: [x, y, z] }
  *
- * The box is the one the static strip fills (the front run and both side
- * runs, 2 mm proud of the recess, never the back), so a house can draw each
- * level as a room light `strip` fixture of exactly this size where the
- * table stands, with the table placed at `led: false` (docs/house-profile.md,
- * "Bedside table LED strips"). Its middle, hidden inside the recess block,
- * is where that fixture's light sits.
+ * The box is the one the table's own strip fills (the front run and both
+ * side runs, 2 mm proud of the recess, never the back). `lightAt` is where
+ * that level's real light goes: a room light `strip` fixture on the level's
+ * channel, aimed out of the table, at the channel's height in the plane of
+ * the drawer fronts' back faces (docs/house-profile.md, "Bedside table LED
+ * strips").
  */
 export function channelStripBoxes(params) {
   const p = Object.assign({}, DEFAULTS, params);
@@ -905,11 +924,15 @@ export function channelStripBoxes(params) {
       color: row.channel.color || '#dbe8ff',
       centre: [0, r((y0 + y1) / 2), r((z0 + z1) / 2)],
       size: [r(2 * (xs + STRIP_PROUD)), r(sh), r(z1 - z0)],
-      // Where the level's real light belongs: on the strip's FRONT face, in
-      // the recess (behind the drawer fronts, so it lights the floor, the
-      // wall and the drawer edges round the channel rather than washing
-      // the other level's recess from inside the table).
-      lightAt: [0, r((y0 + y1) / 2), r(z1)],
+      // Where the level's real light belongs: at the channel's height, in
+      // the plane of the drawer fronts' BACK faces. Aimed out of the table
+      // (a spot with a 90 degree half-angle, see home3d-scene.js addStrip
+      // `aim`), it lights the channel it sits in, the floor in front and
+      // the bed beside the table -- and nothing of the OTHER level's channel,
+      // whose faces all lie behind or on that plane, so an off level stays
+      // dark with no shadow map. The drawer front below is washed by the
+      // level's glow band, which follows the same channel (light-parts.js).
+      lightAt: [0, r((y0 + y1) / 2), r(faceZ - frontThickness(D))],
     };
   });
 }

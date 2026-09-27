@@ -115,7 +115,7 @@ function levelFixtures(preset, centreY, side) {
   return C.channelStripBoxes(p).map((b, i) => ({
     channel: names[i], fixtureType: 'strip', positions: [{
       at: [+(WALL_X - b.lightAt[2]).toFixed(1), +(centreY + b.lightAt[0]).toFixed(1)],
-      heightCm: b.lightAt[1], size: [b.size[2], b.size[1], b.size[0]], drawn: false, reachCm: 90,
+      heightCm: b.lightAt[1], drawn: false, reachCm: 90, aim: [-1, 0], spreadDeg: 90,
       label: side + ' bedside, ' + ['top', 'bottom'][i],
     }],
   }));
@@ -156,13 +156,11 @@ function levelFixtures(preset, centreY, side) {
     check(side + ': two levels, top first', fx.length === 2 && fx[0].positions[0].heightCm > fx[1].positions[0].heightCm, fx);
     fx.forEach(f => {
       const pos = f.positions[0];
-      const x0 = pos.at[0] - pos.size[0] / 2, x1 = pos.at[0] + pos.size[0] / 2;
-      const y0 = pos.at[1] - pos.size[2] / 2, y1 = pos.at[1] + pos.size[2] / 2;
       check(f.channel + ': on the table, along the wall (width)', pos.at[1] >= cy - p.width / 2 && pos.at[1] <= cy + p.width / 2, pos.at);
-      check(f.channel + ': at the strip front: within 2 cm behind the drawer fronts, in the recess',
+      check(f.channel + ': in the channel, within 2 cm behind the drawer fronts',
         pos.at[0] > WALL_X - p.depth && pos.at[0] <= WALL_X - p.depth + 2, pos.at[0]);
-      check(f.channel + ': no mesh of its own (the table draws the strip), a short reach',
-        pos.drawn === false && pos.reachCm > 0 && pos.reachCm < 250, pos);
+      check(f.channel + ': no mesh of its own (the table draws the strip), a short reach, aimed out of the table (west)',
+        pos.drawn === false && pos.reachCm > 0 && pos.reachCm < 250 && pos.aim[0] < 0 && pos.aim[1] === 0, pos);
       check(f.channel + ': in a channel row, between the drawers', pos.heightCm > (p.plinth.height || 0) && pos.heightCm < p.height, pos.heightCm);
     });
   });
@@ -178,14 +176,27 @@ function levelFixtures(preset, centreY, side) {
     rooms: [{ id: 'bedroom', name: 'Bedroom', polygon: [[0, 0], [500, 0], [500, 400], [0, 400]] }],
     lights: [{ room: 'bedroom', fixtures: [
       { channel: 'bedside_north_top', fixtureType: 'strip', positions: [
-        { at: [479, 120], heightCm: 38, size: [36, 0.6, 47], drawn: false, reachCm: 90 }] },
+        { at: [479, 120], heightCm: 38, drawn: false, reachCm: 90, aim: [-1, 0], spreadDeg: 90 }] },
       { channel: 'strip_plain', fixtureType: 'strip', positions: [{ at: [100, 20], heightCm: 200, size: [100, 1, 1] }] }] }],
   };
   const house = HouseLoader.compile(doc, 'houses/demo_bed/');
   const pos = house.lights.bedroom.bedside_north_top.positions[0];
-  check('loader keeps drawn:false and reachCm', pos.drawn === false && pos.reachCm === 90, pos);
+  check('loader keeps drawn:false, reachCm, aim and spreadDeg', pos.drawn === false && pos.reachCm === 90 &&
+    JSON.stringify(pos.aim) === '[-1,0]' && pos.spreadDeg === 90, pos);
   const plain = house.lights.bedroom.strip_plain.positions[0];
-  check('...and adds neither to a plain strip', !('drawn' in plain) && !('reachCm' in plain), plain);
+  check('...and adds none of them to a plain strip', !('drawn' in plain) && !('reachCm' in plain) &&
+    !('aim' in plain) && !('spreadDeg' in plain), plain);
+}
+
+// ---- 4c. an aimed strip light keeps its aim through collapseEmitters -------
+{
+  const { collapseEmitters } = await imp('src/light-merge.js');
+  const out = collapseEmitters([
+    { x: 1, y: 0.38, z: 1, intensity: 1, distance: 0.9, decay: 2, aim: [-1, 0], spread: 90 },
+    { x: 1, y: 0.18, z: 1, intensity: 1, distance: 0.9, decay: 2, aim: [-1, 0], spread: 90 },
+  ], { minX: 0, maxX: 4, minZ: 0, maxZ: 4 }, { merge: false });
+  check('strips stay one light each, each keeping its aim and spread', out.length === 2 &&
+    out.every(m => JSON.stringify(m.aim) === '[-1,0]' && m.spread === 90 && m.distance === 0.9), out);
 }
 
 // ---- 5. light parts follow their channel ------------------------------------
@@ -205,19 +216,23 @@ function levelFixtures(preset, centreY, side) {
   pose({ on: true, bri: 100, color: '#ff0000' }, { on: false, bri: 100, color: '#00ff00' });
   check('top ON: its strips show, in its colour, lit', of('bedside_north_top', 'strip').every(o =>
     o.visible && hex(o.material.color) === '#ff0000' && hex(o.material.emissive) === '#ff0000' && o.material.emissiveIntensity >= 0.99));
-  const band = of('bedside_north_top', 'glow')[0];
+  const band = of('bedside_north_top', 'glow').find(o => o.userData.glowWeight === 1);
+  const faint = of('bedside_north_top', 'glow').find(o => o.userData.glowWeight === 0.15);
+  check('top ON: the wash fades down the drawer (the band at the channel is redder and brighter than the lowest)',
+    band && faint && band.material.color.g < faint.material.color.g - 0.2 &&
+    band.material.emissiveIntensity > faint.material.emissiveIntensity * 3, [hex(band.material.color), hex(faint.material.color)]);
   check('top ON: the drawer below is washed in its colour (red over white)', band &&
     band.material.color.r > band.material.color.g + 0.3 && band.material.emissiveIntensity > 0.9 &&
     hex(band.material.emissive) === hex(band.material.color), hex(band.material.color));
   check('bottom OFF: its strips are hidden (just the recess)', of('bedside_north_bottom', 'strip').every(o => !o.visible));
-  const bandOff = of('bedside_north_bottom', 'glow')[0];
-  check('bottom OFF: its drawer is the plain front, not lit by the other level', bandOff &&
-    hex(bandOff.material.color) === p.color && hex(bandOff.material.emissive) === '#000000' && bandOff.material.emissiveIntensity === 0,
-    [hex(bandOff.material.color), hex(bandOff.material.emissive)]);
+  const offBands = of('bedside_north_bottom', 'glow');
+  check('bottom OFF: its drawer is the plain front, every band of it', offBands.length === 4 && offBands.every(b =>
+    hex(b.material.color) === p.color && hex(b.material.emissive) === '#000000' && b.material.emissiveIntensity === 0),
+    offBands.map(b => [hex(b.material.color), hex(b.material.emissive)]));
 
   const fullG = band.material.color.g, fullK = band.material.emissiveIntensity;
   pose({ on: true, bri: 10, color: '#ff0000' }, { on: true, bri: 100, color: '#0000ff' });
-  const dim = of('bedside_north_top', 'glow')[0].material;
+  const dim = band.material;
   check('top at 10%: the wash is weaker than at 100% (less red over the white, dimmer)',
     dim.color.g > fullG + 0.1 && dim.emissiveIntensity < fullK - 0.3, [hex(dim.color), dim.emissiveIntensity, fullG, fullK]);
   check('bottom back ON: its strips show again, in the new colour', of('bedside_north_bottom', 'strip').every(o =>

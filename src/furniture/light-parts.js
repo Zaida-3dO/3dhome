@@ -15,6 +15,9 @@
  *                                     colour, stronger with brightness; off,
  *                                     it is plain front again
  *   userData.baseColor     'glow' only: the front's own colour ('#rrggbb')
+ *   userData.glowWeight    'glow' only, optional (default 1): how strongly
+ *                          this band is washed, so a stack of bands fades
+ *                          away from the strip
  *
  * The scene (home3d-scene.js syncLights) calls applyLightPart() for every
  * such part of an item in a room, with that room's channel state
@@ -66,11 +69,12 @@ export function applyLightPart(mesh, state) {
   }
   if (mesh.userData.lightRole === 'glow') {
     const base = mesh.userData.baseColor || '#ffffff';
+    const w = mesh.userData.glowWeight > 0 ? Math.min(1, mesh.userData.glowWeight) : 1;
     if (on && k > 0) {
-      const c = glowColour(state.color, base, GLOW_SHARE * k);
+      const c = glowColour(state.color, base, GLOW_SHARE * k * w);
       m.color.set(c);
       m.emissive.set(c);
-      m.emissiveIntensity = 0.35 + 0.65 * k;
+      m.emissiveIntensity = (0.35 + 0.65 * k) * w;
     } else {
       m.color.set(base);
       m.emissive.set('#000000');

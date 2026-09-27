@@ -2528,11 +2528,18 @@ export const Home3DScene = (() => {
       // table level, cabinet.js `channel.light`). `pos.reachCm`: the light's
       // cut-off distance (default 2.5 m), short for a light tucked into
       // furniture so it lights what is round it and not the room.
+      // `pos.aim`: a plan direction [dx, dy] -- the light becomes a SpotLight
+      // (no shadow) pointing that way, lighting only within `pos.spreadDeg`
+      // (default 90: the whole half-space in front). A bedside level's light faces out of the table,
+      // so it washes the fronts beside it and the floor in front, but never
+      // reaches straight up or down to the OTHER level's channel.
       const addStrip = (px, py, pz, size, meshes, lights, tint, pos) => {
         const [sl, sh, sd] = size;
         const reach = pos && pos.reachCm > 0 ? pos.reachCm / 100 : 2.5;
+        const aimed = pos && Array.isArray(pos.aim) && pos.aim.length === 2 && (pos.aim[0] || pos.aim[1])
+          ? { aim: [pos.aim[0], pos.aim[1]], spread: pos.spreadDeg > 0 ? Math.min(90, pos.spreadDeg) : 90 } : {};
         if (pos && pos.drawn === false) {
-          lights.push({ x: px, y: py, z: pz, intensity: 1, distance: reach, decay: 2 });
+          lights.push(Object.assign({ x: px, y: py, z: pz, intensity: 1, distance: reach, decay: 2 }, aimed));
           return;
         }
         const m = new THREE.Mesh(
@@ -2546,7 +2553,7 @@ export const Home3DScene = (() => {
         m.userData = { roomId: id, clickable: true };
         scene.add(m);
         meshes.push(m);
-        lights.push({ x: px, y: py, z: pz, intensity: 1, distance: reach, decay: 2 });
+        lights.push(Object.assign({ x: px, y: py, z: pz, intensity: 1, distance: reach, decay: 2 }, aimed));
       };
 
       /**
@@ -2629,7 +2636,17 @@ export const Home3DScene = (() => {
             minX: tx(HOUSE.footprint.minX), maxX: tx(HOUSE.footprint.maxX),
             minZ: tz(HOUSE.footprint.minY), maxZ: tz(HOUSE.footprint.maxY) } : null })
           .forEach(m => {
-            const pl = new THREE.PointLight(tint, 0.6, m.distance, m.decay);
+            let pl;
+            if (m.aim) {
+              // Plan x east / y south map to world +x / +z (tx, tz).
+              const len = Math.hypot(m.aim[0], m.aim[1]);
+              pl = new THREE.SpotLight(tint, 0.6, m.distance, m.spread * Math.PI / 180, 0.3, m.decay);
+              pl.castShadow = false;
+              pl.target.position.set(m.x + m.aim[0] / len, m.y, m.z + m.aim[1] / len);
+              scene.add(pl.target);
+            } else {
+              pl = new THREE.PointLight(tint, 0.6, m.distance, m.decay);
+            }
             pl.position.set(m.x, m.y, m.z);
             pl.userData.gain = m.intensity;
             pl.userData.fixtures = m.count;

@@ -373,10 +373,10 @@ function buildCabinet(params, levels) {
 // In a house each level is a REAL light: a room light `strip` fixture on its
 // own channel, bound to its own Home Assistant entity (docs/house-profile.md,
 // "Bedside table LED strips"). This preview shows the same thing here: a real
-// point light per level on its strip's front (channelStripBoxes().lightAt,
-// where the house fixture puts it), in the level's colour, with the house's
-// intensity and reach, and a floor and a wall behind the table to see what
-// it lights.
+// light per level in its channel (channelStripBoxes().lightAt, where the
+// house fixture puts it), facing out of the table, in the level's colour, with
+// the house's intensity and reach, and a floor and a wall behind the table to
+// see what it lights.
 const PREVIEW_MAX_INTENSITY = 0.3;   // the house's accent intensity at 100%
 const PREVIEW_REACH_M = 0.9;         // the reach the house fixture is given (reachCm 90)
 const levelName = (i, n) => (n === 2 ? ['top', 'bottom'][i] : 'level ' + (i + 1));
@@ -415,10 +415,14 @@ function addLevelPreview(THREE, group, params, levels) {
     const st = levelState(levels, i);
     if (!st.on) return;
     const colour = params.fronts[ri].channel.color || '#dbe8ff';
-    const light = new THREE.PointLight(new THREE.Color(colour),
-      (st.brightness / 100) * PREVIEW_MAX_INTENSITY, PREVIEW_REACH_M, 2);
+    // As in the house: a shadowless spot in the channel, facing out of the
+    // table over the whole half-space in front (home3d-scene.js addStrip `aim`).
+    const light = new THREE.SpotLight(new THREE.Color(colour),
+      (st.brightness / 100) * PREVIEW_MAX_INTENSITY, PREVIEW_REACH_M, Math.PI / 2, 0.3, 2);
     const at = boxes[i].lightAt;
     light.position.set(at[0] / 100, at[1] / 100, at[2] / 100);
+    light.target.position.set(at[0] / 100, at[1] / 100, at[2] / 100 + 1);
+    group.add(light.target);
     light.name = 'levelPreviewLight:' + levelName(i, rows.length);
     group.add(light);
   });
@@ -578,8 +582,8 @@ function App() {
               );
             })}
             <div className="legend">
-              Each drawer level's strip is a real light: a point light on the strip's front in its colour, and
-              the drawer below is washed in that colour by brightness; off leaves just the recess. In a house
+              Each drawer level's strip is a real light in its channel, facing out of the table, in its colour,
+              and the drawer below is washed in that colour by brightness; off leaves just the recess. In a house
               each level is a room light <code>strip</code> fixture on its own channel, bound to its own Home
               Assistant light, and the table's channel names that channel with <code>light</code> so its strip
               and wash follow the same state (docs/house-profile.md, "Bedside table LED strips"). The levels
