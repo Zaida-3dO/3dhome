@@ -375,6 +375,10 @@ jobs:
         run: node scripts/test-small-items.mjs
       - name: Furniture renderer (placement, merge buckets, shadow proxies, fade, attach)
         run: node scripts/test-furniture-render.mjs
+      - name: Quality tier - mobile-GPU axis, ?tier= override, pixel-ratio cap
+        run: node scripts/test-quality-tier.mjs
+      - name: Room lights - per-channel collapse to one or two lights
+        run: node scripts/test-light-collapse.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

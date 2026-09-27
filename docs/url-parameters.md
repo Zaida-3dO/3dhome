@@ -25,6 +25,7 @@ except where noted. Unknown parameters are ignored.
 | [`rotateSpeed`](#rotatespeed) | float, rad/s | `2π/120` | Preview rotation speed |
 | [`camera`](#camera) | preset name | unset | Initial camera pose |
 | [`shadows`](#shadows) | `auto` \| `low` \| `off` | mode-dependent | Shadow quality |
+| [`tier`](#tier) | `ultra` \| `mid` \| `low` | detected | Force the GPU quality tier (A/B testing) |
 | [`fps`](#fps) | integer | `15` preview / `60` else | Frame-rate cap |
 | [`furniture`](#furniture) | `0` \| `false` \| `off` | shown | Start with the house's furniture hidden and unbuilt |
 | [`debug`](#debug) | `1` | off | Eruda mobile DevTools + error banner |
@@ -266,6 +267,31 @@ An explicit `?shadows=` value overrides the mode default in every mode.
 >
 > Pass `?embed=1&shadows=auto` for the old behaviour. The standalone page is
 > unchanged and still defaults to `auto`. See [perf-cold-start.md](perf-cold-start.md).
+
+### `tier`
+
+`?tier=ultra|mid|low` forces the quality tier. Any other value is ignored.
+
+By default the tier is detected on two axes (`src/quality-tier.js`):
+
+- **What compiles.** `MAX_FRAGMENT_UNIFORM_VECTORS` ≥ 1024 gives `ultra`,
+  ≥ 512 gives `mid`, and anything less gives `low`.
+- **A mobile GPU.** This is true when the GPU's renderer string names Mali,
+  Immortalis, Adreno, PowerVR or Xclipse, or names "Apple GPU" on iOS or
+  iPadOS. Failing that, it is true for Android or iOS/iPadOS with a coarse
+  pointer. A mobile-class GPU in a desktop OS without a touch pointer (a
+  Snapdragon X Windows laptop's Adreno) is not treated as mobile. A mobile GPU
+  is capped at `mid`, which means:
+  - no room-shadow lights, even with `?shadows=high`
+  - a pixel-ratio ceiling of 1.5
+  - no `priority: "minor"` furniture
+
+`?tier=` wins over the mobile cap, and lifts the pixel-ratio ceiling and the
+minor-furniture skip with it, which is what makes it an A/B knob on a tablet. It never goes **above** what the uniform budget compiles: `?tier=ultra`
+on a 256-vector phone stays `low`, because the ultra shader would not compile
+and nothing would render. The detected values, including `mobileGpu`, the
+reason for it and the light counts, are printed in the console's
+`[Home3DScene] Quality tier=` line.
 
 ### `fps`
 
