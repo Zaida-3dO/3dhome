@@ -364,6 +364,7 @@ const STYLE = `
   border: 1px solid rgba(255,255,255,0.10); box-shadow: 0 6px 20px rgba(0,0,0,0.45);
   color: var(--ink); font: 12px/1.3 'Segoe UI', system-ui, sans-serif; touch-action: manipulation; box-sizing: border-box; }
 .tp-pop *, .tp-pop *::before, .tp-pop *::after { box-sizing: border-box; }
+.tp-pop:focus { outline: none; }   /* the card itself holds focus only as a fallback; its controls show rings */
 .tp-arrow { position: absolute; width: 11px; height: 11px; background: rgb(10,10,20); border: 0 solid rgba(255,255,255,0.10); }
 .tp-arrow.bottom { bottom: -6px; transform: translateX(-50%) rotate(45deg); border-right-width: 1px; border-bottom-width: 1px; }
 .tp-arrow.top { top: -6px; transform: translateX(-50%) rotate(45deg); border-left-width: 1px; border-top-width: 1px; }
@@ -416,6 +417,10 @@ const STYLE = `
     white-space: nowrap; padding: 4px 7px; border-radius: 6px; background: #1d1d2e; border: 1px solid rgba(255,255,255,0.16); font-size: 12px; z-index: 5; }
 }
 .tp-ib:focus-visible, .tp-sw:focus-visible, .tp-status:focus-visible, .tp-range:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
+/* Opened by a tap: focus is placed on the first control for keyboard users,
+   but Chrome paints a script-moved focus as :focus-visible even after a
+   pointer tap. No ring until a key is pressed inside the card. */
+.tp-pop.tp-ptr :focus-visible { outline: none; }
 .tp-sw { position: relative; width: var(--sw-w); height: var(--sw-h); border-radius: 999px; border: 0; padding: 0; cursor: pointer;
   background: rgba(255,255,255,0.18); flex: none; transition: background .2s; }
 .tp-sw::after { content: ''; position: absolute; inset: -${GF.swHitY}px -4px; }
@@ -888,7 +893,9 @@ export function attachTapPopovers(o) {
     // Tab cycles within the card (it is appended at the end of <body>, so
     // tabbing off its last control would leave for the browser chrome);
     // Escape (onKey) closes it and returns focus.
+    el.classList.add('tp-ptr');
     el.addEventListener('keydown', e => {
+      el.classList.remove('tp-ptr');   // keyboard in use: show focus rings
       if (e.key !== 'Tab') return;
       const f = focusables(el);
       if (!f.length) { e.preventDefault(); return; }

@@ -120,7 +120,9 @@ is open closes the card.
 ## Keyboard and lifecycle
 
 On open, focus moves to the card's first control (the card itself for the door chip); Tab cycles
-within the card; Escape closes it and returns focus to where it was. `dispose()` is registered with
+within the card; Escape closes it and returns focus to where it was. Because a card is always
+opened by a tap, the focus ring stays hidden until a key is pressed inside it (Chrome otherwise paints
+the script-moved focus as `:focus-visible` after a pointer tap). `dispose()` is registered with
 `home.onDispose`, removes every listener, and clears `window.__home3dTap`.
 
 ## Popover kinds
