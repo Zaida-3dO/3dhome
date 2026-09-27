@@ -13,7 +13,7 @@ import { detectMobileGpu, resolveTier } from './quality-tier.js';
 import {
   LEVELS, maxLevelFor, levelForTier, defaultLevel, levelConfig, createController,
   storageKey, loadState, saveState, clearState, estimateVsync, capCadence, rafThrottle,
-  MOBILE_START_RATIO, MIN_FPS_CAP, BLOCK_MS, COLD_FRAME_MS
+  MOBILE_START_RATIO, MIN_FPS_CAP, BLOCK_MS, COLD_FRAME_MS, createProbeScheduler
 } from './adaptive-quality.js';
 import { collapseEmitters } from './light-merge.js';
 import { HouseLoader } from './house-loader.js';
@@ -4087,28 +4087,32 @@ export const Home3DScene = (() => {
       return t.throttled;
     }
     const UNMEASURED_JUMP_MS = 8000;
-    function jumpUnmeasured() {
-      const d = adaptive && adaptive.jumpToStart();
-      if (!d) return;
-      applyAdaptiveDecision(d, throttleNoted
-        ? 'the browser is throttling frames, so no measurement'
-        : 'no idle frames to judge the browser by, so no measurement');
-      notifyQuality();
-    }
     let vsyncMs = 0;
     let cadenceMs = 0;
     let dprCapState = storedCap;
     let frameContinuous = false;
     let prevRenderAt = 0;
-    let warmUntil = 0;            // set once onReady has fired (the loop's first ready tick)
-    let wantProbe = !!adaptive;   // the controller still has something to learn
-    let probeUntil = 0;
-    let probeStartedAt = 0;
-    let probesRun = 0;
-    let probeSpentMs = 0;
-    let probeIsMaint = false;
-    let lastProbeEndAt = 0;
-    let lastInteractAt = 0;
+    // When to probe, and when to jump to the start ratio unmeasured: the
+    // decisions live in createProbeScheduler (src/adaptive-quality.js, task
+    // 7991c667) so a test can drive them; the side effects stay here.
+    const probes = createProbeScheduler({
+      enabled: !!adaptive,
+      probeMs: PROBE_MS, maxProbes: MAX_PROBES, budgetMs: PROBE_BUDGET_MS, warmupMs: WARMUP_MS,
+      maintEveryMs: MAINT_PROBE_EVERY_MS, maintMs: MAINT_PROBE_MS, maintActiveMs: MAINT_ACTIVE_MS,
+      unmeasuredJumpMs: UNMEASURED_JUMP_MS,
+      throttled: browserThrottled,
+      throttleNoted: () => throttleNoted,
+      jumpToStart: () => adaptive.jumpToStart(),
+      applyJump(d, noted) {
+        applyAdaptiveDecision(d, noted
+          ? 'the browser is throttling frames, so no measurement'
+          : 'no idle frames to judge the browser by, so no measurement');
+        notifyQuality();
+      },
+      // Bounded, so a build that never lands cannot stop probing.
+      furnitureBusy: now => furnitureStarted && !furnitureResult && now - furnitureTimeline.start < 30000,
+      onSettled: () => logAdaptiveSettled()
+    });
     let adaptiveSettledLogged = false;
     let storageWarned = false;
     const qualityListeners = [];
@@ -4136,7 +4140,7 @@ export const Home3DScene = (() => {
       return {
         adaptive: !!adaptive,
         reason: adaptiveOff || (throttleNoted ? 'paused: the browser is throttling frames'
-          : wantProbe || probeUntil ? 'measuring' : 'settled'),
+          : probes.wantProbe || probes.probing ? 'measuring' : 'settled'),
         level: startLevelIdx, levelName: startLevel.name, levelFrom, maxLevel, tier,
         dpr: ceilingRatio, dprStart: adaptive ? dprStart : null, dprMax: basePixelRatio,
         dprCap: adaptive && adaptive.sessionMax < basePixelRatio ? adaptive.sessionMax : null,
@@ -4155,56 +4159,10 @@ export const Home3DScene = (() => {
         try { qualityListeners[i](s); } catch (e) { /* a listener must not break the loop */ }
       }
     }
-    function endProbe(now) {
-      if (!probeUntil) return;
-      if (!probeIsMaint) probeSpentMs += now - probeStartedAt;
-      probeIsMaint = false;
-      probeUntil = 0;
-      lastProbeEndAt = now;
-    }
+    function endProbe(now) { probes.end(now); }
     // Called from the loop, before the on-demand gate: start or continue a
     // probe. Returns true while one is running (the loop then keeps drawing).
-    function tickProbe(now, interacting) {
-      if (!adaptive) return false;
-      if (!warmUntil) warmUntil = now + WARMUP_MS;
-      if (interacting) lastInteractAt = now;
-      if (probeUntil) {
-        if (now < probeUntil) return true;
-        endProbe(now);   // deadline: whatever the window holds, background finishes
-        return false;
-      }
-      if (!wantProbe) {
-        // The in-use maintenance probe (see MAINT_PROBE_EVERY_MS).
-        if (interacting || !lastInteractAt || now - lastInteractAt > MAINT_ACTIVE_MS) return false;
-        if (now - Math.max(lastProbeEndAt, warmUntil) < MAINT_PROBE_EVERY_MS) return false;
-        if (browserThrottled()) return false;
-        probeIsMaint = true;
-        probeStartedAt = now;
-        probeUntil = now + MAINT_PROBE_MS;
-        return true;
-      }
-      if (now < warmUntil) return false;
-      if (browserThrottled()) {
-        // Frame times cannot be trusted, so do what the scene did before
-        // adaptive quality: go to the start ratio unmeasured (a throttled
-        // browser, or no idle evidence within UNMEASURED_JUMP_MS). Never
-        // left at the cheap first-paint ratio for the whole session.
-        if (throttleNoted || now - warmUntil > UNMEASURED_JUMP_MS) jumpUnmeasured();
-        return false;
-      }
-      // Furniture still building: its slices and first frames are not the
-      // scene's cost. (Bounded, so a build that never lands cannot stop it.)
-      if (furnitureStarted && !furnitureResult && now - furnitureTimeline.start < 30000) return false;
-      if (probesRun >= MAX_PROBES || probeSpentMs >= PROBE_BUDGET_MS) {
-        wantProbe = false;
-        logAdaptiveSettled();
-        return false;
-      }
-      probesRun++;
-      probeStartedAt = now;
-      probeUntil = now + PROBE_MS;
-      return true;
-    }
+    function tickProbe(now, interacting) { return probes.tick(now, interacting); }
     function logAdaptiveSettled() {
       if (adaptiveSettledLogged || !adaptive) return;
       adaptiveSettledLogged = true;
@@ -4215,7 +4173,7 @@ export const Home3DScene = (() => {
         `${Number.isFinite(adaptive.lastP95) ? ' p95 ' + adaptive.lastP95.toFixed(1) + ' ms' : ' (no measurement)'}` +
         `${t ? ' (up < ' + t.up.toFixed(1) + ', down > ' + t.down.toFixed(1) + ' ms)' : ''}` +
         `${pending != null ? '; next load: ' + levelName(pending) : '; next load: same'}` +
-        ` (${probesRun} probe${probesRun === 1 ? '' : 's'}, ${Math.round(probeSpentMs)} ms).`
+        ` (${probes.probesRun} probe${probes.probesRun === 1 ? '' : 's'}, ${Math.round(probes.probeSpentMs)} ms).`
       );
       persistQuality({ settled: { level: startLevelIdx, dpr: ceilingRatio,
         p95: Number.isFinite(adaptive.lastP95) ? Math.round(adaptive.lastP95 * 10) / 10 : null, at: Date.now() } });
@@ -4246,8 +4204,8 @@ export const Home3DScene = (() => {
       if (r.verdict !== 'pending') {
         endProbe(now);
         // Verify a DPR step with one more probe; anything else is an answer.
-        wantProbe = !!(d && d.to != null);
-        if (!wantProbe) logAdaptiveSettled();
+        probes.wantProbe = !!(d && d.to != null);
+        if (!probes.wantProbe) logAdaptiveSettled();
       }
       notifyQuality();
     }

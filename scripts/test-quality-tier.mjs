@@ -102,6 +102,14 @@ check('masked "WebKit WebGL" + iPad UA + coarse pointer -> mobile',
   Q.detectMobileGpu({ renderer: 'WebKit WebGL', userAgent: UA.iPad, coarsePointer: true, maxTouchPoints: 5 }).mobileGpu === true);
 check('Android with a FINE pointer and a masked name -> not mobile (a desktop-mode Android box)',
   Q.detectMobileGpu({ renderer: 'WebKit WebGL', userAgent: UA.androidTablet, coarsePointer: false }).mobileGpu === false);
+// The other masked names fall back the same way (they name no GPU family).
+['Mozilla', 'Google SwiftShader',
+  'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)'].forEach(m => {
+  check('masked "' + m + '" + Android + coarse pointer -> mobile (via the platform)',
+    Q.detectMobileGpu({ renderer: m, userAgent: UA.androidTablet, coarsePointer: true }).reason === 'mobile OS with a coarse pointer');
+  check('masked "' + m + '" + Windows -> not mobile (no signal)',
+    Q.detectMobileGpu({ renderer: m, userAgent: UA.windows, coarsePointer: false }).reason === 'no mobile signal');
+});
 
 // ---- 2. no signal -> null, and null changes nothing -------------------------
 const none = Q.detectMobileGpu({});
@@ -121,6 +129,9 @@ check('mobile GPU at 1024 -> mid, marked capped', tab.tier === 'mid' && tab.capp
 check('mobile GPU at 256 stays low', Q.resolveTier({ maxFragU: 256, mobileGpu: true }).tier === 'low');
 check('?tier=ultra wins over the mobile cap (A/B on the tablet)',
   Q.resolveTier({ maxFragU: 1024, mobileGpu: true, override: 'ultra' }).tier === 'ultra');
+// The scene gates room-shadow lights on !capped, so an override must clear it.
+check('?tier=ultra on a mobile GPU is not marked capped',
+  Q.resolveTier({ maxFragU: 1024, mobileGpu: true, override: 'ultra' }).capped === false);
 check('a mobile GPU gets the mobile caps (pixel ratio, minor furniture)',
   Q.resolveTier({ maxFragU: 1024, mobileGpu: true }).mobileCaps === true &&
   Q.resolveTier({ maxFragU: 1024, mobileGpu: false }).mobileCaps === false &&
