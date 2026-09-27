@@ -1341,6 +1341,8 @@ export function attachTapPopovers(o) {
       if (spec && spec.reset) { sim.status = undefined; sim.raw.clear(); vacuumSim.clear(); }
       render(false);
     },
+    /** Repaint an open card from the shared state now (never under a drag). */
+    refresh: () => render(false),
     close: () => close(),
     isOpen: () => !!pop,
     current: () => (pop ? { kind: pop.target.kind, id: pop.target.id, entities: pop.target.entities.slice(), placement: pop.el.dataset.placement,

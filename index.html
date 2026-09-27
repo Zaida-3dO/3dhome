@@ -794,7 +794,7 @@
     import { HouseLoader }    from './src/house-loader.js?v=__VERSION__';
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
-    import { createDragSender, curtainSliderCommand, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
+    import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
              haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml,
              boundLightChannels, hasAmbientRow, ambientRowLabel }
                               from './src/room-panel.js?v=__VERSION__';
@@ -1238,6 +1238,10 @@
       // value and still reads the pre-move position when the row repaints
       // at the START of a move.
       const curtainTarget = new Map();
+      // Last position HA itself REPORTED per curtain (never a drag). When HA
+      // drops inside a drag's debounce window the drag is never sent, so on
+      // going offline every curtain is put back to this (item 349848ef).
+      const curtainReported = new Map();
       function curtainShownPct(curtainId) {
         return curtainTarget.has(curtainId) ? curtainTarget.get(curtainId) : home.getCurtainOpen(curtainId);
       }
@@ -2039,6 +2043,18 @@
             sync_failed:  'HA Sync Failed'
           };
           haStatusText.textContent = labels[status] || 'HA';
+          // Offline: a drag cut off inside its debounce window was never
+          // sent, so put every such curtain (3D and row) back to what HA last
+          // reported. A tap popover shares curtainTarget (curtainLocal), so
+          // refresh it too. Only after a report, so never on a first status.
+          if (status !== 'connected') {
+            const reverts = curtainsToRevert(curtainTarget, curtainReported);
+            reverts.forEach(([curtainId, pct]) => {
+              home.setCurtainOpen(curtainId, pct, null);
+              curtainTarget.set(curtainId, pct);
+            });
+            if (reverts.length && tapPopovers) tapPopovers.refresh();
+          }
           // Offline <-> connected flips every command control in the open
           // room between disabled and enabled (haOffline). 'connected' only
           // arrives after the snapshot's full resync, so the re-enabled rows
@@ -2192,6 +2208,7 @@
       function applyCurtainReading(curtainId, pct, moving) {
         home.setCurtainOpen(curtainId, pct, moving);
         curtainTarget.set(curtainId, pct);
+        curtainReported.set(curtainId, pct);
         // Mid-drag the 3D curtain still follows; the row is repainted when
         // the drag releases, never under the pointer.
         if (curtainSender.isDragging(curtainId)) curtainSender.markDirty(curtainId);

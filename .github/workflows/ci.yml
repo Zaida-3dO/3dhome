@@ -355,6 +355,13 @@ jobs:
           # entity, with no floor-level fixture.
           set -euo pipefail
           node scripts/test-desk-strip-channel.mjs
+      - name: Scene light state seeding (bound channels)
+        run: |
+          # Asserts src/light-state.js seedLightState: a channel rooms.json
+          # binds gets a light-state entry even with no geometry fixture, an
+          # unbound unfixtured channel gets none, and main is never overwritten.
+          set -euo pipefail
+          node scripts/test-light-state.mjs
       - name: Kitchen LED strips as room light channels
         run: |
           # Asserts a kitchen's strip channels (top, under-cabinet, plinth),

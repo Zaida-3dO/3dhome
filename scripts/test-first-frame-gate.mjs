@@ -89,6 +89,60 @@ function check(name, ok, detail) {
     /\[THREE\.DoubleSide\]\s*:\s*THREE\.DoubleSide/.test(sides[1]), sides && sides[1]);
 }
 
+// 4. The gate cannot stay shut forever (item 1212b378 #1), and cannot open
+//    early (#4). r160's compileAsync never settles if the context is lost
+//    mid-compile, so a fallback timer and a webglcontextrestored listener
+//    also open it -- and NOTHING else may: an extra fireReady() before the
+//    precompile silently reintroduces the in-frame compile stall.
+{
+  const region = (startRe, endStr) => {
+    const m = startRe.exec(code);
+    if (!m) return null;
+    const end = code.indexOf(endStr, m.index + m[0].length);
+    return end < 0 ? null : [m.index, end + endStr.length];
+  };
+  const pAll = code.indexOf('precompileDone = Promise.all(jobs)');
+  const thenStart = code.indexOf('.then(() => {', pAll);
+  const elseStart = code.indexOf('\n    } else {', thenStart);
+  const elseEnd = code.indexOf('\n    }\n', elseStart + 1);
+  const regions = {
+    'precompile then()': pAll >= 0 && thenStart > pAll && elseStart > thenStart ? [thenStart, elseStart] : null,
+    'no-compileAsync else-branch': elseStart >= 0 && elseEnd > elseStart ? [elseStart, elseEnd] : null,
+    'fallback timer': region(/readyFallbackTimer = setTimeout\(\(\) => \{/, '}, READY_FALLBACK_MS);'),
+    'contextrestored listener': region(/onGlContextRestored = \(\) => \{/, '\n    };')
+  };
+  Object.entries(regions).forEach(([name, r]) => {
+    check(name + ' found', !!r);
+    check(name + ' calls fireReady()', !!r && /fireReady\(\);/.test(code.slice(r[0], r[1])));
+  });
+  const calls = [...code.matchAll(/(?<!function )\bfireReady\(\)/g)].map(m => m.index);
+  const stray = calls.filter(i => !Object.values(regions).some(r => r && i >= r[0] && i < r[1]));
+  check('every fireReady() call is in one of those four places', calls.length >= 4 && stray.length === 0,
+    stray.map(i => code.slice(Math.max(0, i - 80), i + 12).replace(/\s+/g, ' ')));
+  check('the fallback timer is ~10 s', /const READY_FALLBACK_MS = 10000;/.test(code));
+  const then = regions['precompile then()'];
+  check('the precompile settling clears the fallback timer',
+    !!then && /clearTimeout\(readyFallbackTimer\)/.test(code.slice(then[0], then[1])));
+  check('the contextrestored listener is registered on the canvas',
+    /ren\.domElement\.addEventListener\('webglcontextrestored', onGlContextRestored\)/.test(code));
+  const dStart = code.search(/\n      dispose\(\) \{/);
+  const dispose = dStart >= 0 ? code.slice(dStart, code.indexOf('\n      }\n', dStart)) : '';
+  check('dispose() found', dispose.length > 0);
+  check('dispose() clears the fallback timer', /clearTimeout\(readyFallbackTimer\)/.test(dispose));
+  check('dispose() removes the contextrestored listener',
+    /ren\.domElement\.removeEventListener\('webglcontextrestored', onGlContextRestored\)/.test(dispose));
+
+  // #3: the shared wallpaper placeholder is on no material once every photo
+  // has loaded, so only an explicit dispose frees it.
+  check('dispose() frees the wallpaper placeholder', /\bdisposeWallpaperPlaceholder\(\);/.test(dispose));
+  const dwp = code.match(/function disposeWallpaperPlaceholder\(\) \{([\s\S]*?)\n    \}\n/);
+  check('disposeWallpaperPlaceholder disposes _wallpaperPlaceholder',
+    !!dwp && /_wallpaperPlaceholder\.dispose\(\)/.test(dwp[1]), dwp && dwp[1]);
+  check('buildScene hands disposeWallpaperPlaceholder to create()',
+    /return \{[^}]*\bdisposeWallpaperPlaceholder \};/.test(code) &&
+    /\bdisposeWallpaperPlaceholder \} = buildScene\(scene, quality\);/.test(code));
+}
+
 if (failures) {
   console.error(failures + ' failed, ' + passes + ' passed');
   process.exit(1);

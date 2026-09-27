@@ -335,6 +335,26 @@ export function curtainSliderCommand(coverPositionCommand, pct, entities, availa
   return coverPositionCommand(pct, entities);
 }
 
+/**
+ * Curtains whose SHOWN position is not what Home Assistant last reported
+ * (item 349848ef): HA dropped inside a drag's debounce window, so the drag's
+ * value was never sent -- yet the panel row and the 3D curtain still show it
+ * for the whole outage. Returns [[curtainId, reportedPct]] for each one, for
+ * the status-change handler to re-apply while offline. A curtain HA never
+ * reported is left alone: there is no HA value to go back to.
+ *
+ * @param {Map<string, number>} target    curtainId -> position shown now
+ * @param {Map<string, number>} reported  curtainId -> position HA last reported
+ */
+export function curtainsToRevert(target, reported) {
+  const out = [];
+  if (!target || !reported) return out;
+  reported.forEach((pct, id) => {
+    if (target.has(id) && target.get(id) !== pct) out.push([id, pct]);
+  });
+  return out;
+}
+
 export function createDragSender({ build, dispatch, cancel, onRelease, writable, debounceMs = 200 }) {
   const canWrite = () => typeof writable !== 'function' || writable() === true;
   const dragging = new Set();

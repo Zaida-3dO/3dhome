@@ -31,7 +31,10 @@
  *   6. index.html (source level): every write handler in wireRoomControls
  *      goes through onWrite (the offline gate), the lock-release handlers do
  *      not, sendToHA refuses while offline, both senders are writable-gated,
- *      and a status change repaints the open room.
+ *      and a status change repaints the open room -- after putting any
+ *      curtain cut off mid-drag back to HA's last report (349848ef).
+ *   8. HA drops inside a drag's debounce window: the panel and 3D curtain go
+ *      back to HA's value while still offline, and nothing is sent.
  *
  * No framework, no install: `node scripts/test-ha-resync.mjs`.
  */
@@ -303,6 +306,49 @@ await quiet(async () => {
 })();
 
 // ---------------------------------------------------------------------------
+// 8. HA drops INSIDE a drag's debounce window (item 349848ef)
+// ---------------------------------------------------------------------------
+// The drag's value (30) was never sent. While offline, the panel and the 3D
+// curtain must show HA's last report (100), not the unsent 30. The status
+// handler below mirrors index.html's (pinned at source level in 6).
+await quiet(async () => {
+  const fake = installFakeHA({ states: haStates() });
+  try {
+    // A long reconnect delay: the checks below all run while still offline.
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: ROOMS, sensors: SENSORS, wsReconnectMs: 10000 });
+    const p = wirePanel(ha);
+    const reported = new Map();
+    ha.onCurtainChange((id, st) => reported.set(id, st.pct));
+    let reverts = null;
+    ha.onStatusChange(status => {
+      if (status === 'connected') return;
+      reverts = RP.curtainsToRevert(p.model.curtainPct, reported);
+      reverts.forEach(([id, pct]) => { p.model.curtainPct.set(id, pct); p.model.scene3dCurtain.set(id, pct); });
+    });
+    ha.connect();
+    await fake.whenConnected(ha);
+    const calls0 = fake.calls.length;
+    p.userDragCurtain('lounge_curtain', 30);   // through the real sender: a 200 ms debounced send
+    check('mid-drag: panel and 3D show the drag (30)',
+      p.model.curtainPct.get('lounge_curtain') === 30 && p.model.scene3dCurtain.get('lounge_curtain') === 30);
+    const t0 = Date.now();
+    fake.sockets[fake.sockets.length - 1].close();
+    await until(() => ha.status === 'disconnected', 150);
+    const dropMs = Date.now() - t0;
+    check('socket dropped inside the debounce window', ha.status === 'disconnected' && dropMs < 200, { status: ha.status, dropMs });
+    check('offline: curtainsToRevert yields HA\'s 100', JSON.stringify(reverts) === JSON.stringify([['lounge_curtain', 100]]), reverts);
+    check('offline: panel curtain back to HA\'s 100 while still offline',
+      p.model.curtainPct.get('lounge_curtain') === 100 && ha.status !== 'connected', p.model.curtainPct.get('lounge_curtain'));
+    check('offline: 3D curtain back to HA\'s 100', p.model.scene3dCurtain.get('lounge_curtain') === 100);
+    await sleep(300);   // past the debounce: the cut-off drag must never fire
+    check('offline: ZERO call_service for the cut-off drag', fake.calls.length === calls0, fake.calls.slice(calls0));
+    ha.disconnect();
+  } finally {
+    fake.restore();
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // 6. index.html wiring (source level)
 // ---------------------------------------------------------------------------
 {
@@ -316,7 +362,24 @@ await quiet(async () => {
   check('lock-release handlers stay ungated', (wire.match(/el\.addEventListener\('(pointerup|pointercancel|blur)'/g) || []).length === 6);
   check('sendToHA refuses while offline', /function sendToHA\([^)]*\) \{\s*if \(!ha \|\| !haConfig \|\| haOffline\(ha\)\) return;/.test(html));
   check('both senders are writable-gated', (html.match(/writable: \(\) => !haOffline\(ha\),/g) || []).length === 2);
-  check('status change repaints the open room', /haStatusText\.textContent = labels\[status\] \|\| 'HA';[\s\S]{0,400}if \(selectedRoom && panelReady\) renderPanel\(\);/.test(html));
+  const statusAt = html.indexOf('ha.onStatusChange(status => {');
+  const statusFn = statusAt >= 0 ? html.slice(statusAt, html.indexOf('\n        });', statusAt)) : '';
+  check('status handler found', statusFn.length > 100);
+  check('status change repaints the open room', /haStatusText\.textContent = labels\[status\] \|\| 'HA';[\s\S]*if \(selectedRoom && panelReady\) renderPanel\(\);/.test(statusFn));
+  // Item 349848ef: going offline puts a drag cut off inside its debounce
+  // window back to HA's last report -- 3D, curtainTarget (the row and the
+  // popover both read it) and an open popover -- BEFORE the repaint.
+  const revert = statusFn.match(/if \(status !== 'connected'\) \{([\s\S]*?)\n          \}\n/);
+  const rb = revert ? revert[1] : '';
+  check('offline status runs curtainsToRevert(curtainTarget, curtainReported)', /curtainsToRevert\(curtainTarget, curtainReported\)/.test(rb), rb);
+  check('...re-applies each to the 3D curtain and curtainTarget',
+    /home\.setCurtainOpen\(curtainId, pct, null\);\s*curtainTarget\.set\(curtainId, pct\);/.test(rb), rb);
+  check('...refreshes an open tap popover', /tapPopovers\.refresh\(\)/.test(rb), rb);
+  check('...before the room repaint', !!revert && statusFn.indexOf(revert[0]) < statusFn.indexOf('renderPanel()'));
+  const acr = html.slice(html.indexOf('function applyCurtainReading('), html.indexOf('function applyCurtainAvailable('));
+  check('applyCurtainReading records HA\'s report in curtainReported', /curtainReported\.set\(curtainId, pct\);/.test(acr), acr);
+  check('only applyCurtainReading writes curtainReported', (html.match(/curtainReported\.set\(/g) || []).length === 1);
+  check('tap-popovers exposes refresh() (render, never under a drag)', /\n    refresh: \(\) => render\(false\),/.test(read('src/tap-popovers.js')));
   check('room rows get the offline flag', /curtainRowHtml\(cu, pct, curtainIsAvailable\(cu\.id\), offline\)/.test(html)
     && /mainLightRowHtml\(s\.main, offline\)/.test(html) && /galaxyRowHtml\(s\.galaxy, offline\)/.test(html)
     && /ambientRowHtml\(s\.ambient, ambientRowLabel\(lc\.ambient, rm && rm\.name\), offline, ambientColorable\(rid\)\)/.test(html)
