@@ -75,8 +75,15 @@
             225
           ]
         ],
-        "color": "#8d9aa6",
-        "notes": "Stops well short of the doorway on the east wall so the door leaf clears it."
+        "pattern": {
+          "colors": [
+            "#8d9aa6",
+            "#d9d4c7",
+            "#4f5d6b"
+          ],
+          "bandWidth": 22
+        },
+        "notes": "Stops well short of the doorway on the east wall so the door leaf clears it. A procedural chevron shag (rug.pattern), so the demo shows the pattern form alongside the plain pile rug in the bedroom."
       },
       "notes": "The main living space. Two rows of downlights plus a cove strip."
     },

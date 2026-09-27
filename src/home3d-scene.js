@@ -31,6 +31,7 @@ import {
   disposeFurniture
 } from './furniture.js';
 import { startLiveClock } from './furniture/wall-clock.js';
+import { rugPatternForBox } from './rug-pattern.js';
 import {
   FINISH_TYPES, makeFinishTexture, alongToMetres, finishRectOnBox, createFinishBatch, addLongFace,
   addCrossFace, buildFinishGeometry, revealEnds, finishKey
@@ -2194,6 +2195,39 @@ export const Home3DScene = (() => {
     };
     const rugDiffuseTex = makeRugPile(PILE_MEAN_RGB);
 
+    // Procedural rug LOOK (`rooms[].rug.pattern`, src/rug-pattern.js): one
+    // texture spanning the WHOLE rug, not a tile -- a chevron is a picture of
+    // the rug, so it is stretched over the rug's bounding box exactly once.
+    // Cached by (settings, size, resolution) so identical rugs share a texture
+    // and a rebuild never regenerates one it already has. 512 px along the long
+    // side (0.4 cm/px on a 2 m rug, the spec page's own size); the 'low' tier
+    // halves it, a quarter of the memory and fill time on a weak phone.
+    const rugPatternCache = new Map();
+    const rugPatternTexture = (pattern, spanXCm, spanYCm) => {
+      const longPx = quality.tier === 'low' ? 256 : 512;
+      const key = JSON.stringify([pattern, Math.round(spanXCm), Math.round(spanYCm), longPx]);
+      let tex = rugPatternCache.get(key);
+      if (tex) return tex;
+      const img = rugPatternForBox(spanXCm, spanYCm, pattern, longPx);
+      const c = document.createElement('canvas');
+      c.width = img.width;
+      c.height = img.height;
+      const g = c.getContext('2d');
+      const id = g.createImageData(img.width, img.height);
+      id.data.set(img.data);
+      g.putImageData(id, 0, 0);
+      tex = new THREE.CanvasTexture(c);
+      // The palette is authored as sRGB hex (the photo's colours), and the
+      // spec page it was signed off on renders it as sRGB -- so say so, or the
+      // renderer treats the bytes as linear and the rug washes out pale.
+      if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; // r152+
+      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.anisotropy = 4;
+      tex.needsUpdate = true;
+      rugPatternCache.set(key, tex);
+      return tex;
+    };
+
     // Rooms (invisible click-catchers, rugs, lights)
     Object.entries(ROOMS).forEach(([id, rm]) => {
       const w = (rm.x2 - rm.x1) * S, d = (rm.y2 - rm.y1) * S;
@@ -2320,11 +2354,33 @@ export const Home3DScene = (() => {
           : parseInt(String(rug.color).replace('#', ''), 16);
         const _rugRGB = [(_rugHex >> 16) & 255, (_rugHex >> 8) & 255, _rugHex & 255];
         const _wantsDefaultPile = _rugRGB[0] > 252 && _rugRGB[1] > 252 && _rugRGB[2] > 252;
-        const rugTex = _wantsDefaultPile ? rt : makeRugPile(_rugRGB);
-        rugTex.wrapS = rugTex.wrapT = THREE.RepeatWrapping;
-        rugTex.repeat.copy(rt.repeat);
-        rugTex.anisotropy = 4;
-        rugTex.needsUpdate = true;
+        let rugTex;
+        if (rug.pattern) {
+          // A pattern supersedes `color`: the palette IS the rug's colour.
+          // The texture is laid out in plan orientation by rugPatternForBox
+          // (the zig-zag spans the rug's long side, or its short side with
+          // `across: 'short'`, whichever plan axis that is), so the UVs here are simply each vertex's position
+          // within the rug's bounding box -- replacing ShapeGeometry's
+          // per-metre UVs, which suit a tiling pile but not a whole-rug picture.
+          // The inverse of the shape transform is taken from tx/tz at the box
+          // corners, so a house transform with a flipped axis maps correctly.
+          const X1 = tx(_rb.x1), X2 = tx(_rb.x2), Y1 = -tz(_rb.y1), Y2 = -tz(_rb.y2);
+          const pos = rugGeo.attributes.position, uv = rugGeo.attributes.uv;
+          for (let i = 0; i < pos.count; i++) {
+            const u = X2 !== X1 ? (pos.getX(i) - X1) / (X2 - X1) : 0;
+            const vPlan = Y2 !== Y1 ? (pos.getY(i) - Y1) / (Y2 - Y1) : 0;
+            // CanvasTexture flips Y: canvas row 0 (plan y1) is v = 1.
+            uv.setXY(i, u, 1 - vPlan);
+          }
+          uv.needsUpdate = true;
+          rugTex = rugPatternTexture(rug.pattern, _rb.x2 - _rb.x1, _rb.y2 - _rb.y1);
+        } else {
+          rugTex = _wantsDefaultPile ? rt : makeRugPile(_rugRGB);
+          rugTex.wrapS = rugTex.wrapT = THREE.RepeatWrapping;
+          rugTex.repeat.copy(rt.repeat);
+          rugTex.anisotropy = 4;
+          rugTex.needsUpdate = true;
+        }
         const rugMesh = new THREE.Mesh(rugGeo, new THREE.MeshStandardMaterial({
           color: 0xffffff, roughness: 0.95, metalness: 0.0, map: rugTex
         }));

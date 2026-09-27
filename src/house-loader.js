@@ -28,6 +28,7 @@
  */
 
 import { insidePoly } from './footstep-walk.js';
+import { RUG_PATTERN_DEFAULTS, RUG_PATTERNS, RUG_PATTERN_HOUSE_KEYS, RUG_PATTERN_ACROSS } from './rug-pattern.js';
 import { FINISHES, FINISH_TYPES, resolveTileLook, outsideVector, faceNormalToward, compassVector } from './wall-finish.js';
 
 export const HouseLoader = (() => {
@@ -1061,7 +1062,8 @@ export const HouseLoader = (() => {
           ],
           color: hexToInt(r.rug.color, 0xffffff),
           textureUrl: null,
-          repeatMetres: 1.2
+          repeatMetres: 1.2,
+          pattern: null
         };
         const rt = r.rug.texture;
         if (rt && rt.path) {
@@ -1070,6 +1072,35 @@ export const HouseLoader = (() => {
             rug.repeatMetres = rt.repeatMetres || 1.2;
           } else {
             warn('room "' + r.id + '" rug texture path "' + rt.path + '" is not a safe profile-relative image path -- ignored');
+          }
+        }
+        // Optional procedural look (src/rug-pattern.js). Only the overrides are
+        // stored; unspecified keys fall back to RUG_PATTERN_DEFAULTS in the
+        // scene. The rug's size is NOT a pattern key here -- it comes from the
+        // polygon -- so widthCm/depthCm are dropped with a warning.
+        const rp = r.rug.pattern;
+        if (rp && typeof rp === 'object' && !Array.isArray(rp)) {
+          const pattern = {};
+          Object.keys(rp).forEach(k => {
+            if (RUG_PATTERN_HOUSE_KEYS.includes(k)) pattern[k] = rp[k];
+            else warn('room "' + r.id + '" rug pattern key "' + k + '" is not a pattern setting -- ignored' +
+              (k === 'widthCm' || k === 'depthCm' ? ' (the rug size comes from its polygon)' : ''));
+          });
+          if (pattern.pattern != null && !RUG_PATTERNS.includes(pattern.pattern)) {
+            warn('room "' + r.id + '" rug pattern "' + pattern.pattern + '" is unknown -- using "' + RUG_PATTERN_DEFAULTS.pattern + '"');
+            delete pattern.pattern;
+          }
+          if (pattern.across != null && !RUG_PATTERN_ACROSS.includes(pattern.across)) {
+            warn('room "' + r.id + '" rug pattern across "' + pattern.across + '" is not "long" or "short" -- using "long"');
+            delete pattern.across;
+          }
+          rug.pattern = pattern;
+          if (rug.textureUrl) {
+            // Both a photo and a procedural look: the pattern is the explicit
+            // newer choice, and the two map onto the rug differently (a tiling
+            // image vs one picture of the whole rug), so do not mix them.
+            warn('room "' + r.id + '" rug has both a texture and a pattern -- using the pattern, ignoring the texture');
+            rug.textureUrl = null;
           }
         }
       }
