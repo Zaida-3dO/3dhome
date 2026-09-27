@@ -603,7 +603,7 @@ function contained(g, p) {
   check('Load JSON: modules "x" is refused before anything is swapped', throwsWith(entry({ modules: 'x' }), /modules must be an array/));
   check('Load JSON: modules [null] is refused', throwsWith(entry({ modules: [null] }), /modules\[0\] must be an object/));
   check('Load JSON: a widthless module is refused', throwsWith(entry({ modules: [{ kind: 'cabinet' }] }), /width must be a positive number/));
-  check('Load JSON: an unknown hinge is refused', throwsWith(entry({ modules: [{ kind: 'cabinet', width: 60, hinge: 'up' }] }), /hinge must be left, right or top/));
+  check('Load JSON: an unknown hinge is refused', throwsWith(entry({ modules: [{ kind: 'cabinet', width: 60, hinge: 'up' }] }), /hinge must be left, right, top or bottom/));
   check('Load JSON: a non-numeric width is refused', throwsWith(entry({ width: '180' }), /width must be a positive number/));
   check('Load JSON: a wrong type in a slot is refused', throwsWith(JSON.stringify([{ type: 'fridge-freezer', params: {} }]), /should be a kitchen-base-run/));
   check('Load JSON: not an array is refused', throwsWith('{}', /expected an array/));
@@ -657,6 +657,58 @@ function contained(g, p) {
     const g = impl.build(THREE, p, { detail: 'full' });
     check('default preset ' + k + ': everything drawn is inside the envelope', contained(g, p), boxCm(g));
   });
+}
+
+// ---- 13. alignTo keeps a hood over its oven; hinge "bottom" drop-down fronts ------------
+{
+  const preset = K.KITCHEN_PRESETS.find(p => p.id === K.DEFAULT_PRESET).items;
+  const poses = K.exampleLPoses(preset);
+  const pieces = K.resolveAlignment(JSON.parse(JSON.stringify(preset)));
+  const place = (impl, params, pose) => {
+    const g = impl.build(THREE, Object.assign({}, impl.DEFAULTS, params), { detail: 'full' });
+    g.position.set(pose.x / 100, pose.y / 100, pose.z / 100);
+    g.rotation.y = pose.rotY;
+    g.updateMatrixWorld(true);
+    return g;
+  };
+  warnings.length = 0;
+  const bB = place(BASE, pieces.b, poses.b), wB = place(WALL, pieces.wallB, poses.wallB);
+  const oven = unionBox(meshes(bB, m => /^oven/.test(m.name) || m.name === 'hob'));
+  const hood = unionBox(meshes(wB, m => /^hood/.test(m.name)));
+  // Base run B runs along z in the L: compare centres along the run.
+  check('default preset: the hood is centred over the oven and hob as drawn (within 0.5 cm)',
+    near((hood.z0 + hood.z1) / 2, (oven.z0 + oven.z1) / 2, 0.5), { hood: [hood.z0, hood.z1], oven: [oven.z0, oven.z1] });
+  check('...even though base run B is squeezed (its oven is not at 60-120)', !near(oven.z1 - oven.z0, 60 - 6, 1));
+  // Probe: without alignTo, a plain at of 60 would drift off the squeezed oven.
+  const drift = JSON.parse(JSON.stringify(preset.wallB));
+  delete drift.modules[0].alignTo;
+  drift.modules[0].at = 60;
+  const hd = unionBox(meshes(place(WALL, drift, poses.wallB), m => /^hood/.test(m.name)));
+  check('probe: a fixed at would drift off the oven', !near((hd.z0 + hd.z1) / 2, (oven.z0 + oven.z1) / 2, 0.5));
+  // baseModuleSpans reports what is drawn, silently.
+  warnings.length = 0;
+  const spans = K.baseModuleSpans(preset.b);
+  check('baseModuleSpans: 4 spans, squeezed to the 180 cm run, no warnings', spans.length === 4 && near(spans[3][1], 180, 0.01) && warnings.length === 0, { spans, warnings });
+  check('alignTo validates; a malformed one does not', K.validateParams('kitchen-wall-run', pieces.wallB).length === 0 &&
+    K.validateParams('kitchen-wall-run', { modules: [{ kind: 'hood', width: 60, alignTo: { run: 'b' } }] }).length === 1);
+  warnings.length = 0;
+  const bad = K.resolveAlignment({ w: { modules: [{ kind: 'hood', width: 60, at: 10, alignTo: { run: 'nope', module: 0 } }] } });
+  check('alignTo naming nothing leaves at alone, with a warning', bad.w.modules[0].at === 10 && warnings.some(w => /names no drawn base module/.test(w)));
+
+  // hinge "bottom": one drop-down front, handle along its TOP edge, hinge line along its bottom.
+  const g = build(BASE, { width: 60, modules: [{ kind: 'cabinet', width: 60, hinge: 'bottom' }] });
+  const front = meshes(g, m => m.name === 'drop-front').map(boxCm);
+  const h = meshes(g, m => m.name === 'handle').map(boxCm)[0];
+  const line = meshes(g, m => m.name === 'door-gap').map(boxCm)[0];
+  check('hinge bottom: one drop-down front, no side door or flap', front.length === 1 && meshes(g, m => m.name === 'door' || m.name === 'flap').length === 0);
+  check('hinge bottom: a horizontal handle in the top quarter, like a dishwasher', !!h && h.x1 - h.x0 > h.y1 - h.y0 &&
+    (h.y0 + h.y1) / 2 > front[0].y1 - (front[0].y1 - front[0].y0) / 4, { h, front });
+  check('hinge bottom: the hinge line runs along the bottom edge', !!line && line.x1 - line.x0 > 50 && near(line.y0, front[0].y0, 0.05), { line, front });
+  checkEnvelope('base with a drop-down front', BASE, { width: 60, modules: [{ kind: 'cabinet', width: 60, hinge: 'bottom' }] });
+  check('default preset: base run A module 5 is a drop-down front', preset.a.modules[4].hinge === 'bottom');
+  check('hinge "top" still makes a flap', meshes(build(WALL, { width: 60, modules: [{ kind: 'cabinet', width: 60, hinge: 'top' }] }), m => m.name === 'flap').length === 1);
+  check('hinge bottom validates; "up" does not', K.validateParams('kitchen-base-run', { modules: [{ kind: 'cabinet', width: 60, hinge: 'bottom' }] }).length === 0 &&
+    K.validateParams('kitchen-base-run', { modules: [{ kind: 'cabinet', width: 60, hinge: 'up' }] }).length === 1);
 }
 
 // ---- 9. Copy JSON ------------------------------------------------------------------

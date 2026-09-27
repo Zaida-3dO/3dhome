@@ -107,7 +107,9 @@ function initialState(id) {
 const sumWidths = mods => mods.reduce((n, m) => n + (Number(m.width) || 0), 0);
 
 // ---------------------------------------------------------------- 3D
-function buildKitchen(t, group, THREE) {
+function buildKitchen(t0, group, THREE) {
+  // Wall modules with `alignTo` centre on their base module as drawn.
+  const t = Object.assign({}, t0, K.resolveAlignment(t0));
   const poses = K.exampleLPoses(t);
   const root = new THREE.Group();
   ITEMS.forEach(it => {
@@ -157,11 +159,14 @@ function ModuleRow({ m, i, n, isWall, onChange, onMove, onRemove }) {
         <div className="opts">
           {hingeable &&
             <select title="hinge (none: two doors when over 60 cm)" value={m.hinge || ''} onChange={e => set('hinge', e.target.value || undefined)}>
-              <option value="">hinge auto</option><option value="left">hinge L</option><option value="right">hinge R</option><option value="top">hinge top (flap)</option>
+              <option value="">hinge auto</option><option value="left">hinge L</option><option value="right">hinge R</option><option value="top">hinge top (flap)</option><option value="bottom">hinge bottom (drop-down)</option>
             </select>}
           {isWall &&
-            <label className="f" title="cm from the run's left end to this module (blank: right after the one before)">at
-              <input type="number" min="0" step="1" value={m.at === undefined ? '' : m.at} placeholder="next" onChange={e => set('at', e.target.value === '' ? undefined : Number(e.target.value))} /></label>}
+            (m.alignTo
+              ? <span className="f" title="centred over that base module as drawn">centred on {m.alignTo.run} #{m.alignTo.module + 1}{' '}
+                  <button className="btn ghost" onClick={() => set('alignTo', undefined)}>unlink</button></span>
+              : <label className="f" title="cm from the run's left end to this module (blank: right after the one before)">at
+                  <input type="number" min="0" step="1" value={m.at === undefined ? '' : m.at} placeholder="next" onChange={e => set('at', e.target.value === '' ? undefined : Number(e.target.value))} /></label>)}
           {!isWall && m.kind === 'oven' &&
             <label className="f"><input type="checkbox" checked={!!m.hob} onChange={e => set('hob', e.target.checked)} />hob</label>}
           {isWall && m.kind === 'hood' &&
@@ -332,7 +337,9 @@ function loadJson(text, current) {
   return next;
 }
 
-function exportJson(t) {
+function exportJson(t0) {
+  // Export the resolved `at` alongside `alignTo`, so the JSON is right as is.
+  const t = Object.assign({}, t0, K.resolveAlignment(t0));
   return JSON.stringify(ITEMS.map(it => ({
     type: it.type,
     label: it.label,
