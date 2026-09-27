@@ -16,8 +16,9 @@
  *
  *   base run:  { kind, width }  kind = cabinet | drawers | oven | hob | sink |
  *              dishwasher | washer | filler | corner | gap
- *     cabinet / sink            hinge: 'left' | 'right' | 'top' -- one door
- *                               (or a lift-up flap for 'top') whatever its
+ *     cabinet / sink            hinge: 'left' | 'right' | 'top' | 'bottom' --
+ *                               one door (a lift-up flap for 'top', a
+ *                               drop-down front for 'bottom') whatever its
  *                               width, handle on the opening edge and a
  *                               hinge line on the other. With no hinge, over
  *                               60 cm wide gets two doors.
@@ -46,8 +47,10 @@
  *              height; the placer sets `elevation` for the run's bottom (the
  *              bottom of its tallest module) -- elevationForTop() turns a
  *              top line into that number.
- *     cabinet                   hinge: 'left' | 'right' | 'top', as on a
- *                               base run; the side handle sits low
+ *     cabinet                   hinge: 'left' | 'right' | 'top' | 'bottom',
+ *                               as on a base run; the side handle sits low
+ *     any                       alignTo: { run, module } -- centre it over a
+ *                               base run's module as drawn (resolveAlignment)
  *     cabinet / filler          underLed: true (a strip under it, lighting
  *                               the worktop), topLed: true (one on top)
  *     hood                      splashback: <cm> -- a metal panel hung on
@@ -119,7 +122,8 @@ function deepFreeze(o) {
   return Object.freeze(o);
 }
 
-function warn(msg) { console.warn('[furniture:kitchen] ' + msg); }
+let quiet = 0;
+function warn(msg) { if (!quiet) console.warn('[furniture:kitchen] ' + msg); }
 
 function resolve(defaults, params) {
   const p = Object.assign({}, defaults);
@@ -282,11 +286,12 @@ function hingeLine(THREE, g, mats, f, edge, zFace) {
   let b;
   if (edge === 'left') b = [f.x0 + GAP, f.x0 + GAP + t, f.y0 + GAP, f.y1 - GAP];
   else if (edge === 'right') b = [f.x1 - GAP - t, f.x1 - GAP, f.y0 + GAP, f.y1 - GAP];
+  else if (edge === 'bottom') b = [f.x0 + GAP, f.x1 - GAP, f.y0 + GAP, f.y0 + GAP + t];
   else b = [f.x0 + GAP, f.x1 - GAP, f.y1 - GAP - t, f.y1 - GAP];     // top
   add(g, box(THREE, mats.seam, b[0], b[1], b[2], b[3], zFace, zFace + 0.1, 'door-gap'));
 }
 
-const HINGES = ['left', 'right', 'top'];
+const HINGES = ['left', 'right', 'top', 'bottom'];
 
 /**
  * The door(s) of a cabinet-like module.
@@ -294,6 +299,9 @@ const HINGES = ['left', 'right', 'top'];
  *                           opening edge, hinge line on the other.
  *   hinge 'top'             one lift-up flap: handle along its bottom edge,
  *                           hinge line along its top.
+ *   hinge 'bottom'          one drop-down front: handle along its TOP edge
+ *                           (as on a dishwasher), hinge line along its
+ *                           bottom.
  *   no hinge                one door up to 60 cm (hung left); two doors over
  *                           it, handles at the meeting edges.
  * Narrow doors -- a half-width 30, even a 15 -- keep the handle inset
@@ -306,7 +314,7 @@ function doors(THREE, g, mats, style, detail, m, y0, y1, z0, z1, where) {
   const f = { x0: m.x0, x1: m.x1, y0: y0, y1: y1 };
   let hinge = m.hinge;
   if (hinge !== undefined && HINGES.indexOf(hinge) === -1) {
-    warn('hinge ' + JSON.stringify(hinge) + ' is not left/right/top -- using "left"');
+    warn('hinge ' + JSON.stringify(hinge) + ' is not left/right/top/bottom -- using "left"');
     hinge = 'left';
   }
   if (hinge === undefined && m.x1 - m.x0 > 60.5) {
@@ -322,11 +330,15 @@ function doors(THREE, g, mats, style, detail, m, y0, y1, z0, z1, where) {
     return;
   }
   hinge = hinge || 'left';
-  frontPanel(THREE, g, mats.front, m.x0, m.x1, y0, y1, z0, z1, hinge === 'top' ? 'flap' : 'door');
+  frontPanel(THREE, g, mats.front, m.x0, m.x1, y0, y1, z0, z1,
+    hinge === 'top' ? 'flap' : hinge === 'bottom' ? 'drop-front' : 'door');
   if (!full) return;
   if (hinge === 'top') {
     addHandle(THREE, g, mats, style, f, 'h-bot', 'centre', z1);
     hingeLine(THREE, g, mats, f, 'top', z1);
+  } else if (hinge === 'bottom') {
+    addHandle(THREE, g, mats, style, f, 'h-top', 'centre', z1);
+    hingeLine(THREE, g, mats, f, 'bottom', z1);
   } else {
     addHandle(THREE, g, mats, style, f, where, hinge === 'right' ? 'left' : 'right', z1);
     hingeLine(THREE, g, mats, f, hinge, z1);
@@ -1107,6 +1119,72 @@ export const EXAMPLE_L = deepFreeze({
   wallTop: 210,
 });
 
+/**
+ * A full L kitchen as a builder of one would enter it: the preset
+ * KitchenSpec opens on. Dimensions only. Base run B is kept exactly as
+ * entered -- 180 cm wide with modules adding up to 210, which the builder
+ * squeezes to fit with a warning -- because that width is still an open
+ * question for whoever measured it.
+ */
+export const FULL_RUN_L = deepFreeze({
+  a: {
+    width: 290,
+    height: 118.5,
+    modules: [
+      {kind: 'corner', width: 60, plinthLed: true},
+      {kind: 'cabinet', width: 50, plinthLed: true},
+      {kind: 'cabinet', width: 60, plinthLed: true},
+      {kind: 'dishwasher', width: 60, plinthLed: true},
+      {kind: 'cabinet', width: 60, hinge: 'bottom', plinthLed: true},
+    ],
+    corner: 'left',
+    cornerDepth: 62,
+    sink: {at: 120, width: 90, depth: 50, bowl: 'inset', drainer: 'right'},
+  },
+  b: {
+    width: 180,
+    depth: 62,
+    modules: [
+      {kind: 'cabinet', width: 60, hinge: 'left'},
+      {kind: 'oven', width: 60, hob: true},
+      {kind: 'cabinet', width: 60, plinthLed: true, hinge: 'right'},
+      {kind: 'cabinet', width: 30, hinge: 'right', plinthLed: true},
+    ],
+  },
+  wall: {
+    width: 290,
+    height: 121.5,
+    modules: [
+      {kind: 'cabinet', width: 65, underLed: true, topLed: true, height: 70, hinge: 'left'},
+      {kind: 'cabinet', width: 45, height: 70, underLed: true, topLed: true, hinge: 'left'},
+      {kind: 'cabinet', width: 60, height: 55, hinge: 'right', underLed: true, topLed: true},
+      {kind: 'cabinet', width: 60, underLed: true, topLed: true, height: 55},
+      {kind: 'cabinet', width: 60, height: 70, hinge: 'right', underLed: true, topLed: true},
+    ],
+  },
+  wallB: {
+    width: 160,
+    height: 121.5,
+    modules: [
+      // Centred over the oven (base run B, module 1) as drawn: see resolveAlignment().
+      {kind: 'hood', width: 60, style: 'chimney', visor: 'smoked', splashback: 61.5, height: 60, alignTo: {run: 'b', module: 1}},
+    ],
+  },
+  fridge: {
+    width: 65,
+    plinthLed: true,
+    topLed: true,
+  },
+  wallTop: 210,
+});
+
+/** The presets KitchenSpec offers, the first being the one it opens on. */
+export const KITCHEN_PRESETS = Object.freeze([
+  Object.freeze({ id: 'l-full-run', label: 'L kitchen, full run', items: FULL_RUN_L }),
+  Object.freeze({ id: 'l-example', label: 'Generic example L', items: EXAMPLE_L }),
+]);
+export const DEFAULT_PRESET = 'l-full-run';
+
 function sameValue(a, b) {
   if (a === b) return true;
   if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') return false;
@@ -1165,7 +1243,13 @@ export function validateParams(type, params) {
       if (!m || typeof m !== 'object' || Array.isArray(m)) { errs.push(at + ' must be an object'); return; }
       if (typeof m.kind !== 'string') errs.push(at + '.kind must be a string');
       if (!posNum(m.width)) errs.push(at + '.width must be a positive number');
-      if (m.hinge !== undefined && HINGES.indexOf(m.hinge) === -1) errs.push(at + '.hinge must be left, right or top');
+      if (m.hinge !== undefined && HINGES.indexOf(m.hinge) === -1) errs.push(at + '.hinge must be left, right, top or bottom');
+      if (m.alignTo !== undefined) {
+        const a = m.alignTo;
+        if (!a || typeof a !== 'object' || typeof a.run !== 'string' || !(Number.isInteger(a.module) && a.module >= 0)) {
+          errs.push(at + '.alignTo must be { run: <piece key>, module: <index> }');
+        }
+      }
       ['height', 'at', 'splashback'].forEach(k => {
         if (m[k] !== undefined && !num(m[k])) errs.push(at + '.' + k + ' must be a number');
       });
@@ -1212,4 +1296,71 @@ export function parseKitchenJson(text, slots, THREE) {
     }
     return full;
   });
+}
+
+/**
+ * Where a base run's modules are DRAWN, in cm from the run's left end:
+ * [[x0, x1], ...] in module order, after the builder's fitting (a short run
+ * padded, a long one squeezed, an owner's corner module widened). Silent:
+ * the build itself is where those warnings belong.
+ */
+export function baseModuleSpans(params) {
+  const p = resolve(BASE_DEFAULTS, params);
+  const W = p.width;
+  const corner = ['left', 'right'].indexOf(p.corner) === -1 ? 'none' : p.corner;
+  const cornerDepth = Math.max(10, Math.min(W, typeof p.cornerDepth === 'number' ? p.cornerDepth : 60));
+  quiet++;
+  try {
+    const mods = layoutModules(p.modules, W, { kinds: BASE_KINDS, type: 'kitchen-base-run', corner: corner });
+    growCorner(mods, corner, cornerDepth, 'kitchen-base-run');
+    // Only the entries the author wrote (a padding filler has no index).
+    const out = [];
+    let k = 0;
+    (Array.isArray(p.modules) ? p.modules : []).forEach(m => {
+      if (!m || typeof m !== 'object' || !(typeof m.width === 'number' && m.width > 0)) { out.push(null); return; }
+      while (k < mods.length && mods[k].kind === 'filler' && m.kind !== 'filler') k++;
+      const d = mods[k++];
+      out.push(d ? [d.x0 + W / 2, d.x1 + W / 2] : null);
+    });
+    return out;
+  } finally {
+    quiet--;
+  }
+}
+
+/**
+ * ALIGNMENT. A wall-run module may say `alignTo: { run: 'b', module: 1 }` --
+ * centre me over module 1 of the base run keyed 'b' in the same set of
+ * pieces. A wall run is measured from the same (left) end as the base run
+ * under it, so this sets the module's `at` to centre it on that base module
+ * AS DRAWN: however the base run is fitted (squeezed, padded), the hood
+ * stays over the oven.
+ *
+ * Takes and returns a map of piece key -> params (pieces without wall
+ * modules pass through); a wall module's `at` is replaced whenever it has a
+ * resolvable `alignTo`, and `alignTo` itself is kept so it survives Copy
+ * JSON. An alignTo naming a missing run or module is left alone, with a
+ * warning. Never throws.
+ */
+export function resolveAlignment(pieces) {
+  const out = Object.assign({}, pieces);
+  Object.keys(pieces).forEach(key => {
+    const p = pieces[key];
+    if (!p || typeof p !== 'object' || !Array.isArray(p.modules)) return;
+    if (!p.modules.some(m => m && m.alignTo)) return;
+    const mods = p.modules.map(m => {
+      if (!m || !m.alignTo) return m;
+      const base = pieces[m.alignTo.run];
+      const spans = base && Array.isArray(base.modules) ? baseModuleSpans(base) : null;
+      const span = spans ? spans[m.alignTo.module] : null;
+      if (!span) {
+        warn('alignTo ' + JSON.stringify(m.alignTo) + ' names no drawn base module -- `at` left as it is');
+        return m;
+      }
+      const at = Math.round(((span[0] + span[1]) / 2 - m.width / 2) * 100) / 100;
+      return Object.assign({}, m, { at: Math.max(0, at) });
+    });
+    out[key] = Object.assign({}, p, { modules: mods });
+  });
+  return out;
 }

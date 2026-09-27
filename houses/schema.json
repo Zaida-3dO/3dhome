@@ -1640,9 +1640,10 @@
                 "enum": [
                   "left",
                   "right",
-                  "top"
+                  "top",
+                  "bottom"
                 ],
-                "description": "cabinet / sink: `left` or `right` is one door hung from that edge, whatever its width (handle on the other edge); `top` is one lift-up flap (handle along its bottom). With no hinge a cabinet over 60 cm has two doors."
+                "description": "cabinet / sink: `left` or `right` is one door hung from that edge, whatever its width (handle on the other edge); `top` is one lift-up flap (handle along its bottom); `bottom` is one drop-down front (handle along its top, like a dishwasher). With no hinge a cabinet over 60 cm has two doors."
               },
               "hob": {
                 "type": "boolean",
@@ -1884,9 +1885,10 @@
                 "enum": [
                   "left",
                   "right",
-                  "top"
+                  "top",
+                  "bottom"
                 ],
-                "description": "cabinet: `left` or `right` is one door hung from that edge, whatever its width; `top` is one lift-up flap. With no hinge a cabinet over 60 cm has two doors."
+                "description": "cabinet: `left` or `right` is one door hung from that edge, whatever its width; `top` is one lift-up flap; `bottom` one drop-down front. With no hinge a cabinet over 60 cm has two doors."
               },
               "style": {
                 "type": "string",
@@ -1917,6 +1919,26 @@
                 "type": "number",
                 "minimum": 0,
                 "description": "hood: height in cm of a metal panel hung on the wall under the hood, down toward the worktop. It is part of this run, so the run's height reaches down to its bottom."
+              },
+              "alignTo": {
+                "type": "object",
+                "properties": {
+                  "run": {
+                    "type": "string",
+                    "description": "The key of the base run under this wall run, as the page or placer names its pieces."
+                  },
+                  "module": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "The index of the base module to centre over."
+                  }
+                },
+                "required": [
+                  "run",
+                  "module"
+                ],
+                "additionalProperties": false,
+                "description": "Centre this module over a base run's module AS DRAWN (resolveAlignment() in kitchen.js sets `at` from it), so it cannot drift when the base run is fitted."
               }
             },
             "required": [

@@ -91,17 +91,25 @@ const ITEMS = [
   { key: 'fridge', type: 'fridge-freezer',   label: 'Fridge-freezer' },
 ];
 
-function initialState() {
+// The page opens on K.DEFAULT_PRESET; the preset menu switches between them.
+function presetById(id) {
+  return K.KITCHEN_PRESETS.find(p => p.id === id) || K.KITCHEN_PRESETS[0];
+}
+function initialState(id) {
+  const preset = presetById(id || K.DEFAULT_PRESET);
   const s = {};
-  ITEMS.forEach(it => { s[it.key] = Object.assign(clone(K.TYPES[it.type].DEFAULTS), clone(K.EXAMPLE_L[it.key] || {})); });
-  s.wallTop = K.EXAMPLE_L.wallTop;
+  ITEMS.forEach(it => { s[it.key] = Object.assign(clone(K.TYPES[it.type].DEFAULTS), clone(preset.items[it.key] || {})); });
+  s.wallTop = preset.items.wallTop;
+  s.preset = preset.id;
   return s;
 }
 
 const sumWidths = mods => mods.reduce((n, m) => n + (Number(m.width) || 0), 0);
 
 // ---------------------------------------------------------------- 3D
-function buildKitchen(t, group, THREE) {
+function buildKitchen(t0, group, THREE) {
+  // Wall modules with `alignTo` centre on their base module as drawn.
+  const t = Object.assign({}, t0, K.resolveAlignment(t0));
   const poses = K.exampleLPoses(t);
   const root = new THREE.Group();
   ITEMS.forEach(it => {
@@ -151,11 +159,14 @@ function ModuleRow({ m, i, n, isWall, onChange, onMove, onRemove }) {
         <div className="opts">
           {hingeable &&
             <select title="hinge (none: two doors when over 60 cm)" value={m.hinge || ''} onChange={e => set('hinge', e.target.value || undefined)}>
-              <option value="">hinge auto</option><option value="left">hinge L</option><option value="right">hinge R</option><option value="top">hinge top (flap)</option>
+              <option value="">hinge auto</option><option value="left">hinge L</option><option value="right">hinge R</option><option value="top">hinge top (flap)</option><option value="bottom">hinge bottom (drop-down)</option>
             </select>}
           {isWall &&
-            <label className="f" title="cm from the run's left end to this module (blank: right after the one before)">at
-              <input type="number" min="0" step="1" value={m.at === undefined ? '' : m.at} placeholder="next" onChange={e => set('at', e.target.value === '' ? undefined : Number(e.target.value))} /></label>}
+            (m.alignTo
+              ? <span className="f" title="centred over that base module as drawn">centred on {m.alignTo.run} #{m.alignTo.module + 1}{' '}
+                  <button className="btn ghost" onClick={() => set('alignTo', undefined)}>unlink</button></span>
+              : <label className="f" title="cm from the run's left end to this module (blank: right after the one before)">at
+                  <input type="number" min="0" step="1" value={m.at === undefined ? '' : m.at} placeholder="next" onChange={e => set('at', e.target.value === '' ? undefined : Number(e.target.value))} /></label>)}
           {!isWall && m.kind === 'oven' &&
             <label className="f"><input type="checkbox" checked={!!m.hob} onChange={e => set('hob', e.target.checked)} />hob</label>}
           {isWall && m.kind === 'hood' &&
@@ -326,7 +337,9 @@ function loadJson(text, current) {
   return next;
 }
 
-function exportJson(t) {
+function exportJson(t0) {
+  // Export the resolved `at` alongside `alignTo`, so the JSON is right as is.
+  const t = Object.assign({}, t0, K.resolveAlignment(t0));
   return JSON.stringify(ITEMS.map(it => ({
     type: it.type,
     label: it.label,
@@ -335,7 +348,7 @@ function exportJson(t) {
 }
 
 function App() {
-  const [t, setT] = React.useState(initialState);
+  const [t, setT] = React.useState(() => initialState());
   const [tab, setTab] = React.useState('a');
   const [copied, setCopied] = React.useState('');
   const setItem = (key, v) => setT(prev => Object.assign({}, prev, { [key]: v }));
@@ -413,7 +426,11 @@ function App() {
           <h2>Copy JSON — params that differ from DEFAULTS</h2>
           <div className="row" style={{ marginTop: 0 }}>
             <button className="btn" onClick={doCopy}>Copy JSON</button>
-            <button className="btn ghost" onClick={() => { setT(initialState()); setCopied(''); }}>Reset to the example L</button>
+            <label className="f">preset
+              <select id="preset" value={t.preset} onChange={e => { setT(initialState(e.target.value)); setCopied(''); }}>
+                {K.KITCHEN_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select></label>
+            <button className="btn ghost" onClick={() => { setT(initialState(t.preset)); setCopied(''); }}>Reset to preset</button>
             <span style={{ fontSize: 11 }}>{copied}</span>
           </div>
           <pre id="json-out">{json}</pre>
