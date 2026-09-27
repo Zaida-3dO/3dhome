@@ -174,6 +174,49 @@
             "texture": {
               "$ref": "#/$defs/texture"
             },
+            "pattern": {
+              "type": "object",
+              "description": "A procedural rug look (src/rug-pattern.js, signed off on the Rug spec page): bold zig-zag bands in a palette plus shaggy pile noise, drawn once over the whole rug. Store only what differs from the defaults -- every key is optional and falls back to RUG_PATTERN_DEFAULTS, so `{}` is the default grey/cream/teal chevron shag. The rug's size is NOT a pattern key: it comes from the outline's bounding box, and the pattern's width (the axis the zig-zag spans) always follows the rug's LONG side, whichever plan axis that is. Supersedes `color`, and takes precedence over `texture` if both are given.",
+              "properties": {
+                "pattern": {
+                  "enum": ["chevron", "solid"],
+                  "description": "'chevron' (default) or 'solid' (the first colour only, still with pile noise)."
+                },
+                "colors": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/hexColor" },
+                  "minItems": 1,
+                  "description": "Band colours, cycled in order. Default [\"#9a9a96\", \"#e8e2d4\", \"#2f7e8c\"]."
+                },
+                "bandWidth": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Centimetres measured across one band. Default 26."
+                },
+                "angle": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 80,
+                  "description": "Degrees: the zig-zag's slope off the rug's width axis. Default 40."
+                },
+                "zigzags": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Full zig-zags across the rug's width (long side). Default 1: one big V."
+                },
+                "pileNoise": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "0 = a flat print; about 0.2 = shag (fuzzed band edges, shaded strands). Default 0.18."
+                },
+                "seed": {
+                  "type": "integer",
+                  "description": "Seed for the pile noise, so the same rug always looks the same. Default 1."
+                }
+              },
+              "additionalProperties": false
+            },
             "notes": {
               "type": "string",
               "description": "Why this rug's outline is what it is. Worth filling in: a rug polygon almost always differs from the room polygon for a physical reason (it laps over a pillar, it stops short of a doorway), and without the note the next editor 'corrects' it back to the room shape."

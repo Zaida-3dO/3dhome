@@ -459,6 +459,8 @@ jobs:
           # Math.random.
           set -euo pipefail
           node scripts/test-rug-pattern.mjs
+      - name: Rug pattern in the scene (rooms[].rug.pattern -- plan orientation, loader, schema drift)
+        run: node scripts/test-rug-pattern-scene.mjs
       - name: Digital piano builder (piano, bench, ottoman)
         run: |
           # Asserts src/furniture/digital-piano.js (multi-type: digital-piano,

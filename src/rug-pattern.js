@@ -13,8 +13,8 @@
  * copies the buffer into a canvas ImageData and wraps that in a
  * CanvasTexture.
  *
- * NOT YET READ BY THE SCENE: wiring a `pattern` key into home3d-scene.js is a
- * later step.
+ * Read by the scene through `rooms[].rug.pattern` (see rugPatternForBox,
+ * which lays the pattern out over a rug's plan-space bounding box).
  */
 
 export const RUG_PATTERN_DEFAULTS = Object.freeze({
@@ -109,4 +109,49 @@ export function fillRugPattern(rgba, w, h, params) {
     }
   }
   return rgba;
+}
+
+/**
+ * The keys a house may set under `rooms[].rug.pattern`: every default EXCEPT
+ * the rug's size, which the scene takes from the rug polygon's bounding box so
+ * the outline stays the single source of truth for how big the rug is.
+ */
+export const RUG_PATTERN_HOUSE_KEYS = Object.freeze(
+  Object.keys(RUG_PATTERN_DEFAULTS).filter(k => k !== 'widthCm' && k !== 'depthCm'));
+
+/**
+ * Lay the pattern out over a rug's PLAN-space bounding box.
+ *
+ * The pattern's own axes are the rug's width (its LONG side, which the
+ * zig-zag spans) and depth (its short side, across which the bands stack).
+ * A rug in a plan can lie either way round, so this picks the long side of
+ * the box as the pattern's width and, when that long side runs along plan y,
+ * transposes the buffer. The result is always in plan orientation: column =
+ * plan x (increasing x), row = plan y (increasing y), so a caller maps it
+ * onto the rug with u = (x - x1) / spanX, row = (y - y1) / spanY.
+ *
+ * @param {number} spanXCm  bounding-box extent along plan x, cm
+ * @param {number} spanYCm  bounding-box extent along plan y, cm
+ * @param {Object} [params] overrides for RUG_PATTERN_DEFAULTS (widthCm/depthCm ignored)
+ * @param {number} [longSidePx=512] texture pixels along the rug's long side
+ * @returns {{width:number, height:number, data:Uint8ClampedArray, alongY:boolean}}
+ */
+export function rugPatternForBox(spanXCm, spanYCm, params, longSidePx) {
+  const sx = spanXCm > 0 ? spanXCm : 1, sy = spanYCm > 0 ? spanYCm : 1;
+  const alongY = sy > sx;
+  const longCm = alongY ? sy : sx, shortCm = alongY ? sx : sy;
+  const L = Math.max(8, Math.round(longSidePx > 0 ? longSidePx : 512));
+  const S = Math.max(8, Math.round(L * shortCm / longCm));
+  const p = Object.assign({}, params || {}, { widthCm: longCm, depthCm: shortCm });
+  const pat = fillRugPattern(new Uint8ClampedArray(L * S * 4), L, S, p);
+  if (!alongY) return { width: L, height: S, data: pat, alongY };
+  // Transpose: plan column x <- pattern row, plan row y <- pattern column.
+  const out = new Uint8ClampedArray(L * S * 4);
+  for (let row = 0; row < L; row++) {
+    for (let col = 0; col < S; col++) {
+      const o = (row * S + col) * 4, i = (col * L + row) * 4;
+      out[o] = pat[i]; out[o + 1] = pat[i + 1]; out[o + 2] = pat[i + 2]; out[o + 3] = pat[i + 3];
+    }
+  }
+  return { width: S, height: L, data: out, alongY };
 }
