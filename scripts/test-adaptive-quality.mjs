@@ -405,17 +405,20 @@ const W = A.WINDOW;
   check('scene: the loop feeds rendered-frame intervals (rAF timestamps) with the continuity flag and cadence',
     /adaptive\.feed\(\{ ms: tickTs - prevRenderAt, now: frameNow, continuous: frameContinuous, lowered: appliedRatio < ceilingRatio - RATIO_EPSILON, cadence: cadenceMs, vsync: vsyncMs, wall: Date\.now\(\) \}\)/.test(src));
   check('scene: the fps cap is timed on the rAF timestamp', /if \(minFrameMs && \(tickTs - lastRenderTs\) < minFrameMs\) \{ gateIdleTicks = 0; return; \}/.test(src));
-  check('scene: nothing is fed, and no probe starts, while the browser throttles rAF',
-    /if \(prevRenderAt && !browserThrottled\(\)\) \{/.test(src) && /if \(browserThrottled\(\)\) return false;/.test(src));
+  check('scene: nothing is fed while the browser throttles rAF, and the probe scheduler asks the same question',
+    /if \(prevRenderAt && !browserThrottled\(\)\) \{/.test(src) && /throttled: browserThrottled,/.test(src));
+  // The probe/jump decisions are behaviour-tested in section 6; this only pins
+  // that the scene runs them through the scheduler and wires its side effects.
+  check('scene: probes are decided by createProbeScheduler, and the loop asks it every tick',
+    /const probes = createProbeScheduler\(\{/.test(src) &&
+    /function tickProbe\(now, interacting\) \{ return probes\.tick\(now, interacting\); \}/.test(src) &&
+    /if \(tickProbe\(frameNow, interacting\)\) needsRender = true;/.test(src));
+  check('scene: the scheduler jumps through the controller and applies the decision',
+    /jumpToStart: \(\) => adaptive\.jumpToStart\(\),/.test(src) &&
+    /applyJump\(d, noted\) \{\s*applyAdaptiveDecision\(d, noted/.test(src));
   check('scene: throttling is judged on idle-gate ticks only',
     /if \(adaptive && \+\+gateIdleTicks >= 3 && lastTickDelta > 0\) \{\s*idleDeltas\.push\(lastTickDelta\);/.test(src) &&
     /gateIdleTicks = 0;/.test(src));
-  check('scene: the in-use maintenance probe needs a recent interaction, never runs during one, and is spaced out',
-    /if \(interacting \|\| !lastInteractAt \|\| now - lastInteractAt > MAINT_ACTIVE_MS\) return false;/.test(src) &&
-    /if \(now - Math\.max\(lastProbeEndAt, warmUntil\) < MAINT_PROBE_EVERY_MS\) return false;/.test(src));
-  check('scene: when frames cannot be trusted it jumps to the start ratio unmeasured',
-    /if \(throttleNoted \|\| now - warmUntil > UNMEASURED_JUMP_MS\) jumpUnmeasured\(\);/.test(src) &&
-    /const d = adaptive && adaptive\.jumpToStart\(\);/.test(src));
   check('scene: Re-measure cannot be undone later in the session (visual review r1 L1)',
     /if \(!adaptive \|\| qualityForgotten\) return;/.test(src) &&
     /qualityForgotten = true;\s*adaptive\.forget\(\);[^\n]*\n\s*dprCapState = null;\s*const ok = clearState/.test(src));
@@ -435,6 +438,78 @@ const W = A.WINDOW;
     (src.match(/frameContinuous = false;\s*if \(adaptive && \+\+gateIdleTicks >= 3 && lastTickDelta > 0\)/g) || []).length === 2);
   check('scene: no idle evidence yet counts as "cannot measure"', /if \(idleDeltas\.length < 5\) return true;/.test(src));
   check('scene: the ceiling is written from the controller only', /ceilingRatio = d\.to;/.test(src));
+}
+
+// ---- 6. the probe scheduler, driven end to end (task 7991c667) ----------------
+// A harness standing in for the scene's loop: ticks at a fixed rate, the
+// scene's own throttle test (under 5 idle deltas = cannot measure, else
+// rafThrottle), a real controller, and a scene-side ceiling that only moves
+// when applyJump is called -- so a jump the scheduler decides but never
+// applies is caught, as is a forced frame while the browser throttles.
+{
+  function runIdle(hz, seconds) {
+    const ctl = A.createController({ floor: 1, startRatio: 1.5, maxRatio: 2, level: 1,
+      ctx: { maxLevel: 3, mobile: true, shadows: 'auto' } });
+    const idleDeltas = [];
+    let noted = false;
+    let sceneCeiling = 1;
+    let applies = 0;
+    let settled = 0;
+    const throttled = () => {
+      if (idleDeltas.length < 5) return true;
+      noted = A.rafThrottle(idleDeltas).throttled;
+      return noted;
+    };
+    const probes = A.createProbeScheduler({
+      enabled: true, probeMs: 4000, maxProbes: 6, budgetMs: 20000, warmupMs: 900,
+      maintEveryMs: 180000, maintMs: 2500, maintActiveMs: 60000, unmeasuredJumpMs: 8000,
+      throttled, throttleNoted: () => noted,
+      jumpToStart: () => ctl.jumpToStart(),
+      applyJump(d) { applies++; if (d && d.to != null) sceneCeiling = d.to; },
+      furnitureBusy: () => false,
+      onSettled: () => { settled++; }
+    });
+    const step = 1000 / hz;
+    let forced = 0, forcedWhileThrottled = 0, gateIdleTicks = 0;
+    for (let now = 0; now < seconds * 1000; now += step) {
+      const wasThrottled = idleDeltas.length < 5 || A.rafThrottle(idleDeltas).throttled;
+      if (probes.tick(now, false)) {
+        forced++;
+        if (wasThrottled) forcedWhileThrottled++;
+        gateIdleTicks = 0;
+      } else if (++gateIdleTicks >= 3) {
+        idleDeltas.push(step);
+        if (idleDeltas.length > 20) idleDeltas.shift();
+      }
+    }
+    return { sceneCeiling, applies, forced, forcedWhileThrottled, noted, settled, probes };
+  }
+
+  const r30 = runIdle(30, 30);
+  check('scheduler @30 Hz idle: the browser is noted as throttling', r30.noted === true);
+  check('scheduler @30 Hz idle: the unmeasured jump is APPLIED (scene ends at the start ratio)',
+    r30.sceneCeiling === 1.5, r30.sceneCeiling);
+  check('scheduler @30 Hz idle: the jump is applied exactly once', r30.applies === 1, r30.applies);
+  check('scheduler @30 Hz idle: zero forced renders over 30 s', r30.forced === 0, r30.forced);
+  check('scheduler @30 Hz idle: still wants to measure (throttling is not an answer)',
+    r30.probes.wantProbe === true && r30.settled === 0);
+
+  // Non-vacuity: the same harness at 60 Hz is not throttled, so it DOES
+  // force frames (probes) -- and never while the throttle test says no.
+  const r60 = runIdle(60, 30);
+  check('scheduler @60 Hz idle: not throttled, so probes force frames', r60.noted === false && r60.forced > 0, r60.forced);
+  check('scheduler @60 Hz idle: no forced frame before idle evidence exists', r60.forcedWhileThrottled === 0, r60.forcedWhileThrottled);
+  check('scheduler @60 Hz idle: no unmeasured jump when frames can be measured', r60.applies === 0 && r60.sceneCeiling === 1);
+  check('scheduler @60 Hz idle: the load-probe budget runs out and it settles',
+    r60.probes.wantProbe === false && r60.settled === 1 && r60.probes.probesRun === 5 && r60.probes.probeSpentMs >= 20000,
+    { probesRun: r60.probes.probesRun, spent: r60.probes.probeSpentMs });
+
+  // Disabled: never probes, never jumps.
+  const off = A.createProbeScheduler({ enabled: false, throttled: () => { throw new Error('asked'); },
+    jumpToStart: () => { throw new Error('asked'); } });
+  let offForced = false;
+  for (let t = 0; t < 20000; t += 16) offForced = off.tick(t, false) || offForced;
+  check('scheduler disabled: never forces a frame and asks nothing', offForced === false && off.wantProbe === false);
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

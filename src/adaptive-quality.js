@@ -454,6 +454,115 @@ export function createController(o) {
   };
 }
 
+// ---- the probe scheduler ----------------------------------------------------
+
+/**
+ * When the scene self-drives frames to measure (a probe), and when it gives
+ * up measuring and jumps to the start ratio unmeasured. Pure decision logic:
+ * every side effect the scene owns comes in as a callback, so a test can
+ * drive it on a simulated tick series (task 7991c667).
+ *
+ * @param {Object} o
+ * @param {boolean} o.enabled       adaptation on (false: tick() never probes)
+ * @param {number} o.probeMs        a load probe's length
+ * @param {number} o.maxProbes      load probes per session
+ * @param {number} o.budgetMs       load-probe time per session
+ * @param {number} o.warmupMs       no load probe this soon after the first tick
+ * @param {number} o.maintEveryMs   in-use maintenance probe spacing
+ * @param {number} o.maintMs        a maintenance probe's length
+ * @param {number} o.maintActiveMs  "in use" = an interaction this recently
+ * @param {number} o.unmeasuredJumpMs  no idle evidence this long after warm-up:
+ *        jump to the start ratio unmeasured
+ * @param {function():boolean} o.throttled  frame times cannot be trusted now
+ *        (may update what throttleNoted() reports)
+ * @param {function():boolean} o.throttleNoted  the browser is known to throttle
+ * @param {function():?Object} o.jumpToStart  the controller's jumpToStart()
+ * @param {function(Object, boolean):void} o.applyJump  apply that decision
+ *        (the boolean: throttleNoted at the time)
+ * @param {function(number):boolean} o.furnitureBusy  furniture still building
+ * @param {function():void} o.onSettled  the load probes are used up
+ */
+export function createProbeScheduler(o) {
+  let wantProbe = !!o.enabled;   // the controller still has something to learn
+  let warmUntil = 0;             // set on the first tick
+  let probeUntil = 0;
+  let probeStartedAt = 0;
+  let probesRun = 0;
+  let probeSpentMs = 0;
+  let probeIsMaint = false;
+  let lastProbeEndAt = 0;
+  let lastInteractAt = 0;
+
+  function end(now) {
+    if (!probeUntil) return;
+    if (!probeIsMaint) probeSpentMs += now - probeStartedAt;
+    probeIsMaint = false;
+    probeUntil = 0;
+    lastProbeEndAt = now;
+  }
+
+  function jumpUnmeasured() {
+    const d = o.jumpToStart();
+    if (!d) return;
+    o.applyJump(d, o.throttleNoted());
+  }
+
+  // Start or continue a probe. Returns true while one is running (the loop
+  // then keeps drawing).
+  function tick(now, interacting) {
+    if (!o.enabled) return false;
+    if (!warmUntil) warmUntil = now + o.warmupMs;
+    if (interacting) lastInteractAt = now;
+    if (probeUntil) {
+      if (now < probeUntil) return true;
+      end(now);   // deadline: whatever the window holds, background finishes
+      return false;
+    }
+    if (!wantProbe) {
+      // The in-use maintenance probe.
+      if (interacting || !lastInteractAt || now - lastInteractAt > o.maintActiveMs) return false;
+      if (now - Math.max(lastProbeEndAt, warmUntil) < o.maintEveryMs) return false;
+      if (o.throttled()) return false;
+      probeIsMaint = true;
+      probeStartedAt = now;
+      probeUntil = now + o.maintMs;
+      return true;
+    }
+    if (now < warmUntil) return false;
+    if (o.throttled()) {
+      // Frame times cannot be trusted, so do what the scene did before
+      // adaptive quality: go to the start ratio unmeasured (a throttled
+      // browser, or no idle evidence within unmeasuredJumpMs). Never left
+      // at the cheap first-paint ratio for the whole session.
+      if (o.throttleNoted() || now - warmUntil > o.unmeasuredJumpMs) jumpUnmeasured();
+      return false;
+    }
+    // Furniture still building: its slices and first frames are not the
+    // scene's cost.
+    if (o.furnitureBusy(now)) return false;
+    if (probesRun >= o.maxProbes || probeSpentMs >= o.budgetMs) {
+      wantProbe = false;
+      o.onSettled();
+      return false;
+    }
+    probesRun++;
+    probeStartedAt = now;
+    probeUntil = now + o.probeMs;
+    return true;
+  }
+
+  return {
+    tick,
+    end,
+    jumpUnmeasured,
+    get wantProbe() { return wantProbe; },
+    set wantProbe(v) { wantProbe = !!v; },
+    get probing() { return probeUntil !== 0; },
+    get probesRun() { return probesRun; },
+    get probeSpentMs() { return probeSpentMs; }
+  };
+}
+
 // ---- persistence ------------------------------------------------------------
 
 /**
