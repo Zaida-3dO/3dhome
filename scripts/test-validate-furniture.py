@@ -127,6 +127,13 @@ for label, item in [
     ("box params wrong type", dict(BOX_FREE, params={"width": "wide"})),
     ("box params unknown key", dict(BOX_FREE, params={"wobble": 1})),
     ("box finish outside the palette", dict(BOX_FREE, params={"finish": "shiny"})),
+    # Percent-encoded traversal: the WHATWG URL parser decodes '%2e%2e' to '..'
+    # (case-insensitively) before collapsing dot-segments, so a literal-only
+    # '..' check in the pattern is not enough on its own.
+    ("model src percent-encoded traversal (lower)",
+     dict(BOX_FREE, type="model", params={"src": "%2e%2e/secret.glb"})),
+    ("model src percent-encoded traversal (upper)",
+     dict(BOX_FREE, type="model", params={"src": "a/%2E%2E/x.glb"})),
 ]:
     check(f"schema rejects: {label}", schema_errors(house([item])) != [], item)
 for label, item in [

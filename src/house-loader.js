@@ -76,8 +76,12 @@ export const HouseLoader = (() => {
 
   // Texture paths resolve relative to the profile directory and must not escape
   // it. Mirrors the schema's own pattern -- a profile must not be able to point
-  // the engine at an arbitrary host.
-  const TEXTURE_PATH_RE = /^(?!\/)(?!.*\.\.)(?!https?:)[^\\]+\.(png|jpg|jpeg|webp)$/i;
+  // the engine at an arbitrary host. Also rejects a percent-encoded '%2e'
+  // (case-insensitive): the WHATWG URL parser decodes '%2e%2e' to '..' before
+  // collapsing dot-segments, so a literal-only '..' check alone is not enough
+  // -- each use site below adds a second, independent containment check on
+  // the resolved URL.
+  const TEXTURE_PATH_RE = /^(?!\/)(?!.*\.\.)(?!.*%2e)(?!https?:)[^\\]+\.(png|jpg|jpeg|webp)$/i;
 
   // Extra-overlay script paths resolve relative to the profile directory under
   // exactly the same rule as textures: profile-relative, no leading slash, no
@@ -85,7 +89,7 @@ export const HouseLoader = (() => {
   // less -- a texture that escapes the profile paints a wrong picture, whereas
   // a script that escapes it runs arbitrary code in the page's origin. A
   // profile is data; it must never name an arbitrary host to execute from.
-  const OVERLAY_PATH_RE = /^(?!\/)(?!.*\.\.)(?!https?:)[^\\]+\.js$/i;
+  const OVERLAY_PATH_RE = /^(?!\/)(?!.*\.\.)(?!.*%2e)(?!https?:)[^\\]+\.js$/i;
 
   // Spec-page paths resolve relative to the profile directory under the same
   // rule again. A spec page is a static .html document opened in a new tab --
@@ -93,7 +97,30 @@ export const HouseLoader = (() => {
   // texture case and the overlay case. The guard is identical anyway, because
   // a profile naming an arbitrary host is wrong for reasons that have nothing
   // to do with how dangerous the particular asset is.
-  const SPEC_PATH_RE = /^(?!\/)(?!.*\.\.)(?!https?:)[^\\]+\.html?$/i;
+  const SPEC_PATH_RE = /^(?!\/)(?!.*\.\.)(?!.*%2e)(?!https?:)[^\\]+\.html?$/i;
+
+  /**
+   * Second, independent layer for every profile-relative path above: even
+   * with the %2e literal rejected by the regex, require the URL that would
+   * actually be fetched to still sit inside the profile directory `dir`
+   * (e.g. "houses/demo/"). Anchored the same way the page would resolve it.
+   * Returns true iff `dir + relPath` stays contained.
+   */
+  function resolvesInsideProfile(dir, relPath) {
+    const anchor = typeof location !== 'undefined' && location.href ? location.href : 'http://localhost/';
+    try {
+      const resolved = new URL(dir + relPath, anchor).href;
+      // './' drops any query, hash and last path segment, so an empty dir
+      // (compile(doc, '')) contains against the page's DIRECTORY, not the
+      // page URL itself (/app/index.html?house=x -> /app/).
+      const base = new URL('./', new URL(dir, anchor)).href;
+      return resolved.startsWith(base);
+    } catch (e) {
+      // dir/relPath failed to parse as a URL at all -- treat as not contained
+      // rather than letting an unparseable path through.
+      return false;
+    }
+  }
 
   /** '#rrggbb' -> 0xrrggbb, for THREE.Color. Falls back when absent/malformed. */
   function hexToInt(hex, fallback) {
@@ -1024,7 +1051,7 @@ export const HouseLoader = (() => {
       const ft = w.faceTexture;
       if (!ft || !ft.texture || !ft.texture.path) return;
       const path = ft.texture.path;
-      if (!TEXTURE_PATH_RE.test(path)) {
+      if (!TEXTURE_PATH_RE.test(path) || !resolvesInsideProfile(dir, path)) {
         warn('wall ' + w.id + ' faceTexture path "' + path + '" is not a safe profile-relative image path -- ignored');
         return;
       }
@@ -1067,7 +1094,7 @@ export const HouseLoader = (() => {
         };
         const rt = r.rug.texture;
         if (rt && rt.path) {
-          if (TEXTURE_PATH_RE.test(rt.path)) {
+          if (TEXTURE_PATH_RE.test(rt.path) && resolvesInsideProfile(dir, rt.path)) {
             rug.textureUrl = dir + rt.path;
             rug.repeatMetres = rt.repeatMetres || 1.2;
           } else {
@@ -1392,7 +1419,7 @@ export const HouseLoader = (() => {
     const extraOverlays = (Array.isArray(geo.extraOverlays) ? geo.extraOverlays : [])
       .filter(function (pth) {
         if (typeof pth !== 'string') return false;
-        if (!OVERLAY_PATH_RE.test(pth)) {
+        if (!OVERLAY_PATH_RE.test(pth) || !resolvesInsideProfile(dir, pth)) {
           warn('extraOverlays entry "' + pth + '" is not a safe profile-relative .js path -- ignored');
           return false;
         }
@@ -1414,7 +1441,7 @@ export const HouseLoader = (() => {
           warn('specPages entry is missing a name -- ignored');
           return false;
         }
-        if (typeof sp.path !== 'string' || !SPEC_PATH_RE.test(sp.path)) {
+        if (typeof sp.path !== 'string' || !SPEC_PATH_RE.test(sp.path) || !resolvesInsideProfile(dir, sp.path)) {
           warn('specPages entry "' + sp.name + '" is not a safe profile-relative .html path -- ignored');
           return false;
         }

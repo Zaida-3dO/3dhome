@@ -69,9 +69,13 @@ export const DEFAULTS = Object.freeze({
 /**
  * Same shape as the loader's texture/overlay guards: profile-relative, no
  * leading slash, no '..', no scheme, no backslash -- and .glb only (a .gltf
- * names further files, which would each need guarding).
+ * names further files, which would each need guarding). Also rejects a
+ * percent-encoded '%2e' (case-insensitive): the WHATWG URL parser decodes
+ * '%2e%2e' to '..' before collapsing dot-segments, so a literal-only '..'
+ * check is not enough on its own -- see the containment check below for the
+ * second, independent layer.
  */
-export const MODEL_PATH_RE = /^(?![/])(?!.*\.\.)(?![a-z][a-z0-9+.-]*:)[^\\]+\.glb$/i;
+export const MODEL_PATH_RE = /^(?![/])(?!.*\.\.)(?!.*%2e)(?![a-z][a-z0-9+.-]*:)[^\\]+\.glb$/i;
 
 /** How long prepare() waits for one file before giving up on it (ms). */
 export const LOAD_TIMEOUT_MS = 10000;
@@ -94,12 +98,32 @@ export function resolveModelUrl(src, assetBase) {
   // "houses/demo/", relative to the page), so the file is base + src,
   // resolved against the page.
   const base = typeof assetBase === 'string' ? assetBase : '';
+  const anchor = typeof location !== 'undefined' && location.href ? location.href : 'http://localhost/';
+  let url;
   try {
-    const anchor = typeof location !== 'undefined' && location.href ? location.href : 'http://localhost/';
-    return { url: new URL(base + src, anchor).href };
+    url = new URL(base + src, anchor).href;
   } catch (e) {
     return { url: base + src };
   }
+  // Second, independent layer: even with the %2e literal rejected above,
+  // require the resolved URL to still sit inside assetBase. Belt-and-braces
+  // against any other percent-encoding or normalisation quirk the regex
+  // does not anticipate -- containment is checked on the RESOLVED url, which
+  // is the thing that is actually fetched.
+  try {
+    // './' against the resolved base drops any query, hash and last path
+    // segment: with an empty assetBase the base is the page's DIRECTORY
+    // (e.g. /app/ for /app/index.html?house=x), not the page URL itself --
+    // otherwise nothing could ever start with it.
+    const baseHref = new URL('./', new URL(base, anchor)).href;
+    if (!url.startsWith(baseHref)) {
+      return { error: 'params.src "' + src + '" resolves outside the profile directory' };
+    }
+  } catch (e) {
+    // base itself failed to parse -- fall through and let the caller's fetch
+    // fail naturally rather than mask it as a different kind of error.
+  }
+  return { url };
 }
 
 /**
@@ -186,12 +210,92 @@ export function gltfToAsset(gltf) {
   return { full, low: hasLow ? low : null };
 }
 
+/**
+ * A .glb is allowed because it is meant to be self-contained -- unlike a
+ * .gltf, which routinely names sibling files. But the GLB *container* can
+ * still carry buffers[].uri / images[].uri pointing OUTSIDE the file (a
+ * relative path resolved against the profile directory, or an absolute
+ * https:// URL); GLTFLoader will happily fetch either. That would silently
+ * reopen exactly the "a file names further files" hole the .glb-only rule
+ * exists to close. So this reads the GLB's JSON chunks by hand and refuses
+ * any external (non-`data:`) uri BEFORE handing the bytes to GLTFLoader.
+ *
+ * GLB layout (see the Binary glTF spec): a 12-byte header (magic uint32,
+ * version uint32, total length uint32), then one or more chunks, each an
+ * 8-byte header (chunkLength uint32, chunkType uint32) followed by that many
+ * bytes. A JSON chunk's type is the ASCII bytes "JSON" read little-endian
+ * (0x4e4f534a).
+ *
+ * FAIL CLOSED. Every shape this cannot fully vouch for is refused, not
+ * passed on to GLTFLoader, because GLTFLoader accepts more than the spec:
+ *   - bytes whose magic is not "glTF" -- GLTFLoader.parse then falls back
+ *     to JSON.parse of the whole buffer, i.e. a renamed .gltf;
+ *   - a version other than 2, or a declared length past the end of the file;
+ *   - a chunk that overruns the declared length, or a trailing partial
+ *     chunk header;
+ *   - no JSON chunk, or one that is not a JSON object.
+ * And EVERY chunk is walked (the same bound GLTFLoader walks: the declared
+ * length), and every JSON chunk is checked -- GLTFLoader uses the LAST JSON
+ * chunk it meets, wherever it sits, so checking only the first one (or only
+ * the chunk at offset 12) would let a benign decoy through.
+ *
+ * @returns {?string} a human-readable reason to refuse the file, or null
+ */
+function findExternalGlbUri(buf) {
+  const bad = why => 'is not a well-formed binary glTF (' + why + ') -- refused';
+  if (!(buf instanceof ArrayBuffer) || buf.byteLength < 12) return bad('shorter than a GLB header');
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== 0x46546c67) return bad('no "glTF" magic');
+  if (dv.getUint32(4, true) !== 2) return bad('version ' + dv.getUint32(4, true) + ', not 2');
+  const total = dv.getUint32(8, true);
+  if (total < 12 || total > buf.byteLength) return bad('declared length ' + total + ' but the file has ' + buf.byteLength + ' bytes');
+  // Inline only if GLTFLoader itself would treat it as inline: its own test
+  // is /^data:.*,.*$/i (`.` does not match a newline), and anything else --
+  // `data:/../x.bin`, `data:x<newline>,...` -- it resolves against the file's own
+  // directory and FETCHES. A uri present but not a string is refused too.
+  const isExternal = uri => uri !== undefined && !(typeof uri === 'string' && /^data:.*,.*$/i.test(uri));
+  const decoder = new TextDecoder('utf-8');
+  let jsonChunks = 0;
+  for (let at = 12; at < total;) {
+    if (at + 8 > total) return bad('truncated chunk header');
+    const chunkLength = dv.getUint32(at, true);
+    const chunkType = dv.getUint32(at + 4, true);
+    const start = at + 8;
+    if (start + chunkLength > total) return bad('a chunk runs past the end of the file');
+    if (chunkType === 0x4e4f534a) {
+      jsonChunks++;
+      let json;
+      try {
+        json = JSON.parse(decoder.decode(new Uint8Array(buf, start, chunkLength)));
+      } catch (e) {
+        return bad('unparseable JSON chunk');
+      }
+      if (!json || typeof json !== 'object' || Array.isArray(json)) return bad('JSON chunk is not an object');
+      for (const kind of ['buffers', 'images']) {
+        // Every value, not only an array's: GLTFLoader indexes json[kind][i],
+        // which reads a plain object {"0": {...}} just as well (code review r3).
+        const arr = json[kind] && typeof json[kind] === 'object' ? Object.values(json[kind]) : [];
+        for (const entry of arr) {
+          if (entry && isExternal(entry.uri)) {
+            return kind + '[].uri "' + entry.uri + '" is external -- a .glb must be self-contained (data: URIs only)';
+          }
+        }
+      }
+    }
+    at = start + chunkLength;
+  }
+  if (!jsonChunks) return bad('no JSON chunk');
+  return null;
+}
+
 /** The default loader: fetch + the vendored GLTFLoader. Resolves to a parsed glTF. */
 async function defaultLoadGltf(url) {
   const mod = await import('../../vendor/three-r160/addons/loaders/GLTFLoader.js');
   const res = await fetch(url);
   if (!res.ok) throw new Error('could not be loaded (HTTP ' + res.status + ')');
   const buf = await res.arrayBuffer();
+  const refusal = findExternalGlbUri(buf);
+  if (refusal) throw new Error(refusal);
   const loader = new mod.GLTFLoader();
   const dir = url.slice(0, url.lastIndexOf('/') + 1);
   return new Promise((resolve, reject) => loader.parse(buf, dir, resolve,

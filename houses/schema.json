@@ -47,7 +47,7 @@
         "path": {
           "type": "string",
           "description": "Relative path from the house profile directory to the image file.",
-          "pattern": "^(?!/)(?!.*\\.\\.)(?!https?:)[^\\\\]+\\.(png|jpg|jpeg|webp)$"
+          "pattern": "^(?!/)(?!.*\\.\\.)(?!.*%[2][eE])(?!https?:)[^\\\\]+\\.(png|jpg|jpeg|webp)$"
         },
         "fit": {
           "type": "string",
@@ -2501,7 +2501,7 @@
       "type": "object",
       "description": "Params for `model` (src/furniture/model.js): a piece drawn from a .glb file that lives in the house profile, fitted into width x depth x height. Use it for a real product model the repo may not redistribute; decimate it first (scripts/model-lod). Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
-        "src": { "type": ["string", "null"], "pattern": "^(?![/])(?!.*\\.\\.)(?![a-zA-Z][a-zA-Z0-9+.-]*:)[^\\\\]+\\.[gG][lL][bB]$", "default": null, "description": "Profile-relative path to a .glb, e.g. \"assets/models/chair/lod.glb\". No leading slash, no '..', no URL scheme; .glb only. A missing or unloadable file skips the item with a warning." },
+        "src": { "type": ["string", "null"], "pattern": "^(?![/])(?!.*\\.\\.)(?!.*%[2][eE])(?![a-zA-Z][a-zA-Z0-9+.-]*:)[^\\\\]+\\.[gG][lL][bB]$", "default": null, "description": "Profile-relative path to a .glb, e.g. \"assets/models/chair/lod.glb\". No leading slash, no '..', no percent-encoded '..' (%2e%2e), no URL scheme; .glb only. A missing or unloadable file skips the item with a warning." },
         "width": { "type": "number", "exclusiveMinimum": 0, "default": 60, "description": "cm, along the wall / the item's local x." },
         "depth": { "type": "number", "exclusiveMinimum": 0, "default": 60, "description": "cm, back to front." },
         "height": { "type": "number", "exclusiveMinimum": 0, "default": 60, "description": "cm." },
@@ -4141,7 +4141,7 @@
           "items": {
             "type": "string",
             "description": "A profile-relative path to a .js file inside this house's own directory, e.g. \"overlays/proposed-layout.js\". Same path rule as textures: no leading slash, no '..', no absolute URL. An entry that breaks the rule is dropped with a console warning rather than failing the load.",
-            "pattern": "^(?!/)(?!.*\\.\\.)(?!https?:)[^\\\\]+\\.js$"
+            "pattern": "^(?!/)(?!.*\\.\\.)(?!.*%[2][eE])(?!https?:)[^\\\\]+\\.js$"
           },
           "uniqueItems": true,
           "description": "OPTIONAL extra overlay scripts this profile ships next to its geometry, loaded by the page after the engine and the house are ready.\n\nUnlike `decor` — which names geometry THIS ENGINE builds, from a closed enum — an entry here points at a script the engine does not contain and cannot validate beyond its path. The mechanism is generic; what it loads is the profile author's own code.\n\nWHY IT LIVES IN THE PROFILE: an overlay of this kind draws something true about one particular house (a renovation plan for that building, a survey annotation), so a house that owns such a drawing should carry it wherever its profile is loaded, rather than the embedding page having to know. This is the argument `decor` already makes for panelling.\n\nPRIVACY: this is the supported way to keep house-specific drawings OUT of a public repository. A private profile directory can hold its own overlay script and geometry together, mounted next to a public engine that ships neither.\n\nSECURITY: a script named here runs with the page's full privileges. The path guard confines it to the profile directory so a profile cannot point the engine at an arbitrary host, but the profile directory itself must be trusted exactly as much as the page is. Do not load a profile you would not run code from.\n\nAbsent for most houses, including the demo. A profile without the field loads exactly as before."
@@ -4164,7 +4164,7 @@
               "path": {
                 "type": "string",
                 "description": "A profile-relative path to an .html file inside this house's own directory, e.g. \"specs/BathroomSpec.html\". Same path rule as textures and overlays: no leading slash, no '..', no absolute URL. An entry that breaks the rule is dropped with a console warning rather than failing the load.",
-                "pattern": "^(?!/)(?!.*\\.\\.)(?!https?:)[^\\\\]+\\.html?$"
+                "pattern": "^(?!/)(?!.*\\.\\.)(?!.*%[2][eE])(?!https?:)[^\\\\]+\\.html?$"
               },
               "group": {
                 "type": "string",
