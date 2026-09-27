@@ -493,6 +493,15 @@ jobs:
           node scripts/test-rug-pattern.mjs
       - name: Rug pattern in the scene (rooms[].rug.pattern -- plan orientation, loader, schema drift)
         run: node scripts/test-rug-pattern-scene.mjs
+      - name: Page-only image previews (photo-frame span, rug texture warning)
+        run: |
+          # Asserts src/photo-span.js: one picked image covers a photo
+          # frame's panels, centred and cropped, one slice per panel left to
+          # right, on every photo-frame preset of the SmallItems page; and,
+          # text-level, that the preview never leaves the browser and that
+          # RugSpec shows a visible warning when ?texture= cannot reach 3D.
+          set -euo pipefail
+          node scripts/test-photo-span.mjs
       - name: Digital piano builder (piano, bench, ottoman)
         run: |
           # Asserts src/furniture/digital-piano.js (multi-type: digital-piano,
