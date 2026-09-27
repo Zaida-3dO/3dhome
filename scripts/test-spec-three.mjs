@@ -5,19 +5,23 @@
  *
  * What this checks:
  *   1. The iso camera distance (specIsoDistance, extracted from the
- *      SPEC-ISO-DISTANCE block and run here) fits a whole sphere of the item's
- *      radius in view, at a phone's portrait canvas as well as on a desktop.
- *      The fit is checked by projecting points of the sphere through an
- *      independent perspective projection, not by re-deriving the formula.
- *      At 390 px the canvas is taller than wide, so the horizontal field of
- *      view is the tight one; a distance that ignored the aspect cropped the
- *      bed on a phone.
+ *      SPEC-ISO-DISTANCE block and run here) puts every corner of the item's
+ *      box inside the frame on a phone's portrait canvas. The fit is checked
+ *      through an independent lookAt camera and perspective projection, not
+ *      by re-deriving the formula. At 390 px the canvas is taller than wide,
+ *      so the horizontal field of view is the tight one; the fixed 3.8 m
+ *      cropped the bed on a phone. And it changes nothing else: any landscape
+ *      (desktop) canvas gets exactly the old 3.8 m, even for an item that is
+ *      cropped there, and a portrait item whose width already fits stays at
+ *      3.8 m too.
  *   2. ThreeView actually uses it: the iso preset and the first build frame
- *      the item from the canvas's own width / height.
+ *      the item from the canvas's own width / height and the orbit angles.
  *   3. The key light carries a shadow bias and normalBias (shadow acne: faint
  *      diagonal bands on flat faces that both cast and receive).
- *   4. The mirror env-cube capture swaps the dark page background for a
- *      neutral room colour for the capture only, and puts it back.
+ *   4. Mirrors get their own env cube captured against a neutral room grey
+ *      (not the dark page background), assigned as envMap to isMirror meshes
+ *      ONLY -- scene.environment, which lights every other material, keeps
+ *      the ordinary capture, so nothing else on the page changes brightness.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,56 +46,91 @@ vm.runInContext((block || '') + '\n;this.specIsoDistance = typeof specIsoDistanc
 const iso = ctx.specIsoDistance;
 check('specIsoDistance is a function', typeof iso === 'function');
 
-// Largest |NDC| any point of a sphere of radius R (centred on the look
-// target) reaches, seen from distance d along -z with a vertical fov and
-// aspect. <= 1 means the whole sphere is inside the frame.
-function maxNdc(d, R, fovDeg, aspect) {
+// An independent camera: position = target + d * (sin ph sin th, cos ph,
+// sin ph cos th) exactly as ThreeView's syncCam places it, then a textbook
+// lookAt basis and perspective divide. Returns the largest |NDC x| and
+// |NDC y| any point reaches (<= 1 means in frame on that axis).
+function maxNdc(points, d, th, ph, fovDeg, aspect) {
+  const cam = [d * Math.sin(ph) * Math.sin(th), d * Math.cos(ph), d * Math.sin(ph) * Math.cos(th)];
+  const norm = v => { const l = Math.hypot(...v); return v.map(c => c / l); };
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const fwd = norm(cam.map(c => -c));                 // camera looks at the origin (target)
+  const right = norm(cross(fwd, [0, 1, 0]));
+  const up = cross(right, fwd);
   const t = Math.tan(fovDeg * Math.PI / 360);
-  let worst = 0;
-  const N = 90;
-  for (let i = 0; i <= N; i++) {
-    const phi = Math.PI * i / N;
-    for (let j = 0; j < 2 * N; j++) {
-      const th = Math.PI * j / N;
-      const x = R * Math.sin(phi) * Math.cos(th);
-      const y = R * Math.sin(phi) * Math.sin(th);
-      const z = d - R * Math.cos(phi);          // depth in front of the camera
-      if (z <= 0) return Infinity;
-      worst = Math.max(worst, Math.abs(x / (z * t * aspect)), Math.abs(y / (z * t)));
-    }
+  let x = 0, y = 0;
+  for (const p of points) {
+    const rel = [p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]];
+    const z = dot(rel, fwd);
+    if (z <= 0) return { x: Infinity, y: Infinity };
+    x = Math.max(x, Math.abs(dot(rel, right) / (z * t * aspect)));
+    y = Math.max(y, Math.abs(dot(rel, up) / (z * t)));
   }
-  return worst;
+  return { x, y };
 }
+// the 8 corners of a box w x h x d (m), relative to a look target at its
+// centre (ThreeView's iso target is half the item's height)
+const boxCorners = (w, h, dd) => {
+  const pts = [];
+  for (let i = 0; i < 8; i++) pts.push([(i & 1 ? 0.5 : -0.5) * w, (i & 2 ? 0.5 : -0.5) * h, (i & 4 ? 0.5 : -0.5) * dd]);
+  return pts;
+};
 
-const FOV = 35; // ThreeView's PerspectiveCamera
-const cases = [
-  { label: 'phone canvas 390x420 (portrait)', aspect: 390 / 420 },
-  { label: 'phone canvas 309x420 (390 px page, card padding)', aspect: 309 / 420 },
-  { label: 'desktop canvas 1335x560', aspect: 1335 / 560 },
-];
+const FOV = 35, TH = 0.6, PH = 1.15, FILL = 0.92; // ThreeView's camera, iso angles, margin
+const PHONE = 309 / 420, PHONE_WIDE = 390 / 420, DESK = 1335 / 560;
 if (typeof iso === 'function') {
-  for (const c of cases) {
-    for (const R of [0.4, 1.5, 3]) {
-      const d = iso(c.aspect, R, FOV, 0, Infinity);
-      const ndc = maxNdc(d, R, FOV, c.aspect);
-      check(`${c.label}, radius ${R} m: whole sphere in frame`, ndc <= 1 + 1e-6, { d, ndc });
-      // and not absurdly far: the sphere's projected edge reaches well into
-      // the frame (a sphere fit leaves some margin, but not half the view).
-      check(`${c.label}, radius ${R} m: fit is tight`, ndc > 0.8, { d, ndc });
+  const items = [
+    { label: 'double bed 1.6 x 1.0 x 2.1 m', box: boxCorners(1.6, 1.0, 2.1) },
+    { label: 'wardrobe 2.4 x 2.3 x 0.6 m', box: boxCorners(2.4, 2.3, 0.6) },
+    { label: 'kitchen run 4 x 2.4 x 0.6 m', box: boxCorners(4, 2.4, 0.6) },
+    { label: 'side table 0.4 x 0.5 x 0.4 m', box: boxCorners(0.4, 0.5, 0.4) },
+  ];
+  for (const aspect of [PHONE, PHONE_WIDE, 0.99]) {
+    for (const it of items) {
+      const d = iso(it.box, TH, PH, aspect, FOV, 0, Infinity, FILL);
+      const ndc = maxNdc(it.box, d, TH, PH, FOV, aspect);
+      check(`aspect ${aspect.toFixed(2)}, ${it.label}: every corner inside the width`, ndc.x <= FILL + 1e-6, { d, ndc });
+      // tight: a box fit touches the margin exactly (a sphere fit would not)
+      check(`aspect ${aspect.toFixed(2)}, ${it.label}: fit is tight`, ndc.x > FILL - 1e-3, { d, ndc });
+      // a phone: the height is the roomy axis, so the width fit leaves the
+      // item wholly in frame (3.8 m or further, as the harness clamps it).
+      // (Near square it need not: height framing is left as it always was.)
+      if (aspect > 0.95) continue;
+      const dc = iso(it.box, TH, PH, aspect, FOV, 3.8, Infinity, FILL);
+      check(`aspect ${aspect.toFixed(2)}, ${it.label}: portrait keeps the height in frame too`,
+        maxNdc(it.box, dc, TH, PH, FOV, aspect).y <= 1, { dc, ndc: maxNdc(it.box, dc, TH, PH, FOV, aspect) });
     }
   }
-  // the clamps the harness passes: never closer than the old 3.8 m, never
-  // past the orbit's 10 m zoom limit
-  check('min distance holds for a small item', iso(390 / 420, 0.2, FOV, 3.8, 10) === 3.8);
-  check('max distance holds for a huge item', iso(390 / 420, 20, FOV, 3.8, 10) === 10);
-  check('portrait needs more distance than landscape for the same item',
-    iso(390 / 420, 1.5, FOV, 0, Infinity) > iso(1335 / 560, 1.5, FOV, 0, Infinity));
+  // Desktop framing is exactly as before: every landscape canvas gets the
+  // old fixed 3.8 m -- including a wide item a width fit would push back
+  // there (the kitchen run).
+  for (const aspect of [1, 4 / 3, DESK]) {
+    for (const it of items) {
+      check(`landscape ${aspect.toFixed(2)}, ${it.label}: exactly the old 3.8 m`,
+        iso(it.box, TH, PH, aspect, FOV, 3.8, 10, FILL) === 3.8, iso(it.box, TH, PH, aspect, FOV, 3.8, 10, FILL));
+    }
+  }
+  check('(the kitchen run overflows the fit margin at 3.8 m on a desktop, so a fit there would move it)',
+    maxNdc(items[2].box, 3.8, TH, PH, FOV, DESK).x > FILL, maxNdc(items[2].box, 3.8, TH, PH, FOV, DESK));
+  // Portrait clamps: never closer than the old 3.8 m, never past the orbit's
+  // 10 m limit; a small item whose width fits stays at exactly 3.8 m.
+  const bed = items[0].box;
+  check('phone: a side table fits at 3.8 m, so it stays at exactly 3.8 m',
+    iso(items[3].box, TH, PH, PHONE, FOV, 3.8, 10, FILL) === 3.8);
+  check('phone: the bed is cropped at 3.8 m, so the camera moves back',
+    maxNdc(bed, 3.8, TH, PH, FOV, PHONE).x > 1 && iso(bed, TH, PH, PHONE, FOV, 3.8, 10, FILL) > 3.8,
+    { ndcAt38: maxNdc(bed, 3.8, TH, PH, FOV, PHONE) });
+  check('max distance holds for a huge item', iso(boxCorners(30, 5, 30), TH, PH, PHONE, FOV, 3.8, 10, FILL) === 10);
+  const shifted = bed.map(([x, y, z]) => [x + 1, y, z]);
+  check('an off-centre item is fitted too (not assumed symmetric about the target)',
+    maxNdc(shifted, iso(shifted, TH, PH, PHONE, FOV, 0, Infinity, FILL), TH, PH, FOV, PHONE).x <= FILL + 1e-6);
 }
 
 // ------------------------------------------------------------ 2. wiring
 const isoFn = (src.match(/function isoDistance\(\) \{([\s\S]*?)\n    \}/) || [])[1] || '';
-check('isoDistance() passes the canvas aspect (W / H) and the camera fov',
-  /specIsoDistance\(\s*W\s*\/\s*H\s*,\s*r\s*,\s*cam\.fov\s*,\s*3\.8\s*,\s*10\s*\)/.test(isoFn), isoFn.trim().slice(0, 200));
+check('isoDistance() passes the item corners, orbit angles, canvas aspect (W / H), fov and clamps',
+  /specIsoDistance\(\s*pts\s*,\s*orb\.th\s*,\s*orb\.ph\s*,\s*W\s*\/\s*H\s*,\s*cam\.fov\s*,\s*3\.8\s*,\s*10\s*,\s*0\.9\d*\s*\)/.test(isoFn), isoFn.trim().slice(0, 300));
 check('isoDistance() reads the canvas size', /canvas\.clientWidth/.test(isoFn) && /canvas\.clientHeight/.test(isoFn));
 check('iso preset takes its distance from isoDistance()',
   /iso:\s*\{[^}]*r:\s*null/.test(src) && /orb\.r\s*=\s*v\.r\s*\?\?\s*isoDistance\(\)/.test(src));
@@ -108,17 +147,26 @@ check('key light shadow.normalBias is set, small and positive', normalBias > 0 &
 check('the biased light is the shadow-casting key light',
   /const key = new THREE\.DirectionalLight[\s\S]*?key\.castShadow = true/.test(src));
 
-// ------------------------------------------------------------ 4. env capture background
+// ------------------------------------------------------------ 4. mirror env cube
 const cap = (src.match(/\/\/ \(C\) env cube capture[\s\S]*?renderer\.render\(scene, cam\);/) || [])[0] || '';
 check('env capture block found', !!cap);
-const iSave = cap.indexOf('const prevBackground = scene.background;');
+// The shared capture (scene.environment, lights EVERYTHING) must see the
+// page's own background: nothing may swap it before cubeCam.update.
+const iShared = cap.indexOf('cubeCam.update(renderer, scene);');
 const iSet = cap.indexOf('scene.background = envCaptureBackground;');
-const iUpdate = cap.indexOf('cubeCam.update(renderer, scene);');
+const iMirror = cap.indexOf('mirrorCubeCam.update(renderer, scene);');
 const iRestore = cap.indexOf('scene.background = prevBackground;');
-check('capture saves, sets, captures, then restores the background (in that order)',
-  iSave >= 0 && iSave < iSet && iSet < iUpdate && iUpdate < iRestore, { iSave, iSet, iUpdate, iRestore });
-check('only one cube capture in the block (the one wrapped by set/restore)',
-  cap.split('cubeCam.update(').length === 2);
+check('shared capture first, then set grey, mirror capture, restore (in that order)',
+  iShared >= 0 && iShared < iSet && iSet < iMirror && iMirror < iRestore, { iShared, iSet, iMirror, iRestore });
+check('the grey background is set exactly once, in the mirror-only branch',
+  cap.split('scene.background = envCaptureBackground').length === 2 &&
+  /if \(mirrors\.length\) \{[\s\S]*?scene\.background = envCaptureBackground;[\s\S]*?mirrorCubeCam\.update/.test(cap));
+check('mirror cube assigned as envMap to the mirror meshes only',
+  /for \(const mesh of mirrors\)[\s\S]*?\.envMap = mirrorRT\.texture/.test(cap) && src.split('.envMap = mirrorRT.texture').length === 2);
+check('scene.environment is the shared capture, never the mirror cube',
+  /scene\.environment = cubeRT\.texture;/.test(src) && !/scene\.environment\s*=\s*mirrorRT/.test(src));
+check('mirror cube captured from a CubeCamera on its own render target, and disposed',
+  /const mirrorCubeCam = new THREE\.CubeCamera\([^)]*mirrorRT\)/.test(src) && /mirrorRT\.dispose\(\)/.test(src));
 const bg = (src.match(/const envCaptureBackground = new THREE\.Color\(0x([0-9a-fA-F]{6})\)/) || [])[1];
 check('envCaptureBackground is a declared colour', !!bg);
 if (bg) {

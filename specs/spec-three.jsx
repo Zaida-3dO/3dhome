@@ -97,29 +97,48 @@
        (target). Meshes tagged mesh.userData.isMirror = true are HIDDEN
        during the cube capture so a mirror never reflects itself, and
        faded shell walls and ceiling are captured SOLID (their fade is
-       restored straight after), and the capture frame swaps the page's
-       dark scene.background for a neutral room grey (restored straight
-       after), so anything the cube still sees past reflects as a dim
-       room rather than as black.
+       restored straight after), so the cube never sees the background.
+       Meshes tagged isMirror additionally get their OWN envMap: a second
+       capture of the same room against a neutral room grey instead of the
+       dark page background, so whatever that cube still sees past (an
+       open side of the room) reflects as a dim room rather than as a
+       black band. Only the mirrors get it -- scene.environment keeps the
+       first capture, so every other material is lit exactly as before.
        buildModel only needs to tag mirror meshes with
        userData.isMirror = true (optional but recommended); no other work.
    ===================================================================== */
 
 /* SPEC-ISO-DISTANCE-BEGIN -- plain JS, no JSX: scripts/test-spec-three.mjs
    extracts this block and runs it, so keep it self-contained.
-   How far the iso camera must stand for a sphere of `radius` (m) around its
-   look target to fit the view, given the canvas `aspect` (width / height) and
-   the camera's VERTICAL field of view `fovDeg`. The narrower of the two half
-   angles decides it: on a phone the canvas is taller than wide, so the
-   horizontal half-angle is the tight one (the 390 px iso crop). Never closer
-   than `minDistance` (the fixed 3.8 m every page used before, so a small item
-   keeps its old framing) and never beyond `maxDistance` (the orbit's own zoom
-   limit). */
-function specIsoDistance(aspect, radius, fovDeg, minDistance, maxDistance) {
-  const vHalf = (fovDeg * Math.PI / 180) / 2;
-  const hHalf = Math.atan(Math.tan(vHalf) * aspect);
-  const fit = radius / Math.sin(Math.min(vHalf, hHalf));
-  return Math.min(maxDistance ?? Infinity, Math.max(minDistance ?? 0, fit));
+   How far the iso camera must stand, looking at its target from the orbit
+   angles (th, ph), for every one of `points` ([x, y, z] in metres, relative
+   to the target -- the item's bounding-box corners) to land inside `fill` of
+   the frame's WIDTH, given the canvas `aspect` (width / height) and the
+   camera's VERTICAL field of view `fovDeg`.
+   Portrait canvases only: the reported crop is a phone's (390 px), where the
+   canvas is taller than wide and the horizontal field of view is the narrow
+   one. A landscape canvas (aspect >= 1: every desktop) gets `minDistance`,
+   the fixed 3.8 m every page has always used, so desktop framing is exactly
+   as it was. On portrait only the width is fitted, and exactly (the box, not
+   a bounding sphere), so an item whose width already fits stays at 3.8 m
+   too; the height is the roomy axis there. Never beyond `maxDistance` (the
+   orbit's own zoom limit). */
+function specIsoDistance(points, th, ph, aspect, fovDeg, minDistance, maxDistance, fill) {
+  if (!(aspect < 1)) return Math.min(maxDistance ?? Infinity, minDistance ?? 0);
+  // camera "back" axis (target -> camera), as syncCam places it, and its
+  // horizontal "right" axis (worldUp x back)
+  const bx = Math.sin(ph) * Math.sin(th), by = Math.cos(ph), bz = Math.sin(ph) * Math.cos(th);
+  const rl = Math.hypot(bz, bx) || 1;
+  const rx = bz / rl, rz = -bx / rl;
+  const tanH = Math.tan(fovDeg * Math.PI / 360) * aspect * (fill ?? 1);
+  let need = 0;
+  for (const [x, y, z] of points) {
+    const px = x * rx + z * rz, pz = x * bx + y * by + z * bz;
+    // the point sits pz nearer the camera than the target; at distance d it
+    // is (d - pz) deep and must satisfy |px| <= (d - pz) * tanH
+    need = Math.max(need, pz + Math.abs(px) / tanH);
+  }
+  return Math.min(maxDistance ?? Infinity, Math.max(minDistance ?? 0, need));
 }
 /* SPEC-ISO-DISTANCE-END */
 if (typeof window !== 'undefined') window.specIsoDistance = specIsoDistance;
@@ -179,8 +198,16 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
     // frames-remaining counter: >0 means "capture the env cube this frame".
     // Set to a few frames on each rebuild so materials/positions settle.
     let envCaptureFrames = 3;
-    // Neutral warm grey, roughly a lit plaster wall: what a reflection shows
-    // where the room is open, instead of the dark page background.
+    // Mirrors' own env cube: the same room captured against a neutral warm
+    // grey (roughly a lit plaster wall) instead of the dark page background,
+    // assigned as envMap to isMirror meshes ONLY. It must not become
+    // scene.environment: that one lights every material on the page, and a
+    // lighter background there brightens all of them.
+    const mirrorRT = new THREE.WebGLCubeRenderTarget(256, {
+      generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter,
+    });
+    const mirrorCubeCam = new THREE.CubeCamera(0.05, 50, mirrorRT);
+    scene.add(mirrorCubeCam);
     const envCaptureBackground = new THREE.Color(0x6b6862);
 
     const target = new THREE.Vector3(0, 1, 0);
@@ -225,16 +252,16 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
     window.addEventListener('resize', onResize);
 
     // ---- iso framing ---------------------------------------------------
-    // Radius of the item around the look target: the furthest corner of any
-    // visible mesh's world box. Staging is skipped so it does not push the
-    // camera back: flat meshes (a floor disc or plane, thinner than 1 cm on
-    // some axis) always, and backdrops -- the pages build their walls and
-    // floors to RECEIVE shadows only -- whenever anything else is left (some
-    // builders mark their own meshes receive-only too; then everything counts).
-    const _box = new THREE.Box3(), _corner = new THREE.Vector3(), _size = new THREE.Vector3();
-    function itemRadius() {
-      const radius = skipBackdrops => {
-        let r = 0;
+    // The item's world-box corners, relative to the look target. Staging is
+    // skipped so it does not push the camera back: flat meshes (a floor disc
+    // or plane, thinner than 1 cm on some axis) always, and backdrops -- the
+    // pages build their walls and floors to RECEIVE shadows only -- whenever
+    // anything else is left (some builders mark their own meshes receive-only
+    // too; then everything counts).
+    const _box = new THREE.Box3(), _size = new THREE.Vector3();
+    function itemCorners() {
+      const corners = skipBackdrops => {
+        const pts = [];
         sceneRoot.traverse(o => {
           if (!o.isMesh || !o.visible || !o.geometry) return;
           if (skipBackdrops && o.receiveShadow && !o.castShadow) return;
@@ -244,21 +271,24 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
           _box.getSize(_size);
           if (Math.min(_size.x, _size.y, _size.z) < 0.01) return;
           for (let i = 0; i < 8; i++) {
-            _corner.set(i & 1 ? _box.max.x : _box.min.x, i & 2 ? _box.max.y : _box.min.y, i & 4 ? _box.max.z : _box.min.z);
-            r = Math.max(r, _corner.distanceTo(target));
+            pts.push([(i & 1 ? _box.max.x : _box.min.x) - target.x,
+                      (i & 2 ? _box.max.y : _box.min.y) - target.y,
+                      (i & 4 ? _box.max.z : _box.min.z) - target.z]);
           }
         });
-        return r;
+        return pts;
       };
       sceneRoot.updateMatrixWorld(true);
-      return radius(true) || radius(false);
+      const own = corners(true);
+      return own.length ? own : corners(false);
     }
     function isoDistance() {
       const W = canvas.clientWidth, H = canvas.clientHeight;
-      const r = itemRadius();
-      const d = (r > 0 && W > 0 && H > 0) ? specIsoDistance(W / H, r, cam.fov, 3.8, 10) : 3.8;
-      canvas.dataset.isoRadius = r.toFixed(3); // read by browser checks
-      canvas.dataset.isoDistance = d.toFixed(3);
+      const pts = itemCorners();
+      const d = (pts.length && W > 0 && H > 0)
+        ? specIsoDistance(pts, orb.th, orb.ph, W / H, cam.fov, 3.8, 10, 0.92)
+        : 3.8;
+      canvas.dataset.isoDistance = d.toFixed(3); // read by browser checks
       return d;
     }
 
@@ -356,15 +386,25 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
         cubeCam.position.copy(target);
         const prevEnv = scene.environment;
         scene.environment = null; // avoid feedback while capturing
-        // Whatever the cube still sees past (a cutaway wall that is neither a
-        // shellWall nor the ceiling, an open side of the room) would reflect
-        // as the near-black page background -- the dark lower band on the
-        // mirror-cabinet doors. Capture against a neutral room colour
-        // instead, for this frame only, and put the page's own back.
-        const prevBackground = scene.background;
-        scene.background = envCaptureBackground;
         cubeCam.update(renderer, scene);
-        scene.background = prevBackground;
+        // Mirrors only: whatever the cube still sees past (a cutaway wall
+        // that is neither a shellWall nor the ceiling, an open side of the
+        // room) would reflect as the near-black page background -- the dark
+        // lower band on the mirror-cabinet doors. Capture a second cube
+        // against a neutral room colour and give it to the mirrors as their
+        // own envMap (which takes precedence over scene.environment).
+        if (mirrors.length) {
+          const prevBackground = scene.background;
+          scene.background = envCaptureBackground;
+          mirrorCubeCam.position.copy(target);
+          mirrorCubeCam.update(renderer, scene);
+          scene.background = prevBackground;
+          for (const mesh of mirrors) {
+            for (const m of (Array.isArray(mesh.material) ? mesh.material : [mesh.material])) {
+              if (m && m.envMap !== mirrorRT.texture) { m.envMap = mirrorRT.texture; m.needsUpdate = true; }
+            }
+          }
+        }
         scene.environment = prevEnv;
         for (const s of solid) { s.m.opacity = s.opacity; s.m.depthWrite = s.depthWrite; }
         for (let i = 0; i < mirrors.length; i++) mirrors[i].visible = hidden[i];
@@ -405,6 +445,7 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', onResize);
       cubeRT.dispose();
+      mirrorRT.dispose();
       renderer.dispose();
       // Release the WebGL context itself, not just its resources: a spec page
       // that switches objects (SpecPage in tweaks-panel.jsx) unmounts one
