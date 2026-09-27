@@ -40,7 +40,8 @@
  * negative renderOrder), because the wall fade's clone of each MUST be transparent
  * and three.js keys a program on `transparent` (the OPAQUE define). Solid
  * and fading buckets therefore share one program each, instead of two.
- * renderOrder: palette -2, glow -1 (see buildBucketMesh), kept 0.
+ * renderOrder: palette -2, glow -1 (see buildBucketMesh), kept 0; every FADE
+ * bucket 0, so it depth-sorts with the walls fading around it.
  *
  * SCOPE. Buckets are HOUSE-wide by default (`scope: 'house'`): the dollhouse
  * camera frames the whole house almost all the time, so per-room buckets buy
@@ -595,8 +596,14 @@ export function buildBucketMesh(THREE, b, materials) {
   // a screen or an LED sits on (sometimes flush with) its body, and on a tie
   // in depth the later draw wins -- the other order stripes the screen with
   // the body behind it.
-  if (b.cls === 'opaque') mesh.renderOrder = -2;
-  else if (b.cls === 'glow') mesh.renderOrder = -1;
+  // A FADE bucket keeps renderOrder 0 (item 3d2f067d): while its wall fades
+  // it must depth-sort among the fading walls, not draw before them and be
+  // blended over (washed out) by the wall behind it. The program is the same
+  // either way (renderOrder is not part of its key).
+  if (b.fadeWallId == null) {
+    if (b.cls === 'opaque') mesh.renderOrder = -2;
+    else if (b.cls === 'glow') mesh.renderOrder = -1;
+  }
   // Beauty meshes NEVER cast (plan A1): a caster draws in the sun pass and
   // in every room pass whose frustum it touches. The per-room proxy casts.
   mesh.castShadow = false;

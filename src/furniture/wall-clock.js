@@ -603,6 +603,16 @@ function numeralFontReady(doc) {
 }
 
 /**
+ * TEST-ONLY (item 1c7f8a6d). numeralFontReady caches ONE promise per page, so
+ * a test file that has already loaded the font once can never drive the
+ * failure path. These clear that cache and read the shared promise, so
+ * scripts/test-wall-clock.mjs runs the failing-link scenario for real.
+ * Not used by any caller in the app.
+ */
+export function _resetNumeralFontForTest() { numeralFontPromise = null; }
+export function _numeralFontReadyForTest(doc) { return numeralFontReady(doc); }
+
+/**
  * Call `onReady` (redraw and re-upload a diy-words texture) once the shared
  * numeralFontReady() promise settles TRUE. Never calls `onReady` on Node or
  * on a failed/unavailable load -- the caller's own fallback-font first draw

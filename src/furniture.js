@@ -326,18 +326,28 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
       // faded host wall (found in code review, item 059873ed finding F1).
       // Fixed generically here, not in wall-clock.js, so any future
       // dynamic part (the desk LED strip, item 816d71ee) inherits it: mark
-      // each dynamic mesh's OWN material transparent (each already has its
-      // own material instance -- see addHands' mat/mat.clone() split, no
-      // two dynamic meshes on one item share one material object, so this
-      // cannot leak opacity onto an unrelated mesh), and carry the item's
+      // each dynamic mesh's OWN material transparent, and carry the item's
       // own fadeWallId alongside the group so the caller can register it
       // exactly like a beauty bucket.
+      //
+      // Each material's OWN base (the opacity and depthWrite the builder
+      // gave it) is recorded BEFORE it is marked transparent (items
+      // c333108d, 14320d17): the fade returns a translucent dynamic part
+      // (a future LED diffuser at 0.4, say) to its own 0.4, never to 1, just
+      // as merge.js's forFade clone does for a glass bucket. A material
+      // shared by two dynamic meshes is visited once here (the `fade` flag)
+      // and registered once by fadeRegistrations.
       if (fadeWallId != null) {
         flat.dynamicGroup.traverse(o => {
           if (!o.isMesh || !o.material) return;
           (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+            if (m.userData && m.userData.fade) return;
+            m.userData = Object.assign({}, m.userData, {
+              fade: true,
+              baseOpacity: typeof m.opacity === 'number' ? m.opacity : 1,
+              baseDepthWrite: m.depthWrite !== false
+            });
             m.transparent = true;
-            m.userData = Object.assign({}, m.userData, { fade: true });
           });
         });
       }
@@ -581,16 +591,12 @@ export async function buildFurniture(THREE, items, opts) {
  * dynamic mesh on an item with a fadeWallId was already marked
  * `transparent = true` at build time (buildPlaced, furnitureBuildSteps), so
  * registering it here is enough for the existing fade loop to drive its
- * opacity exactly like a beauty bucket's. Every dynamic part TODAY is
- * opaque (a clock's matte hands), so this records `baseOpacity: 1,
- * baseDepthWrite: true` explicitly -- the same "safe, fully-opaque" base
- * task f7324d3f's own glass/translucent lock exists to require, rather than
- * leaving these two fields `undefined` and relying on wallFadeTarget's/
- * wallFadeDepthWrite's `base == null -> 1` fallback to happen to land on
- * the same number. A translucent dynamic part (a future LED diffuser, item
- * 816d71ee) would still need this reworked to record its OWN real base
- * rather than the hardcoded 1 here -- tracked separately as c333108d, not
- * fixed in this PR, since no dynamic part is translucent today.
+ * opacity exactly like a beauty bucket's. Each registration carries the
+ * material's OWN base, recorded at build time before it was marked
+ * transparent (items c333108d, 14320d17): 1/true for today's opaque clock
+ * hands, and a translucent dynamic part's real opacity and depthWrite, so
+ * the fade returns it to that rather than to 1. A material shared by two
+ * dynamic meshes is registered once, so it is eased once per frame.
  * @returns {Array<{mesh, wallId, baseOpacity, baseDepthWrite}>}
  */
 export function fadeRegistrations(result) {
@@ -604,12 +610,20 @@ export function fadeRegistrations(result) {
     if (see && !recorded) return;
     out.push({ mesh, wallId, baseOpacity: recorded ? mud.baseOpacity : 1, baseDepthWrite: mud.baseDepthWrite !== false });
   });
+  const seenDynamic = new Set();
   Object.keys(result && result.dynamicByItemId || {}).forEach(itemId => {
     const dyn = result.dynamicByItemId[itemId];
     if (dyn.fadeWallId == null) return;
     dyn.group.traverse(o => {
       if (!o.isMesh || !o.material) return;
-      out.push({ mesh: o, wallId: dyn.fadeWallId, baseOpacity: 1, baseDepthWrite: true });
+      // One registration per MATERIAL: the fade loop eases mesh.material,
+      // so two meshes sharing one would be eased twice per frame.
+      if (seenDynamic.has(o.material)) return;
+      seenDynamic.add(o.material);
+      const mud = (Array.isArray(o.material) ? o.material[0] : o.material).userData || {};
+      const recorded = typeof mud.baseOpacity === 'number';
+      out.push({ mesh: o, wallId: dyn.fadeWallId,
+        baseOpacity: recorded ? mud.baseOpacity : 1, baseDepthWrite: mud.baseDepthWrite !== false });
     });
   });
   return out;
@@ -761,6 +775,9 @@ export function disposeFurniture(result) {
     for (const k in m) { const v = m[k]; if (v && v.isTexture) texs.add(v); }
     m.dispose();
   });
-  (result.extraDisposables || []).forEach(m => m.dispose());
+  // extraDisposables also lists the palette texture (materials.textures),
+  // which `texs` already holds via the palette material's maps: dispose it
+  // once (item 1c7f8a6d).
+  (result.extraDisposables || []).forEach(m => { if (!texs.has(m)) m.dispose(); });
   texs.forEach(t => t.dispose());
 }
