@@ -397,7 +397,7 @@ const OTTOMAN_DEFAULTS = Object.freeze({
   channelDepth: 3.5,   // how far the rolls rise above the lid
   lidThickness: 4,     // the lid slab under the rolls (its rounded edge is the piping)
   lidOverhang: 1,      // the lid overhangs the box by this much all round
-  color: '#1f6f6c',    // teal plush velvet
+  color: '#1b5e6a',    // teal plush velvet
   footColor: '#1c1c1c',
   finish: 'satin'      // velvet's soft sheen, between matte fabric and gloss
 });
@@ -560,7 +560,10 @@ function buildOttoman(THREE, params, opts) {
   // ---- the pull-tab, hanging from the lid's front edge at the centre --------
   const tabH = Math.min(6, baseH * 0.3);
   const tabGeo = shadeGeometry(THREE, new THREE.BoxGeometry(m(3.2), m(tabH), m(0.4)), 0.8, 0.8);
-  add(tabGeo, velvet, 'tab', 0, m(lidBottom + 0.5 - tabH / 2), m(D - ov + 0.25));
+  const tabMesh = add(tabGeo, velvet, 'tab', 0, m(lidBottom + 0.5 - tabH / 2), m(D - ov + 0.25));
+  // Too thin to shadow itself cleanly: at 4 mm it striped with shadow acne.
+  tabMesh.castShadow = false;
+  tabMesh.receiveShadow = false;
 
   // ---- the rolls: centre panel + side rolls, running front to back ----------
   const widths = ottomanChannelWidths(p);

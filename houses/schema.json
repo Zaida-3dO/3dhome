@@ -2611,7 +2611,7 @@
         "channelDepth": { "type": "number", "exclusiveMinimum": 0, "default": 3.5, "description": "cm, how far the rolls rise above the lid." },
         "lidThickness": { "type": "number", "exclusiveMinimum": 0, "default": 4, "description": "cm, the lid slab under the rolls." },
         "lidOverhang": { "type": "number", "minimum": 0, "default": 1, "description": "cm, how far the lid overhangs the box all round." },
-        "color": { "$ref": "#/$defs/hexColor", "default": "#1f6f6c", "description": "Teal velvet: box, lid, rolls and tab." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#1b5e6a", "description": "Teal velvet: box, lid, rolls and tab." },
         "footColor": { "$ref": "#/$defs/hexColor", "default": "#1c1c1c" },
         "finish": { "$ref": "#/$defs/furnitureFinish", "default": "satin" }
       },
