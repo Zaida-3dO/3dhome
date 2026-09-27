@@ -63,7 +63,7 @@
  *
  * Pure ESM with THREE injected; no `import 'three'` (plan amendment A4).
  */
-import { FINISH_PARAMS, partFinish, partKeep, isKeptFinish } from './finishes.js';
+import { FINISH_PARAMS, liveFinishParams, partFinish, partKeep, isKeptFinish } from './finishes.js';
 
 /** Finishes that can go into a vertex-coloured bucket. */
 export const OPAQUE_FINISHES = Object.freeze(['matte', 'gloss', 'metal']);
@@ -331,7 +331,7 @@ export function makePaletteTexture(THREE) {
   const n = PALETTE_FINISHES.length;
   const data = new Uint8Array(n * 4);
   PALETTE_FINISHES.forEach((f, i) => {
-    const p = FINISH_PARAMS[f];
+    const p = liveFinishParams(f);   // a mirror has nothing to reflect here: see finishes.js
     data[i * 4] = 255;
     data[i * 4 + 1] = Math.round((typeof p.roughness === 'number' ? p.roughness : 1) * 255);
     data[i * 4 + 2] = Math.round((typeof p.metalness === 'number' ? p.metalness : 0) * 255);

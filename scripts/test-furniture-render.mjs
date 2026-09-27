@@ -246,11 +246,19 @@ const build = (h, quality, extra, opts) => quietly(() => F.buildFurnitureSync(TH
   const pm = pal[0].material, tex = pm.roughnessMap;
   check('palette material: roughness and metalness come from the palette texture', tex && pm.metalnessMap === tex &&
     pm.roughness === 1 && pm.metalness === 1 && tex.magFilter === THREE.NearestFilter && tex.generateMipmaps === false);
-  check('palette texel per finish = FINISH_PARAMS', M.PALETTE_FINISHES.every((f, i) => {
-    const d = tex.image.data, P = Fin.FINISH_PARAMS[f];
+  check('palette texel per finish = liveFinishParams', M.PALETTE_FINISHES.every((f, i) => {
+    const d = tex.image.data, P = Fin.liveFinishParams(f);
     return Math.abs(d[i * 4 + 1] / 255 - (P.roughness != null ? P.roughness : 1)) < 0.5 / 255 + 1e-9 &&
       Math.abs(d[i * 4 + 2] / 255 - (P.metalness != null ? P.metalness : 0)) < 0.5 / 255 + 1e-9;
   }));
+  // No environment map in the live scene: a metalness-1 mirror would draw
+  // black, so the mirror texel is a smooth, barely metallic grey.
+  {
+    const i = M.PALETTE_FINISHES.indexOf('mirror'), d = tex.image.data;
+    check('mirror texel is not fully metallic (no env map to reflect)', d[i * 4 + 2] / 255 <= 0.2 && d[i * 4 + 1] / 255 <= 0.2,
+      [d[i * 4 + 1], d[i * 4 + 2]]);
+    check('every other finish draws exactly as the palette', M.PALETTE_FINISHES.filter(f => f !== 'mirror').every(f => Fin.liveFinishParams(f) === Fin.FINISH_PARAMS[f]));
+  }
   check('a vertex uv lands on its own finish texel', ['matte', 'gloss', 'satin', 'metal', 'mirror'].every(f =>
     Math.floor(M.paletteU(f) * M.PALETTE_FINISHES.length) === M.PALETTE_FINISHES.indexOf(f)));
   check('the palette texture is freed with the furniture', res.extraDisposables.indexOf(tex) !== -1);

@@ -449,6 +449,8 @@ jobs:
         run: node scripts/test-furniture-kitchen.mjs
       - name: Small items -- envelope, facing and finish tags per type x preset x detail
         run: node scripts/test-small-items.mjs
+      - name: Bathroom fittings -- presets, triangle caps, loft winding, notch, envelopes
+        run: node scripts/test-furniture-bathroom.mjs
       - name: Furniture renderer (placement, merge buckets, shadow proxies, fade, attach)
         run: node scripts/test-furniture-render.mjs
       - name: Quality tier - mobile-GPU axis, ?tier= override, pixel-ratio cap

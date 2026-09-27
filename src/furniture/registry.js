@@ -27,6 +27,8 @@
 
 export const REGISTRY = Object.freeze({
 
+  'bathtub': { path: 'bathroom.js', key: 'bathtub', spec: 'BathroomFittingsSpec' },
+
   'bed': { path: 'bed.js', key: null, spec: 'BedSpec' },
 
   'box': { path: 'box.js', key: null, spec: null },
@@ -69,6 +71,12 @@ export const REGISTRY = Object.freeze({
 
   'shelf': { path: 'small-items.js', key: 'shelf', spec: 'SmallItemsSpec' },
 
+  'shower-screen': { path: 'bathroom.js', key: 'shower-screen', spec: 'BathroomFittingsSpec' },
+
+  'shower-set': { path: 'bathroom.js', key: 'shower-set', spec: 'BathroomFittingsSpec' },
+
+  'shower-tray': { path: 'bathroom.js', key: 'shower-tray', spec: 'BathroomFittingsSpec' },
+
   'slat-panel': { path: 'wall-panels.js', key: 'slat-panel', spec: 'WallPanelSpec' },
 
   'sofa': { path: 'sofa.js', key: null, spec: 'SofaSpec' },
@@ -79,9 +87,15 @@ export const REGISTRY = Object.freeze({
 
   'subwoofer': { path: 'small-items.js', key: 'subwoofer', spec: 'SmallItemsSpec' },
 
+  'toilet': { path: 'bathroom.js', key: 'toilet', spec: 'BathroomFittingsSpec' },
+
+  'towel-rail': { path: 'bathroom.js', key: 'towel-rail', spec: 'BathroomFittingsSpec' },
+
   'tube-floor-lamp': { path: 'small-items.js', key: 'tube-floor-lamp', spec: 'SmallItemsSpec' },
 
   'tv': { path: 'small-items.js', key: 'tv', spec: 'SmallItemsSpec' },
+
+  'vanity-counter': { path: 'bathroom.js', key: 'vanity-counter', spec: 'BathroomFittingsSpec' },
 
   'wall-clock': { path: 'wall-clock.js', key: null, spec: 'ClockSpec' },
 
