@@ -227,6 +227,8 @@
     .plant-st.dry, .plant-st.due { color: #fde68a; background: rgba(245,158,11,0.18); border-color: rgba(245,158,11,0.45); }
     .plant-st.wet { color: #bfdbfe; background: rgba(96,165,250,0.16); border-color: rgba(96,165,250,0.45); }
     .plant-sample { padding: 0 12px 8px; font-size: 11px; opacity: 0.45; }
+    /* Keyboard hint after a Settings label, e.g. Grid (G). */
+    .kbd-hint { opacity: 0.4; font-weight: 400; }
 
     /* Control section */
     .control-section { padding: 8px 16px; }
@@ -544,6 +546,19 @@
     :root[data-theme="light"] .ha-offline-note { background: rgba(239,68,68,0.10); border-color: rgba(220,38,38,0.35); color: #991b1b; }
     :root[data-theme="light"] .color-square::-webkit-color-swatch { border-color: rgba(0,0,0,0.25); }
     :root[data-theme="light"] .color-square::-moz-color-swatch { border-color: rgba(0,0,0,0.25); }
+    /* Plants block. Chip text >= 4.5:1 on its tint, icons >= 3:1 on the panel
+       (scripts/test-theme.mjs measures them). */
+    :root[data-theme="light"] .plant-list { border-color: rgba(0,0,0,0.10); background: rgba(0,0,0,0.025); }
+    :root[data-theme="light"] .plant-row + .plant-row { border-top-color: rgba(0,0,0,0.08); }
+    :root[data-theme="light"] .plant-row svg { fill: #6b6f7b; }
+    :root[data-theme="light"] .plant-row svg.p-ok { fill: #15803d; }
+    :root[data-theme="light"] .plant-row svg.p-dry, :root[data-theme="light"] .plant-row svg.p-due { fill: #b45309; }
+    :root[data-theme="light"] .plant-row svg.p-wet { fill: #1d4ed8; }
+    :root[data-theme="light"] .plant-sub, :root[data-theme="light"] .plant-val.muted, :root[data-theme="light"] .plant-sample { opacity: 0.72; }
+    :root[data-theme="light"] .plant-st.ok { color: #166534; background: rgba(34,197,94,0.14); border-color: rgba(21,128,61,0.45); }
+    :root[data-theme="light"] .plant-st.dry, :root[data-theme="light"] .plant-st.due { color: #92400e; background: rgba(245,158,11,0.16); border-color: rgba(180,83,9,0.45); }
+    :root[data-theme="light"] .plant-st.wet { color: #1e40af; background: rgba(59,130,246,0.14); border-color: rgba(29,78,216,0.45); }
+    :root[data-theme="light"] .kbd-hint { opacity: 0.8; }
 
     /* Wide screen: panel always open, no close/lights button */
     @media (min-width: 1500px) {
@@ -1925,7 +1940,7 @@
       function overlayToggleRow(t, indented) {
         return '<div class="panel-toggle-row"' + (indented ? ' style="padding-left:16px;"' : '') + '>' +
           '<span class="panel-toggle-label"' + (indented ? ' style="opacity:0.85;"' : '') + '>' + esc(t.label) +
-          (t.hint ? ' <span style="opacity:0.4;font-weight:400;">(' + esc(t.hint) + ')</span>' : '') +
+          (t.hint ? ' <span class="kbd-hint">(' + esc(t.hint) + ')</span>' : '') +
           '</span>' +
           '<button class="toggle ' + (t.get() ? 'on' : '') + '" id="panel-xo-' + esc(t.key) + '"><div class="toggle-knob"></div></button>' +
           '</div>';
@@ -2495,7 +2510,7 @@
             '</div>';
 
           html += '<div class="panel-toggle-row">' +
-            '<span class="panel-toggle-label">Grid <span style="opacity:0.4;font-weight:400;">(G)</span></span>' +
+            '<span class="panel-toggle-label">Grid <span class="kbd-hint">(G)</span></span>' +
             '<button class="toggle ' + (gridOn ? 'on' : '') + '" id="panel-grid-toggle"><div class="toggle-knob"></div></button>' +
             '</div>';
 
@@ -2503,7 +2518,7 @@
           // the wall in the 3D view (see src/overlays/wall-debug-overlay.js). Also toggled
           // by Shift+D; the two stay in sync via the overlay's onChange.
           html += '<div class="panel-toggle-row">' +
-            '<span class="panel-toggle-label">Wall numbers <span style="opacity:0.4;font-weight:400;">(⇧D)</span></span>' +
+            '<span class="panel-toggle-label">Wall numbers <span class="kbd-hint">(⇧D)</span></span>' +
             '<button class="toggle ' + (wallNums.isEnabled() ? 'on' : '') + '" id="panel-wall-numbers-toggle"><div class="toggle-knob"></div></button>' +
             '</div>';
 

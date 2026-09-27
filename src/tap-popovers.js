@@ -666,6 +666,11 @@ ${coarseRules('.tp-force-coarse')}
 :root[data-theme="light"] .tp-offline { color: #b91c1c; }
 :root[data-theme="light"] .tp-vstat.err, :root[data-theme="light"] .tp-batt.low { color: #b91c1c; }
 :root[data-theme="light"] .tp-pop.chip .st.closed { color: #15803d; }
+:root[data-theme="light"] .tp-pmoist svg { fill: #1d4ed8; }
+:root[data-theme="light"] .tp-pmoist.muted svg { fill: #6b6f7b; }
+:root[data-theme="light"] .tp-pst.ok { color: #166534; background: rgba(34,197,94,0.14); border-color: rgba(21,128,61,0.45); }
+:root[data-theme="light"] .tp-pst.dry, :root[data-theme="light"] .tp-pst.due { color: #92400e; background: rgba(245,158,11,0.16); border-color: rgba(180,83,9,0.45); }
+:root[data-theme="light"] .tp-pst.wet { color: #1e40af; background: rgba(59,130,246,0.14); border-color: rgba(29,78,216,0.45); }
 `;
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));

@@ -183,10 +183,61 @@ const html = read('index.html');
   for (const sel of ['.panel', '.top-btn', '.toggle', '.slider', '.row-ib', '.sun-mode-btn', '.room-list-item', '.ha-status', '.spec-btn'])
     check('light rule for ' + sel, css.includes(':root[data-theme="light"] ' + sel));
   check('light theme declares only light', /:root\[data-theme="light"\] \{ color-scheme: only light; \}/.test(css));
+  for (const sel of ['.plant-list', '.plant-row svg', '.plant-st.ok', '.plant-st.dry', '.plant-st.wet', '.kbd-hint'])
+    check('light rule for ' + sel, css.includes(':root[data-theme="light"] ' + sel));
+  check('no inline-styled keyboard hint left (it could not be re-themed)', !html.includes('<span style="opacity:0.4;font-weight:400;">'));
   const TP = await imp('src/tap-popovers.js');
   const lp = (TP.STYLE.match(/:root\[data-theme="light"\] \.tp-pop \{([^}]*)\}/) || [])[1] || '';
   check('popover has a light rule re-pointing its tokens',
     /color-scheme: only light/.test(lp) && /--ink:#1a1d29/.test(lp) && /--pop-bg:/.test(lp) && /--pop-border:/.test(lp) && /--range-track:/.test(lp), lp);
+}
+
+// 7. light-theme contrast, measured from the CSS source ---------------------
+// WCAG contrast of the declared colours: chip text on its tint (the tint
+// composited over the panel or card), icons on the panel or card. Text needs
+// 4.5:1, icons 3:1.
+{
+  const TP = await imp('src/tap-popovers.js');
+  const css = (html + '\n' + TP.STYLE).replace(/\/\*[\s\S]*?\*\//g, '');
+  const rgba = str => {
+    let m = str.match(/^#([0-9a-f]{6})$/i);
+    if (m) return [0, 2, 4].map(i => parseInt(m[1].slice(i, i + 2), 16)).concat(1);
+    m = str.match(/^rgba?\(([^)]*)\)$/);
+    if (m) { const p = m[1].split(',').map(Number); return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1]; }
+    throw new Error('colour? ' + str);
+  };
+  const over = (fg, bg) => [0, 1, 2].map(i => fg[i] * fg[3] + bg[i] * (1 - fg[3])).concat(1);
+  const lum = c => { const l = c.slice(0, 3).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]; };
+  const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  // The declaration `prop` in the LIGHT rule whose selector list contains `sel`.
+  const lightDecl = (sel, prop) => {
+    const re = /([^{}]+)\{([^{}]*)\}/g; let m;
+    while ((m = re.exec(css))) {
+      const sels = m[1].split(',').map(x => x.trim());
+      if (sels.includes(':root[data-theme="light"] ' + sel)) {
+        const d = m[2].match(new RegExp('(?:^|[;\\s])' + prop + ':\\s*([^;]+)'));
+        if (d) return d[1].trim();
+      }
+    }
+    return null;
+  };
+  const PANEL = over(rgba('rgba(248,249,252,0.95)'), [255, 255, 255, 1]);
+  const CARD = over(rgba('rgba(250,251,253,0.96)'), [255, 255, 255, 1]);
+  const r2 = x => Math.round(x * 100) / 100;
+  for (const [sel, base] of [['.plant-st.ok', PANEL], ['.plant-st.dry', PANEL], ['.plant-st.wet', PANEL], ['.tp-pst.ok', CARD], ['.tp-pst.dry', CARD], ['.tp-pst.wet', CARD]]) {
+    const fg = lightDecl(sel, 'color'), bg = lightDecl(sel, 'background');
+    const c = fg && bg ? ratio(rgba(fg), over(rgba(bg), base)) : 0;
+    check('light ' + sel + ' text >= 4.5:1 (' + r2(c) + ')', c >= 4.5, { fg, bg });
+  }
+  for (const [sel, base] of [['.plant-row svg', PANEL], ['.plant-row svg.p-ok', PANEL], ['.plant-row svg.p-dry', PANEL], ['.plant-row svg.p-wet', PANEL], ['.tp-pmoist svg', CARD], ['.tp-pmoist.muted svg', CARD]]) {
+    const fill = lightDecl(sel, 'fill');
+    const c = fill ? ratio(rgba(fill), base) : 0;
+    check('light ' + sel + ' icon >= 3:1 (' + r2(c) + ')', c >= 3, fill);
+  }
+  // Keyboard hint: panel ink at (label opacity x hint opacity) over the panel.
+  const labelOp = Number(lightDecl('.panel-toggle-label', 'opacity')), hintOp = Number(lightDecl('.kbd-hint', 'opacity'));
+  const hint = ratio(over([26, 29, 41, labelOp * hintOp], PANEL), PANEL);
+  check('light keyboard hint >= 4.5:1 (' + r2(hint) + ')', hint >= 4.5, { labelOp, hintOp });
 }
 
 console.log(`\n${passes} passed, ${failures} failed`);
