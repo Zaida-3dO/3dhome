@@ -70,6 +70,14 @@ function facingWorld(g, facing) {
   return new THREE.Vector3(f[0], f[1], f[2]).transformDirection(g.matrixWorld);
 }
 
+/** A D card's lightMap as the GPU receives it: half floats decoded, red channel, row-major. */
+function lightMapOf(card) {
+  const img = card.material.lightMap.image, W = img.width, H = img.height;
+  const v = new Float32Array(W * H);
+  for (let k = 0; k < W * H; k++) v[k] = THREE.DataUtils.fromHalfFloat(img.data[k * 4]);
+  return { W, H, at: (i, j) => v[j * W + i], max: v.reduce((m, x) => Math.max(m, x), 0) };
+}
+
 /** A mesh's vertices in the STRIP's own frame (world, then undone by the strip's world matrix). */
 function localBox(g, mesh) {
   const inv = new THREE.Matrix4().copy(g.matrixWorld).invert();
@@ -193,11 +201,11 @@ for (const facing of ['down', 'up']) {
     // v=1 (texture top row) is the plane's +Y, which must point back at the strip's own plane
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(back.getWorldQuaternion(new THREE.Quaternion()));
     check(tag + ': texture top row lies in the strip plane', up.dot(fw) < -0.9999, up);
-    const img = back.material.map.image, W = img.width, H = img.height;
-    const col = i => img.data[(i * W + W / 2) * 4 + 3];
-    let best = 0; for (let i = 1; i < H; i++) if (col(i) > col(best)) best = i;
+    const lm = lightMapOf(back), W = lm.W, H = lm.H;
+    const col = j => lm.at(W / 2, j);
+    let best = 0; for (let j = 1; j < H; j++) if (col(j) > col(best)) best = j;
     check(tag + ': brightest band in the half nearer the strip (a wall is lit most just below it)', best >= H / 2, [best, H]);
-    check(tag + ': dark at the far end (by the lit surface)', col(0) < 10, col(0));
+    check(tag + ': dark at the far end (by the lit surface)', col(0) < 0.01 * lm.max, [col(0), lm.max]);
   }
 }
 for (const facing of ['front', 'back']) {
@@ -214,6 +222,33 @@ for (const facing of ['front', 'back']) {
   const span = [Math.min(...ts), Math.max(...ts)];
   check('D wash reaches washSpread past each end', near(span[0], -0.2, 1e-3) && near(span[1], 1.2, 1e-3), span);
 }
+{
+  // washEnds / washBack: the lit-surface card can stop short of a worktop's ends
+  // and of the wall behind, independently of how far it reaches in front.
+  const { g } = placed({ technique: 'D', washDistance: 50, washSpread: 34, washBack: 26, washEnds: 5, length: 170, facing: 'down' });
+  let wash = null; g.traverse(o => { if (o.userData.stripRole === 'wash') wash = o; });
+  const lb = localBox(g, wash);
+  check('D washEnds: card reaches 5 cm past each end', near(lb.min.x, -0.90, 1e-6) && near(lb.max.x, 0.90, 1e-6), [lb.min.x, lb.max.x]);
+  check('D washBack/washSpread: card spans 26 cm behind to 34 cm in front', near(lb.min.z, -0.26, 1e-6) && near(lb.max.z, 0.34, 1e-6), [lb.min.z, lb.max.z]);
+  // and the texture's bright line sits over the strip (z = 0), not at the card's middle
+  const lm = lightMapOf(wash);
+  let jm = 0; for (let j = 0; j < lm.H; j++) if (lm.at(lm.W / 2, j) > lm.at(lm.W / 2, jm)) jm = j;
+  const uv = wash.geometry.attributes.uv, pos = wash.geometry.attributes.position;
+  // row jm -> v -> the card's world point -> strip-local z
+  const v = jm / (lm.H - 1);
+  const a = new THREE.Vector3(), b = new THREE.Vector3();
+  let v0 = null, v1 = null;
+  for (let i = 0; i < uv.count; i++) { if (uv.getY(i) === 0) v0 = i; if (uv.getY(i) === 1) v1 = i; }
+  a.fromBufferAttribute(pos, v0); b.fromBufferAttribute(pos, v1);
+  const pt = a.clone().lerp(b, v).applyMatrix4(wash.matrixWorld).applyMatrix4(new THREE.Matrix4().copy(g.matrixWorld).invert());
+  check('D asymmetric card: brightest row lies under the strip', Math.abs(pt.z) < 0.012, pt.z);
+  for (const facing of ['up']) {
+    const { g: gu } = placed({ technique: 'D', washDistance: 17, washSpread: 30, washBack: 14, facing, length: 100 });
+    let wu = null; gu.traverse(o => { if (o.userData.stripRole === 'wash') wu = o; });
+    const lbu = localBox(gu, wu);
+    check('D washBack facing up: 14 cm behind, 30 cm in front', near(lbu.min.z, -0.14, 1e-6) && near(lbu.max.z, 0.30, 1e-6), [lbu.min.z, lbu.max.z]);
+  }
+}
 
 // ---- 4b. D cards: soft everywhere, physically scaled, albedo-aware -----------------
 /** Every card's alpha along ALL FOUR borders is ~0, and it falls smoothly from its peak. */
@@ -223,29 +258,27 @@ for (const facing of ['down', 'up', 'back']) {
   check('D facing ' + facing + ': cards built', cards.length === (facing === 'back' ? 1 : 2), cards.length);
   for (const c of cards) {
     const tag = 'D facing ' + facing + ' ' + c.userData.stripRole;
-    const img = c.material.map.image, W = img.width, H = img.height;
-    const a = (i, j) => img.data[(j * W + i) * 4 + 3];
-    let border = 0, peak = 0;
+    const lm = lightMapOf(c), W = lm.W, H = lm.H, a = lm.at, peak = lm.max, tol = peak * 0.004;
+    let border = 0;
     for (let i = 0; i < W; i++) { border = Math.max(border, a(i, 0), a(i, H - 1)); }
     for (let j = 0; j < H; j++) { border = Math.max(border, a(0, j), a(W - 1, j)); }
-    for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) peak = Math.max(peak, a(i, j));
-    check(tag + ': no hard edge -- every border texel near 0', border <= 6, border);
-    check(tag + ': a real peak inside', peak >= 200, peak);
+    check(tag + ': no hard edge -- every border texel near 0 (< 2.5% of peak)', border <= 0.025 * peak, [border, peak]);
+    check(tag + ': a real peak inside', peak > 0);
     // along the length: from the middle column outward, never rises, and no step > 12% of peak between texels
     let jm = 0; for (let j = 0; j < H; j++) if (a(W / 2, j) > a(W / 2, jm)) jm = j;
     let mono = true, maxStep = 0;
     for (let i = W / 2; i < W - 1; i++) {
-      if (a(i + 1, jm) > a(i, jm) + 1) mono = false;
+      if (a(i + 1, jm) > a(i, jm) + tol) mono = false;
       maxStep = Math.max(maxStep, Math.abs(a(i + 1, jm) - a(i, jm)));
     }
-    check(tag + ': falls smoothly past the end (monotone, no step)', mono && maxStep <= 0.12 * peak, [mono, maxStep]);
-    // across: from the peak row, the same
+    check(tag + ': falls smoothly past the end (monotone, no step)', mono && maxStep <= 0.12 * peak, [mono, maxStep / peak]);
+    // across: from the peak row toward row 0, the same
     let mono2 = true, maxStep2 = 0;
     for (let j = jm; j > 0; j--) {
-      if (a(W / 2, j - 1) > a(W / 2, j) + 1) mono2 = false;
+      if (a(W / 2, j - 1) > a(W / 2, j) + tol) mono2 = false;
       maxStep2 = Math.max(maxStep2, Math.abs(a(W / 2, j - 1) - a(W / 2, j)));
     }
-    check(tag + ': falls smoothly across (monotone, no step)', mono2 && maxStep2 <= 0.12 * peak, [mono2, maxStep2]);
+    check(tag + ': falls smoothly across (monotone, no step)', mono2 && maxStep2 <= 0.12 * peak, [mono2, maxStep2 / peak]);
   }
 }
 {
@@ -262,9 +295,10 @@ for (const facing of ['down', 'up', 'back']) {
   }
   const E0 = (2 * I / L) * sum * (L / n) / 3;          // irradiance under the centre
   const expect = E0 / Math.PI;                           // x albedo 1 / pi
-  const img = wash.material.map.image, W = img.width, H = img.height;
-  const centreAlpha = img.data[((H / 2) * W + W / 2) * 4 + 3] / 255;
-  const got = wash.material.color.r * centreAlpha;
+  // What three's basic shader adds: colour x lightMap texel x lightMapIntensity / pi.
+  const lm = lightMapOf(wash);
+  const centre = (lm.at(lm.W / 2 - 1, lm.H / 2) + lm.at(lm.W / 2, lm.H / 2) + lm.at(lm.W / 2 - 1, lm.H / 2 - 1) + lm.at(lm.W / 2, lm.H / 2 - 1)) / 4;
+  const got = wash.material.color.r * centre * wash.material.lightMapIntensity / Math.PI;
   check('D: the card adds albedo/pi x the line-source irradiance under the strip (numeric check)',
     Math.abs(got - expect) / expect < 0.03, [got, expect]);
   // the albedo multiplies it: a dark worktop glows dimly
@@ -275,7 +309,26 @@ for (const facing of ['down', 'up', 'back']) {
   // a surface twice as far gets less (not a fixed decal strength)
   const { g: g3 } = placed({ technique: 'D', length: 100, washDistance: 100, washSpread: 40, color: '#ffffff' });
   let w3 = null; g3.traverse(o => { if (o.userData.stripRole === 'wash') w3 = o; });
-  check('D: a surface further away gets a dimmer peak', w3.material.color.r < 0.6 * wash.material.color.r, [w3.material.color.r, wash.material.color.r]);
+  const peakOut = w => w.material.color.r * lightMapOf(w).max * w.material.lightMapIntensity;
+  check('D: a surface further away gets a dimmer peak', peakOut(w3) < 0.6 * peakOut(wash), [peakOut(w3), peakOut(wash)]);
+}
+// The shared colour survives on every card, however short the throw: the
+// material colour is EXACTLY hue x albedo (so <= 1) and the magnitude rides in
+// the lightMap. (Round 2 put the magnitude in the colour: 16.2 on the console
+// card, which tone-mapped to white.)
+for (const h of [3, 6, 10, 50, 260]) {
+  for (const col of ['#ffd7a0', '#3080ff', '#ff3300']) {
+    const { g } = placed({ technique: 'D', length: 60, washDistance: h, backWash: 12, washAlbedo: '#e9e5dc', backAlbedo: '#8e8c88', color: col });
+    S.applyStripState(g, { on: true, bri: 100, color: col });
+    const cards = []; g.traverse(o => { if (o.userData.stripRole && o.userData.stripRole.indexOf('wash') === 0) cards.push(o); });
+    for (const c of cards) {
+      const m = c.material.color, want = new THREE.Color(col).multiply(c.userData.albedo);
+      check('D h=' + h + ' ' + col + ' ' + c.userData.stripRole + ': colour channels <= 1', Math.max(m.r, m.g, m.b) <= 1, [m.r, m.g, m.b]);
+      check('D h=' + h + ' ' + col + ' ' + c.userData.stripRole + ': colour is exactly hue x albedo',
+        near(m.r, want.r, 1e-9) && near(m.g, want.g, 1e-9) && near(m.b, want.b, 1e-9), [m.getHexString(), want.getHexString()]);
+      check('D h=' + h + ' ' + col + ' ' + c.userData.stripRole + ': magnitude in the lightMap', c.material.lightMap && c.material.lightMap.type === THREE.HalfFloatType && c.material.lightMapIntensity > 0);
+    }
+  }
 }
 {
   // washSpread 0 = auto: AUTO_SPREAD x distance, clamped
@@ -297,8 +350,20 @@ for (const tech of ['A', 'B']) {
     const dirs = ls.map(l => l.target.getWorldPosition(new THREE.Vector3()).sub(worldPos(l)).normalize());
     check(tag + ': each aimed along facing', dirs.every(d => d.dot(fw) > 0.9999), dirs);
     check(tag + ': cone stops short of the mounting plane (angle < 90 deg)', ls.every(l => l.angle < Math.PI / 2 - 0.05), ls.map(l => l.angle));
-    const sum = ls.reduce((s, l) => s + l.intensity, 0);
-    check(tag + ': total intensity still 0.3', near(sum, 0.3), sum);
+    // Flux, integrated HERE by a midpoint rule over three's own cone falloff
+    // (smoothstep(cos angle, cos(angle*(1-penumbra)), cos t)), must equal the
+    // unaimed strip's half-space flux 2*pi*0.3.
+    const fluxOf = l => {
+      const c0 = Math.cos(l.angle), c1 = Math.cos(l.angle * (1 - l.penumbra)), n = 4000; let acc = 0;
+      for (let i = 0; i < n; i++) {
+        const t = (i + 0.5) * (Math.PI / 2) / n, x = Math.min(1, Math.max(0, (Math.cos(t) - c0) / (c1 - c0)));
+        acc += x * x * (3 - 2 * x) * Math.sin(t) * (Math.PI / 2) / n;
+      }
+      return 2 * Math.PI * l.intensity * acc;
+    };
+    const flux = ls.reduce((s, l) => s + fluxOf(l), 0);
+    check(tag + ': aimed flux equals the unaimed 2*pi*0.3 (within 0.5%)', Math.abs(flux - 2 * Math.PI * 0.3) / (2 * Math.PI * 0.3) < 0.005, [flux, 2 * Math.PI * 0.3]);
+    check(tag + ': cone is not the round-2 80/0.5 one (which sent 53%)', Math.abs(S.spotFluxFraction(80 * Math.PI / 180, 0.5) - 0.530) < 0.002 && S.AIM_FLUX_FRACTION > 0.7, S.AIM_FLUX_FRACTION);
     const c = S.lightCounts({ technique: tech, n: 4, aim: true });
     check(tag + ': lightCounts reports spots', c.spot === ls.length && c.point === 0, c);
     check(tag + ': uniformVectors counts 7 per spot', S.uniformVectors({ technique: tech, n: 4, aim: true }) === 7 * ls.length);
@@ -315,7 +380,7 @@ for (const tech of S.TECHNIQUES) {
   const owned = new Set();
   g.traverse(o => {
     if (o.geometry) owned.add(o.geometry);
-    if (o.material) { owned.add(o.material); if (o.material.map) owned.add(o.material.map); if (o.material.emissiveMap) owned.add(o.material.emissiveMap); }
+    if (o.material) { owned.add(o.material); for (const k of ['map', 'emissiveMap', 'lightMap']) if (o.material[k]) owned.add(o.material[k]); }
   });
   const called = new Set();
   for (const r of owned) { const orig = r.dispose.bind(r); r.dispose = () => { called.add(r); orig(); }; }
@@ -351,9 +416,9 @@ for (const tech of ['A', 'B', 'C']) {
   const { g } = placed({ technique: 'D', washDistance: 40 });
   let wash = null; g.traverse(o => { if (o.userData.stripRole === 'wash') wash = o; });
   S.applyStripState(g, { on: true, bri: 100, color: '#ffffff' });
-  const full = wash.material.color.r;
+  const full = wash.material.lightMapIntensity;
   S.applyStripState(g, { on: true, bri: 50, color: '#ffffff' });
-  check('D: the wash dims with brightness', near(wash.material.color.r, full / 2, 1e-9), [full, wash.material.color.r]);
+  check('D: the wash dims with brightness', near(wash.material.lightMapIntensity, full / 2, 1e-9), [full, wash.material.lightMapIntensity]);
   S.applyStripState(g, { on: false });
   check('D: off hides the wash', wash.visible === false);
 }
@@ -455,6 +520,49 @@ check('kelvinToHex matches the house ramp at 6500 K', S.kelvinToHex(6500) === 0x
       check('playground ' + tech + ' "' + slot.name + '": faces open space', inside.length === 0, inside);
     }
   }
+  // Every LIT part of every D card lies ON a real surface: from each texel
+  // carrying more than 2% of the card's peak, a ray back along the strip's
+  // facing must hit a room mesh within 1.5 cm (cards sit 3 mm proud). A card
+  // hanging in the air (round 2's console card, 1.3 cm above nothing and 8 cm
+  // past the console's front) fails.
+  const meshes = []; room.traverse(o => { if (o.isMesh && o.name !== 'window-glass') meshes.push(o); });
+  const rc = new THREE.Raycaster();
+  function cardMisses(g, fw) {
+    const miss = [];
+    g.traverse(c => {
+      if (!c.userData.stripRole || c.userData.stripRole.indexOf('wash') !== 0) return;
+      const lm = lightMapOf(c), prm = c.geometry.parameters;
+      for (let j = 0; j < lm.H; j += 3) for (let i = 0; i < lm.W; i += 4) {
+        if (lm.at(i, j) <= 0.02 * lm.max) continue;
+        const local = new THREE.Vector3((i / (lm.W - 1) - 0.5) * prm.width, (j / (lm.H - 1) - 0.5) * prm.height, 0);
+        const pt = local.applyMatrix4(c.matrixWorld);
+        // the surface is on the far side of the card from the strip
+        const nrm = new THREE.Vector3(0, 0, 1).transformDirection(c.matrixWorld);
+        const toStrip = g.getWorldPosition(new THREE.Vector3()).sub(pt);
+        const toSurface = nrm.dot(toStrip) > 0 ? nrm.clone().negate() : nrm.clone();
+        rc.set(pt.clone().addScaledVector(toSurface, -0.01), toSurface);
+        rc.far = 0.025;
+        const hit = rc.intersectObjects(meshes, false)[0];
+        if (!hit) miss.push(c.userData.stripRole + '@' + pt.toArray().map(v => v.toFixed(3)).join(','));
+      }
+    });
+    return miss;
+  }
+  for (const slot of slots) {
+    const g = S.build(THREE, PG.slotParams(slot, 'D', 1, 1.6));
+    g.position.set(slot.pos[0], slot.pos[1], slot.pos[2]); g.rotation.y = slot.rotY;
+    g.updateMatrixWorld(true);
+    const miss = cardMisses(g);
+    check('playground D "' + slot.name + '" @' + slot.pos.map(v => v.toFixed(2)).join(',') + ': every lit part of every card lies on a surface',
+      miss.length === 0, miss.slice(0, 4));
+  }
+  {
+    // The round-2 console card: wash 10, spread 12, at the bay's front -- must be caught.
+    const g = S.build(THREE, { technique: 'D', length: 10, facing: 'down', washDistance: 10, washSpread: 12, washAlbedo: '#ffffff' });
+    g.position.set(3.0 - 0.36, 0.322, 0); g.rotation.y = -Math.PI / 2; g.updateMatrixWorld(true);
+    check('playground: the surface check catches the round-2 floating console card', cardMisses(g).length > 0);
+  }
+
   // The mutation this guards: the pre-fix TV mounting (x 2.91, the TV's front face) IS caught.
   const bad = S.build(THREE, { technique: 'B', length: 120, facing: 'back' });
   bad.position.set(2.91, 1.52, 0); bad.rotation.y = -Math.PI / 2; bad.updateMatrixWorld(true);

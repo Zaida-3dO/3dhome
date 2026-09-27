@@ -28,8 +28,11 @@ const TV = Object.freeze({ x0: 2.91, x1: 2.94, y: 1.22, h: 0.71, w: 1.23 });
  * Every strip mounting, in the order the page's "Strips" slider adds them.
  * pos: the MOUNTING POINT (the channel's back, on the surface it is stuck to);
  * rotY turns the strip's local X; wash/back: D's distances (cm) to the lit
- * surface and to a wall behind; spread: D's card reach (cm); aim: up-facing
- * strips use aimed lights so they do not light the wall below their ledge.
+ * surface and to a wall behind; spread / washBack / ends: how far D's
+ * lit-surface card reaches in front of the line, behind it and past its ends
+ * -- chosen so every lit part of every card lies ON a real surface
+ * (scripts/test-strip-light.mjs raycasts it); aim: up-facing strips use aimed
+ * lights so they do not light the wall below their ledge.
  */
 export function stripSlots() {
   const N = -ROOM.d / 2, E = ROOM.w / 2, Wx = -ROOM.w / 2;
@@ -40,35 +43,37 @@ export function stripSlots() {
     // reaches 34 cm across: to the worktop's front edge (its back half runs
     // into the wall, where the wall hides it).
     { name: 'under kitchen wall cabinets', length: 170, facing: 'down', pos: [-1.7, 1.40, N + 0.26], rotY: 0,
-      wash: 51.5, spread: 34, back: 26, washAlbedo: C.worktop, backAlbedo: C.wall },
+      wash: 51.5, spread: 34, washBack: 26, ends: 5, back: 26, washAlbedo: C.worktop, backAlbedo: C.wall },
     // Under the desk top (0.74), behind the control panel (its back is 63.5 cm out).
     { name: 'desk, under the top', length: 110, facing: 'down', pos: [1.3, 0.74, N + 0.60], rotY: 0,
       wash: 74, spread: 45, washAlbedo: C.floor },
     // A cove on a ledge along the window wall, behind a 7 cm lip, lighting the ceiling.
     { name: 'cove over the window wall', length: 340, facing: 'up', pos: [Wx + 0.14, 2.43, 0], rotY: Math.PI / 2,
-      wash: 17, spread: 30, back: 14, aim: true, washAlbedo: C.ceiling, backAlbedo: C.wall },
+      wash: 17, spread: 30, washBack: 14, back: 14, aim: true, washAlbedo: C.ceiling, backAlbedo: C.wall },
     // On the BACK of the TV, facing the wall 6 cm behind it.
     { name: 'behind the TV', length: 120, facing: 'back', pos: [TV.x1, 1.52, 0], rotY: -Math.PI / 2,
       wash: 6, spread: 30, washAlbedo: C.wall },
     // On top of the wall cabinets (2.10), lighting the ceiling.
     { name: 'on top of the wall cabinets', length: 170, facing: 'up', pos: [-1.7, 2.10, N + 0.12], rotY: 0,
-      wash: 50, spread: 40, back: 12, aim: true, washAlbedo: C.ceiling, backAlbedo: C.wall },
+      wash: 50, spread: 40, washBack: 12, back: 12, aim: true, washAlbedo: C.ceiling, backAlbedo: C.wall },
     // Under the base run's carcass, in the 3 cm recess in front of the plinth.
     { name: 'kitchen plinth', length: 170, facing: 'down', pos: [-1.7, 0.13, N + 0.545], rotY: 0,
-      wash: 13, spread: 25, washAlbedo: C.floor },
+      wash: 13, spread: 25, washBack: 2.5, washAlbedo: C.floor },
     // Under the floating shelf over the desk; the desk top below, the wall behind.
     { name: 'shelf over the desk', length: 60, facing: 'down', pos: [1.3, 1.55, N + 0.16], rotY: 0,
-      wash: 78.5, spread: 30, back: 16, washAlbedo: C.deskTop, backAlbedo: C.wall },
-    // Under the TV console's top, at the front of its open centre bay.
-    { name: 'TV console open bay (10 cm)', length: 10, facing: 'down', pos: [E - 0.36, 0.322, 0], rotY: -Math.PI / 2,
-      wash: 10, spread: 12, washAlbedo: C.carcass },
+      wash: 78.5, spread: 30, washBack: 16, back: 16, washAlbedo: C.deskTop, backAlbedo: C.wall },
+    // Under the TV console's top, in the middle of its open centre bay, over
+    // the bay's shelf board (CONSOLE_SHELF; the cabinet builder leaves an open
+    // cell floorless, so the playground adds the board a real console has).
+    { name: 'TV console open bay (10 cm)', length: 10, facing: 'down', pos: [E - 0.18, 0.322, 0], rotY: -Math.PI / 2,
+      wash: 11, spread: 17, washBack: 17, ends: 25, washAlbedo: C.carcass },
   ];
   // Stress slots: linear ceiling strips on a grid.
   const xs = [-2.2, -0.75, 0.75, 2.2], zs = [-1.75, -1.25, -0.75, -0.25, 0.25, 0.75, 1.25, 1.75];
   const lens = [60, 120, 240, 120];
   for (const z of zs) for (let i = 0; i < xs.length; i++) {
     slots.push({ name: 'ceiling strip', length: lens[i], facing: 'down', pos: [xs[i], ROOM.h, z], rotY: 0,
-      wash: 260, spread: 80, washAlbedo: C.floor, stress: true });
+      wash: 260, spread: 45, ends: 15, washAlbedo: C.floor, stress: true });
   }
   return slots;
 }
@@ -77,7 +82,8 @@ export function stripSlots() {
 export function slotParams(slot, technique, n, diameter) {
   return {
     technique, n, length: slot.length, facing: slot.facing, diameter, aim: !!slot.aim,
-    washDistance: slot.wash, washSpread: slot.spread, backWash: slot.back || 0,
+    washDistance: slot.wash, washSpread: slot.spread, washBack: slot.washBack || null, washEnds: slot.ends || null,
+    backWash: slot.back || 0,
     washAlbedo: slot.washAlbedo, backAlbedo: slot.backAlbedo || '#ffffff'
   };
 }
@@ -140,6 +146,12 @@ export function buildRoom(THREE, root, F) {
       { kind: 'door', width: 50 }] }],
     plinth: { type: 'plinth', height: 0 }, gloss: true, color: C.carcass, topColor: '#2a2a2a'
   }), w / 2, 0, 0, -Math.PI / 2);
+  // The console's open bay has no floor of its own (the cabinet builder
+  // leaves an open cell empty down to the drawer): give it the shelf board a
+  // real console has, on top of the drawer, between the carcass back and the
+  // fronts. World: the console's depth runs along -x from the east wall.
+  box(0.351, 0.018, 0.78, w / 2 - 0.006 - 0.351 / 2, 0.203, 0,
+    new THREE.MeshStandardMaterial({ color: C.carcass, roughness: 0.4 }), 'console-bay-shelf');
   // The TV: a 55" panel, 6 cm off the wall.
   const tvMat = new THREE.MeshStandardMaterial({ color: C.tv, roughness: 0.3, metalness: 0.2 });
   box(TV.x1 - TV.x0, TV.h, TV.w, (TV.x0 + TV.x1) / 2, TV.y, 0, tvMat, 'tv');

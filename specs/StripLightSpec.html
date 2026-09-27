@@ -29,6 +29,11 @@
     font-size:10.5px; line-height:1.5; padding:8px 10px; border-radius:4px; pointer-events:none;
     white-space:pre-wrap; overflow-wrap:anywhere; }
   .hud.collapsed { display:none; }
+  .bays { display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; }
+  .bays #c3d { height:300px; }
+  .bays .row, .bays .legend { display:none; }
+  .bay-label { font-size:11px; font-weight:600; margin-bottom:6px; }
+  @media (max-width: 760px) { .bays { grid-template-columns:1fr 1fr; } .bays #c3d { height:220px; } }
   .hud .warn { color:#ffb070; }
   .bench-out { font-size:10.5px; white-space:pre; background:#fbfaf7; border:1px solid #ece8e0; border-radius:4px;
     padding:8px 10px; margin-top:10px; max-height:260px; overflow:auto; }
@@ -136,8 +141,8 @@
    ===================================================================== */
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "technique": "B",
-  "n": 6,
+  "technique": "C",
+  "n": 1,
   "bri": 100,
   "colorMode": "white",
   "kelvin": 3000,
@@ -569,37 +574,66 @@ const nextFrame = () => new Promise(r => setTimeout(r, 0));
 // ====================================================================
 // Close-up (spec-three.jsx ThreeView): A B C D side by side
 // ====================================================================
-/** What the previous close-up build owns, freed on the next rebuild (ThreeView disposes geometry only). */
-let closeupOwned = [];
-/** Close-up bays: 1 m wide, 1.65 m apart. With the close-up's point-light reach cut to CLOSEUP_REACH_CM
- *  no A/B light reaches a neighbouring bay (0.22 + 0.5 + 0.9 < 1.65); C has no cut-off, its spill onto
- *  the next bay is a few per cent (a one-sided rectangle 1.2 m away, near grazing). */
-const CLOSEUP_BAY = 1.65, CLOSEUP_REACH_CM = 90;
-function buildCloseup(t, group, THREE) {
+/** What each close-up bay's previous build owns, freed on its next rebuild (ThreeView disposes geometry only). */
+const closeupOwned = { A: [], B: [], C: [], D: [] };
+/**
+ * One close-up bay: a 1 m backboard, a 60 cm counter and a shelf with a 45 cm
+ * strip under it, 4 cm in from its front; the counter 62 cm below the strip,
+ * the backboard face 25 cm behind it. Each technique gets its OWN ThreeView
+ * (its own scene), so no bay can light another and every light keeps the
+ * house's full 2.5 m reach -- a fair side-by-side.
+ */
+function buildBay(tech, t, group, THREE) {
   const SL = window.StripLight;
-  for (const o of closeupOwned) SL.dispose(o);
-  closeupOwned = [];
+  for (const o of closeupOwned[tech]) SL.dispose(o);
+  closeupOwned[tech] = [];
   const C = PG.COLOURS;
-  const shelf = new THREE.MeshStandardMaterial({ color: 0xf2f0ea, roughness: 0.6 });
-  const top = new THREE.MeshStandardMaterial({ color: C.worktop, roughness: 0.7 });
-  const back = new THREE.MeshStandardMaterial({ color: C.wall, roughness: 0.9 });
-  const own = m => { closeupOwned.push(m); group.add(m); return m; };
-  SL.TECHNIQUES.forEach((tech, i) => {
-    const x = (i - 1.5) * CLOSEUP_BAY;
-    // Each bay its own backboard (1 m), counter (60 cm deep) and shelf: A B C D left to right.
-    own(new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.02), back)).position.set(x, 0.5, -0.17);
-    own(new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.03, 0.6), top)).position.set(x, 0.015, 0.14);
-    own(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.3), shelf)).position.set(x, 0.8, -0.01);
-    // Strip under the shelf, 4 cm in from its front; the counter 62 cm below, the backboard face 25 cm behind.
-    // D's cards stay inside the bay: 45 + 2 x 27 = 99 cm wide, and the counter card ends 8 cm short of the counter's front.
-    const g = SL.build(THREE, { technique: tech, n: t.n, length: 45, facing: 'down', diameter: t.diameter,
-      reach: CLOSEUP_REACH_CM, washDistance: 62, washSpread: 27, washAlbedo: C.worktop, backWash: 25, backAlbedo: C.wall });
-    g.userData.stripLight.intensity = SL.DEFAULTS.intensity * t.power;
-    SL.applyStripState(g, { on: t.bri > 0, bri: t.bri, color: stripColour(t) });
-    g.position.set(x, 0.65, 0.09);
-    own(g);
-  });
+  const own = m => { closeupOwned[tech].push(m); group.add(m); return m; };
+  own(new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.02), new THREE.MeshStandardMaterial({ color: C.wall, roughness: 0.9 }))).position.set(0, 0.5, -0.17);
+  own(new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.03, 0.6), new THREE.MeshStandardMaterial({ color: C.worktop, roughness: 0.7 }))).position.set(0, 0.015, 0.14);
+  own(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.3), new THREE.MeshStandardMaterial({ color: 0xf2f0ea, roughness: 0.6 }))).position.set(0, 0.8, -0.01);
+  // D's cards stay on the counter and the backboard: 45 + 2 x 27 = 99 cm wide;
+  // the counter card reaches 25 cm behind the line (to the backboard) and 27 in front.
+  const g = SL.build(THREE, { technique: tech, n: t.n, length: 45, facing: 'down', diameter: t.diameter,
+    washDistance: 62, washSpread: 27, washBack: 25, washAlbedo: C.worktop, backWash: 25, backAlbedo: C.wall });
+  g.userData.stripLight.intensity = SL.DEFAULTS.intensity * t.power;
+  SL.applyStripState(g, { on: t.bri > 0, bri: t.bri, color: stripColour(t) });
+  g.position.set(0, 0.65, 0.09);
+  own(g);
 }
+const BAY_BUILDERS = { A: (t, g, T) => buildBay('A', t, g, T), B: (t, g, T) => buildBay('B', t, g, T),
+  C: (t, g, T) => buildBay('C', t, g, T), D: (t, g, T) => buildBay('D', t, g, T) };
+/** A little below the shelf (so the tube shows), high enough to see the counter's wash. */
+const BAY_VIEW = { th: 0.35, ph: 1.5, r: 1.75, target: [0, 0.42, 0.1] };
+
+/**
+ * MEASURED 2026-09-27 on one desktop (RTX 4080 SUPER, ANGLE D3D11) with the
+ * page's own bench: frames rendered back to back and forced to finish (1-px
+ * readPixels), 120 frames after 20 warm-up, at the house popup size and the
+ * ultra pixel ratio 2 (2356 x 1408), ceiling light on, sun off, house lighting.
+ * Strips 1-8 are the furniture mountings (the cove and top-of-cabinet strips,
+ * slots 3 and 5, are AIMED: A and B use SpotLights there), 9+ ceiling strips.
+ * [technique, strips, p50 ms, p95 ms, fragment uniform rows, first show ms].
+ * NOT a tablet figure: nothing here was measured on the tablet or a phone.
+ * On this shared machine differences under ~1 ms are noise (A at 1 strip
+ * measured 2.4 and 4.1 ms p50 in two runs).
+ */
+const PERF_TABLE = [
+  ['A', 1, 2.4, 3.2, 47, 120], ['A', 5, 2.6, 3.8, 69, 204], ['A', 13, 2.2, 2.6, 101, 213], ['A', 25, 2.1, 2.6, 149, 360],
+  ['B N=1', 1, 1.4, 1.7, 47, 114], ['B N=1', 5, 1.4, 1.8, 69, 141], ['B N=1', 13, 1.8, 2.3, 101, 203], ['B N=1', 25, 2.9, 3.3, 149, 355],
+  ['B N=3', 1, 1.5, 1.7, 55, 152], ['B N=3', 5, 2.0, 2.3, 121, 298], ['B N=3', 13, 2.8, 3.7, 217, 623], ['B N=3', 25, 3.3, 3.9, 361, 1309],
+  ['B N=6', 1, 1.3, 1.6, 67, 184], ['B N=6', 5, 1.8, 2.3, 199, 509], ['B N=6', 13, 3.2, 3.7, 391, 1400], ['B N=6', 25, 5.0, 7.6, 679, 4346],
+  ['C', 1, 1.3, 1.5, 47, 220], ['C', 5, 1.5, 1.9, 63, 436], ['C', 13, 2.6, 3.8, 95, 1234], ['C', 25, 3.9, 4.6, 143, 2931],
+  ['D', 1, 1.4, 1.8, 43, 41], ['D', 5, 1.8, 2.2, 43, 39], ['D', 13, 2.0, 2.6, 43, 36], ['D', 25, 2.4, 2.9, 43, 39],
+];
+
+/** The owner's ladder, as one-click variants (params are what each sets). */
+const STRIP_VARIANTS = [
+  { id: 'c-recommended', label: 'C — recommended', params: { technique: 'C', mainLight: false, sun: false, strips: 8, bri: 100, lighting: 'house' } },
+  { id: 'b1-fallback', label: 'B N=1 — real-light fallback', params: { technique: 'B', n: 1, mainLight: false, sun: false, strips: 8, bri: 100, lighting: 'house' } },
+  { id: 'd-last-resort', label: 'D — last resort', params: { technique: 'D', mainLight: false, sun: false, strips: 8, bri: 100, lighting: 'house' } },
+  { id: 'strips-only', label: 'Strips only (main light off)', params: { mainLight: false, sun: false, strips: 8, bri: 100, lighting: 'house' } },
+];
 
 // ====================================================================
 // App
@@ -639,22 +673,28 @@ function App() {
 
   return (
     <SpecPage>
+      <SpecVariants variants={STRIP_VARIANTS} values={t}
+        onSelect={id => setTweak(Object.assign({}, STRIP_VARIANTS.find(v => v.id === id).params))} />
       <div className="grid">
         <div className="card">
           <h2>Techniques (per strip, N = {t.n})</h2>
           <table>
             <tbody>
-              <tr><th>Technique</th><th className="num">lights</th><th className="num">uniform vec</th><th>notes</th></tr>
+              <tr><th>Technique</th><th className="num">lights</th><th className="num">uniform vec</th><th>role</th></tr>
               {perStrip.map(r => (
                 <tr key={r.tech}>
                   <td>{SL.TECHNIQUE_LABELS[r.tech]}</td>
                   <td className="num">{r.c.point + r.c.rectArea}</td>
                   <td className="num">{r.u}</td>
                   <td>{{
-                    A: 'today: a blob on the surface, centred on the strip',
-                    B: 'even wash when the gap ≲ the distance to the lit surface; cost ∝ N',
-                    C: 'true line/area light; no shadows; Standard/Physical materials only; no cut-off',
-                    D: 'free: no lights; glow card fakes the wash (additive, ignores surface colour)',
+                    A: 'today, for comparison only: one light at the centre throws a round blob.',
+                    B: 'N=1 is the REAL-LIGHT FALLBACK: today\'s cost (one light, set behind the strip, in the frosted tube). ' +
+                       'More lights smooth the wash but cost 4 vectors each and still scallop on short throws (a cove).',
+                    C: 'RECOMMENDED: a true line light, smooth at every distance, 4 vectors per strip. No shadows; ' +
+                       'lights Standard/Physical materials only (all the house\'s lit materials are).',
+                    D: 'LAST RESORT, for genuinely constrained devices: no lights at all. Its glow cards take the shared colour ' +
+                       'and the colour of the surface they lie on, but it lights ONLY the surfaces its cards were placed on -- ' +
+                       'a strips-only room stays mostly dark.',
                   }[r.tech]}</td>
                 </tr>
               ))}
@@ -677,21 +717,56 @@ function App() {
             (a white by colour temperature, or any colour) drive every strip on the page.
           </div>
           <div className="legend">
-            Close-up below: four separate bays, techniques <b>A B C D</b> left to right, seen from just below shelf height
-            so the tubes show. Both views follow the Lighting control: "house" is the live scene's night rig (no
-            environment map), "spec" the spec pages' own. In the close-up the point lights' reach is cut to 0.9 m so no bay
-            lights its neighbour. D's glow cards take the colour of the surface they lie on (a grey worktop glows dimmer
-            than a white wall); a different surface inside a card's area (a black hob) is painted as if it were the worktop,
-            which is the limit of a decal.
+            Close-up below: the same shelf, strip and counter four times, one technique per view -- each its own scene, so
+            nothing spills between them and every light keeps its full 2.5 m reach. The camera sits just below the shelf
+            (the tube shows) and above the counter (its wash shows); drag any view to orbit it. Both the close-up and the
+            playground follow the Lighting control: "house" is the live scene's night rig (no environment map), "spec" the
+            spec pages' own. D's glow cards carry the shared colour times the colour of the surface they lie on (a grey
+            worktop glows dimmer than a white wall); a different surface inside a card's area (a black hob) is painted as if
+            it were the worktop -- the limit of a decal. The variants above are the owner's ladder: <b>C</b> recommended,
+            <b>B N=1</b> the real-light fallback, <b>D</b> the last resort; "Strips only" turns the main light and the sun
+            off, to judge whether a room lit only by its strips is legible.
+          </div>
+        </div>
+
+        <div className="card full">
+          <h2>Measured cost (this desktop, not the tablet)</h2>
+          <table>
+            <tbody>
+              <tr><th>Technique</th>{[1, 5, 13, 25].map(k => <th key={k} className="num">{k} strip{k > 1 ? 's' : ''}: p50 / p95 ms · uniform rows · first show</th>)}</tr>
+              {['A', 'B N=1', 'B N=3', 'B N=6', 'C', 'D'].map(tech => (
+                <tr key={tech}>
+                  <td>{tech}</td>
+                  {[1, 5, 13, 25].map(k => {
+                    const r = PERF_TABLE.find(x => x[0] === tech && x[1] === k);
+                    return <td key={k} className="num">{r[2].toFixed(1)} / {r[3].toFixed(1)} · {r[4]} · {r[5]} ms</td>;
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="legend">
+            Bench: frames rendered back to back, each forced to finish, at the house popup's size and the ultra pixel ratio
+            (2356 × 1408), ceiling light on, 2026-09-27, RTX 4080 SUPER. Strip counts include the aimed cove and
+            top-of-cabinet strips (SpotLights for A and B there). Uniform rows are the heaviest shader's (phone limit 256,
+            this PC 1024); first show is the compile + link + first draw of a new light set. Nothing here was measured on
+            the tablet; differences under ~1 ms are noise on this shared machine. "Bench this configuration" below re-runs any
+            cell on your own device.
           </div>
         </div>
 
         {t.closeup && (
           <div className="card full">
-            <h2>Close-up — A B C D left to right (follows the Lighting control)</h2>
-            <ThreeView t={t} buildModel={buildCloseup} heightOf={() => 1.1}
-              initialView={{ th: 0, ph: 1.585, r: 4.6, target: [0, 0.55, 0.1] }}
-              rigOf={tt => tt.lighting} />
+            <h2>Close-up — one bay per technique (follows the Lighting control)</h2>
+            <div className="bays">
+              {SL.TECHNIQUES.map(tech => (
+                <div key={tech}>
+                  <div className="bay-label">{SL.TECHNIQUE_LABELS[tech]}</div>
+                  <ThreeView t={t} buildModel={BAY_BUILDERS[tech]} heightOf={() => 1.1}
+                    initialView={BAY_VIEW} rigOf={tt => tt.lighting} />
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

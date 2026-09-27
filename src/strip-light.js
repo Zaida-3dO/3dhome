@@ -26,15 +26,24 @@
  *                   irradiance a Lambertian line source with the same flux as
  *                   B/C would put there (closed form, so it is soft along the
  *                   length AND across, with no hard edge anywhere), times the
- *                   albedo of the surface it lies on. Costs no fragment
- *                   uniforms at all -- the low-tier / phone option.
+ *                   albedo of the surface it lies on. The irradiance rides in a
+ *                   half-float lightMap (MeshBasicMaterial's lightMap x
+ *                   lightMapIntensity / pi), so the material colour stays the
+ *                   shared hue x albedo (<= 1) and short throws keep their
+ *                   colour instead of clamping to white. Costs no fragment
+ *                   uniforms at all -- but it lights ONLY the surfaces its
+ *                   cards were placed on: the last-resort option.
  *
  * AIMED STRIPS (`aim: true`): A's and B's lights become unshadowed
  * SpotLights pointing along `facing` (AIM_ANGLE_DEG), so an up-facing cove
  * lights the ceiling but not the wall BELOW its ledge -- lights are
  * unshadowed here, so a ledge or lip cannot block them. C is one-sided by
  * nature and D paints nothing behind the strip, so the option means the same
- * for all four. A SpotLight costs 7 uniform vectors against a PointLight's 4.
+ * for all four. A cone sends only AIM_FLUX_FRACTION of what the same
+ * candela sends into the whole half-space, so an aimed light's intensity is
+ * divided by it (AIM_GAIN): an aimed strip delivers the same flux as an
+ * unaimed one and as C. A SpotLight costs 7 uniform vectors against a
+ * PointLight's 4.
  *
  * THE DIFFUSER (B, C, D): a round frosted tube in an aluminium channel. Its
  * glow is an emissive gradient AROUND the tube (brightest on the side that
@@ -106,7 +115,9 @@ export const DEFAULTS = Object.freeze({
   on: true,
   aim: false,           // A/B: SpotLights along `facing` instead of PointLights
   washDistance: 0,      // cm; D: distance to the surface the strip faces (0 = no card)
-  washSpread: 0,        // cm; D: how far the cards reach across the line and past its ends (0 = auto)
+  washSpread: 0,        // cm; D: how far the cards reach across the line (0 = auto)
+  washBack: null,       // cm; D, facing down/up: how far the lit-surface card reaches BEHIND the line (null = washSpread)
+  washEnds: null,       // cm; D: how far the lit-surface card reaches past each end (null = washSpread)
   washAlbedo: '#ffffff',// D: colour of the surface the wash card lies on
   backWash: 0,          // cm; D, facing down/up: distance to a wall BEHIND the strip (0 = none)
   backAlbedo: '#ffffff' // D: colour of that wall
@@ -138,9 +149,30 @@ export const AREA_FLUX = 2;
 export const WASH_GAIN = 1;
 /** D: washSpread 0 means this many times the distance to the lit surface, clamped to 5..80 cm. */
 export const AUTO_SPREAD = 2.5;
-/** A/B with aim: the SpotLights' half-angle (degrees) and penumbra. */
-export const AIM_ANGLE_DEG = 80;
-export const AIM_PENUMBRA = 0.5;
+/** A/B with aim: the SpotLights' half-angle (degrees) and penumbra (full inside 68 deg). */
+export const AIM_ANGLE_DEG = 85;
+export const AIM_PENUMBRA = 0.2;
+
+/**
+ * The share of a point light's half-space flux (2*pi*I) that a three.js
+ * SpotLight of the same intensity sends: the integral over the half-space of
+ * its cone falloff, smoothstep(cos(angle), cos(angle*(1-penumbra)), cos t),
+ * weighted by sin t. Simpson's rule, 2000 intervals.
+ */
+export function spotFluxFraction(angleRad, penumbra) {
+  const c0 = Math.cos(angleRad), c1 = Math.cos(angleRad * (1 - penumbra));
+  const ss = x => { const t = Math.max(0, Math.min(1, (x - c0) / (c1 - c0))); return t * t * (3 - 2 * t); };
+  const n = 2000, h = (Math.PI / 2) / n;
+  let sum = 0;
+  for (let i = 0; i <= n; i++) {
+    const t = i * h, w = i === 0 || i === n ? 1 : (i % 2 ? 4 : 2);
+    sum += w * ss(Math.cos(t)) * Math.sin(t);
+  }
+  return sum * h / 3;
+}
+export const AIM_FLUX_FRACTION = spotFluxFraction(AIM_ANGLE_DEG * Math.PI / 180, AIM_PENUMBRA);
+/** An aimed light's intensity multiplier, so its flux matches the unaimed light's half-space flux. */
+export const AIM_GAIN = 1 / AIM_FLUX_FRACTION;
 
 /**
  * Fragment uniform vectors each light type adds to EVERY lit shader, counted
@@ -184,6 +216,8 @@ export function resolveParams(params) {
   p.washDistance = Math.max(0, Number(p.washDistance) || 0);
   p.backWash = Math.max(0, Number(p.backWash) || 0);
   p.washSpread = Number(p.washSpread) > 0 ? Number(p.washSpread) : clamp(AUTO_SPREAD * p.washDistance, 5, 80);
+  p.washBack = Number(p.washBack) > 0 ? Number(p.washBack) : p.washSpread;
+  p.washEnds = Number(p.washEnds) > 0 ? Number(p.washEnds) : p.washSpread;
   return p;
 }
 
@@ -264,40 +298,52 @@ export function fadeWindow(t) {
 }
 
 /**
- * A glow card's texture: lineIrradiance over the card divided by its peak (so
- * the texture is 0..1 and the absolute peak goes into the material colour),
- * times fadeWindow so it reaches exactly 0 at EVERY card edge.
- *   face: the card spans x in [-L/2 - S, L/2 + S] and y in [-S, S], h away.
- *   back: the same x, and depth y in [0, h] down a wall b behind; texture
- *         row H-1 (v = 1) is the strip's own plane.
- * Returns { tex, peak } -- peak is the unnormalised maximum.
+ * A glow card's lightMap: lineIrradiance over the card (per unit radiant
+ * intensity per metre, i.e. the physical shape AND magnitude) times
+ * fadeWindow, which reaches exactly 0 at EVERY card edge. Half-float RGB, so
+ * values above 1 survive to the shader, where they meet the material colour
+ * (hue x albedo, <= 1) and lightMapIntensity (the strip's intensity x bri).
+ *   face: x in [-L/2 - E, L/2 + E]; across a in [-B, +S] (B: behind the line,
+ *         S: in front), at distance h. `acrossSign` maps texture rows onto a.
+ *   back: the same x with E = S, depth y in [0, h] down a wall b behind; the
+ *         texture's top row (v = 1) is the strip's own plane.
+ * Returns { tex, peak, W, H, vals } (vals: Float32 irradiance, row-major).
  */
-function cardTexture(THREE, kind, L, S, h, b) {
+function cardLightMap(THREE, kind, L, ext, h, b) {
   const W = 128, H = 64;
-  const halfW = L / 2 + S;
+  const { S, B, E } = ext;
   const vals = new Float32Array(W * H);
   let peak = 0;
   for (let j = 0; j < H; j++) {
+    const v = j / (H - 1);                                  // 0 bottom row .. 1 top row
     for (let i = 0; i < W; i++) {
-      const x = (i / (W - 1) * 2 - 1) * halfW;       // edge texels sample the edges exactly
-      const y = kind === 'face' ? (j / (H - 1) * 2 - 1) * S : (1 - j / (H - 1)) * h;
-      const e = lineIrradiance(kind, L, x, y, h, b);
-      if (e > peak) peak = e;
-      const wx = fadeWindow(Math.max(0, Math.abs(x) - L / 2) / S);
-      const wy = kind === 'face' ? fadeWindow(Math.abs(y) / S) : fadeWindow(y / h);
-      vals[j * W + i] = e * wx * wy;
+      const x = (i / (W - 1) * 2 - 1) * (L / 2 + E);          // edge texels sample the edges exactly
+      let e, wy;
+      if (kind === 'face') {
+        const a = ext.acrossSign > 0 ? -B + v * (S + B) : S - v * (S + B);
+        e = lineIrradiance('face', L, x, a, h, 0);
+        wy = a >= 0 ? fadeWindow(a / S) : fadeWindow(-a / B);
+      } else {
+        const y = (1 - v) * h;
+        e = lineIrradiance('back', L, x, y, h, b);
+        wy = fadeWindow(y / h);
+      }
+      const val = e * fadeWindow(Math.max(0, Math.abs(x) - L / 2) / E) * wy;
+      if (val > peak) peak = val;
+      vals[j * W + i] = val;
     }
   }
-  const data = new Uint8Array(W * H * 4);
+  const data = new Uint16Array(W * H * 4);
+  const one = THREE.DataUtils.toHalfFloat(1);
   for (let k = 0; k < W * H; k++) {
-    data[k * 4] = 255; data[k * 4 + 1] = 255; data[k * 4 + 2] = 255;
-    data[k * 4 + 3] = Math.round(255 * (peak > 0 ? vals[k] / peak : 0));
+    const hv = THREE.DataUtils.toHalfFloat(vals[k]);
+    data[k * 4] = hv; data[k * 4 + 1] = hv; data[k * 4 + 2] = hv; data[k * 4 + 3] = one;
   }
-  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat, THREE.HalfFloatType);
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearFilter;
   tex.needsUpdate = true;
-  return { tex, peak };
+  return { tex, peak, W, H, vals };
 }
 
 // ---- build -----------------------------------------------------------------------
@@ -449,9 +495,11 @@ export function build(THREE, params) {
       // know is a DIFFERENT surface inside its area (a black hob set in a grey
       // worktop): that is painted with the card's albedo. The limit of a decal.
       const S = p.washSpread * CM, h = p.washDistance * CM;
-      const mk = (w, hh, card, role, albedo) => {
+      const B = (p.facing === 'down' || p.facing === 'up') ? p.washBack * CM : S;
+      const E = p.washEnds * CM;
+      const mk = (card, w, hh, role, albedo) => {
         const wm = new THREE.MeshBasicMaterial({
-          color, map: card.tex, transparent: true, opacity: 1,
+          color, lightMap: card.tex, lightMapIntensity: 1, transparent: true, opacity: 1,
           blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
         });
         wm.userData.finish = 'emissive';
@@ -459,28 +507,36 @@ export function build(THREE, params) {
         const m = new THREE.Mesh(new THREE.PlaneGeometry(w, hh), wm);
         m.name = 'strip-' + role;
         m.userData.stripRole = role;
-        m.userData.peak = card.peak;
+        m.userData.card = card;                 // { peak, W, H, vals } for tests and tools
         m.userData.albedo = new THREE.Color(albedo);
         m.renderOrder = 1;
         washes.push(m);
         g.add(m);
         return m;
       };
-      // 1. The surface the strip faces (a worktop, the floor, the ceiling, a wall).
-      wash = mk(L + 2 * S, 2 * S, cardTexture(THREE, 'face', L, S, h, 0), 'wash', p.washAlbedo);
-      // PlaneGeometry faces +Z; turn it to face back toward the strip (-facing).
-      wash.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), fv.clone().negate());
-      wash.position.copy(fv).multiplyScalar(h - 0.003);
+      // 1. The surface the strip faces (a worktop, the floor, the ceiling, a
+      //    wall): a plane facing back at the strip, its across axis (local Z
+      //    for a down/up strip, local Y for a front/back one) spanning -B..+S.
+      const xAxis = new THREE.Vector3(1, 0, 0);
+      const across = (p.facing === 'down' || p.facing === 'up') ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+      let yAxis = across.clone();
+      if (xAxis.clone().cross(yAxis).dot(fv) > 0) yAxis.negate(); // the plane must face -facing
+      const acrossSign = yAxis.dot(across);
+      const card = cardLightMap(THREE, 'face', L, { S, B, E, acrossSign }, h, 0);
+      wash = mk(card, L + 2 * E, S + B, 'wash', p.washAlbedo);
+      wash.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, xAxis.clone().cross(yAxis)));
+      wash.position.copy(fv).multiplyScalar(h - 0.003).addScaledVector(across, (S - B) / 2);
       // 2. Optional: the wall BEHIND a down/up-facing strip (the backsplash
       //    under a wall cabinet, the wall above a cove), from the strip's
       //    plane to the lit surface.
       if (p.backWash > 0 && (p.facing === 'down' || p.facing === 'up')) {
         const b = p.backWash * CM;
-        const bw = mk(L + 2 * S, h, cardTexture(THREE, 'back', L, S, h, b), 'wash-back', p.backAlbedo);
+        const bcard = cardLightMap(THREE, 'back', L, { S, B: S, E: S }, h, b);
+        const bw = mk(bcard, L + 2 * S, h, 'wash-back', p.backAlbedo);
         // plane +Y -> back toward the mounting plane, so the texture's top
         // row (v = 1) lies in the strip's own plane
-        const yAxis = fv.clone().negate(), xAxis = new THREE.Vector3(1, 0, 0);
-        bw.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, xAxis.clone().cross(yAxis)));
+        const by = fv.clone().negate();
+        bw.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, by, xAxis.clone().cross(by)));
         bw.position.copy(fv).multiplyScalar(h / 2).add(new THREE.Vector3(0, 0, -b + 0.003));
       }
     }
@@ -506,7 +562,8 @@ export function applyStripState(group, state) {
   for (const l of s.lights) {
     l.color.set(col);
     const share = l.userData.stripShare;
-    l.intensity = l.isRectAreaLight ? (AREA_FLUX * total * k) / l.userData.areaM2 : total * share * k;
+    l.intensity = l.isRectAreaLight ? (AREA_FLUX * total * k) / l.userData.areaM2
+      : total * share * k * (l.isSpotLight ? AIM_GAIN : 1);
     // NOT l.visible: hiding a light changes the scene's light count, and
     // three recompiles every lit material when that count changes. Off is
     // intensity 0, exactly as syncLights() does it.
@@ -524,12 +581,14 @@ export function applyStripState(group, state) {
     }
   }
   // D: a Lambertian line with the same half-space flux as B/C (2*pi*I) has
-  // radiant intensity 2*I/L per metre on its axis; a card adds albedo/pi x
-  // the irradiance that gives -- a lit Standard material's diffuse term.
+  // radiant intensity 2*I/L per metre on its axis. A card adds
+  // colour x lightMap x lightMapIntensity / pi (three's basic shader) =
+  // hue x albedo x irradiance / pi -- a lit Standard material's diffuse term.
+  // The colour stays hue x albedo (<= 1); the magnitude is the lightMap's.
   const perMetre = 2 * total / (s.length * CM);
   for (const w of s.washes || []) {
-    w.material.color.set(col).multiply(w.userData.albedo)
-      .multiplyScalar(WASH_GAIN * k * perMetre * w.userData.peak / Math.PI);
+    w.material.color.set(col).multiply(w.userData.albedo);
+    w.material.lightMapIntensity = WASH_GAIN * k * perMetre;
     w.visible = k > 0;
   }
   s.state = { on, bri: k * 100, color: col };
@@ -559,7 +618,7 @@ export function dispose(root) {
     if (o.isLight && typeof o.dispose === 'function') o.dispose();
   });
   for (const m of mats) {
-    for (const key of ['map', 'emissiveMap']) if (m[key]) m[key].dispose();
+    for (const key of ['map', 'emissiveMap', 'lightMap']) if (m[key]) m[key].dispose();
     m.dispose();
   }
 }
