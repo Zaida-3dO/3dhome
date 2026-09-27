@@ -637,14 +637,13 @@ function contained(g, p) {
   // (kept exactly as entered: 180 wide, modules adding up to 210).
   warnings.length = 0;
   keys.forEach((k, i) => K.TYPES[slots[i]].build(THREE, Object.assign({}, K.TYPES[slots[i]].DEFAULTS, preset[k]), { detail: 'full' }));
-  // Two known warnings, both from the data as entered and both left for its
-  // owner to settle: base run B's squeeze, and base run A's 60 cm corner
-  // module widened to the other leg's 62 cm depth.
-  check('default preset: the only warnings are the two known ones', warnings.length === 2 &&
-    warnings.some(w => /modules add up to 210 cm but width is 180 cm/.test(w)) &&
-    warnings.some(w => /corner module is 60 cm but the other run is 62 cm deep/.test(w)), warnings);
-  check('default preset: base run B is as entered (180, modules summing to 210)', preset.b.width === 180 &&
+  // As measured, every run's modules fill its width and A's corner module is
+  // exactly B's depth: no squeeze, no widening, no warnings at all.
+  check('default preset: builds with no warnings', warnings.length === 0, warnings);
+  check('default preset: base run B is 210 wide and its modules add up to 210', preset.b.width === 210 &&
     preset.b.modules.reduce((n, m) => n + m.width, 0) === 210);
+  check('default preset: A is 65 deep, B 60, and A\'s corner module is the 60 B hides', preset.a.depth === 65 &&
+    preset.b.depth === 60 && preset.a.cornerDepth === 60 && preset.a.modules[0].kind === 'corner' && preset.a.modules[0].width === 60);
   keys.forEach((k, i) => check('default preset ' + k + ': validates', K.validateParams(slots[i], preset[k]).length === 0, K.validateParams(slots[i], preset[k])));
   // Copy JSON (paramsDiff) then Load JSON (parseKitchenJson) gives back exactly the preset's params.
   const text = JSON.stringify(keys.map((k, i) => ({ type: slots[i], params: K.paramsDiff(slots[i], Object.assign({}, K.TYPES[slots[i]].DEFAULTS, preset[k])) })));
@@ -658,6 +657,9 @@ function contained(g, p) {
     check('default preset ' + k + ': everything drawn is inside the envelope', contained(g, p), boxCm(g));
   });
 }
+
+/** Run fn with the builders' warnings discarded afterwards. */
+function quietly(fn) { const n = warnings.length; fn(); warnings.length = n; }
 
 // ---- 13. alignTo keeps a hood over its oven; hinge "bottom" drop-down fronts ------------
 {
@@ -678,17 +680,25 @@ function contained(g, p) {
   // Base run B runs along z in the L: compare centres along the run.
   check('default preset: the hood is centred over the oven and hob as drawn (within 0.5 cm)',
     near((hood.z0 + hood.z1) / 2, (oven.z0 + oven.z1) / 2, 0.5), { hood: [hood.z0, hood.z1], oven: [oven.z0, oven.z1] });
-  check('...even though base run B is squeezed (its oven is not at 60-120)', !near(oven.z1 - oven.z0, 60 - 6, 1));
-  // Probe: without alignTo, a plain at of 60 would drift off the squeezed oven.
-  const drift = JSON.parse(JSON.stringify(preset.wallB));
-  delete drift.modules[0].alignTo;
-  drift.modules[0].at = 60;
-  const hd = unionBox(meshes(place(WALL, drift, poses.wallB), m => /^hood/.test(m.name)));
-  check('probe: a fixed at would drift off the oven', !near((hd.z0 + hd.z1) / 2, (oven.z0 + oven.z1) / 2, 0.5));
+  check('default preset: unsqueezed, the hood resolves to at 60 over the oven at 60-120', near(pieces.wallB.modules[0].at, 60, 0.01), pieces.wallB.modules[0]);
+  // alignTo follows a SQUEEZED base run too, where a fixed at would drift.
+  const sq = JSON.parse(JSON.stringify(preset));
+  sq.b.width = 180;
+  const sqPieces = K.resolveAlignment(sq), sqPoses = K.exampleLPoses(sq);
+  quietly(() => {
+    const sqOven = unionBox(meshes(place(BASE, sqPieces.b, sqPoses.b), m => /^oven/.test(m.name) || m.name === 'hob'));
+    const sqHood = unionBox(meshes(place(WALL, sqPieces.wallB, sqPoses.wallB), m => /^hood/.test(m.name)));
+    check('squeezed base run: alignTo still centres the hood on the oven', near((sqHood.z0 + sqHood.z1) / 2, (sqOven.z0 + sqOven.z1) / 2, 0.5), { sqHood, sqOven });
+    const drift = JSON.parse(JSON.stringify(sq.wallB));
+    delete drift.modules[0].alignTo;
+    drift.modules[0].at = 60;
+    const hd = unionBox(meshes(place(WALL, drift, sqPoses.wallB), m => /^hood/.test(m.name)));
+    check('probe: on a squeezed run a fixed at 60 drifts off the oven', !near((hd.z0 + hd.z1) / 2, (sqOven.z0 + sqOven.z1) / 2, 0.5));
+  });
   // baseModuleSpans reports what is drawn, silently.
   warnings.length = 0;
-  const spans = K.baseModuleSpans(preset.b);
-  check('baseModuleSpans: 4 spans, squeezed to the 180 cm run, no warnings', spans.length === 4 && near(spans[3][1], 180, 0.01) && warnings.length === 0, { spans, warnings });
+  const spans = K.baseModuleSpans(sq.b);
+  check('baseModuleSpans: 4 spans, squeezed to a 180 cm run, no warnings', spans.length === 4 && near(spans[3][1], 180, 0.01) && warnings.length === 0, { spans, warnings });
   check('alignTo validates; a malformed one does not', K.validateParams('kitchen-wall-run', pieces.wallB).length === 0 &&
     K.validateParams('kitchen-wall-run', { modules: [{ kind: 'hood', width: 60, alignTo: { run: 'b' } }] }).length === 1);
   warnings.length = 0;
