@@ -4,12 +4,23 @@
  * The result is written for an agent to re-analyse; this is the first pass,
  * in plain terms, so the person holding the tablet learns something too.
  *
- * TARGET: a setting HOLDS when its stage is valid, its frame-time p95 is at
- * most 33.4 ms (30 fps with vsync slack) and at most 2% of its frames exceed
- * 50 ms. Both, because a steady 25 ms with a 10% rate of 80 ms hitches has a
- * fine p95 and still feels broken.
+ * TWO LINES, both reported:
  *
- * HEADROOM is measured against that 33.4 ms budget, from the best cost
+ *   APP LINE (decides the RECOMMENDED level): p95 at most the app's own
+ *     adaptive-quality STEP-DOWN threshold for this display
+ *     (adaptive-quality.js thresholds(): ~41.7 ms at 60 Hz with the app's
+ *     60 fps cap), and at most 2% of frames over 50 ms. A level recommended
+ *     on this line is one the app's own ladder will not immediately step back
+ *     down from once applied. (The 2% hitch guard is stricter than the app,
+ *     which looks at p95 alone: never looser.)
+ *   SMOOTH LINE (reported alongside): p95 at most 33.4 ms -- a steady 30 fps
+ *     with vsync slack -- and at most 2% over 50 ms. What a wall display
+ *     that should feel smooth would want; `bestSmooth` / `smoothAtDpr`.
+ *
+ * Both need the 2% guard because a steady 25 ms with a 10% rate of 80 ms
+ * hitches has a fine p95 and still feels broken.
+ *
+ * HEADROOM is measured against the smooth 33.4 ms budget, from the best cost
  * signal available:
  *   gpu    the GPU timer query's p95 (EXT_disjoint_timer_query_webgl2),
  *          maxed with the CPU submit p95 -- the frame's real work;
@@ -27,8 +38,35 @@
  */
 
 import { linearFit } from './stats.js';
+import { estimateVsync, capCadence, thresholds } from '../adaptive-quality.js';
 
+/** The smooth-30-fps line. */
 export const TARGET = Object.freeze({ p95Ms: 33.4, maxPctOver50: 2 });
+export const SMOOTH_TARGET = TARGET;
+
+/** The frame-rate cap the app runs the 3D view at (index.html maxFps). */
+export const APP_MAX_FPS = 60;
+
+/**
+ * The app's own adaptive step-down threshold on a display whose idle rAF tick
+ * is `refreshMs`, computed with adaptive-quality.js's own functions exactly as
+ * the scene does (vsync snapped to a standard rate, the 60 fps cap's cadence,
+ * thresholds()). {vsyncMs, cadenceMs, upMs, downMs}.
+ */
+export function appStepDown(refreshMs, maxFps = APP_MAX_FPS) {
+  const tick = refreshMs > 0 ? refreshMs : 1000 / 60;
+  const vsync = estimateVsync([tick, tick, tick], 0);
+  const minFrameMs = maxFps > 0 ? (1000 / maxFps) - 1 : 0;
+  const cadence = capCadence(minFrameMs, vsync);
+  const t = thresholds(cadence, vsync);
+  return { vsyncMs: r2(vsync), cadenceMs: r2(cadence), upMs: r2(t.up), downMs: r2(t.down) };
+}
+
+/** The app line as a target: {p95Ms, maxPctOver50, line: 'app'}. */
+export function appTarget(plan) {
+  const down = plan && plan.appStepDownMs > 0 ? plan.appStepDownMs : appStepDown(1000 / 60).downMs;
+  return { p95Ms: down, maxPctOver50: 2, line: 'app' };
+}
 
 const r1 = x => Math.round(x * 10) / 10;
 const r2 = x => Math.round(x * 100) / 100;
@@ -98,7 +136,8 @@ export function stripVerdict(stages, target = TARGET) {
  * @param {Object} plan       { currentLevel, currentDpr, shadows, currentLevelFrom? }
  * @returns {Object} the verdict block
  */
-export function computeVerdict(stages, plan, target = TARGET) {
+export function computeVerdict(stages, plan, targetOverride) {
+  const target = targetOverride || appTarget(plan);
   const curLevel = plan.currentLevel != null ? plan.currentLevel : plan.defaultLevel;
   const curDpr = plan.currentDpr != null ? plan.currentDpr : plan.defaultDpr;
   const shadows = plan.shadows || 'auto';
@@ -107,21 +146,27 @@ export function computeVerdict(stages, plan, target = TARGET) {
   const rank = s => s.level * 100 + s.dpr;
   const byRank = valid.slice().sort((a, b) => rank(b) - rank(a));
   const best = byRank.find(s => holds(s, target)) || null;
+  const bestSmooth = byRank.find(s => holds(s, SMOOTH_TARGET)) || null;
   const current = grid.find(s => s.level === curLevel && s.dpr === curDpr) || null;
   const cur = costOf(current);
   const from = plan.currentLevelFrom ? ' (' + plan.currentLevelFrom + ')' : '';
   const out = {
     target,
+    smoothTarget: SMOOTH_TARGET,
+    appStepDown: plan.appStepDown || null,
     basis: cur.basis,
     current: current ? {
       stage: current.id, level: current.level, levelName: current.levelName, levelFrom: plan.currentLevelFrom || null,
-      dpr: current.dpr, holds: holds(current, target), p95Ms: current.frames ? current.frames.p95Ms : null,
-      costMs: cur.ms != null ? r1(cur.ms) : null, headroomPct: headroomPct(cur.ms, target.p95Ms),
+      dpr: current.dpr, holds: holds(current, target), holdsSmooth: holds(current, SMOOTH_TARGET),
+      p95Ms: current.frames ? current.frames.p95Ms : null,
+      costMs: cur.ms != null ? r1(cur.ms) : null, headroomPct: headroomPct(cur.ms, SMOOTH_TARGET.p95Ms),
       furnitureDetail: current.config ? current.config.furnitureDetail : null
     } : null,
     best: best ? { stage: best.id, level: best.level, levelName: best.levelName, dpr: best.dpr,
-      p95Ms: best.frames.p95Ms, headroomPct: headroomPct(costOf(best).ms, target.p95Ms),
+      p95Ms: best.frames.p95Ms, headroomPct: headroomPct(costOf(best).ms, SMOOTH_TARGET.p95Ms),
       furnitureDetail: best.config ? best.config.furnitureDetail : null } : null,
+    bestSmooth: bestSmooth ? { stage: bestSmooth.id, level: bestSmooth.level, levelName: bestSmooth.levelName,
+      dpr: bestSmooth.dpr, p95Ms: bestSmooth.frames.p95Ms } : null,
     recommendedLevel: best ? best.level : null,
     recommendedLevelName: best ? best.levelName : null,
     recommendation: null,
@@ -160,16 +205,20 @@ export function computeVerdict(stages, plan, target = TARGET) {
   out.levels = levelIds.map(l => {
     const ss = grid.filter(s => s.level === l).sort((a, b) => a.dpr - b.dpr);
     const ok = ss.filter(s => holds(s, target));
+    const okSmooth = ss.filter(s => holds(s, SMOOTH_TARGET));
     const c = ss[0] && ss[0].config ? ss[0].config : null;
     return { level: l, levelName: ss[0].levelName, tier: c ? c.tier : null,
       furnitureDetail: c ? c.furnitureDetail : null, dropMinorFurniture: c ? c.dropMinorFurniture : null,
       roomShadowLights: c ? c.roomShadowLights : null,
       holdsAtDpr: ok.length ? ok[ok.length - 1].dpr : null,
-      measured: ss.map(s => ({ dpr: s.dpr, valid: !!s.valid, holds: holds(s, target), p95Ms: s.frames ? s.frames.p95Ms : null })) };
+      smoothAtDpr: okSmooth.length ? okSmooth[okSmooth.length - 1].dpr : null,
+      measured: ss.map(s => ({ dpr: s.dpr, valid: !!s.valid, holds: holds(s, target), holdsSmooth: holds(s, SMOOTH_TARGET),
+        p95Ms: s.frames ? s.frames.p95Ms : null })) };
   });
   out.levelLines = out.levels.map(L => 'level ' + L.levelName + ' (furniture ' + (L.furnitureDetail || '?') +
     (L.dropMinorFurniture ? ', minor items dropped' : '') + '): ' +
-    (L.holdsAtDpr != null ? 'holds up to DPR ' + L.holdsAtDpr : L.measured.some(m => m.valid) ? 'misses the target at every ratio' : 'not measured'));
+    (L.holdsAtDpr != null ? 'holds up to DPR ' + L.holdsAtDpr : L.measured.some(m => m.valid) ? 'misses the target at every ratio' : 'not measured') +
+    (L.holdsAtDpr != null ? (L.smoothAtDpr != null ? ', smooth 30 fps up to DPR ' + L.smoothAtDpr : ', not smooth 30 fps at any ratio') : ''));
 
   // Furniture detail: full detail is built at every tier but low; every item
   // (minor ones included) at every level but mid-lite (and low on a mobile GPU).

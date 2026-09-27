@@ -10,6 +10,8 @@
  *   --save-dir <dir>  switch the save endpoint ON, writing runs here
  *                     (absent: OFF, exactly like the container's default)
  *   --host <addr>     default 127.0.0.1 (never listens on the LAN unless asked)
+ *   --max-files <n>   storage cap in runs (default 500), as HOME3D_DIAGNOSTICS_MAX_FILES
+ *   --max-bytes <n>   storage cap in bytes (default 100 MB), as HOME3D_DIAGNOSTICS_MAX_BYTES
  *
  * WHY IT EXISTS. The app's real server is nginx in a container, and the save
  * endpoint is an njs handler inside it. Docker is not available everywhere
@@ -20,7 +22,7 @@
  *     the file nginx runs, and calls its check() and store();
  *   - the same bounds nginx adds around it: a 256 KB body cap answered 413
  *     before the body is read in full, and limit_req's leaky bucket (6/min,
- *     burst 3, nodelay) answered 429;
+ *     burst 3, nodelay) answered 429, and the total storage cap answered 507;
  *   - the same routes: /diagnostics serves diagnostics.html, /diagnostics/
  *     redirects to /diagnostics (query kept), POST /api/diagnostics saves or
  *     answers the off-state JSON 404;
@@ -96,6 +98,10 @@ export function createHandler(opts) {
   const root = path.resolve(opts.root || REPO);
   const saveDir = opts.saveDir ? path.resolve(opts.saveDir) : null;
   const limiter = opts.limiter || createLimiter();
+  // The storage cap, as HOME3D_DIAGNOSTICS_MAX_FILES / _MAX_BYTES set it in the
+  // container (defaults 500 runs / 100 MB), enforced by the same store().
+  const limits = { maxFiles: opts.maxFiles > 0 ? opts.maxFiles : contract.DEFAULT_MAX_FILES,
+    maxBytes: opts.maxBytes > 0 ? opts.maxBytes : contract.DEFAULT_MAX_BYTES };
 
   function save(req, res) {
     if (!saveDir) {
@@ -127,7 +133,7 @@ export function createHandler(opts) {
       const buf = Buffer.concat(chunks);
       const ok = contract.check(req.method, req.headers['content-type'], buf.toString('utf8'), buf.length, opts.now ? opts.now() : new Date());
       if (ok.status !== 201) { json(res, ok.status, { ok: false, error: ok.error }); return; }
-      const r = contract.store(saveDir, ok, buf.length);
+      const r = contract.store(saveDir, ok, buf.length, limits);
       if (r.status !== 201) { json(res, r.status, { ok: false, error: r.error }); return; }
       json(res, 201, r.body);
     });
@@ -170,7 +176,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const root = arg('root', REPO);
   const saveDir = arg('save-dir', null);
   if (saveDir && !fs.existsSync(saveDir)) fs.mkdirSync(saveDir, { recursive: true });
-  http.createServer(createHandler({ root, saveDir })).listen(port, host, () => {
+  const maxFiles = parseInt(arg('max-files', '0'), 10);
+  const maxBytes = parseInt(arg('max-bytes', '0'), 10);
+  http.createServer(createHandler({ root, saveDir, maxFiles, maxBytes })).listen(port, host, () => {
     console.log('3dHome dev server on http://' + (host === '127.0.0.1' ? 'localhost' : host) + ':' + port + '/  (root ' + root + ')');
     console.log('  diagnostics: http://localhost:' + port + '/diagnostics');
     console.log('  save endpoint: ' + (saveDir ? 'ON -> ' + path.resolve(saveDir) : 'OFF (pass --save-dir <dir> to enable)'));

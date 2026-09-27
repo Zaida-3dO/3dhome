@@ -129,8 +129,21 @@ try {
   check('422 for the wrong schema id', r.status === 422, r);
 
   const before = fs.readdirSync(dir).length;
-  const pad = n => doc({ pad: 'x'.repeat(n) });
+  // A valid document of EXACTLY n extra bytes: strings are capped at 2048,
+  // so the padding is a list of <= 2000-character strings in `trimmed`.
+  const pad = n => {
+    // n extra bytes = 2 quotes per string + 1 comma between strings + the characters.
+    if (n <= 0) return doc({ trimmed: [] });
+    let m = 1;
+    while (n - 2 * m - (m - 1) > 2000 * m) m++;
+    let chars = n - 2 * m - (m - 1);
+    const parts = [];
+    for (let i = 0; i < m; i++) { const len = Math.min(2000, chars); parts.push('x'.repeat(len)); chars -= len; }
+    return doc({ trimmed: parts });
+  };
   const base = Buffer.byteLength(pad(0));
+  check('pad() is byte-exact', [2, 3, 2003, 2004, 5000, 99999].every(k => Buffer.byteLength(pad(k)) === base + k),
+    [2, 3, 2003, 2004, 5000].map(k => Buffer.byteLength(pad(k)) - base - k));
   clock = new Date('2026-09-27T18:31:00.000Z');
   r = await req(on, 'POST', '/api/diagnostics', pad(C.MAX_BYTES - base), JSONH);
   check('a body of exactly MAX_BYTES is accepted', r.status === 201, r.status);
@@ -173,6 +186,44 @@ try {
   check('sanitizeId caps at 64', C.sanitizeId('a'.repeat(100)).length === 64);
   check('store refuses a relative directory', C.store('runs', { name: 'a.json', doc: {}, receivedAt: 'x' }, 2).status === 507);
 
+  // Structure: the result document's own keys only, typed, strings and depth capped.
+  const sc = body => C.check('POST', 'application/json', body, Buffer.byteLength(body), new Date(0));
+  check('structure: a full-shaped document passes', sc(doc({ run: {}, device: null, matrix: {}, builds: [], stages: [{ a: 1 }], verdict: {}, trimmed: [], save: null })).status === 201);
+  check('structure: an unknown top-level key is 422', sc(doc({ pad: 'x' })).status === 422 && /unknown top-level key "pad"/.test(sc(doc({ pad: 'x' })).error));
+  check('structure: a client-sent "server" block is refused', sc(doc({ server: { file: '../x' } })).status === 422);
+  check('structure: a wrongly typed key is 422', sc(doc({ stages: {} })).status === 422 && sc(doc({ summary: 'x' })).status === 422);
+  check('structure: summary must hold strings', sc(doc({ summary: [1] })).status === 422);
+  check('structure: a string of 2048 is fine, 2049 is 422', sc(doc({ trimmed: ['y'.repeat(2048)] })).status === 201 &&
+    sc(doc({ trimmed: ['y'.repeat(2049)] })).status === 422);
+  check('structure: a long string deep inside is caught', sc(doc({ stages: [{ a: { b: ['z'.repeat(3000)] } }] })).status === 422);
+  let deep = {}; const deepRoot = deep; for (let i = 0; i < 20; i++) { deep.d = {}; deep = deep.d; }
+  check('structure: nesting past 16 is 422', sc(doc({ run: deepRoot })).status === 422 && /deeper/.test(sc(doc({ run: deepRoot })).error));
+  check('structure: a long key is caught', sc(doc({ run: { ['k'.repeat(2049)]: 1 } })).status === 422);
+
+  // Storage cap: files and bytes, 507 past either, nothing written.
+  const capDir = path.join(tmp, 'cap');
+  fs.mkdirSync(capDir);
+  let capClock = new Date('2026-09-27T20:00:00.000Z');
+  const capped = await listen(DS.createHandler({ root, saveDir: capDir, maxFiles: 2, now: () => capClock, limiter: () => true }));
+  const capCodes = [];
+  for (let i = 0; i < 3; i++) { capClock = new Date(capClock.getTime() + 1000); capCodes.push((await req(capped, 'POST', '/api/diagnostics', doc(), JSONH)).status); }
+  check('file cap: 2 saves, then 507', capCodes.join() === '201,201,507', capCodes);
+  const capBody = (await req(capped, 'POST', '/api/diagnostics', doc(), JSONH)).json;
+  check('file cap: the refusal says why', capBody && /storage cap reached: 2 runs \(limit 2\)/.test(capBody.error), capBody);
+  check('file cap: nothing written past it', fs.readdirSync(capDir).length === 2);
+  capped.close();
+  const byteDir = path.join(tmp, 'bytes');
+  fs.mkdirSync(byteDir);
+  fs.writeFileSync(path.join(byteDir, 'old.json'), 'x'.repeat(1000));
+  const small = Buffer.byteLength(doc());
+  const byted = await listen(DS.createHandler({ root, saveDir: byteDir, maxBytes: 1000 + small + 200, limiter: () => true }));
+  check('byte cap: a save that fits is taken', (await req(byted, 'POST', '/api/diagnostics', doc(), JSONH)).status === 201);
+  check('byte cap: the next one (over the total) is 507', (await req(byted, 'POST', '/api/diagnostics', doc({ summary: ['more'] }), JSONH)).status === 507);
+  check('byte cap: nothing written past it', fs.readdirSync(byteDir).length === 2);
+  byted.close();
+  check('capProblem: an unreadable directory is a refusal', /not readable/.test(C.capProblem(path.join(tmp, 'nope'), {}, 1)));
+  check('capProblem: defaults are 500 runs / 100 MB', C.DEFAULT_MAX_FILES === 500 && C.DEFAULT_MAX_BYTES === 104857600);
+
   // ---- B. the nginx side, statically ----------------------------------------------------
   const read = p => fs.readFileSync(path.join(root, p), 'utf8');
   const nginx = read('deploy/nginx.conf');
@@ -194,6 +245,10 @@ try {
   check('on-conf: rate limited on the zone, 429', /limit_req zone=home3d_diag burst=3 nodelay;/.test(onConf) && /limit_req_status 429;/.test(onConf));
   check('on-conf: njs imported and used', /js_import home3d_diag from diagnostics\.js;/.test(onConf) && /js_content home3d_diag\.save;/.test(onConf));
   check('on-conf: directory placeholder present', /set \$home3d_diag_dir "__DIAG_DIR__";/.test(onConf));
+  check('on-conf: storage cap placeholders present', /set \$home3d_diag_max_files "__DIAG_MAX_FILES__";/.test(onConf) &&
+    /set \$home3d_diag_max_bytes "__DIAG_MAX_BYTES__";/.test(onConf));
+  check('njs: the handler passes both caps to store()', /maxFiles: intVar\(r\.variables\.home3d_diag_max_files\)/.test(njs) &&
+    /maxBytes: intVar\(r\.variables\.home3d_diag_max_bytes\)/.test(njs));
   check('on-conf: exactly one location, no listing', (onConf.replace(/#.*$/gm, '').match(/\blocation\b\s*[=~^]?/g) || []).length === 1 && !/autoindex/.test(onConf));
   check('off-conf: a JSON 404', /return 404 '\{"ok":false/.test(offConf));
   const balanced = s => { const t = s.replace(/#.*$/gm, '').replace(/'[^']*'|"[^"]*"/g, ''); return (t.match(/\{/g) || []).length === (t.match(/\}/g) || []).length; };
@@ -285,6 +340,22 @@ try {
   fs.unlinkSync(path.join(s3, 'module.so'));
   const x3 = entry(s3, posix(path.join(s3, 'runs')));
   check('entrypoint without the njs module: stays off', !x3.failed && /return 404/.test(x3.live) && /diagnosticsSave: false/.test(x3.config));
+  // A directory inside the web root would make runs readable over HTTP: refused.
+  const s4 = sandbox();
+  fs.mkdirSync(path.join(s4, 'web', 'runs'));
+  const x4 = entry(s4, posix(path.join(s4, 'web', 'runs')));
+  check('entrypoint refuses a directory inside the web root', !x4.failed && /return 404/.test(x4.live) && /diagnosticsSave: false/.test(x4.config) && !/load_module/.test(x4.main), x4.log || x4.live);
+  const x4b = entry(s4, posix(path.join(s4, 'web')) + '/');
+  check('entrypoint refuses the web root itself (trailing slash)', !x4b.failed && /return 404/.test(x4b.live));
+  fs.mkdirSync(path.join(s4, 'web2'));
+  const x4c = entry(s4, posix(path.join(s4, 'web2')));
+  check('entrypoint accepts a sibling that only shares the prefix', !x4c.failed && /js_content/.test(x4c.live), x4c.log);
+  const s5 = sandbox();
+  const x5 = entry(s5, posix(path.join(s5, 'runs')), { HOME3D_DIAGNOSTICS_MAX_FILES: '7', HOME3D_DIAGNOSTICS_MAX_BYTES: '12345' });
+  check('entrypoint writes the caps into the conf', !x5.failed && /home3d_diag_max_files "7";/.test(x5.live) && /home3d_diag_max_bytes "12345";/.test(x5.live), x5.live && x5.live.slice(0, 600));
+  const s6 = sandbox();
+  const x6 = entry(s6, posix(path.join(s6, 'runs')), { HOME3D_DIAGNOSTICS_MAX_FILES: '5"; evil', HOME3D_DIAGNOSTICS_MAX_BYTES: '0' });
+  check('entrypoint: bad cap values fall back to the defaults', !x6.failed && /home3d_diag_max_files "500";/.test(x6.live) && /home3d_diag_max_bytes "104857600";/.test(x6.live));
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

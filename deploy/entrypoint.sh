@@ -83,6 +83,20 @@ NJS_MODULE=${HOME3D_NJS_MODULE:-/etc/nginx/modules/ngx_http_js_module.so}
 DIAG_DIR=${HOME3D_DIAGNOSTICS_DIR:-}
 HOME3D_DIAGNOSTICS_SAVE=false
 
+# The storage cap: positive integers only (they are written into nginx.conf).
+pos_int() { case "$1" in ""|*[!0-9]*|0) printf "%s" "$2" ;; *) printf "%s" "$1" ;; esac; }
+DIAG_MAX_FILES=$(pos_int "${HOME3D_DIAGNOSTICS_MAX_FILES:-}" 500)
+DIAG_MAX_BYTES=$(pos_int "${HOME3D_DIAGNOSTICS_MAX_BYTES:-}" 104857600)
+
+# Is $1 the web root or anything under it? (Trailing slashes normalised.)
+in_web_root() {
+  _d=$(printf "%s" "$1" | sed -e "s|/*$||")
+  _w=$(printf "%s" "$WEB_ROOT" | sed -e "s|/*$||")
+  [ -n "$_w" ] || return 1
+  case "$_d/" in "$_w"/*) return 0 ;; esac
+  return 1
+}
+
 diag_off() {
   if [ -f "$DIAG_OFF_TEMPLATE" ]; then cp "$DIAG_OFF_TEMPLATE" "$DIAG_CONF"; fi
   HOME3D_DIAGNOSTICS_SAVE=false
@@ -105,6 +119,10 @@ else
     diag_off
     log "WARN: diagnostics saving: OFF - HOME3D_DIAGNOSTICS_DIR must be an absolute"
     log "      path of [A-Za-z0-9/._-] only."
+  elif in_web_root "$DIAG_DIR"; then
+    diag_off
+    log "WARN: diagnostics saving: OFF - $DIAG_DIR is inside the web root ($WEB_ROOT), where saved"
+    log "      runs would be readable over HTTP. Mount a directory outside it (e.g. /data/diagnostics)."
   elif [ ! -d "$DIAG_DIR" ]; then
     diag_off
     log "WARN: diagnostics saving: OFF - $DIAG_DIR is not a directory (mount a volume there)."
@@ -113,14 +131,15 @@ else
     log "WARN: diagnostics saving: OFF - the njs module or the endpoint config is missing"
     log "      from this image ($NJS_MODULE, $DIAG_ON_TEMPLATE)."
   else
-    sed "s|__DIAG_DIR__|${DIAG_DIR}|g" "$DIAG_ON_TEMPLATE" > "$DIAG_CONF"
+    sed -e "s|__DIAG_DIR__|${DIAG_DIR}|g" -e "s|__DIAG_MAX_FILES__|${DIAG_MAX_FILES}|g" \
+        -e "s|__DIAG_MAX_BYTES__|${DIAG_MAX_BYTES}|g" "$DIAG_ON_TEMPLATE" > "$DIAG_CONF"
     if ! grep -qF "load_module $NJS_MODULE;" "$MAIN_NGINX_CONF" 2>/dev/null && \
        ! grep -q '^[[:space:]]*load_module.*ngx_http_js_module' "$MAIN_NGINX_CONF" 2>/dev/null; then
       MAIN_TMP="${MAIN_NGINX_CONF}.$$"
       { printf 'load_module %s;\n' "$NJS_MODULE"; cat "$MAIN_NGINX_CONF"; } > "$MAIN_TMP" && mv "$MAIN_TMP" "$MAIN_NGINX_CONF"
     fi
     HOME3D_DIAGNOSTICS_SAVE=true
-    log "diagnostics saving: ON -> $DIAG_DIR (POST /api/diagnostics, write-only)"
+    log "diagnostics saving: ON -> $DIAG_DIR (POST /api/diagnostics, write-only; cap $DIAG_MAX_FILES runs / $DIAG_MAX_BYTES bytes)"
     if command -v su >/dev/null 2>&1 && id nginx >/dev/null 2>&1; then
       if ! su -s /bin/sh nginx -c "test -w '$DIAG_DIR'" 2>/dev/null; then
         log "WARN: $DIAG_DIR is not writable by the nginx worker (uid $(id -u nginx));"

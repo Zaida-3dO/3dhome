@@ -42,6 +42,10 @@ check('percentile does not mutate its input', ten[0] === 10 && ten[1] === 1);
 check('empty -> NaN', Number.isNaN(S.percentile([], 50)));
 const hundred = Array.from({ length: 100 }, (_, i) => i + 1);
 check('p99 of 1..100 is 99', S.percentile(hundred, 99) === 99, S.percentile(hundred, 99));
+// A FRACTIONAL rank (0.95 x 12 = 11.4) must round UP (nearest rank): Math.round would give 11.
+const twelve = Array.from({ length: 12 }, (_, i) => i + 1);
+check('p95 of 1..12 is 12 (fractional rank rounds up)', S.percentile(twelve, 95) === 12, S.percentile(twelve, 95));
+check('p90 of 1..12 is 11 (rank 10.8 -> 11)', S.percentile(twelve, 90) === 11, S.percentile(twelve, 90));
 
 // ---- 2-4. summary ------------------------------------------------------------
 const steady30 = new Array(60).fill(1000 / 30);

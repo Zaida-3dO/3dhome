@@ -175,7 +175,7 @@ v = V.computeVerdict([
   st({ id: 'baseline', group: 'baseline', level: 1, levelName: 'mid-lite', dpr: 1.5, lightsAdded: 0, frames: { p95Ms: 17, meanMs: 16.7 }, gpu: { meanMs: 5, p95Ms: 6 } }),
   st({ id: 'l10', group: 'lights', grid: false, level: 1, dpr: 1.5, lightsAdded: 10, frames: { p95Ms: 17, meanMs: 16.7 }, gpu: { meanMs: 7, p95Ms: 8 } }),
   st({ id: 'l25', group: 'lights', grid: false, level: 1, dpr: 1.5, lightsAdded: 25, frames: { p95Ms: 25, meanMs: 20 }, gpu: { meanMs: 10, p95Ms: 11 } }),
-  st({ id: 'l50', group: 'lights', grid: false, level: 1, dpr: 1.5, lightsAdded: 50, frames: { p95Ms: 40, meanMs: 33 }, gpu: { meanMs: 15, p95Ms: 16 } })
+  st({ id: 'l50', group: 'lights', grid: false, level: 1, dpr: 1.5, lightsAdded: 50, frames: { p95Ms: 45, meanMs: 33 }, gpu: { meanMs: 15, p95Ms: 16 } })
 ], plan);
 check('per-light GPU slope is 0.2 ms', v.perLightMs && Math.abs(v.perLightMs.gpu - 0.2) < 1e-9, v.perLightMs);
 check('first failing light count is 50', v.perLightMs.firstFailingLights === 50, v.perLightMs);
@@ -196,8 +196,18 @@ v = V.computeVerdict([
   st({ id: 'l4a', level: 4, levelName: 'ultra', dpr: 1, config: cfgOf('ultra', false), frames: { p95Ms: 90, pctOver50: 60 } })
 ], plan0);
 check('verdict names the stored current level', v.current.levelName === 'low' && v.current.levelFrom === 'stored' && /(stored)/.test(v.summary), v.summary);
-check('verdict: highest sustainable is mid @1', v.best.stage === 'l2a' && v.recommendedLevel === 2, v.best);
-check('levels: mid holds up to DPR 1 only', v.levels.find(L => L.level === 2).holdsAtDpr === 1);
+// p95 40 ms: over the smooth 33.4 line, under the app's 41.67 ms step-down at 60 Hz.
+check('app line: highest sustainable is mid @1.5 (p95 40 < 41.67 step-down)', v.best.stage === 'l2b' && v.recommendedLevel === 2, v.best);
+check('smooth line: highest is mid @1 (p95 40 > 33.4)', v.bestSmooth && v.bestSmooth.stage === 'l2a', v.bestSmooth);
+check('the verdict carries both targets', v.target.p95Ms === 41.67 && v.target.line === 'app' && v.smoothTarget.p95Ms === 33.4, v.target);
+check('levels: mid holds up to DPR 1.5 on the app line, smooth only up to 1', v.levels.find(L => L.level === 2).holdsAtDpr === 1.5 &&
+  v.levels.find(L => L.level === 2).smoothAtDpr === 1 && /smooth 30 fps up to DPR 1/.test(v.levelLines.find(l => /level mid /.test(l))), v.levels.find(L => L.level === 2));
+// The app line is the app's own step-down (adaptive-quality thresholds with the 60 fps cap).
+check('appStepDown at 60 Hz is 41.67 ms', V.appStepDown(1000 / 60).downMs === 41.67);
+check('appStepDown at 120 Hz is 34 ms (DOWN_MS floor)', V.appStepDown(1000 / 120).downMs === 34);
+check('appStepDown on a throttled/unknown tick falls back to 60 Hz', V.appStepDown(1000).downMs === 41.67 && V.appStepDown(0).downMs === 41.67);
+check('plan.appStepDownMs sets the app line', V.computeVerdict([st({ id: 'q', level: 1, dpr: 1.5, frames: { p95Ms: 36 } })],
+  { currentLevel: 1, currentDpr: 1.5, appStepDownMs: 34 }).recommendation === 'reduce-below-lowest');
 check('levels: ultra misses at every ratio', v.levels.find(L => L.level === 4).holdsAtDpr === null && /misses the target/.test(v.levelLines.find(l => /ultra/.test(l))));
 check('furniture: current is low detail, full detail affordable', v.furniture.currentDetail === 'low' && v.furniture.fullDetailAffordable === true &&
   v.furniture.allItemsFullDetailAffordable === true, v.furniture);
@@ -233,6 +243,8 @@ check('summary is non-empty lines', Array.isArray(doc.summary) && doc.summary.le
 const text = JSON.stringify(doc);
 check('house NAME never in the document', text.indexOf('SECRET NAME') === -1);
 check('house coordinates never in the document', text.indexOf('51.5') === -1 && text.indexOf('latitude') === -1);
+check('a non-demo house id never appears (x -> custom)', doc.app.houseId === 'custom' && JSON.stringify(doc).indexOf('"x"') === -1 && !/house "x"/.test(doc.summary[0]), doc.app.houseId);
+check('the demo house keeps its id', R.publicHouseId('demo') === 'demo' && R.publicHouseId('owner-name') === 'custom' && R.publicHouseId(undefined) === 'custom');
 check('house counts are there', doc.app.house.rooms === 2 && doc.app.house.walls === 3 && doc.app.house.furnitureItems === 4, doc.app.house);
 check('run carries stage counts', doc.run.stagesRun === 41 && doc.run.stagesInvalid === 0);
 const before = R.byteSize(doc);

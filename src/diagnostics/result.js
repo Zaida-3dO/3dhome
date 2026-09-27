@@ -21,6 +21,16 @@ export const MAX_BYTES = 200 * 1024;
 
 const fmt = (x, d = 1) => (Number.isFinite(x) ? (Math.round(x * 10 ** d) / 10 ** d).toString() : '?');
 
+/**
+ * The house as the result names it: 'demo' for the public demo house, and
+ * 'custom' for anything else. A real profile's directory name is often a
+ * person's name (it is on the live deployment), so it never leaves the
+ * device -- the counts below say what an analyst needs.
+ */
+export function publicHouseId(id) {
+  return id === 'demo' ? 'demo' : 'custom';
+}
+
 /** House counts only -- never names, coordinates or entity ids. */
 export function houseCounts(house) {
   if (!house) return null;
@@ -57,6 +67,10 @@ export function summarize(r) {
   const v = r.verdict || {};
   if (v.summary) lines.push('Verdict: ' + v.summary + '.');
   else if (v.recommendation) lines.push('Verdict: ' + v.recommendation + '.');
+  if (v.target && v.smoothTarget) {
+    lines.push('Lines: recommended = app step-down (p95 <= ' + v.target.p95Ms + ' ms, the adaptive ladder threshold on this display); ' +
+      'smooth 30 fps (p95 <= ' + v.smoothTarget.p95Ms + ' ms): ' + (v.bestSmooth ? v.bestSmooth.levelName + ' @' + v.bestSmooth.dpr : 'nothing measured') + '.');
+  }
   (v.levelLines || []).forEach(l => lines.push(l));
   if (v.furniture && v.furniture.line) lines.push(v.furniture.line);
   if (v.stripLights) v.stripLights.lines.forEach(l => lines.push(l));
@@ -92,7 +106,7 @@ export function assembleResult(o) {
     schema: SCHEMA,
     schemaVersion: SCHEMA_VERSION,
     summary: [],
-    app: { version: o.app.version, houseId: o.app.houseId, house: houseCounts(o.app.house), page: '/diagnostics' },
+    app: { version: o.app.version, houseId: publicHouseId(o.app.houseId), house: houseCounts(o.app.house), page: '/diagnostics' },
     run: Object.assign({ stagesRun: stages.length, stagesInvalid: stages.filter(s => !s.valid).length }, o.run),
     device: o.device,
     matrix: o.matrix,

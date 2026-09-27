@@ -17,6 +17,7 @@
  *   6. Copy: Clipboard API, then execCommand, then a failure that says why.
  *   7. Save: success returns the server's id; each refusal a readable error.
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -225,6 +226,40 @@ check('strip B keeps total intensity per strip', Math.abs(b6.slice(0, 6).reduce(
 const c = R.stripLightSpecs(anchors, { kind: 'rect', perStrip: 1 });
 check('strip C: one 1 m x 2 cm RectAreaLight per strip, facing into the room', c.length === 2 && c[0].type === 'rect' && c[0].width === 1 &&
   c[0].height === 0.02 && c[0].lookAt === anchors[0].facing);
+
+// ---- the adaptive-record guard (binding #1 item 4) -------------------------------------
+function fakeLs(init) {
+  const m = new Map(Object.entries(init || {}));
+  return { m, get length() { return m.size; }, key: i => [...m.keys()][i] || null,
+    getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) };
+}
+const QA = 'home3d.quality.v1|GPU|1024|auto', QL = 'home3d.quality.v1|GPU|1024|low';
+let ls = fakeLs({ [QA]: '{"v":1,"level":0}', [QL]: '{"v":1,"level":1}', other: 'x' });
+check('snapshot reads only adaptive keys', JSON.stringify(R.snapshotAdaptive(ls)) === JSON.stringify({ [QA]: '{"v":1,"level":0}', [QL]: '{"v":1,"level":1}' }));
+let g = R.guardAdaptive(ls);
+let st = g.finish();
+check('guard: untouched run reports untouched, restores nothing', st.untouched === true && st.restored === false && st.keysBefore === 2, st);
+g = R.guardAdaptive(ls);
+ls.setItem(QA, '{"v":1,"level":4}');               // clobbered
+ls.removeItem(QL);                                  // deleted
+ls.setItem('home3d.quality.v1|NEW|1|auto', 'y');    // added
+ls.setItem('other', 'changed');                     // not ours
+st = g.finish();
+check('guard: a clobbered run is reported and restored', st.untouched === false && st.restored === true, st);
+check('guard: the clobbered record is back exactly', ls.getItem(QA) === '{"v":1,"level":0}');
+check('guard: a deleted record is back', ls.getItem(QL) === '{"v":1,"level":1}');
+check('guard: a record added during the run is removed', ls.getItem('home3d.quality.v1|NEW|1|auto') === null);
+check('guard: keys that are not adaptive records are never touched', ls.getItem('other') === 'changed');
+check('guard: finish() again finds nothing to do', (() => { const s2 = g.finish(); return s2.untouched === true && s2.restored === false; })());
+const gNull = R.guardAdaptive(null).finish();
+check('guard: no storage -> untouched, with the reason', gNull.untouched === true && /unavailable/.test(gNull.note), gNull);
+const throwingLs = { get length() { throw new Error('SecurityError'); } };
+check('guard: throwing storage never throws', R.guardAdaptive(throwingLs).finish().untouched === true);
+// Every way out of runDiagnostics goes through the guard's finish(): a thrown
+// error included (an abort is caught inside and reported as adaptiveState).
+const runnerSrc = fs.readFileSync(path.join(root, 'src/diagnostics/runner.js'), 'utf8');
+check('runDiagnostics finishes the guard in a finally', /const guard = guardAdaptive\(storage\);\s*try \{\s*return await runGuarded\(o, guard\);\s*\} finally \{\s*guard\.finish\(\);\s*\}/.test(runnerSrc));
+check('the result reports the guard', /const adaptiveState = guard\.finish\(\);/.test(runnerSrc) && /adaptiveState \},/.test(runnerSrc));
 
 // ---- 7. save ---------------------------------------------------------------------------
 const fetchOK = async (url, init) => ({ ok: true, status: 201, json: async () => ({ ok: true, id: 'run-1', receivedAt: 'T', echo: init.method }) });

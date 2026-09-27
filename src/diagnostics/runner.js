@@ -26,7 +26,7 @@ import { motionPose, MOTIONS } from './camera-motion.js';
 import { summarizeIntervals, summarizeSamples, histogram, downsampleMax, drift, HIST_EDGES, percentile } from './stats.js';
 import { createFrameRecorder, createGpuTimer, createCpuTimer, attachToScene, createLongTaskObserver, heapMB, rendererInfo } from './telemetry.js';
 import { collectDevice } from './device-info.js';
-import { computeVerdict } from './verdict.js';
+import { computeVerdict, appStepDown } from './verdict.js';
 import { describeLevel } from './matrix.js';
 import { estimateLightVectors, measuredMaxUniformVectors } from './lights-budget.js';
 import { LEVELS } from '../adaptive-quality.js';
@@ -85,6 +85,21 @@ export async function measureRefresh(ms = 1000) {
  * @returns {Promise<Object>} the result document (partial if aborted)
  */
 export async function runDiagnostics(o) {
+  // The app's own adaptive-quality records are guarded for the WHOLE run:
+  // snapshotted before anything happens, and compared (and restored if
+  // anything moved) on every way out -- a finished run, an abort (caught
+  // inside, reported in run.adaptiveState) and a thrown error (this finally).
+  let storage = null;
+  try { storage = window.localStorage; } catch (e) { storage = null; }
+  const guard = guardAdaptive(storage);
+  try {
+    return await runGuarded(o, guard);
+  } finally {
+    guard.finish();
+  }
+}
+
+async function runGuarded(o, guard) {
   const signal = o.signal || { aborted: false };
   const progress = typeof o.onProgress === 'function' ? o.onProgress : () => {};
   const startedAt = new Date();
@@ -103,10 +118,6 @@ export async function runDiagnostics(o) {
 
   progress({ phase: 'device', label: 'Reading device capabilities' });
   const shadowsMode = ['auto', 'low', 'off'].indexOf(o.shadows) !== -1 ? o.shadows : 'auto';
-  // The app's own adaptive-quality records, snapshotted BEFORE anything runs:
-  // the benchmark pins every build's level (adaptive off, nothing persisted),
-  // and this proves it -- compared after the run, restored if anything moved.
-  const adaptiveBefore = snapshotAdaptive();
   const device = await collectDevice(window, { shadows: shadowsMode });
   const refresh = await measureRefresh(1000);
   device.refreshRateHz = refresh.hz;
@@ -123,9 +134,14 @@ export async function runDiagnostics(o) {
     currentDpr: device.app.currentDpr, mobile: device.app.mobileCaps === true, deviceDpr: window.devicePixelRatio || 1,
     shadows: shadowsMode });
   plan.currentLevelFrom = device.app.currentLevelFrom;
+  // The app's own step-down threshold on THIS display decides the recommended
+  // level (verdict.js); the smooth 30 fps line is reported beside it.
+  plan.appStepDown = appStepDown(refresh.medianTickMs);
+  plan.appStepDownMs = plan.appStepDown.downMs;
   const matrix = describePlan(plan);
   matrix.motions = MOTIONS;
   matrix.histogramEdgesMs = HIST_EDGES;
+  matrix.appStepDown = plan.appStepDown;
   matrix.sun = 'pinned to 12:00 local time on the run date, so every device lights the same scene';
   matrix.maxFragmentUniformVectors = device.webgl && device.webgl.limits ? device.webgl.limits.MAX_FRAGMENT_UNIFORM_VECTORS : null;
   const ctxInfo = { maxFragU: matrix.maxFragmentUniformVectors };
@@ -188,17 +204,16 @@ export async function runDiagnostics(o) {
     document.removeEventListener('visibilitychange', onVis);
   }
   spentMs = performance.now() - t0;
-  const adaptiveAfter = snapshotAdaptive();
-  const untouched = JSON.stringify(adaptiveBefore) === JSON.stringify(adaptiveAfter);
-  const restored = untouched ? false : restoreAdaptive(adaptiveBefore, adaptiveAfter);
+  // The benchmark pins every build's level (adaptive off, nothing persisted);
+  // this proves it, and puts the records back if anything moved regardless.
+  const adaptiveState = guard.finish();
 
   const result = assembleResult({
     app: { version: o.version, houseId: o.houseId, house: o.house },
     run: { mode: plan.mode, startedAt: startedAt.toISOString(), finishedAt: new Date().toISOString(),
       durationMs: Math.round(spentMs), estimatedMs: plan.estimatedMs, aborted, abortReason, hiddenEvents,
       shadows: shadowsMode,
-      adaptiveState: { untouched, restored, keysBefore: Object.keys(adaptiveBefore || {}).length,
-        note: adaptiveBefore === null ? 'localStorage unavailable: nothing to protect' : 'the app\'s home3d.quality.v1 records were compared before and after the run' } },
+      adaptiveState },
     device, matrix, plan, builds, stages
   });
   fitToSize(result);
@@ -206,10 +221,10 @@ export async function runDiagnostics(o) {
   return result;
 }
 
-/** Every adaptive-quality record, raw ({key: string}), or null without storage. */
-function snapshotAdaptive() {
+/** Every adaptive-quality record in `ls`, raw ({key: string}), or null without storage. */
+export function snapshotAdaptive(ls) {
   try {
-    const ls = window.localStorage;
+    if (!ls) return null;
     const out = {};
     for (let i = 0; i < ls.length; i++) {
       const k = ls.key(i);
@@ -219,15 +234,38 @@ function snapshotAdaptive() {
   } catch (e) { return null; }
 }
 
-/** Put the records back exactly as they were. Returns whether it managed. */
-function restoreAdaptive(before, after) {
-  if (!before) return false;
+/**
+ * Put the records back exactly as they were: keys added since are removed,
+ * changed or deleted ones rewritten. Other keys are never touched. Returns
+ * whether it managed.
+ */
+export function restoreAdaptive(ls, before, after) {
+  if (!before || !ls) return false;
   try {
-    const ls = window.localStorage;
     Object.keys(after || {}).forEach(k => { if (!(k in before)) ls.removeItem(k); });
     Object.keys(before).forEach(k => ls.setItem(k, before[k]));
     return true;
   } catch (e) { return false; }
+}
+
+/**
+ * Guard the adaptive records across a run. finish() compares with the
+ * snapshot, restores on any difference, and can be called more than once
+ * (the second call finds nothing to do). Returns the run.adaptiveState block.
+ */
+export function guardAdaptive(ls) {
+  const before = snapshotAdaptive(ls);
+  return {
+    before,
+    finish() {
+      const after = snapshotAdaptive(ls);
+      const untouched = JSON.stringify(before) === JSON.stringify(after);
+      const restored = untouched ? false : restoreAdaptive(ls, before, after);
+      return { untouched, restored, keysBefore: Object.keys(before || {}).length,
+        note: before === null ? 'localStorage unavailable: nothing to protect'
+          : 'the app\'s home3d.quality.v1 records were compared before and after the run' };
+    }
+  };
 }
 
 function stageLabel(s, b) {

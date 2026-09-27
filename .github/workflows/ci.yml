@@ -827,8 +827,15 @@ jobs:
           out=$(curl -s -X POST -H 'Content-Type: application/json' -d "$body" http://127.0.0.1:8081/api/diagnostics)
           echo "$out"
           echo "$out" | grep -q '"ok":true' || { echo "::error::save failed"; exit 1; }
-          ls -la runs
-          [ "$(ls runs | wc -l)" = 1 ] && ls runs | grep -Eq '^[0-9T:.Z-]+_cidev_ci-1\.json$' || { echo "::error::unexpected file name"; exit 1; }
+          find runs -type f
+          n=$(find runs -type f -name '*.json' | wc -l)
+          [ "$n" = 1 ] || { echo "::error::expected one saved run, found $n"; exit 1; }
+          set -- runs/*_cidev_ci-1.json
+          [ -f "$1" ] || { echo "::error::unexpected file name (want <received-at>_cidev_ci-1.json)"; exit 1; }
+          case "${1##*/}" in
+            [0-9][0-9][0-9][0-9]-*) ;;
+            *) echo "::error::file name does not start with the received-at timestamp"; exit 1 ;;
+          esac
           [ "$(code http://127.0.0.1:8081/api/diagnostics)" = 405 ] || { echo "::error::GET must be refused"; exit 1; }
           [ "$(code -X POST -H 'Content-Type: application/json' -d '{"schema":"home3d-diagnostics","schemaVersion":2}' http://127.0.0.1:8081/api/diagnostics)" = 422 ]
           [ "$(code -X POST -H 'Content-Type: application/json' -d 'nope' http://127.0.0.1:8081/api/diagnostics)" = 400 ]
@@ -837,6 +844,29 @@ jobs:
           # The burst is spent by now (6/min, burst 3): the next saves are refused.
           last=0; for _ in 1 2 3 4; do last=$(code -X POST -H 'Content-Type: application/json' -d "$body" http://127.0.0.1:8081/api/diagnostics); done
           [ "$last" = 429 ] || { echo "::error::rate limit did not engage (last: $last)"; exit 1; }
+      - name: Diagnostics save endpoint -- storage cap and web-root refusal (real image)
+        if: steps.dockerfile.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          # A directory already at the file cap: the next save is 507, nothing written.
+          mkdir -p full && echo '{}' > full/existing.json && sudo chown -R 101:101 full
+          docker run -d --name home3d-cap -p 8082:80 -e HOME3D_DIAGNOSTICS_DIR=/data/diagnostics \
+            -e HOME3D_DIAGNOSTICS_MAX_FILES=1 -v "$PWD/full:/data/diagnostics" home3d:ci
+          # A save directory inside the web root would make runs readable over HTTP: refused.
+          docker run -d --name home3d-webroot -p 8083:80 -e HOME3D_DIAGNOSTICS_DIR=/usr/share/nginx/html/houses home3d:ci
+          trap 'docker logs home3d-cap || true; docker logs home3d-webroot || true; docker rm -f home3d-cap home3d-webroot >/dev/null 2>&1 || true' EXIT
+          for port in 8082 8083; do
+            for _ in $(seq 1 30); do curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1 && break; sleep 1; done
+          done
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          body='{"schema":"home3d-diagnostics","schemaVersion":1,"save":{"deviceId":"cap","appVersion":"ci"}}'
+          got=$(code -X POST -H 'Content-Type: application/json' -d "$body" http://127.0.0.1:8082/api/diagnostics)
+          [ "$got" = 507 ] || { echo "::error::file cap did not refuse (got $got)"; exit 1; }
+          n=$(find full -type f | wc -l)
+          [ "$n" = 1 ] || { echo "::error::the cap refusal wrote a file ($n files)"; exit 1; }
+          docker logs home3d-webroot 2>&1 | grep -q 'diagnostics saving: OFF' || { echo "::error::web-root directory was not refused"; exit 1; }
+          got=$(code -X POST -H 'Content-Type: application/json' -d "$body" http://127.0.0.1:8083/api/diagnostics)
+          [ "$got" = 404 ] || { echo "::error::web-root container should have saving OFF (got $got)"; exit 1; }
 
   docker-dry-run-gate:
     name: Docker dry run (required)

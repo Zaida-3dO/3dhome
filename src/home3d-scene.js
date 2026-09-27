@@ -5869,9 +5869,6 @@ export const Home3DScene = (() => {
           warnings: furnitureResult ? furnitureResult.warnings.slice() : []
         };
       },
-      // The live orbit camera — external overlays that project world points into
-      // screen space (e.g. the compass rose) read this each frame. Returned by
-      // reference; callers must not mutate it.
       /**
        * The /diagnostics benchmark's hooks (src/diagnostics/, item 112ec00c).
        * An explicit, documented surface so the benchmark never reaches into
@@ -6025,6 +6022,9 @@ export const Home3DScene = (() => {
         },
         footprintMetres() { return { width: _fpW, depth: _fpD }; }
       },
+      // The live orbit camera — external overlays that project world points into
+      // screen space (e.g. the compass rose) read this each frame. Returned by
+      // reference; callers must not mutate it.
       getCamera() { return cam; },
       // Jump the orbit camera to a named preset view (top/se/front/iso/…) —
       // powers `?camera=<preset>` for scriptable visual review. Unknown/absent
