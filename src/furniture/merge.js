@@ -41,7 +41,9 @@
  * and three.js keys a program on `transparent` (the OPAQUE define). Solid
  * and fading buckets therefore share one program each, instead of two.
  * renderOrder: palette -2, glow -1 (see buildBucketMesh), kept 0; every FADE
- * bucket 0, so it depth-sorts with the walls fading around it.
+ * bucket 0, so it depth-sorts with the walls fading around it -- except a
+ * translucent fade bucket, +1, so it still draws after the opaque parts
+ * behind it (a display cabinet's glass after its lining).
  *
  * SCOPE. Buckets are HOUSE-wide by default (`scope: 'house'`): the dollhouse
  * camera frames the whole house almost all the time, so per-room buckets buy
@@ -600,14 +602,26 @@ export function buildBucketMesh(THREE, b, materials) {
   // it must depth-sort among the fading walls, not draw before them and be
   // blended over (washed out) by the wall behind it. The program is the same
   // either way (renderOrder is not part of its key).
+  // But a TRANSLUCENT fade bucket (glass, a translucent globe) draws at +1,
+  // AFTER every fade palette/glow bucket at 0 (item d5698f97). The fade clone
+  // is transparent for every class, so at one shared renderOrder three.js
+  // orders them by bucket centroid alone -- and a house-wide bucket's
+  // centroid says nothing about which part is in front. A display cabinet's
+  // glass shelves and pane (depthWrite off) then drew BEFORE its lining and
+  // were painted over, on every exterior wall, even with the wall solid. The
+  // palette-before-translucent order the solid -2 guarantees must hold inside
+  // a wall's fade group too. Glass drawn after a fading wall in front of it
+  // costs nothing visible: it fades with that wall to 0.05 x its own opacity.
+  const translucent = isTranslucent(b.first);
   if (b.fadeWallId == null) {
     if (b.cls === 'opaque') mesh.renderOrder = -2;
     else if (b.cls === 'glow') mesh.renderOrder = -1;
+  } else if (translucent) {
+    mesh.renderOrder = 1;
   }
   // Beauty meshes NEVER cast (plan A1): a caster draws in the sun pass and
   // in every room pass whose frustum it touches. The per-room proxy casts.
   mesh.castShadow = false;
-  const translucent = isTranslucent(b.first);
   // A translucent part (a glass globe, a beam cone) would catch a shadow
   // as a dark smear across its own surface; it receives none. Nor does an
   // unlit glow, which has no lighting for a shadow to take away.

@@ -600,6 +600,53 @@ function lightScene() {
     solidPal.renderOrder === -2 && solidGlow.renderOrder === -1,
     rGlow.beauty.map(m => [m.userData.bucket, m.renderOrder]));
   F.disposeFurniture(rGlow);
+  // Item d5698f97 (regression from 3d2f067d): inside ONE wall's fade group a
+  // translucent bucket must still draw AFTER the palette behind it, from any
+  // camera. Every fade clone is transparent, so three.js sorts them all with
+  // its transparent comparator -- replicated here verbatim from r160
+  // (reversePainterSortStable: groupOrder, renderOrder, then FAR-first by the
+  // bounding-sphere centre's clip z, then id). With both at renderOrder 0 the
+  // order falls to the two buckets' centroids, which say nothing about which
+  // part is in front: a display cabinet's glass shelves drew before its
+  // lining and were painted over. Two cameras on opposite sides of the pair,
+  // so one of them always puts the glass centroid FARTHER.
+  const hOrd = compile([
+    { id: 'pane', room: 'r', type: 'box', wall: 1, centre: 200, params: { height: 180, finish: 'glass' } },
+    { id: 'lining', room: 'r', type: 'box', wall: 1, centre: 300, params: { height: 180 } }
+  ]);
+  const rOrd = build(hOrd);
+  const ordPal = rOrd.beauty.find(m => m.userData.cls === 'opaque' && m.userData.fadeWallId === 1);
+  const ordGlass = rOrd.beauty.find(m => m.userData.finish === 'glass' && m.userData.fadeWallId === 1);
+  const threeTransparentSort = (a, b) => a.groupOrder !== b.groupOrder ? a.groupOrder - b.groupOrder
+    : a.renderOrder !== b.renderOrder ? a.renderOrder - b.renderOrder : a.z !== b.z ? b.z - a.z : a.id - b.id;
+  const drawOrderFrom = camPos => {
+    const cam = new THREE.PerspectiveCamera(50, 1.6, 1, 100000);
+    const cp = ordPal.geometry.boundingSphere || (ordPal.geometry.computeBoundingSphere(), ordPal.geometry.boundingSphere);
+    cam.position.copy(camPos); cam.lookAt(cp.center); cam.updateMatrixWorld(); cam.updateProjectionMatrix();
+    const proj = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    const items = [ordPal, ordGlass].map(m => {
+      m.updateMatrixWorld();
+      if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere();
+      const z = m.geometry.boundingSphere.center.clone().applyMatrix4(m.matrixWorld).applyMatrix4(proj).z;
+      return { mesh: m, groupOrder: 0, renderOrder: m.renderOrder, z, id: m.id };
+    });
+    return items.sort(threeTransparentSort).map(it => it.mesh === ordGlass ? 'glass' : 'palette');
+  };
+  const ordOk = !!ordPal && !!ordGlass && ordPal.material.transparent && ordGlass.material.transparent;
+  const cG = ordOk && ordGlass.geometry.boundingSphere.center.clone();
+  const cP = ordOk && ordPal.geometry.boundingSphere.center.clone();
+  // Beyond each centroid along the line through both, lifted and pulled off
+  // the wall, so each camera has one of the two centroids nearer.
+  const along = ordOk && cP.clone().sub(cG).normalize();
+  const camA = ordOk && cP.clone().addScaledVector(along, 400).add(new THREE.Vector3(0, 120, 300));
+  const camB = ordOk && cG.clone().addScaledVector(along, -400).add(new THREE.Vector3(0, 120, 300));
+  const ordA = ordOk ? drawOrderFrom(camA) : [], ordB = ordOk ? drawOrderFrom(camB) : [];
+  check('a fade group draws its glass after its palette from either side (no centroid lottery)',
+    ordOk && ordA.join() === 'palette,glass' && ordB.join() === 'palette,glass',
+    { ordA, ordB, renderOrder: ordOk && [ordPal.renderOrder, ordGlass.renderOrder] });
+  check('...and the fade palette stays at 0, sorting among the fading walls (3d2f067d kept)',
+    ordOk && ordPal.renderOrder === 0 && ordGlass.renderOrder > 0, ordOk && [ordPal.renderOrder, ordGlass.renderOrder]);
+  F.disposeFurniture(rOrd);
   // Glass fades WITH its item (f7324d3f, replacing A3), from and back to its
   // own opacity -- never driven to 1.
   const hg = compile([
