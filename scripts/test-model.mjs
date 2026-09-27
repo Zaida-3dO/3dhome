@@ -273,6 +273,77 @@ try {
       res.beauty.map(m => m.userData.bucket));
   }
 
+  // ---- gain: brightens (a tint only darkens), and survives the merge ------------
+  {
+    M.clearModelCache();
+    const loadGltf = async () => {
+      const scene = new THREE.Group();
+      const g = new THREE.BoxGeometry(1, 1, 1);
+      const cols = new Float32Array(g.attributes.position.count * 3).fill(0.05);
+      g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+      scene.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true })));
+      return { scene };
+    };
+    await M.prepare([item('dark', { src: 'models/dark.glb' })], { loadGltf });
+    const colourOf = extra => {
+      const grp = M.build(THREE, Object.assign({}, M.DEFAULTS, { src: 'models/dark.glb' }, extra), { assetBase: BASE });
+      let m = null;
+      grp.traverse(o => { if (o.isMesh) m = o.material; });
+      return m.color;
+    };
+    check('gain defaults to 1 (white material over the vertex colours)', near(colourOf({}).r, 1) && near(colourOf({}).b, 1), colourOf({}));
+    const g4 = colourOf({ gain: 4 });
+    check('gain 4 multiplies the material colour past 1 (brightens)', near(g4.r, 4) && near(g4.g, 4) && near(g4.b, 4), g4);
+    // With a colour override the gain multiplies the override (linear).
+    const tint = colourOf({ color: '#808080' }), both = colourOf({ color: '#808080', gain: 3 });
+    check('gain multiplies a color override', near(both.r, tint.r * 3) && near(both.g, tint.g * 3), { tint, both });
+    for (const bad of [0, -2, NaN, '4']) {
+      const c = colourOf({ gain: bad });
+      check('an invalid gain (' + String(bad) + ') is ignored', near(c.r, 1), c);
+    }
+    // Through the real merge: the palette bucket's float vertex colours carry it.
+    const items = [item('dark', { src: 'models/dark.glb', gain: 6 })];
+    const res = (await quietlyAsync(async () => {
+      const builders = await F.loadFurnitureModules(items, { prepareCtx: { loadGltf } });
+      return F.buildFurnitureSync(THREE, items, builders, { tx: x => x / 100, tz: y => y / 100, quality: { tier: 'ultra' } });
+    })).value;
+    const pal = res.beauty.find(m => m.userData.cls === 'opaque');
+    const ca = pal && pal.geometry.attributes.color;
+    check('gain reaches the merged palette bucket (0.05 x 6 = 0.3)', !!ca && near(ca.getX(0), 0.3, 1e-5) && near(ca.getZ(0), 0.3, 1e-5),
+      ca && [ca.getX(0), ca.getY(0), ca.getZ(0)]);
+    check('gain adds no draw (still one palette bucket)', res.beauty.length === 1, res.beauty.map(m => m.userData.bucket));
+  }
+
+  // ---- gain on a TEXTURED part: applied, and never shared across gains ----------
+  {
+    M.clearModelCache();
+    await M.prepare([item('tx')]);
+    const texMat = extra => {
+      const grp = M.build(THREE, Object.assign({}, M.DEFAULTS, { src: SRC }, extra), { assetBase: BASE });
+      let m = null;
+      grp.traverse(o => { if (o.isMesh && o.material.map) m = o.material; });
+      return m;
+    };
+    const t1 = texMat({}), t4 = texMat({ gain: 4 });
+    check('gain multiplies a textured part colour', !!t1 && !!t4 && near(t4.color.r, t1.color.r * 4) && near(t4.color.b, t1.color.b * 4),
+      t1 && t4 && [t1.color.toArray(), t4.color.toArray()]);
+    const e1 = texMat({ finish: 'emissive' }), e4 = texMat({ finish: 'emissive', gain: 4 });
+    check('on the emissive finish gain scales the emissive too', near(e4.emissive.r, e1.emissive.r * 4) && near(e4.emissive.g, e1.emissive.g * 4),
+      [e1.emissive.toArray(), e4.emissive.toArray()]);
+    // Two textured copies whose colours differ ONLY above 1 (the merge key used
+    // to clamp them to the same hex): they must not share one material.
+    const items = [item('bright', { gain: 4 }), item('brighter', { gain: 8 })];
+    const res = (await quietlyAsync(async () => {
+      const builders = await F.loadFurnitureModules(items);
+      return F.buildFurnitureSync(THREE, items, builders, { tx: x => x / 100, tz: y => y / 100, quality: { tier: 'ultra' } });
+    })).value;
+    const kept = res.beauty.filter(m => m.userData.cls === 'kept');
+    const reds = kept.map(m => +m.material.color.r.toFixed(4)).sort((a, b) => a - b);
+    check('two gains above 1 give two kept materials, each with its own colour',
+      kept.length === 2 && near(reds[1], reds[0] * 2, 1e-3), { n: kept.length, reds });
+    F.disposeFurniture(res);
+  }
+
   // ---- slow file: the per-file timeout ------------------------------------------
   {
     M.clearModelCache();

@@ -763,6 +763,7 @@ public, and the file stays wherever the profile is.
 | `yaw` | `0` | Degrees, anticlockwise from above, applied before fitting. It turns the file's front to glTF's +z, which becomes the item's front. |
 | `finish` | `"matte"` | The palette finish for every part. |
 | `color` | `null` | Overrides the file's colours (and tints vertex colours). |
+| `gain` | `1` | Multiplies every part's colour (the file's, or `color`). A tint can only darken, so this is how you **brighten** a file whose colours are too dark, typically a vendor model with studio lighting baked into its textures. It rides on the material colour: nothing extra for a vertex-coloured file; a textured part with a different gain is its own (kept) material. On the `emissive` finish it scales the glow too. Similar to `scripts/model-lod --gain` without re-exporting, except that model-lod clamps each baked channel at 1 and `gain` does not. |
 | `maxTriangles` | `5000` | A file heavier than this, per level of detail, is refused and skipped. |
 
 - **Loading.** The file is fetched and parsed once per page, however many
