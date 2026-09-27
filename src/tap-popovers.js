@@ -636,6 +636,41 @@ export const STYLE = `
 .tp-pop.chip .tp-status { margin-left: 2px; margin-right: 0; }
 @media (pointer: coarse) { ${coarseRules('')} }
 ${coarseRules('.tp-force-coarse')}
+/* Light theme (<html data-theme="light">, src/theme.js). The tokens carry most
+   of it; the rest re-colours the literal white-on-dark parts. The diamond
+   follows the card through --pop-bg / --pop-border. */
+:root[data-theme="light"] .tp-pop { color-scheme: only light;
+  --ink:#1a1d29; --ink-2:rgba(26,29,41,0.64); --amber:#d99a00; --heat:#e8590c; --door-open:#c77700; --ok:#16a34a;
+  --pop-bg: rgba(250,251,253,0.96); --pop-border: rgba(0,0,0,0.12); --range-track: rgba(0,0,0,0.18);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.22); }
+:root[data-theme="light"] .tp-ico { fill: rgba(0,0,0,0.62); }
+:root[data-theme="light"] .tp-ico.light-on, :root[data-theme="light"] .tp-ico.heat { filter: none; }
+:root[data-theme="light"] .tp-ico.dim { fill: rgba(0,0,0,0.3); }
+:root[data-theme="light"] .tp-ib, :root[data-theme="light"] .tp-vb { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.14); color: #1a1d29; }
+:root[data-theme="light"] .tp-vb.primary:not(:disabled) { background: var(--accent); color: #fff; }
+:root[data-theme="light"] .tp-vroom { border-color: rgba(0,0,0,0.16); }
+@media (hover: hover) {
+  :root[data-theme="light"] .tp-ib:hover:not(:disabled), :root[data-theme="light"] .tp-vb:hover:not(:disabled) { background: rgba(0,0,0,0.09); }
+  :root[data-theme="light"] .tp-vroom:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
+  :root[data-theme="light"] .tp-ib[data-tip]:hover::before { background: #fff; border-color: rgba(0,0,0,0.14); color: #1a1d29; }
+}
+:root[data-theme="light"] .tp-sw { background: rgba(0,0,0,0.20); }
+:root[data-theme="light"] .tp-sw.on { background: var(--accent); }
+:root[data-theme="light"] .tp-sw i { box-shadow: 0 1px 3px rgba(0,0,0,0.35); }
+:root[data-theme="light"] .tp-range.off { --fill: rgba(0,0,0,0.38); }
+:root[data-theme="light"] .tp-range::-webkit-slider-thumb { box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 1px 4px rgba(0,0,0,0.3); }
+:root[data-theme="light"] .tp-range::-moz-range-thumb { box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 1px 4px rgba(0,0,0,0.3); }
+:root[data-theme="light"] .tp-tip { background: #fff; border-color: rgba(0,0,0,0.14); color: #1a1d29; box-shadow: 0 4px 14px rgba(0,0,0,0.2); }
+:root[data-theme="light"] .tp-color::-webkit-color-swatch { border-color: rgba(0,0,0,0.25); }
+:root[data-theme="light"] .tp-color::-moz-color-swatch { border-color: rgba(0,0,0,0.25); }
+:root[data-theme="light"] .tp-offline { color: #b91c1c; }
+:root[data-theme="light"] .tp-vstat.err, :root[data-theme="light"] .tp-batt.low { color: #b91c1c; }
+:root[data-theme="light"] .tp-pop.chip .st.closed { color: #15803d; }
+:root[data-theme="light"] .tp-pmoist svg { fill: #1d4ed8; }
+:root[data-theme="light"] .tp-pmoist.muted svg { fill: #6b6f7b; }
+:root[data-theme="light"] .tp-pst.ok { color: #166534; background: rgba(34,197,94,0.14); border-color: rgba(21,128,61,0.45); }
+:root[data-theme="light"] .tp-pst.dry, :root[data-theme="light"] .tp-pst.due { color: #92400e; background: rgba(245,158,11,0.16); border-color: rgba(180,83,9,0.45); }
+:root[data-theme="light"] .tp-pst.wet { color: #1e40af; background: rgba(59,130,246,0.14); border-color: rgba(29,78,216,0.45); }
 `;
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
