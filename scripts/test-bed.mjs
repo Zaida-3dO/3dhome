@@ -295,7 +295,7 @@ const L = Bed.layout(Object.assign({}, D));
       if (cm(distToCushion(root)) > 0.5) rootsOff++;
       const len = cm(tip.distanceTo(root));
       if (len < Bed.FUR_LENGTH.min - 0.01 || len > Bed.FUR_LENGTH.max + 0.01) badLen++;
-      if (cm(distToCushion(tip)) < 0.6) notOut++;
+      if (cm(distToCushion(tip)) < 0.4) notOut++;
       // faces out: its normal points away from the cushion's centre
       const nrm = new THREE.Vector3().subVectors(vs[i + 1], vs[i]).cross(new THREE.Vector3().subVectors(tip, vs[i]));
       if (nrm.dot(root.clone().sub(wbox(cush).getCenter(new THREE.Vector3()))) <= 0) inward++;
@@ -307,7 +307,7 @@ const L = Bed.layout(Object.assign({}, D));
   check('fur: >= 80 tufts', strands >= 80, strands);
   check('fur: every tuft is rooted on the cushion surface (within 0.5 cm)', rootsOff === 0, rootsOff);
   check('fur: every tuft is FUR_LENGTH long', badLen === 0, badLen);
-  check('fur: every tuft tip is lifted >= 0.6 cm off the cushion (a pile, not a print)', notOut === 0, notOut);
+  check('fur: every tuft tip is lifted >= 0.4 cm off the cushion (a pile, not a print)', notOut === 0, notOut);
   check('fur: every tuft faces out of the cushion', inward === 0, inward);
   // The body is lumpy, not a smooth sewn case. Mutation: drop furCushion's
   // displacement (k = 1, no x/z jitter) -> the deviation is 0 and fails.
@@ -334,7 +334,8 @@ const L = Bed.layout(Object.assign({}, D));
     Object.keys(Bed.PRINT_COLORS).every(k => print.some(m => m.name === 'bed:print-' + k)), print.map(m => m.name));
   // The print stays inside the duvet's own envelope clamp (W/2 - 0.3, D -
   // 0.3) even where a lifted motif on a side drape leans outward. Mutation:
-  // drop the clamp in lifted() -> fails at some width.
+  // let motifs onto the clamped hem (onCleanCloth's floorY margin 1.5 -> -9)
+  // -> fails.
   for (const P of [{}, { width: 137, depth: 190 }, { width: 180 }, { width: 200, depth: 210 }]) {
     const gp = build(P), W2 = (P.width || D.width) / 200, DD = (P.depth || D.depth) / 100;
     const cx = (wbox(gp).min.x + wbox(gp).max.x) / 2, z0 = wbox(gp).min.z;

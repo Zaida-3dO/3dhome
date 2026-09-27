@@ -95,6 +95,7 @@ export const PRINT_COLORS = Object.freeze({
  */
 const ACCENT_LEN = 42, ACCENT_LEAN = 58 * Math.PI / 180;
 const CUSHION_LEN = 40, CUSHION_LEAN = 62 * Math.PI / 180;
+const CUSHION_W = 42;      // the cushion's width: only its height (len) is solved
 const ACCENT_RISE = 32;    // accent pillow tops aim this far above the mattress top
 const HEAD_SHOW = 12;      // ...but always leave at least this much headboard showing
 
@@ -170,7 +171,7 @@ function furCushion(THREE, w, h, d) {
  * streaks. Same transform as the cushion.
  */
 const FUR_TUFTS = 100;
-export const FUR_LENGTH = Object.freeze({ min: 2.5, max: 4 });
+export const FUR_LENGTH = Object.freeze({ min: 2.2, max: 3.4 });
 function addFur(THREE, cmesh, geo, color, add) {
   const rnd = prng(0xfa11);
   const pos = geo.attributes.position, idx = geo.index;
@@ -202,17 +203,17 @@ function addFur(THREE, cmesh, geo, color, add) {
     if (t1.lengthSq() < 1e-6) t1 = new THREE.Vector3().subVectors(f.b, f.a);
     t1.normalize();
     const t2 = new THREE.Vector3().crossVectors(f.n, t1).normalize();
-    const ang = (rnd() - 0.5) * 1.75;
+    const ang = (rnd() - 0.5) * 1.0;
     const dir = t1.clone().multiplyScalar(Math.cos(ang)).addScaledVector(t2, Math.sin(ang));
     const len = (FUR_LENGTH.min + rnd() * (FUR_LENGTH.max - FUR_LENGTH.min)) * CM;
-    // lying down, ~22 degrees off the surface; wound to face out (+n)
-    const tip = root.clone().addScaledVector(dir, len * 0.92).addScaledVector(f.n, len * 0.38);
-    const side = new THREE.Vector3().crossVectors(f.n, dir).normalize().multiplyScalar(0.9 * CM);
+    // lying down, ~17 degrees off the surface; wound to face out (+n)
+    const tip = root.clone().addScaledVector(dir, len * 0.954).addScaledVector(f.n, len * 0.3);
+    const side = new THREE.Vector3().crossVectors(f.n, dir).normalize().multiplyScalar(1.4 * CM);
     const b0 = root.clone().add(side), b1 = root.clone().sub(side);
     buckets[rnd() < 0.5 ? 0 : 1].push(b0, b1, tip);
   }
   const base = new THREE.Color(color);
-  const tones = [base.clone().lerp(new THREE.Color('#c9cf9a'), 0.45), base.clone().multiplyScalar(0.72)];
+  const tones = [base.clone().lerp(new THREE.Color('#c9cf9a'), 0.3), base.clone().multiplyScalar(0.82)];
   buckets.forEach((verts, i) => {
     if (!verts.length) return;
     const arr = [];
@@ -540,9 +541,9 @@ export function build(THREE, params, opts) {
       mesh.rotation.x = -(Math.PI - acc.lean);
     }
     // the cushion, centred, leaning on the sleeping pillows: faux fur (a
-    // lumpy body and a coat of strands, see addFur)
+    // lumpy body and a coat of shag tufts, see addFur)
     const cBase = L.mattTop + 3;
-    const cush = solveProp(THREE, (len) => furCushion(THREE, m(len), m(14), m(len)), cBase, tops.cushion,
+    const cush = solveProp(THREE, (len) => furCushion(THREE, m(CUSHION_W), m(14), m(len)), cBase, tops.cushion,
       { lean: CUSHION_LEAN, len: CUSHION_LEN, minLen: 32, minLean: 5 * Math.PI / 180 });
     const cFoot = sleepZ0 + pd + 4;
     const cmesh = add(cush.geo, cushionMat, 'cushion',
@@ -645,13 +646,9 @@ function addPrint(THREE, Dv, add, m) {
     const nl = Math.hypot(n[0], n[1], n[2]) || 1;
     return [n[0] / nl, n[1] / nl, n[2] / nl];
   }
-  // Lifted off the cloth, but never past the duvet's own envelope clamp (a
-  // motif on a side drape is lifted outward, towards the rail's face).
-  const xLim = Dv.L.W / 2 - 0.3, zLim = Dv.L.D - 0.3;
   function lifted(s, t, lift) {
     const q = Dv.map(s, t), n = clothNormal(s, t);
-    const x = Math.max(-xLim, Math.min(xLim, q.x + n[0] * lift));
-    return [m(x), m(q.y + n[1] * lift), m(Math.min(zLim, q.z + n[2] * lift))];
+    return [m(q.x + n[0] * lift), m(q.y + n[1] * lift), m(q.z + n[2] * lift)];
   }
   const buckets = {};
   for (const k of Object.keys(PRINT_COLORS)) buckets[k] = [];
@@ -684,15 +681,16 @@ function addPrint(THREE, Dv, add, m) {
   // map the print follows: a motif touching it would sink into the duvet.
   // Likewise keep motifs off the places the cloth is clamped or folded,
   // where the coarse duvet grid can run above the map: the side drapes of
-  // the folded-back band, the hem where the drop is clamped at the rail top,
-  // and the envelope clamp at the sides and foot.
+  // the folded-back band, and the hem where the drop is clamped at the rail
+  // top. (That also keeps every motif well inside the envelope: the drape
+  // above the hem sits ~2 cm in from the rails' outer face.)
   const stepLo = Dv.tBand - 1, stepHi = Dv.tStep + 2;
   const floorY = Dv.L.railTop + 0.5;
   const onCleanCloth = q => {
     if (q[1] > stepLo && q[1] < stepHi) return false;
     if (q[1] <= stepHi && Math.abs(q[0]) > Dv.s0 + Dv.rollLen / 2) return false;
     const c = Dv.map(q[0], q[1]);
-    return c.y > floorY + 1.5 && Math.abs(c.x) < Dv.L.W / 2 - 1.3 && c.z < Dv.L.D - 1.3;
+    return c.y > floorY + 1.5;
   };
   function tri(key, p0, p1, p2) {
     const lift = PRINT_LIFT[key];

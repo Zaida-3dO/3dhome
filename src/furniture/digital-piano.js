@@ -231,7 +231,7 @@ function resolveBenchParams(params) {
 export const BENCH_TUFT_DIP = 2.0;
 const BENCH_TUFT_RING = 3.25;   // the dimple's radius: where the seat is back at full height
 const BENCH_BUTTON_R = 1.1;
-const BENCH_BUTTON_RISE = 0.6;
+const BENCH_BUTTON_RISE = 1.1;   // crown above the rim: near seat level, so a button shows from a standing eye line
 
 /** The 2 x 4 tuft-button grid, as [x, z] offsets from the seat centre, cm. */
 export function benchButtons(p) {
