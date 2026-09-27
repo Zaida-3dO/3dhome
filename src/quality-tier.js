@@ -34,8 +34,9 @@ const MOBILE_RE = /\b(mali|immortalis|adreno|powervr|xclipse)\b/i;
 const APPLE_GPU_RE = /\bapple\s+gpu\b/i;
 // Names that identify a desktop part outright.
 const DESKTOP_RE = /\b(nvidia|geforce|quadro|rtx|radeon|amd|intel|iris|uhd graphics|hd graphics|arc)\b|apple m\d/i;
-// A renderer string that says nothing about the hardware.
-const MASKED_RE = /^\s*(webkit webgl|mozilla|google swiftshader|angle \(google, vulkan[^)]*swiftshader)/i;
+// A masked renderer string ("WebKit WebGL", "Mozilla", SwiftShader) names no
+// GPU family, so it matches none of the above and falls through to the user
+// agent. (A separate masked-name list was dead code: task 384a16dd.)
 
 // A desktop operating system. A mobile-class GPU inside one (a Snapdragon X
 // Windows laptop's Adreno) is not a tablet: it drives a laptop panel, with
@@ -68,7 +69,7 @@ export function detectMobileGpu(s) {
   const r = typeof o.renderer === 'string' ? o.renderer : '';
   const ua = typeof o.userAgent === 'string' ? o.userAgent : '';
   // 1. The GPU's own name, when it gives one.
-  if (r && !MASKED_RE.test(r)) {
+  if (r) {
     if (MOBILE_RE.test(r)) {
       if (ua && isDesktopOS(ua, o.maxTouchPoints) && o.coarsePointer !== true) {
         return { mobileGpu: false, reason: 'mobile-class GPU in a desktop OS without touch' };

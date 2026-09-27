@@ -107,6 +107,11 @@ const E = (x, z, extra) => Object.assign({ x, y: 2.4, z, intensity: 1, distance:
   check('match region is clipped to the house', clipped.length > 0 && clipped.every(p => p[0] >= 0 && p[2] >= 0) &&
     clipped.length < pts.length);
   check('...which is LESS than the summed intensity (a central light over-lights the floor)', mm.intensity < 6, mm.intensity);
+  // The match above is self-referential (both sides use floorIrradiance), so a
+  // change to the formula itself would pass it. Pin one absolute value: the
+  // six-downlight merge at this code's formula (task 384a16dd). Dropping the
+  // floor's cosine term gives 5.1869.
+  check('six-downlight merged intensity is pinned (5.34624)', Math.abs(mm.intensity - 5.34624) < 1e-4, mm.intensity);
   check('three.js falloff: 1/max(d^decay, 0.01), windowed to the cutoff',
     near(L.attenuation(2, 0, 2), 0.25) && near(L.attenuation(2, 4, 2), 0.25 * Math.pow(1 - 1 / 16, 2)) && L.attenuation(5, 4, 2) === 0);
   const lone = L.collapseEmitters([E(1, 1, { intensity: 1 })], box)[0];
