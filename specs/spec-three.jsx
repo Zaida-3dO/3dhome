@@ -170,9 +170,12 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
     key.castShadow = true; key.shadow.mapSize.set(1024, 1024);
     // Every spec mesh both casts and receives, so without a bias large flat
     // faces shadow themselves in faint diagonal bands (shadow acne: radiator
-    // end caps, the slatted box, the bed frame in close-up). normalBias does
-    // most of the work; the small negative bias mops up faces lit edge-on.
-    key.shadow.bias = -0.0005;
+    // end caps, the slatted box, the bed frame in close-up). normalBias
+    // alone cures it. The depth bias stays 0: the shadow camera keeps its
+    // default 0.5-500 m range, on which even -0.0005 is ~25 cm of depth and
+    // erased real contact shadows (the wall under the radiator, the kitchen
+    // plinth line) -- visual review of PR #89.
+    key.shadow.bias = 0;
     key.shadow.normalBias = 0.02;
     scene.add(key);
     const fill = new THREE.DirectionalLight(0xb8c8ff, 0.3);

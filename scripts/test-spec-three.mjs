@@ -141,7 +141,11 @@ check('first build frames the item with isoDistance()',
 const num = re => { const m = src.match(re); return m ? Number(m[1]) : NaN; };
 const bias = num(/\bkey\.shadow\.bias\s*=\s*(-?[\d.]+)\s*;/);
 const normalBias = num(/\bkey\.shadow\.normalBias\s*=\s*(-?[\d.]+)\s*;/);
-check('key light shadow.bias is set, small and negative', bias < 0 && bias >= -0.005, bias);
+// The depth bias must stay ~0: on the key light's default 0.5-500 m shadow
+// range, -0.0005 is ~25 cm and erased real contact shadows (visual review
+// of PR #89). normalBias alone cures the acne.
+check('key light shadow.bias is explicit and ~0 (never deep enough to erase contact shadows)',
+  Number.isFinite(bias) && bias <= 0 && bias >= -0.00005, bias);
 check('key light shadow.normalBias is set, small and positive', normalBias > 0 && normalBias <= 0.1, normalBias);
 // ...and the light they are set on is the shadow-casting key light
 check('the biased light is the shadow-casting key light',
