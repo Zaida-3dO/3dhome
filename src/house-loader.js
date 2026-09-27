@@ -29,7 +29,7 @@
 
 import { insidePoly } from './footstep-walk.js';
 import { RUG_PATTERN_DEFAULTS, RUG_PATTERNS, RUG_PATTERN_HOUSE_KEYS, RUG_PATTERN_ACROSS } from './rug-pattern.js';
-import { FINISHES, FINISH_TYPES, resolveTileLook, outsideVector, faceNormalToward, compassVector } from './wall-finish.js';
+import { FINISHES, FINISH_TYPES, GRID_ANCHORS, resolveTileLook, outsideVector, faceNormalToward, compassVector } from './wall-finish.js';
 
 export const HouseLoader = (() => {
   'use strict';
@@ -880,7 +880,7 @@ export const HouseLoader = (() => {
    * wall rendered plain is the right degradation.
    *
    * @returns {Array<{finish, look:Object|null, normal:[number,number], from:number|null,
-   *   to:number|null, along:[number,number]|null}>}
+   *   to:number|null, along:[number,number]|null, gridAnchor:'floor'|'from'}>}
    */
   function compileWallFinishes(wall, rooms, centre, warn) {
     const out = [];
@@ -975,9 +975,17 @@ export const HouseLoader = (() => {
       } else if (f.look != null) {
         warn(where + ': `look` applies to a tile finish only -- ignored on ' + f.finish);
       }
+      // Where the grid starts vertically: the floor (default) or the band's
+      // own bottom. A bad value is warned and the floor used -- still drawn.
+      let gridAnchor = 'floor';
+      if (f.gridAnchor != null) {
+        if (GRID_ANCHORS.indexOf(f.gridAnchor) !== -1) gridAnchor = f.gridAnchor;
+        else warn(where + ': gridAnchor ' + JSON.stringify(f.gridAnchor) + ' is not one of ' +
+          GRID_ANCHORS.join(', ') + ' -- using "floor"');
+      }
       out.push({
         finish: f.finish, look: look, normal: normal, face: endAt ? 'end' : 'long', at: endAt,
-        from: from, to: to, along: along,
+        from: from, to: to, along: along, gridAnchor: gridAnchor,
         // Wrap the finish round the reveals of openings and the wall's own
         // ends: on by default for an exterior skin (brick returns into the
         // window reveals, as on the spec pages), off otherwise.

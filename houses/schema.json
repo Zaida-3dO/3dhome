@@ -471,6 +471,14 @@
           },
           "additionalProperties": false
         },
+        "gridAnchor": {
+          "type": "string",
+          "enum": [
+            "floor",
+            "from"
+          ],
+          "description": "Where the finish's grid starts vertically. \"floor\" (default): at the floor top, so joints sit at 0, 25, 50 ... cm (for the default tile) whatever the band -- every band courses together. \"from\": at the band's own bottom (`from`), so a whole tile starts exactly on it -- a 93-118 band on a 93 cm counter is one full row rather than a sliver under a joint at 100."
+        },
         "reveals": {
           "type": "boolean",
           "description": "Also wrap the finish round the reveals (jambs) of the wall's doors and windows and round the wall's own ends, within the finish's height band -- as brick returns into a window opening. Defaults to true for `side: \"exterior\"` and false otherwise."

@@ -309,7 +309,8 @@ def check_wall_finishes(geo, room_ids, report):
     `room` exists, that `to` is above `from`, that `along` lies on the wall
     (and is not given for an END face), and that a finish does not land on
     the face the wall's wallpaper (`faceTexture`) is on, and that a `look` is
-    on a tile (and its grout fits the tile).
+    on a tile (and its grout fits the tile), and that a `gridAnchor: "from"`
+    has a `from` to anchor at.
     Which face a `room` finish lands on is probed by the engine (the same
     probe windows use); see src/house-loader.js compileWallFinishes.
     """
@@ -351,6 +352,9 @@ def check_wall_finishes(geo, room_ids, report):
                 report.warn(where, f"look.grout {look['grout']} is not under half the tile {look['size']} -- "
                                    "the engine falls back to the default joint")
             lo_h, hi_h = f.get("from"), f.get("to")
+            if f.get("gridAnchor") == "from" and lo_h is None:
+                report.warn(where, "gridAnchor \"from\" without a `from` anchors the grid at the wall's "
+                                   "bottom -- give `from` for the height the first row starts at")
             if lo_h is not None and hi_h is not None and not hi_h > lo_h:
                 report.error(where, f"`to` ({hi_h}) must be above `from` ({lo_h})")
             along = f.get("along")

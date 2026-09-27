@@ -36,6 +36,10 @@
  *      #cdc2b1 / #a89c87, flat or 5 cm relief) and agrees with the vanity
  *      counter's defaults; a `look` changes it, is validated with fallbacks,
  *      and keys its own canvas / texture / mesh; the tile is colour-managed.
+ *   9. `gridAnchor`: "floor" (default) keeps joints at 0, 25, 50 ... cm;
+ *      "from" starts the grid at the band's bottom, so a 93-118 band is one
+ *      whole row -- read back off real quad UVs, reveals included; the
+ *      schema, loader (bad value -> floor, warned) and scene agree.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -588,6 +592,96 @@ function triangles(geo) {
   const lk = schema.$defs.wallFinish.properties.look;
   check('schema: look declared, closed, with exactly the engine\'s properties', !!lk && lk.additionalProperties === false &&
     JSON.stringify(Object.keys(lk.properties).sort()) === JSON.stringify(Object.keys(D).sort()), lk && Object.keys(lk.properties));
+}
+
+// ---- 9. gridAnchor: where the tile grid starts vertically ----------------------
+// The texture's v = 0 is a grout joint and it repeats every tile height, so
+// a horizontal joint lies wherever v * (rows per metre) is a whole number.
+// These read the joints back off real quad UVs, in world heights.
+{
+  const rowsPerM = F.FINISH_TYPES.tile.repeat(F.TILE_DEFAULTS).y;   // 4 for a 25 cm tile
+  check('grid: the default tile is 4 rows per metre', near(rowsPerM, 4));
+  // Every horizontal joint (world m) on quad `q` of a batch, edges included.
+  const jointsOf = (batch, q) => {
+    const vs = [0, 1, 2, 3].map(i => batch.uv[(q * 4 + i) * 2 + 1]);
+    const ys = [0, 1, 2, 3].map(i => batch.pos[(q * 4 + i) * 3 + 1]);
+    const vMin = Math.min(...vs), vMax = Math.max(...vs), yMin = Math.min(...ys);
+    const out = [];
+    for (let k = Math.ceil(vMin * rowsPerM - 1e-9); k <= Math.floor(vMax * rowsPerM + 1e-9); k++) {
+      out.push(Math.round((yMin + (k / rowsPerM - vMin)) * 1e4) / 1e4);
+    }
+    return out;
+  };
+  check('gridOriginY: floor -> 0', F.gridOriginY('floor', [0.93, 1.18]) === 0);
+  check('gridOriginY: absent -> 0 (the old behaviour)', F.gridOriginY(undefined, [0.93, 1.18]) === 0);
+  check('gridOriginY: from -> the band bottom', near(F.gridOriginY('from', [0.93, 1.18]), 0.93));
+  check('gridOriginY: from with no band bottom -> 0', F.gridOriginY('from', [-Infinity, 2.5]) === 0);
+  check('GRID_ANCHORS is exactly floor + from', JSON.stringify(F.GRID_ANCHORS) === '["floor","from"]');
+
+  // One row on a 93 cm counter: the band 93-118, both anchors, a wall run both ways.
+  for (const w of [{ x1: 0, y1: 0, x2: 400, y2: 0 }, { x1: 400, y1: 0, x2: 0, y2: 0 }]) {
+    const fr = frameOf(w, 0.01, 10);
+    const floor = F.createFinishBatch(), from = F.createFinishBatch();
+    F.addLongFace(floor, fr, [0, 1], 1.0, 2.3, 0.93, 1.18);
+    F.addLongFace(from, fr, [0, 1], 1.0, 2.3, 0.93, 1.18, F.gridOriginY('from', [0.93, 1.18]));
+    const jf = jointsOf(floor, 0), ja = jointsOf(from, 0);
+    check('floor anchor: a 93-118 band has a joint at 100 (7 cm sliver + 18 cm piece)',
+      JSON.stringify(jf) === '[1]', jf);
+    check('from anchor: a 93-118 band is ONE whole row -- joints only at its edges, 93 and 118',
+      JSON.stringify(ja) === '[0.93,1.18]', ja);
+    check('from anchor: positions and u untouched (only v moves)',
+      JSON.stringify(floor.pos) === JSON.stringify(from.pos) &&
+      [0, 1, 2, 3].every(i => near(floor.uv[i * 2], from.uv[i * 2])));
+  }
+  // A taller band anchored at from: joints every 25 cm from its bottom.
+  {
+    const fr = frameOf({ x1: 0, y1: 0, x2: 400, y2: 0 }, 0.01, 10);
+    const b = F.createFinishBatch();
+    F.addLongFace(b, fr, [0, 1], 0, 1, 0.93, 1.60, 0.93);
+    const j = jointsOf(b, 0);
+    check('from anchor: joints at 93, 118, 143 on a 93-160 band', JSON.stringify(j) === '[0.93,1.18,1.43]', j);
+    // The reveal courses with its face.
+    const c = F.createFinishBatch();
+    F.addCrossFace(c, fr, 1, 1, 0.93, 1.60, 0.93);
+    const jc = jointsOf(c, 0);
+    check('from anchor: a reveal courses with its face', JSON.stringify(jc) === '[0.93,1.18,1.43]', jc);
+    const c0 = F.createFinishBatch();
+    F.addCrossFace(c0, fr, 1, 1, 0.93, 1.60);
+    check('floor anchor: a reveal keeps floor joints (100, 125, 150)', JSON.stringify(jointsOf(c0, 0)) === '[1,1.25,1.5]', jointsOf(c0, 0));
+  }
+
+  // Schema + loader.
+  const schema = JSON.parse(fs.readFileSync(path.join(root, 'houses/schema.json'), 'utf8'));
+  const ga = schema.$defs.wallFinish.properties.gridAnchor;
+  check('schema: gridAnchor declared with exactly the engine anchors',
+    !!ga && JSON.stringify(ga.enum) === JSON.stringify(F.GRID_ANCHORS), ga);
+  const { house: h, warnings } = compile(house([
+    { id: 7, start: [500, 0], end: [500, 590], finishes: [
+      { finish: 'tile', room: 'bathroom', from: 93, to: 118, gridAnchor: 'from' },
+      { finish: 'tile', room: 'store', from: 93, to: 118 },
+      { finish: 'tile', side: 'east', from: 20, gridAnchor: 'counter' },
+      { finish: 'tile', side: 'west', gridAnchor: 'floor' }
+    ] }
+  ]));
+  const f7 = h.wallsExt.find(w => w.id === 7).finishes;
+  check('loader: gridAnchor entries all kept', f7.length === 4, f7.length);
+  check('loader: gridAnchor "from" passed through', f7[0].gridAnchor === 'from', f7[0]);
+  check('loader: no gridAnchor -> "floor"', f7[1].gridAnchor === 'floor', f7[1]);
+  check('loader: a bad gridAnchor warns and falls back to "floor"', f7[2].gridAnchor === 'floor' &&
+    warnings.some(m => /wall 7 finishes\[2\]: gridAnchor "counter"/.test(m)), warnings);
+  check('loader: "floor" given explicitly is kept, not warned', f7[3].gridAnchor === 'floor' &&
+    !warnings.some(m => /finishes\[3\]/.test(m)));
+
+  // The scene hands every quad its finish's grid origin.
+  const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+  check('scene: grid origin from the entry anchor and drawn band',
+    /vOrigin: gridOriginY\(f\.gridAnchor, range\)/.test(src));
+  check('scene: every long face gets the grid origin',
+    /addLongFace\(wf\.batch, frame, wf\.normal, r\.s0, r\.s1, r\.y0, r\.y1, wf\.vOrigin\)/.test(src) &&
+    (src.match(/addLongFace\(/g) || []).length === (src.match(/addLongFace\([^)]*wf\.vOrigin\)/g) || []).length);
+  check('scene: every cross face (end faces + reveals) gets the grid origin',
+    (src.match(/addCrossFace\(wf/g) || []).length === 3 &&
+    (src.match(/addCrossFace\(wf[^)]*wf\.vOrigin\)/g) || []).length === 3);
 }
 
 console.log((failures ? 'FAILED' : 'OK') + ' -- ' + passes + ' passed, ' + failures + ' failed');
