@@ -1121,8 +1121,11 @@ export const EXAMPLE_L = deepFreeze({
 
 /**
  * A full L kitchen as measured: the preset KitchenSpec opens on.
- * Dimensions only, as measured. Run A (65 deep, 290 long) owns the corner;
- * run B (60 deep, 214 long: 60/60/60/34) starts at A's front face, so the leg
+ * Dimensions only, as measured and fitted by the owner. Run A (65 deep,
+ * 60/45/55/60/55 = 275) owns the corner and, with the 65 cm fridge-freezer,
+ * fills its 340 cm wall; wall run A (65/45/55/55/55 = 275) ends where the
+ * fridge starts. Run B (60 deep, 214 long:
+ * 60/60/60/34) starts at A's front face, so the leg
  * along B's wall is 65 + 214 = 279. Wall-unit tops meet the fridge top at
  * 219.2. A's `cornerDepth` is B's 60 -- the square B hides -- which
  * is exactly its 60 cm corner module. Every run's modules fill its width,
@@ -1130,15 +1133,15 @@ export const EXAMPLE_L = deepFreeze({
  */
 export const FULL_RUN_L = deepFreeze({
   a: {
-    width: 290,
+    width: 275,
     depth: 65,
     height: 118.5,
     modules: [
       {kind: 'corner', width: 60, plinthLed: true},
-      {kind: 'cabinet', width: 50, plinthLed: true},
-      {kind: 'cabinet', width: 60, plinthLed: true},
+      {kind: 'cabinet', width: 45, plinthLed: true},
+      {kind: 'cabinet', width: 55, plinthLed: true},
       {kind: 'dishwasher', width: 60, plinthLed: true},
-      {kind: 'cabinet', width: 60, hinge: 'bottom', plinthLed: true},
+      {kind: 'cabinet', width: 55, hinge: 'bottom', plinthLed: true},
     ],
     corner: 'left',
     cornerDepth: 60,
@@ -1155,14 +1158,14 @@ export const FULL_RUN_L = deepFreeze({
     ],
   },
   wall: {
-    width: 290,
+    width: 275,
     height: 121.5,
     modules: [
       {kind: 'cabinet', width: 65, underLed: true, topLed: true, height: 70, hinge: 'left'},
       {kind: 'cabinet', width: 45, height: 70, underLed: true, topLed: true, hinge: 'left'},
-      {kind: 'cabinet', width: 60, height: 55, hinge: 'right', underLed: true, topLed: true},
-      {kind: 'cabinet', width: 60, underLed: true, topLed: true, height: 55},
-      {kind: 'cabinet', width: 60, height: 70, hinge: 'right', underLed: true, topLed: true},
+      {kind: 'cabinet', width: 55, height: 55, hinge: 'right', underLed: true, topLed: true},
+      {kind: 'cabinet', width: 55, underLed: true, topLed: true, height: 55},
+      {kind: 'cabinet', width: 55, height: 70, hinge: 'right', underLed: true, topLed: true},
     ],
   },
   wallB: {
