@@ -346,19 +346,25 @@ check('DEFAULTS kind is diy-numerals', Clock.DEFAULTS.kind === 'diy-numerals');
   check('diy-words: has a centre disc', !!meshesNoDom.centreDisc, Object.keys(meshesNoDom));
   check('diy-words: has a second-hand tail', !!meshesNoDom.secondHandTail, Object.keys(meshesNoDom));
 
-  // Dot size (item 059873ed, round 2): the references show each dot at
-  // roughly 60-70% of the numeral stroke height, about 3x a first pass
-  // here (radius factor 0.05). Measured directly from the built dot's own
-  // geometry (its world-space diameter), not asserted from the source, so
-  // this fails if the radius factor regresses toward the too-small value.
+  // Dot size (item 059873ed): round 1 shipped 0.05r (visual review: ~3x too
+  // small against wall-clock-reference.png, where a dot is ~0.065r radius).
+  // Round 2 overcorrected to 0.15r on a flat "3x" instruction (visual
+  // review: ~2x too BIG against the same photo, measured directly this
+  // time -- 0.065r radius, ~0.4x the "12" numeral's height). Round 3
+  // corrected to 0.07r, the coordinator's own 0.065-0.07 range. Measured
+  // directly from the built dot's own geometry (its world-space diameter,
+  // i.e. radius factor * 2), not asserted from the source, and bounded on
+  // BOTH sides so this fails if the radius factor regresses toward either
+  // previous wrong value.
   const dotDiameterM = (() => {
     const geo = meshesNoDom.dot7.geometry;
     geo.computeBoundingBox();
     return geo.boundingBox.max.x - geo.boundingBox.min.x;
   })();
   const dialRadiusM = (Clock.DIY_WORDS_DEFAULTS.diameter / 100) / 2;
-  check('diy-words: dot diameter is at least 0.25x the dial radius (was 0.1x, read as ~3x too small)',
-    dotDiameterM >= dialRadiusM * 0.25, { dotDiameterM, dialRadiusM, ratio: dotDiameterM / dialRadiusM });
+  const dotRadiusRatio = (dotDiameterM / 2) / dialRadiusM;
+  check('diy-words: dot radius is within the visually-verified 0.06-0.08x-dial-radius band (not round 1\'s 0.05 or round 2\'s 0.15)',
+    dotRadiusRatio >= 0.06 && dotRadiusRatio <= 0.08, { dotDiameterM, dialRadiusM, dotRadiusRatio });
 
   // Centre disc segment count (item 059873ed, round 2): 14 segments at full
   // detail read as a visible polygon next to the reference photos' smooth

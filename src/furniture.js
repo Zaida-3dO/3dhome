@@ -318,7 +318,31 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
       if (!casters.has(item.room)) casters.set(item.room, []);
       casters.get(item.room).push({ item, builder, params, placement, parts: flat.parts });
     }
-    if (flat.dynamicGroup) dynamicGroups.push({ itemId: item.id, type: item.type, group: flat.dynamicGroup });
+    if (flat.dynamicGroup) {
+      // A dynamic part sits OUTSIDE every merge bucket (that is the whole
+      // point of userData.dynamic), so it never went through
+      // materials.forFade() -- the fade loop would otherwise never touch
+      // it, and a clock's hands would float fully opaque over their own
+      // faded host wall (found in code review, item 059873ed finding F1).
+      // Fixed generically here, not in wall-clock.js, so any future
+      // dynamic part (the desk LED strip, item 816d71ee) inherits it: mark
+      // each dynamic mesh's OWN material transparent (each already has its
+      // own material instance -- see addHands' mat/mat.clone() split, no
+      // two dynamic meshes on one item share one material object, so this
+      // cannot leak opacity onto an unrelated mesh), and carry the item's
+      // own fadeWallId alongside the group so the caller can register it
+      // exactly like a beauty bucket.
+      if (fadeWallId != null) {
+        flat.dynamicGroup.traverse(o => {
+          if (!o.isMesh || !o.material) return;
+          (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+            m.transparent = true;
+            m.userData = Object.assign({}, m.userData, { fade: true });
+          });
+        });
+      }
+      dynamicGroups.push({ itemId: item.id, type: item.type, group: flat.dynamicGroup, fadeWallId: fadeWallId });
+    }
     yield 'item ' + item.id;
   }
 
@@ -483,9 +507,9 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
   // to the scene graph as its own draws so it can keep being posed after
   // the house is built (a clock's hands, an LED strip segment).
   const dynamicByItemId = {};
-  dynamicGroups.forEach(({ itemId, type, group }) => {
+  dynamicGroups.forEach(({ itemId, type, group, fadeWallId }) => {
     root.add(group);
-    dynamicByItemId[itemId] = { itemId, type, group };
+    dynamicByItemId[itemId] = { itemId, type, group, fadeWallId };
   });
 
   let beautyTris = 0, proxyTris = 0, dynamicTris = 0, dynamicDraws = 0;
@@ -549,6 +573,24 @@ export async function buildFurniture(THREE, items, opts) {
  * forFade clone). The lock that replaces plan A3's: a glass or translucent
  * mesh WITHOUT a recorded base opacity is refused, since the loop would drive
  * it back to 1.0 and turn it solid.
+ *
+ * ALSO covers dynamic parts (item 059873ed finding F1): a dynamic mesh sits
+ * outside every merge bucket, so it is never in `result.beauty` and was
+ * previously invisible to this function entirely -- a clock's hands stayed
+ * fully opaque while their own host wall faded out around them. Each
+ * dynamic mesh on an item with a fadeWallId was already marked
+ * `transparent = true` at build time (buildPlaced, furnitureBuildSteps), so
+ * registering it here is enough for the existing fade loop to drive its
+ * opacity exactly like a beauty bucket's. Every dynamic part TODAY is
+ * opaque (a clock's matte hands), so this records `baseOpacity: 1,
+ * baseDepthWrite: true` explicitly -- the same "safe, fully-opaque" base
+ * task f7324d3f's own glass/translucent lock exists to require, rather than
+ * leaving these two fields `undefined` and relying on wallFadeTarget's/
+ * wallFadeDepthWrite's `base == null -> 1` fallback to happen to land on
+ * the same number. A translucent dynamic part (a future LED diffuser, item
+ * 816d71ee) would still need this reworked to record its OWN real base
+ * rather than the hardcoded 1 here -- tracked separately as c333108d, not
+ * fixed in this PR, since no dynamic part is translucent today.
  * @returns {Array<{mesh, wallId, baseOpacity, baseDepthWrite}>}
  */
 export function fadeRegistrations(result) {
@@ -561,6 +603,14 @@ export function fadeRegistrations(result) {
     const recorded = typeof mud.baseOpacity === 'number';
     if (see && !recorded) return;
     out.push({ mesh, wallId, baseOpacity: recorded ? mud.baseOpacity : 1, baseDepthWrite: mud.baseDepthWrite !== false });
+  });
+  Object.keys(result && result.dynamicByItemId || {}).forEach(itemId => {
+    const dyn = result.dynamicByItemId[itemId];
+    if (dyn.fadeWallId == null) return;
+    dyn.group.traverse(o => {
+      if (!o.isMesh || !o.material) return;
+      out.push({ mesh: o, wallId: dyn.fadeWallId, baseOpacity: 1, baseDepthWrite: true });
+    });
   });
   return out;
 }
@@ -681,9 +731,9 @@ export function scheduleFurnitureAttach(ctx) {
  *
  * Any live clock (or other per-item ticker) on a dynamic part must be
  * stopped by the CALLER before this runs (see home3d-scene.js's
- * stopLiveClocksFor / detachFurniture) -- disposeFurniture only frees
- * three.js resources, it does not know which dynamic groups were animated
- * or how to stop them.
+ * stopLiveClocks(), called from dispose() immediately before this function)
+ * -- disposeFurniture only frees three.js resources, it does not know which
+ * dynamic groups were animated or how to stop them.
  */
 export function disposeFurniture(result) {
   if (!result) return;

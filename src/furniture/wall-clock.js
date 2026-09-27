@@ -51,25 +51,17 @@
  * does not repoint or touch that entry -- small-items.js is someone else's
  * territory. It is the `wall-clock` type, registered separately.
  *
- * ⚠️ KNOWN GAP (item 059873ed, found while wiring "always shows the live
- * time in the placed 3D house"): the live house scene merges furniture
- * meshes by finish+colour for draw-call budget (src/furniture/merge.js).
- * Any TWO matte parts of the same colour -- e.g. hourHand and minuteHand,
- * both matte black -- are merged into ONE static mesh regardless of
- * userData.keep, because matte/gloss/metal/mirror are all "palette
- * materials" that force keep back to false (merge.js's isPaletteMaterial
- * check), and even the one finish that DOES stay individually kept
- * (emissive) is itself concatenated with every other emissive part in the
- * same room into a shared "glow" mesh keyed only by side+fade, not by item.
- * There is currently no mechanism in this codebase for two independently
- * MOVING furniture parts sharing a finish to survive as separate rotatable
- * meshes post-merge -- this predates this task (it already affects the
- * `diy-numerals`/`framed` hands shipped in PR #45) and is not fixable from
- * within this file: it needs a merge.js change with house-wide perf
- * implications, which is out of this module's territory. setClockTime()
- * therefore only actually animates a clock rendered OUTSIDE the merge
- * pipeline (ClockSpec.html renders the real builder directly, so it is
- * unaffected). See the item's own notes for the full analysis.
+ * LIVE HOUSE ANIMATION. A clock's hands (hourHand, minuteHand, secondHand,
+ * secondHandTail) carry userData.dynamic = true, which excludes them from
+ * every furniture merge bucket (src/furniture/merge.js flattenGroup) and
+ * keeps them as their own live meshes, re-parented into a per-item wrapper
+ * group (src/furniture.js buildPlaced, exposed as result.dynamicByItemId).
+ * The scene starts startLiveClock() on that wrapper when the item is
+ * attached and stops it on dispose (src/home3d-scene.js attachFurniture /
+ * stopLiveClocks). This is what lets setClockTime() actually animate a
+ * clock placed in a real house, not just on ClockSpec -- item 059873ed's
+ * round 3 review; see src/furniture/merge.js's own header for the general
+ * mechanism (also used by the desk LED strip, item 816d71ee).
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 
@@ -160,12 +152,9 @@ export function angleForTime(date) {
  * other part of the group, so it is cheap enough to call every animation
  * frame, and safe to call on a group built at any `time` default.
  *
- * THE LIVE SCENE calls this once a MINUTE (the minute hand is the coarsest
- * visible movement that matters at furniture scale, and re-laying every
- * frame for a wall clock nobody is standing next to is wasted work); the
- * spec page below calls it every SECOND so the second hand is visibly live
- * while tweaking. Both are valid callers -- this helper itself has no
- * opinion on cadence.
+ * Both the live house scene and the spec page call this once a SECOND, via
+ * startLiveClock() below -- this helper itself has no opinion on cadence,
+ * it is just the cheap, geometry-free pose write both callers share.
  *
  * @param {Object} group  a THREE.Group returned by wall-clock's build()
  * @param {Date} [date]   defaults to `new Date()`
@@ -203,9 +192,7 @@ export function setClockTime(group, date) {
  * frame regardless (like ClockSpec's orbit-camera loop) can ignore it, and
  * a render-on-demand scene (the live house) should have `onTick` call its
  * own bounded "wake for one frame" primitive, not an unconditional
- * repaint-forever. See this module's own KNOWN GAP note for why the live
- * house's furniture merge pass keeps this from visibly animating there
- * today regardless of this helper.
+ * repaint-forever.
  *
  * @param {Object} group  a THREE.Group returned by wall-clock's build()
  * @param {Object} [opts]
@@ -321,10 +308,9 @@ function addHands(THREE, group, radius, handColor, time, detail, backZ, totalDep
     // setClockTime/startLiveClock below): userData.dynamic = true is the
     // merge's per-part opt-out (src/furniture/merge.js flattenGroup) that
     // keeps a part OUT of every bucket entirely, as its own mesh, parented
-    // so it follows the item's placement -- the mechanism the KNOWN GAP note
-    // used to say did not exist. `keep` stays set too (a dynamic part is
-    // also never re-coloured/merged if something upstream reads keep on its
-    // own), but `dynamic` is what actually excludes it now.
+    // so it follows the item's placement. `keep` stays set too (a dynamic
+    // part is also never re-coloured/merged if something upstream reads
+    // keep on its own), but `dynamic` is what actually excludes it.
     mesh.userData.keep = true;
     mesh.userData.dynamic = true;
     return mesh;
@@ -554,8 +540,19 @@ function buildWordsTexture(THREE, wPx, hPx, numeralColor, createCanvas) {
   // relative to the dial too. This is also what made the clipping fix
   // above (WORD_LEFT_R/Y_MARGIN_R) tractable without an oversized canvas:
   // a smaller, lighter glyph needs less margin to clear.
+  // Round 3 (item 059873ed, visual review): "Arial Rounded MT Bold" has
+  // only a BOLD face -- a CSS weight of 500 on a single-weight font file is
+  // ignored (or synthesized inconsistently) by the browser, so the numerals
+  // still rendered bold regardless of the weight number here. Led instead
+  // with "Segoe UI" / "system-ui", both of which carry REAL Regular/Medium/
+  // Semibold weights on the platforms that have them (Windows and most
+  // desktop browsers respectively), so weight 500 actually renders medium
+  // rather than being silently ignored. "Arial Rounded MT Bold" is kept
+  // LAST as a rounded-look fallback for a browser with neither -- it will
+  // still render bold there, but that is strictly better than every
+  // browser rendering bold, which is what the font-first order did.
   const numeralSize = Math.round(pxPerR * 0.5);
-  ctx.font = `500 ${numeralSize}px "Arial Rounded MT Bold", "Segoe UI", sans-serif`;
+  ctx.font = `500 ${numeralSize}px "Segoe UI", system-ui, "Arial Rounded MT Bold", sans-serif`;
   ctx.shadowColor = 'rgba(0,0,0,0.35)';
   ctx.shadowBlur = pxPerR * 0.05;
   ctx.shadowOffsetX = pxPerR * 0.025;
@@ -643,13 +640,13 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
   // ---- Dots at 7, 8, 10, 11 -- solid black low-poly cylinders, flush with
   // the wall (their own back face at z=0, front at STANDOFF). ----
   const dotPositions = [7, 8, 10, 11];
-  // Round 2 (item 059873ed): 0.05 read as roughly 3x too small against the
-  // references, where each dot is about 60-70% of the numeral stroke
-  // height -- widened to 0.15 (the directive's own "3x" figure; canvas 2D
-  // has no API to measure a filled glyph's own stroke width directly, so
-  // the numeral-relative percentage and the flat multiplier are taken as
-  // the same instruction stated two ways, and the simpler one is used).
-  const dotR = r * 0.15;
+  // Round 3 (item 059873ed, visual review): round 2's "3x" instruction
+  // (0.05 -> 0.15) overshot -- the visual reviewer measured the ACTUAL
+  // reference photo directly (wall-clock-reference.png) and found a dot is
+  // ~0.065r in radius, about 0.4x the height of "12", against 0.15r/~0.75x
+  // in the round-2 render. Corrected to 0.07 (the coordinator's own
+  // 0.065-0.07 range).
+  const dotR = r * 0.07;
   // Segment count raised alongside the 3x radius increase above -- 10
   // segments (this module's original full-detail count, sized for the OLD,
   // much smaller dot) became a visible polygon once the dot itself tripled
