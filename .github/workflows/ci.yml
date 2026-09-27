@@ -620,7 +620,7 @@ jobs:
           node scripts/test-spec-module-scope.mjs
       - name: Pinned sidebar -- open/pin state machine and its triggers
         run: node scripts/test-sidebar-pin.mjs
-      - name: Camera zoom floor and two-finger pan/pinch classification
+      - name: Camera zoom (dolly-through, never inverts) and two-finger pan/pinch classification
         run: node scripts/test-camera-gestures.mjs
       - name: Accent light colour -- rgb/hs conversion, colour square, HA colour parsing
         run: node scripts/test-light-color.mjs
