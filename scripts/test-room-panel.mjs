@@ -33,6 +33,8 @@
  *      with its slider (no swatch grid, no colour bar, no strip list);
  *      curtain Open / Close are icon buttons; the thermometer is orange
  *      while heating.
+ *   9. curtainsToRevert: the curtains to put back to HA's last report when
+ *      HA goes offline with an unsent drag showing.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -576,6 +578,20 @@ const onReading = (over = {}) => HAClient.parseClimate({
   s.forget && s.forget('r');
   s.input('r', 4); s.end('r');
   check('forget() (row replaced) drops the dirty flag without a repaint', released[2] === 'r:false', released);
+}
+
+// 9. curtainsToRevert (item 349848ef): on going offline, every curtain whose
+//    shown value differs from HA's last report goes back to HA's value.
+{
+  const target = new Map([['a', 30], ['b', 100], ['c', 0], ['d', 55]]);
+  const reported = new Map([['a', 100], ['b', 100], ['c', 40], ['e', 70]]);
+  const r = RP.curtainsToRevert(target, reported);
+  check('curtainsToRevert: a diverged curtain goes back to HA\'s value', r.some(([id, p]) => id === 'a' && p === 100), r);
+  check('curtainsToRevert: every diverged curtain, and only those', JSON.stringify(r) === JSON.stringify([['a', 100], ['c', 40]]), r);
+  check('curtainsToRevert: a curtain HA never reported is left alone (d)', !r.some(([id]) => id === 'd'), r);
+  check('curtainsToRevert: a report with nothing shown is not invented (e)', !r.some(([id]) => id === 'e'), r);
+  check('curtainsToRevert: nothing diverged -> []', RP.curtainsToRevert(new Map([['a', 100]]), new Map([['a', 100]])).length === 0);
+  check('curtainsToRevert: missing maps -> []', RP.curtainsToRevert(null, reported).length === 0 && RP.curtainsToRevert(target, null).length === 0);
 }
 
 if (failures) {

@@ -4338,8 +4338,8 @@ export const Home3DScene = (() => {
         .catch((e) => console.warn('[Home3DScene] shader precompile failed; ' +
           'falling back to compiling on first render.', e))
         .then(() => {
-          if (readyFallbackTimer !== null) { clearTimeout(readyFallbackTimer); readyFallbackTimer = null; }
           ren.shadowMap.enabled = shadowWasEnabled;
+          if (readyFallbackTimer !== null) { clearTimeout(readyFallbackTimer); readyFallbackTimer = null; }
           // REQUIRED: this scene renders on demand, so without an explicit
           // repaint request nothing draws after the precompile resolves and
           // the canvas stays blank. Invalidate too: shadowMap.enabled was
