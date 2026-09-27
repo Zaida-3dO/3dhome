@@ -1145,7 +1145,10 @@ export const FULL_RUN_L = deepFreeze({
     ],
     corner: 'left',
     cornerDepth: 60,
-    sink: {at: 120, width: 90, depth: 50, bowl: 'inset', drainer: 'right'},
+    // `at` is the sink's CENTRE: 160 puts the 90 cm sink at 115-205, its left
+    // edge 10 cm into the 55 cm cabinet (105-160) and its drainer over the
+    // dishwasher (160-220), as in the owner's photos.
+    sink: {at: 160, width: 90, depth: 50, bowl: 'inset', drainer: 'right'},
   },
   b: {
     width: 214,
