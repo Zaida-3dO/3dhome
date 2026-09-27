@@ -794,6 +794,7 @@
     import { HouseLoader }    from './src/house-loader.js?v=__VERSION__';
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
+    import { parseSunTime }   from './src/sun-position.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
              haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml,
              boundLightChannels, hasAmbientRow, ambientRowLabel }
@@ -1353,6 +1354,19 @@
         home.setView(cameraPreset);
       }
 
+      // ?time=HH:MM and/or &date=YYYY-MM-DD pin the sun to that moment (local
+      // time), so a render at morning, noon, evening or night is reproducible
+      // whatever the clock says. A malformed value is ignored with a warning.
+      {
+        const tParam = params.get('time'), dParam = params.get('date');
+        if (tParam || dParam) {
+          const at = parseSunTime(tParam, dParam);
+          if (at) home.setSunTime(at);
+          else console.warn('[home3d] ignoring ?time=/&date=: expected time=HH:MM and date=YYYY-MM-DD, got',
+            JSON.stringify({ time: tParam, date: dParam }));
+        }
+      }
+
       // Sensor test seam. The presence and door-contact bindings are driven by
       // a live Home Assistant socket, which a demo profile deliberately does
       // not have (`homeAssistant.enabled: false`), so without this there is no
@@ -1455,6 +1469,12 @@
         // Pin the sun ('morning'|'noon'|'night'|'auto') so daylight can be
         // checked at any wall-clock time -- same as the Settings sun buttons.
         sunMode: mode => home.setSunMode(mode),
+        // Pin the sun to a moment ('2026-06-21T09:00', a Date) or null to
+        // follow the clock -- the same as ?time= / &date=.
+        sunTime: when => home.setSunTime(when),
+        // A sun.sun reading, through the same path the live socket uses:
+        //   __home3dSensors.sun(135, 20)   // azimuth, elevation (deg)
+        sun: (azimuth, elevation) => home.setSunFromHA({ azimuth, elevation }),
         // A room light channel's HA reading, through the same handler the
         // live onStateChange uses -- e.g. a desk strip on its own entity:
         //   __home3dSensors.light('study', 'desk_strip', true, 60, '#00ff66')
@@ -2063,6 +2083,8 @@
         });
 
         ha.onStateChange((roomId, group, state) => applyLightReading(roomId, group, state));
+        // sun.sun points the scene's sun (a pinned ?time= still wins).
+        ha.onSunChange(reading => home.setSunFromHA(reading));
       }
       // HA light reading -> the room's light state (and its row). Shared by
       // the live onStateChange and the ?debug=1 seam below.

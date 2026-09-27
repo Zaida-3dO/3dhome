@@ -28,6 +28,8 @@ except where noted. Unknown parameters are ignored.
 | [`tier`](#tier) | `ultra` \| `mid` \| `low` | detected | Force the GPU quality tier (A/B testing) |
 | [`fps`](#fps) | integer | `15` preview / `60` else | Frame-rate cap |
 | [`furniture`](#furniture) | `0` \| `false` \| `off` | shown | Start with the house's furniture hidden and unbuilt |
+| [`time`](#time-and-date) | `HH:MM` | the clock | Pin the sun to that local time |
+| [`date`](#time-and-date) | `YYYY-MM-DD` | today | Pin the sun to that day |
 | [`debug`](#debug) | `1` | off | Eruda mobile DevTools + error banner |
 | [`debugWalls`](#debugwalls) | `1` \| `true` | off | Wall-number overlay |
 | [`grid`](#grid) | `1` \| `true` | off | Coordinate grid overlay |
@@ -374,6 +376,25 @@ The Settings panel's **Show furniture** switch toggles the same thing at
 runtime: it hides every furniture mesh and its shadow, and turning it on in a
 `?furniture=0` session builds the furniture then. The switch only appears for
 a house that has furniture.
+
+### `time` and `date`
+
+`?time=HH:MM` (24-hour, the viewer's local time) and/or `&date=YYYY-MM-DD` pin
+the sun to that moment instead of following the clock, so a render at morning,
+noon, evening or night is reproducible whenever it is taken:
+
+```
+?time=09:00&date=2026-06-21     midsummer morning
+?time=13:00                     today, 1 pm
+?date=2026-12-21                midwinter, at the current clock time
+```
+
+The sun's direction, height and colour are computed from the profile's `site`
+(latitude, longitude, `northOffsetDegrees`) for that moment. A pinned time wins
+over Home Assistant's `sun.sun`, which otherwise drives the sun whenever it is
+reporting. The Settings panel's morning / noon / night presets still win over
+both. A malformed value is ignored with a console warning; a profile with no
+`site` keeps its fixed neutral daylight.
 
 ### `_` (cache bust)
 

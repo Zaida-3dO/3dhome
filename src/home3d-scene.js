@@ -35,6 +35,7 @@ import {
 import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { rugPatternForBox } from './rug-pattern.js';
+import { solarPosition, solarNoon, sunDirection, daylightCurve, windowSunPool, NIGHT } from './sun-position.js';
 import {
   FINISH_TYPES, makeFinishTexture, alongToMetres, finishRectOnBox, createFinishBatch, addLongFace,
   addCrossFace, buildFinishGeometry, revealEnds, finishKey
@@ -970,8 +971,11 @@ export const Home3DScene = (() => {
   // Cornice downlight intensity at full brightness, PER light (a cornice has
   // 3 or 5 -- see corniceSpotLayout in wall-fittings.js).
   const CORNICE_GLOW_INTENSITY = 0.35;
-  // Daylight gains, applied to sun factor x curtain transmission.
-  const DAYLIGHT_PATCH_GAIN = 0.4;    // additive floor patch colour
+  // Daylight gains, applied to the sun/sky amount x curtain transmission.
+  // The pools blend multiply-add (floor * (1 + gain)), so a gain of 1 doubles
+  // the floor's brightness under full sun.
+  const DAYLIGHT_SUN_POOL_GAIN = 1.4; // window-shaped direct-sun pool
+  const DAYLIGHT_SKY_POOL_GAIN = 0.25; // soft sky pool, sun round the other side
   const DAYLIGHT_SPOT_GAIN = 7;       // shared per-room SpotLight intensity
 
   /**
@@ -1020,11 +1024,22 @@ export const Home3DScene = (() => {
     // slightly softer shadows (e.g. 0.25 => 2048->512) — used by the 'low' preset.
     const smScale = quality.shadowMapScale || 1;
 
-    // Ambient + directional (intensities set by updateSunlight())
-    const ambLight = new THREE.AmbientLight(0x252535, 0.3);
+    // Sky fill + directional sun (both set by updateSunlight()).
+    // The fill is a HemisphereLight, not a flat AmbientLight: cool light from
+    // above, a warm floor bounce from below, so tops read lighter than
+    // undersides. It REPLACES the ambient one-for-one (same light count, a
+    // couple of uniform rows more), and at night its sky and ground colours
+    // are equal, which makes it exactly the old ambient.
+    const ambLight = new THREE.HemisphereLight(0xd9d9e6, 0xd9d9e6, 0.12);
     scene.add(ambLight);
     const sun = new THREE.DirectionalLight(0xffeedd, 0.25);
-    sun.position.set(10, 18, -5);
+    // Where the sun is comes from updateSunlight() (real solar position). The
+    // light and its target are both placed about the house centre, so the
+    // shadow frustum (+-15 m) is centred on the house rather than the world
+    // origin.
+    sun.position.set(tx(HOUSE.centre[0]) + 10, 18, tz(HOUSE.centre[1]) - 5);
+    sun.target.position.set(tx(HOUSE.centre[0]), 0, tz(HOUSE.centre[1]));
+    scene.add(sun.target);
     sun.castShadow = quality.sunShadow;
     sun.shadow.mapSize.width = Math.round(2048 * smScale);
     sun.shadow.mapSize.height = Math.round(2048 * smScale);
@@ -1927,23 +1942,34 @@ export const Home3DScene = (() => {
     }
 
     // === Daylight through the windows ===
-    // The global sun + ambient light the house as a whole; this is the part
+    // The global sun + sky fill light the house as a whole; this is the part
     // that comes in THROUGH A WINDOW, so it is what a curtain can shut out.
     // Cheap by design, per the uniform budget the quality tiers protect:
-    //   * every tier: an unlit, additive light patch on the floor in front of
-    //     each window (MeshBasicMaterial -- no light uniforms at all);
+    //   * every tier: one unlit floor mesh per window (MeshBasicMaterial -- no
+    //     light uniforms at all). When the sun is on this window's side of the
+    //     house it is the SUN POOL: the window opening projected along the
+    //     real sun ray onto the floor (windowSunPool in sun-position.js), so a
+    //     window-shaped patch that moves and stretches through the day. When
+    //     the sun is round the other side it is a faint SKY POOL in the old
+    //     soft shape. Blended multiply-add (dst * (1 + src)), so it brightens
+    //     the floor's own colour instead of greying it;
     //   * mid/ultra only: ONE unshadowed SpotLight per room that has windows,
-    //     shared by all of them, aimed into the room.
-    // Intensities are all set by updateDaylight() in create(); built dark.
+    //     shared by all of them, aimed into the room (re-aimed by
+    //     updateDaylight() toward the windows actually letting light in).
+    // Geometry is rebuilt by updateDaylightPools() (sun moved) and colours by
+    // updateDaylight() (sun or a curtain moved); built dark.
     const daylight = { windows: [], rooms: {} };
     if (WINDOWS.length) {
       const patchTex = makeDaylightPatchTexture();
+      // Every rug is a plane at y = 0.01; the pool sits just above so it
+      // lights a rug too rather than vanishing at its edge.
+      const POOL_Y = 0.012;
       WINDOWS.forEach(wn => {
         const curtains = CURTAINS.filter(cu =>
           String(cu.wallId) === String(wn.wallId) && cu.room === wn.room);
         const roomFace = wn.outerFace + wn.inDir * wn.hostThickness;   // plan cm
         const v = windowVerticals(wn);
-        // Patch reach into the room: a tall window throws light further.
+        // Sky-pool reach into the room: a tall window throws light further.
         // Clamped to the room's own depth so it never crosses the far wall.
         const room = ROOMS[wn.room];
         const roomDepth = room
@@ -1951,60 +1977,67 @@ export const Home3DScene = (() => {
           : 300;
         const reach = Math.min(roomDepth * 0.9, 80 + (v.openTop - v.openBot) * 100 * 0.9);  // cm
         const half = wn.w / 2;
-        // Four corners in plan cm: [along-wall, across-wall]
-        const corners = [
-          [wn.c - half, roomFace], [wn.c + half, roomFace],
-          [wn.c - half * 1.25, roomFace + wn.inDir * reach], [wn.c + half * 1.25, roomFace + wn.inDir * reach]
-        ];
         const toWorld = ([along, across]) => wn.axis === 'x'
           ? [tx(along), tz(across)] : [tx(across), tz(along)];
-        const pos = new Float32Array(12);
-        corners.forEach((c, i) => {
-          const [wx, wz] = toWorld(c);
-          pos[i * 3] = wx; pos[i * 3 + 1] = 0.006; pos[i * 3 + 2] = wz;
-        });
+        // Sky pool: four corners in plan cm, [along-wall, across-wall].
+        const skyCorners = [
+          [wn.c - half, roomFace], [wn.c + half, roomFace],
+          [wn.c - half * 1.25, roomFace + wn.inDir * reach], [wn.c + half * 1.25, roomFace + wn.inDir * reach]
+        ].map(toWorld);
+        // The opening on each face of the wall, world [x, y, z], in order
+        // round the rectangle -- what windowSunPool() projects.
+        const faceRect = across => {
+          const a = toWorld([wn.c - half, across]), b = toWorld([wn.c + half, across]);
+          return [[a[0], v.openBot, a[1]], [b[0], v.openBot, b[1]],
+            [b[0], v.openTop, b[1]], [a[0], v.openTop, a[1]]];
+        };
+        // Capacity: a pool clipped by an L-shaped room stays well under 16
+        // vertices; 3 * 14 triangle corners is ample and fixed, so updating
+        // it is a sub-range upload, never a reallocation.
+        const MAX_CORNERS = 42;
+        const pos = new Float32Array(MAX_CORNERS * 3);
+        const uv = new Float32Array(MAX_CORNERS * 2);
         const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), 2));
-        geo.setIndex([0, 2, 1, 1, 2, 3]);
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+        geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2).setUsage(THREE.DynamicDrawUsage));
+        geo.setDrawRange(0, 0);
         const mat = new THREE.MeshBasicMaterial({
           map: patchTex, color: 0x000000, transparent: true,
-          blending: THREE.AdditiveBlending, depthWrite: false,
+          // out = src * dst + dst: the floor's own colour, brightened.
+          blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+          blendSrc: THREE.DstColorFactor, blendDst: THREE.OneFactor,
+          depthWrite: false, toneMapped: false,
           side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2
         });
         const patch = new THREE.Mesh(geo, mat);
         patch.name = 'daylightPatch:' + wn.id;
         patch.castShadow = false; patch.receiveShadow = false;
         patch.renderOrder = 2;
+        patch.frustumCulled = false;   // the geometry moves; no stale bounds
         scene.add(patch);
-        const entry = { win: wn, curtains, patch, mat, transmit: 1, tint: [1, 1, 1] };
+        const inward = wn.axis === 'x' ? [0, wn.inDir] : [wn.inDir, 0];
+        const entry = {
+          win: wn, curtains, patch, mat, geo, transmit: 1, tint: [1, 1, 1],
+          mode: 'none', poolY: POOL_Y, skyCorners,
+          outer: faceRect(wn.outerFace), inner: faceRect(roomFace), inward,
+          roomPoly: room && Array.isArray(room.poly) ? room.poly.map(p => [tx(p[0]), tz(p[1])]) : null
+        };
         daylight.windows.push(entry);
 
         const r = daylight.rooms[wn.room] || (daylight.rooms[wn.room] = { windows: [], light: null });
         r.windows.push(entry);
         // Window centre on the room face, in world metres, and the inward
-        // unit vector -- accumulated per room for the shared light.
+        // unit vector -- used per room to place the shared light.
         const [cxW, czW] = toWorld([wn.c, roomFace]);
         entry.faceWorld = [cxW, (v.openBot + v.openTop) / 2, czW];
-        entry.inWorld = wn.axis === 'x' ? [0, wn.inDir] : [wn.inDir, 0];
+        entry.inWorld = inward;
       });
       if (quality.tier !== 'low') {
         Object.keys(daylight.rooms).forEach(roomId => {
           const r = daylight.rooms[roomId];
-          let sw = 0, px = 0, py = 0, pz = 0, ix = 0, iz = 0;
-          r.windows.forEach(e => {
-            const w = e.win.w;
-            sw += w; px += e.faceWorld[0] * w; py += e.faceWorld[1] * w; pz += e.faceWorld[2] * w;
-            ix += e.inWorld[0] * w; iz += e.inWorld[1] * w;
-          });
-          px /= sw; py /= sw; pz /= sw;
-          const il = Math.hypot(ix, iz) || 1;
-          ix /= il; iz /= il;
           const spot = new THREE.SpotLight(0xffffff, 0, 7, 1.05, 0.9, 1.4);
           spot.name = 'daylight:' + roomId;
           spot.castShadow = false;
-          spot.position.set(px + ix * 0.25, Math.min(WH - 0.1, py + 0.4), pz + iz * 0.25);
-          spot.target.position.set(px + ix * 2.2, 0, pz + iz * 2.2);
           scene.add(spot.target);   // a SpotLight target must be in the graph
           scene.add(spot);
           r.light = spot;
@@ -3801,39 +3834,125 @@ export const Home3DScene = (() => {
       return moving;
     }
 
-    // Current sun factor (0 night .. 1 day) and colour, recorded by
-    // updateSunlight() so the daylight can be recomputed when only a curtain
-    // moved.
+    // What the sun is doing now, recorded by updateSunlight() so the window
+    // daylight can be recomputed when only a curtain moved:
+    //   daylightSunF    0..1 daytime (the sky), daylightDirect 0..1 direct sun,
+    //   daylightHigh    0..1 how high it is (0 horizon .. 1 at 40 deg+),
+    //   daylightToSun   world unit vector toward the sun (the REAL one; the
+    //                   light itself may be held steeper on the low tier).
     let daylightSunF = 0;
+    let daylightDirect = 0;
+    let daylightHigh = 0;
+    let daylightToSun = [0, 1, 0];
     const daylightSunColor = new THREE.Color(1, 1, 1);
+    const daylightSkyColor = new THREE.Color(1, 1, 1);
+
+    // Rebuild each window's floor mesh for the current sun: its sun pool when
+    // direct sun comes in through it, else its sky pool by day, else nothing.
+    // Called when the SUN moves (60 s tick, a preset, a time override), never
+    // per frame; a curtain moving only needs updateDaylight().
+    function updateDaylightPools() {
+      daylight.windows.forEach(e => {
+        const posAttr = e.geo.attributes.position, uvAttr = e.geo.attributes.uv;
+        const pos = posAttr.array, uv = uvAttr.array;
+        const cap = pos.length / 3;
+        let n = 0;
+        const put = (x, z, u, v) => {
+          if (n >= cap) return;
+          pos[n * 3] = x; pos[n * 3 + 1] = e.poolY; pos[n * 3 + 2] = z;
+          uv[n * 2] = u; uv[n * 2 + 1] = v;
+          n++;
+        };
+        const poly = (daylightDirect > 0.001 && e.roomPoly)
+          ? windowSunPool({ outer: e.outer, inner: e.inner, inward: e.inward,
+              toSun: daylightToSun, room: e.roomPoly, floorY: 0 })
+          : null;
+        if (poly) {
+          // uv (0.5, 0) is the patch texture's full-strength texel: a sun pool
+          // is evenly lit with a sharp edge, as direct sun is.
+          const tris = THREE.ShapeUtils.triangulateShape(poly.map(p => new THREE.Vector2(p[0], p[1])), []);
+          tris.forEach(t => t.forEach(i => put(poly[i][0], poly[i][1], 0.5, 0)));
+          e.mode = 'sun';
+          e.pool = poly;
+        } else if (daylightSunF > 0.001) {
+          const c = e.skyCorners, UV = [[0, 0], [1, 0], [0, 1], [1, 1]];
+          [0, 2, 1, 1, 2, 3].forEach(i => put(c[i][0], c[i][1], UV[i][0], UV[i][1]));
+          e.mode = 'sky';
+          e.pool = null;
+        } else {
+          e.mode = 'none';
+          e.pool = null;
+        }
+        e.geo.setDrawRange(0, n);
+        posAttr.needsUpdate = true;
+        uvAttr.needsUpdate = true;
+      });
+    }
 
     function updateDaylight() {
       const pctOf = id => (curtainById[id] ? curtainById[id].built.getOpen() : null);
+      // Direct sun on a floor scales with how high the sun is (a low sun's
+      // pool is long and faint), but never so far that a morning pool vanishes.
+      const sunK = daylightDirect * (0.5 + 0.5 * daylightHigh) * DAYLIGHT_SUN_POOL_GAIN;
+      const skyK = daylightSunF * DAYLIGHT_SKY_POOL_GAIN;
       daylight.windows.forEach(e => {
         const d = windowDaylight(e.win, e.curtains, pctOf);
         e.transmit = d.transmit;
         e.tint = d.tint;
-        const k = daylightSunF * d.transmit * DAYLIGHT_PATCH_GAIN;
-        e.mat.color.setRGB(daylightSunColor.r * d.tint[0] * k,
-          daylightSunColor.g * d.tint[1] * k, daylightSunColor.b * d.tint[2] * k);
+        const col = e.mode === 'sun' ? daylightSunColor : daylightSkyColor;
+        const k = (e.mode === 'sun' ? sunK : e.mode === 'sky' ? skyK : 0) * d.transmit;
+        e.mat.color.setRGB(col.r * d.tint[0] * k, col.g * d.tint[1] * k, col.b * d.tint[2] * k);
         e.patch.visible = k > 0.001;
       });
+      // The room's shared daylight spot: placed at, and aimed through, the
+      // windows actually letting light in -- weighted by width, curtain
+      // transmission and whether the sun is coming through that window. The
+      // old plain average pointed straight down from mid-room when a room had
+      // windows on opposite walls (their inward vectors cancel); when the
+      // weighted aim is that weak, the strongest window wins outright.
+      const sunH = [daylightToSun[0], daylightToSun[2]];
       Object.keys(daylight.rooms).forEach(roomId => {
         const r = daylight.rooms[roomId];
         if (!r.light) return;
-        let sw = 0, tr = 0, tint = [0, 0, 0];
+        let sw = 0, tr = 0, tint = [0, 0, 0], sunW = 0;
+        let px = 0, py = 0, pz = 0, ix = 0, iz = 0, wsum = 0, best = null, bestW = -1;
         r.windows.forEach(e => {
           const w = e.win.w;
           sw += w; tr += e.transmit * w;
           tint = tint.map((c, i) => c + e.tint[i] * e.transmit * w);
+          const facing = e.mode === 'sun' ? daylightDirect * Math.max(0, -(sunH[0] * e.inWorld[0] + sunH[1] * e.inWorld[1])) : 0;
+          const wt = w * (0.05 + e.transmit) * (0.3 + facing);
+          wsum += wt;
+          sunW += facing * e.transmit * w;
+          px += e.faceWorld[0] * wt; py += e.faceWorld[1] * wt; pz += e.faceWorld[2] * wt;
+          ix += e.inWorld[0] * wt; iz += e.inWorld[1] * wt;
+          if (wt > bestW) { bestW = wt; best = e; }
         });
+        if (wsum > 0) { px /= wsum; py /= wsum; pz /= wsum; }
+        let il = Math.hypot(ix, iz);
+        if (best && il < 0.35 * wsum) {
+          [px, py, pz] = best.faceWorld;
+          [ix, iz] = best.inWorld;
+          il = 1;
+        }
+        il = il || 1;
+        ix /= il; iz /= il;
+        r.light.position.set(px + ix * 0.25, Math.min(WH - 0.1, py + 0.4), pz + iz * 0.25);
+        r.light.target.position.set(px + ix * 2.2, 0, pz + iz * 2.2);
+        r.light.target.updateMatrixWorld();
         const transmit = sw ? tr / sw : 0;
         // Intensity only -- never `visible`: toggling a light's visibility
         // changes the light count and forces every lit material to recompile.
         r.light.intensity = daylightSunF * transmit * DAYLIGHT_SPOT_GAIN;
+        // Sky-coloured, warming toward the sun's colour as sun comes in.
+        const sunFrac = tr > 0 ? Math.min(1, sunW / tr) : 0;
+        const base = [
+          daylightSkyColor.r + (daylightSunColor.r - daylightSkyColor.r) * sunFrac,
+          daylightSkyColor.g + (daylightSunColor.g - daylightSkyColor.g) * sunFrac,
+          daylightSkyColor.b + (daylightSunColor.b - daylightSkyColor.b) * sunFrac
+        ];
         const norm = tr > 0 ? tr : 1;
-        r.light.color.setRGB(daylightSunColor.r * tint[0] / norm,
-          daylightSunColor.g * tint[1] / norm, daylightSunColor.b * tint[2] / norm);
+        r.light.color.setRGB(base[0] * tint[0] / norm, base[1] * tint[1] / norm, base[2] * tint[2] / norm);
       });
     }
 
@@ -4707,132 +4826,126 @@ export const Home3DScene = (() => {
 
     // ---- Sunlight from the house's own location -------------------------
     //
-    // GEOLOCATED PER HOUSE. This used to hardcode one city's latitude and assume
-    // solar noon at 12:00 UTC, so a house anywhere else lit up and went dark at
-    // the wrong time. Latitude and longitude now come from the profile's `site`
-    // block; a profile that omits `site` gets a fixed neutral daylight instead of
-    // somebody else's sky.
+    // GEOLOCATED PER HOUSE. Latitude and longitude come from the profile's
+    // `site` block, and the sun is put where it really is in the sky --
+    // direction, not just brightness -- so its light comes through the right
+    // windows and moves through the day and the year. `northOffsetDegrees`
+    // turns plan-north to true north. A profile that omits `site` gets a fixed
+    // neutral daylight instead of somebody else's sky.
+    //
+    // Where the position comes from, first match wins:
+    //   1. a Settings preset (morning / noon / night), for today's date;
+    //   2. a pinned time (?time= / &date=, or setSunTime()) -- reproducible
+    //      screenshots at any wall-clock time;
+    //   3. Home Assistant's sun.sun azimuth/elevation, while it is fresh;
+    //   4. computed from the site and the clock.
     const LAT = HOUSE.site.latitude;
     const LON = HOUSE.site.longitude;
     const HAS_SITE = HOUSE.site.present;
-
-    function getSunTimes() {
-      const now = new Date();
-      const start = new Date(now.getFullYear(), 0, 0);
-      const doy = Math.floor((now - start) / 86400000); // day of year
-      // Solar declination (Spencer, 1971)
-      const B = (2 * Math.PI / 365) * (doy - 81);
-      const decl = Math.asin(0.3978 * Math.sin(B));
-      // Hour angle at sunrise/sunset
-      const latRad = LAT * Math.PI / 180;
-      const cosH = -Math.tan(latRad) * Math.tan(decl);
-      const clamped = Math.max(-1, Math.min(1, cosH));
-      const H = Math.acos(clamped) * 180 / Math.PI; // degrees
-      // Solar noon in LOCAL CLOCK HOURS. Solar noon is 12:00 UTC on the prime
-      // meridian and shifts 4 minutes (1/15 h) per degree of longitude east, so
-      // the UTC instant is 12 - LON/15. Convert that to the viewer's own clock
-      // with their UTC offset, because getSunFactor() compares against local
-      // wall-clock time. (For a house at longitude 0 viewed from UTC this is
-      // exactly 12, which is what the reference implementation assumed.)
-      const utcOffsetH = -now.getTimezoneOffset() / 60;
-      const solarNoon = 12 - LON / 15 + utcOffsetH;
-      const rise = solarNoon - H / 15;
-      const set = solarNoon + H / 15;
-      return { rise, set };
-    }
-
-    function getSunFactor() {
-      // No site in the profile: a fixed, neutral daylight. Better than picking a
-      // latitude on the author's behalf and being confidently wrong about it.
-      if (!HAS_SITE) return 0.85;
-      const now = new Date();
-      const h = now.getHours() + now.getMinutes() / 60;
-      const { rise, set } = getSunTimes();
-      // Transition periods: 1 hour for dawn, 1 hour for dusk
-      const dawnStart = rise - 0.5;   // civil twilight ~30min before sunrise
-      const dawnEnd = rise + 0.5;     // full brightness 30min after sunrise
-      const duskStart = set - 0.5;    // start dimming 30min before sunset
-      const duskEnd = set + 0.5;      // dark 30min after sunset
-
-      if (h < dawnStart) return 0;                                    // night
-      if (h < dawnEnd) return (h - dawnStart) / (dawnEnd - dawnStart); // dawn: 0→1
-      if (h < duskStart) return 1;                                     // day
-      if (h < duskEnd) return 1 - (h - duskStart) / (duskEnd - duskStart); // dusk: 1→0
-      return 0;                                                        // night
-    }
+    const NORTH_OFFSET = HOUSE.site.northOffsetDegrees || 0;
+    const HOUSE_CX = tx(HOUSE.centre[0]), HOUSE_CZ = tz(HOUSE.centre[1]);
+    // With no site: the old fixed sun direction (from the +x/-z side, ~58 deg
+    // up), full daylight.
+    const NO_SITE_SUN = { azimuth: 63.4, elevation: 58 };
+    // sun.sun older than this is treated as gone (HA dropped) and the sun is
+    // computed instead. HA republishes it every few minutes by day.
+    const HA_SUN_STALE_MS = 20 * 60000;
 
     let sunEnabled = true;
     // "auto" | "morning" | "noon" | "night"
     let sunMode = "auto";
+    let sunTimeOverride = null;   // Date, or null to follow the clock
+    let haSun = null;             // { azimuth, elevation, at }
+    let lastSun = null;           // what updateSunlight() last used (debug)
 
-    // Fixed sun factors for preset modes
-    const SUN_MODE_FACTORS = { morning: 0.42, noon: 1.0, night: 0.0 };
-    // Colour tints per preset: [r, g, b] for sun directional light
-    const SUN_MODE_COLORS  = { morning: [1.0, 0.70, 0.38], noon: [1.0, 0.93, 0.85], night: [0.4, 0.45, 0.6] };
+    function currentSun() {
+      const now = sunTimeOverride ? new Date(sunTimeOverride.getTime()) : new Date();
+      if (sunMode === 'night') return { azimuth: 0, elevation: -20, source: 'preset' };
+      if (sunMode === 'morning' || sunMode === 'noon') {
+        if (!HAS_SITE) {
+          return sunMode === 'noon'
+            ? { azimuth: 180, elevation: 50, source: 'preset' }
+            : { azimuth: 110, elevation: 16, source: 'preset' };
+        }
+        // Solar noon, or 3.5 h before it: the same sun whatever clock the
+        // viewer is on.
+        const noon = solarNoon(now, LON);
+        const at = sunMode === 'noon' ? noon : new Date(noon.getTime() - 3.5 * 3600000);
+        return Object.assign(solarPosition(at, LAT, LON), { source: 'preset' });
+      }
+      if (sunTimeOverride) {
+        return HAS_SITE ? Object.assign(solarPosition(now, LAT, LON), { source: 'time' })
+          : Object.assign({}, NO_SITE_SUN, { source: 'fixed' });
+      }
+      if (haSun && Date.now() - haSun.at < HA_SUN_STALE_MS) {
+        return { azimuth: haSun.azimuth, elevation: haSun.elevation, source: 'ha' };
+      }
+      if (!HAS_SITE) return Object.assign({}, NO_SITE_SUN, { source: 'fixed' });
+      return Object.assign(solarPosition(now, LAT, LON), { source: 'site' });
+    }
 
     function updateSunlight() {
       // The sun is a shadow-casting directional light, so ANY change here
-      // (intensity, colour, or being switched off entirely) changes its
-      // shadow. Invalidating inside the function rather than at each call site
-      // covers all three callers at once — setSun(), setSunMode(), and the
-      // loop's own 60-second tick — so a future caller cannot forget to.
+      // (intensity, colour, direction, or being switched off entirely) changes
+      // its shadow. Invalidating inside the function rather than at each call
+      // site covers every caller at once -- setSun(), setSunMode(),
+      // setSunTime(), a sun.sun reading, and the loop's own 60-second tick --
+      // so a future caller cannot forget to.
       invalidateShadows();
       if (!sunEnabled) {
         daylightSunF = 0;
+        daylightDirect = 0;
+        lastSun = null;
+        updateDaylightPools();
         updateDaylight();
         sun.intensity = 0;
-        ambLight.intensity = 0.12;
-        ambLight.color.setRGB(0.85, 0.85, 0.9);
+        ambLight.intensity = NIGHT.fill;
+        ambLight.color.setRGB(NIGHT.fillColor[0], NIGHT.fillColor[1], NIGHT.fillColor[2]);
+        ambLight.groundColor.copy(ambLight.color);
         gndMat.color.setRGB(0x18/255, 0x18/255, 0x18/255);
-        scene.background.setRGB(0x0f/255, 0x0f/255, 0x1a/255);
+        scene.background.setRGB(NIGHT.background[0], NIGHT.background[1], NIGHT.background[2]);
         clouds.forEach(c => { c.material.opacity = 0; });
         return;
       }
-      const f = sunMode === "auto" ? getSunFactor() : SUN_MODE_FACTORS[sunMode];
-      // Sun directional: exterior light hitting roof/ground — 0 at night, 0.8 at peak
-      sun.intensity = f * 0.8;
-      // Sun color: preset overrides, otherwise auto from factor
-      if (sunMode !== "auto" && SUN_MODE_COLORS[sunMode]) {
-        const [sr, sg, sb] = SUN_MODE_COLORS[sunMode];
-        sun.color.setRGB(sr, sg, sb);
-      } else if (f < 0.7) {
-        sun.color.setRGB(1.0, 0.75, 0.45);   // warm gold (dawn/dusk)
-      } else {
-        sun.color.setRGB(1.0, 0.93, 0.85);   // neutral warm white (midday)
-      }
+      const s = currentSun();
+      const c = daylightCurve(s.elevation);
+      lastSun = Object.assign({}, s, { day: c.day, direct: c.direct });
+      // The REAL direction drives the window pools on every tier.
+      daylightToSun = sunDirection(s.azimuth, s.elevation, NORTH_OFFSET);
+      // The light itself. Without sun shadows (the low tier) nothing stops an
+      // unshadowed sun, so a low one would light interior walls straight
+      // through the building: hold it steep there -- azimuth still follows
+      // the day, and the pools carry the real angle. Never below 2 deg either,
+      // so the shadow camera is never edge-on (it is dark by then anyway).
+      const lightEl = (quality.sunShadow && ren.shadowMap.enabled) ? Math.max(s.elevation, 2) : Math.max(s.elevation, 60);
+      const ld = sunDirection(s.azimuth, lightEl, NORTH_OFFSET);
+      sun.position.set(HOUSE_CX + ld[0] * 25, ld[1] * 25, HOUSE_CZ + ld[2] * 25);
+      sun.intensity = c.sunIntensity;
+      sun.color.setRGB(c.sun[0], c.sun[1], c.sun[2]);
+      // Sky fill (hemisphere): cool from above, warm bounce from below.
+      ambLight.intensity = c.fill;
+      ambLight.color.setRGB(c.sky[0], c.sky[1], c.sky[2]);
+      ambLight.groundColor.setRGB(c.bounce[0], c.bounce[1], c.bounce[2]);
+      gndMat.color.setRGB(c.ground[0], c.ground[1], c.ground[2]);
+      scene.background.setRGB(c.background[0], c.background[1], c.background[2]);
       // Daylight through the windows follows the same sun, gated per window
       // by its curtains.
-      daylightSunF = f;
-      daylightSunColor.copy(sun.color);
+      daylightSunF = c.day;
+      daylightDirect = c.direct;
+      daylightHigh = c.high;
+      daylightSunColor.setRGB(c.sun[0], c.sun[1], c.sun[2]);
+      daylightSkyColor.setRGB(c.sky[0], c.sky[1], c.sky[2]);
+      updateDaylightPools();
       updateDaylight();
-      // Ambient: this is what lights the interior (penetrates roof)
-      // Night: dim 0.12, Day: bright 0.7 — simulates light through windows
-      ambLight.intensity = 0.12 + f * 0.58;
-      ambLight.color.setRGB(0.85 + f * 0.15, 0.85 + f * 0.12, 0.9 + f * 0.1);
-      // Ground: dark at night, visible green-grey during day
-      const gr = (0x18 + Math.round(f * 0x22)) / 255;
-      const gg = (0x18 + Math.round(f * 0x28)) / 255;
-      const gb = (0x18 + Math.round(f * 0x18)) / 255;
-      gndMat.color.setRGB(gr, gg, gb);
-      // Background: dark navy at night, dark blue-grey during day
-      const bgR = (0x0f + Math.round(f * 0x18)) / 255;
-      const bgG = (0x0f + Math.round(f * 0x17)) / 255;
-      const bgB = (0x1a + Math.round(f * 0x1e)) / 255;
-      scene.background.setRGB(bgR, bgG, bgB);
-      // Clouds: tinted with sun. Warm gold at dawn/dusk, white at noon, faint
-      // blue-grey at night. Preset modes match the sun color tints above.
-      let cr, cg, cb;
-      if (sunMode !== "auto" && SUN_MODE_COLORS[sunMode]) {
-        [cr, cg, cb] = SUN_MODE_COLORS[sunMode];
-      } else if (f < 0.7) {
-        cr = 1.0; cg = 0.82; cb = 0.65;
-      } else {
-        cr = 1.0; cg = 0.98; cb = 0.95;
-      }
-      const cloudOpacity = 0.25 + f * 0.6;
-      clouds.forEach(c => {
-        c.material.color.setRGB(cr, cg, cb);
-        c.material.opacity = cloudOpacity;
+      // Clouds: lit by the sun's own colour by day, the old dim gold at night.
+      const cw = 0.55;
+      const cr = 1.0 + (c.sun[0] + (1 - c.sun[0]) * cw - 1.0) * c.day;
+      const cg = 0.82 + (c.sun[1] + (1 - c.sun[1]) * cw - 0.82) * c.day;
+      const cb = 0.65 + (c.sun[2] + (1 - c.sun[2]) * cw - 0.65) * c.day;
+      const cloudOpacity = 0.25 + c.day * 0.6;
+      clouds.forEach(cl => {
+        cl.material.color.setRGB(cr, cg, cb);
+        cl.material.opacity = cloudOpacity;
       });
     }
     updateSunlight();
@@ -5247,6 +5360,32 @@ export const Home3DScene = (() => {
         requestRender();
       },
       getSunMode() { return sunMode; },
+      // Pin the sun to a moment (a Date, or anything Date accepts), or pass
+      // null to follow the clock again. Drives ?time= / &date=: reproducible
+      // morning / noon / evening / night renders at any wall-clock time.
+      // Returns false (and changes nothing) for an unparseable value.
+      setSunTime(when) {
+        if (when == null) sunTimeOverride = null;
+        else {
+          const d = when instanceof Date ? new Date(when.getTime()) : new Date(when);
+          if (!Number.isFinite(d.getTime())) return false;
+          sunTimeOverride = d;
+        }
+        updateSunlight();
+        requestRender();
+        return true;
+      },
+      getSunTime() { return sunTimeOverride ? new Date(sunTimeOverride.getTime()) : null; },
+      // Home Assistant's sun.sun: { azimuth, elevation } in degrees (its own
+      // attributes). Ignored unless both are finite; a reading older than
+      // HA_SUN_STALE_MS falls back to the computed sun.
+      setSunFromHA(reading) {
+        if (!reading || !Number.isFinite(reading.azimuth) || !Number.isFinite(reading.elevation)) return false;
+        haSun = { azimuth: reading.azimuth, elevation: reading.elevation, at: Date.now() };
+        updateSunlight();
+        requestRender();
+        return true;
+      },
       // Per-room door openness (panel slider — UI only, no HA wiring).
       // pct: 0 = fully closed, 100 = fully open at the door's collision-solved
       // max angle, always in its fixed single swing direction (swingSign).
@@ -5411,8 +5550,15 @@ export const Home3DScene = (() => {
       getDaylightDebug() {
         return {
           sunFactor: daylightSunF,
+          direct: daylightDirect,
+          sun: lastSun ? { azimuth: lastSun.azimuth, elevation: lastSun.elevation, source: lastSun.source,
+            toSun: daylightToSun.slice(), light: [sun.position.x - sun.target.position.x,
+              sun.position.y - sun.target.position.y, sun.position.z - sun.target.position.z] } : null,
+          fill: { intensity: ambLight.intensity, sky: [ambLight.color.r, ambLight.color.g, ambLight.color.b],
+            ground: [ambLight.groundColor.r, ambLight.groundColor.g, ambLight.groundColor.b] },
           windows: daylight.windows.map(e => ({
             id: e.win.id, room: e.win.room, transmit: e.transmit, tint: e.tint.slice(),
+            mode: e.mode, pool: e.pool ? e.pool.map(p => p.slice()) : null,
             patchVisible: e.patch.visible,
             patchColor: [e.mat.color.r, e.mat.color.g, e.mat.color.b]
           })),
@@ -5508,6 +5654,8 @@ export const Home3DScene = (() => {
       setActive(active) { _inactive = !active; applyPause(); },
       setShadows(enabled) {
         ren.shadowMap.enabled = enabled;
+        // An unshadowed sun is held steep (see updateSunlight); re-place it.
+        updateSunlight();
         // Still correct with autoUpdate off: needsUpdate is the one-shot that
         // refreshes the maps after the toggle. (This setter is the expensive
         // program-cache path — see the tombstone — and is NOT used as a

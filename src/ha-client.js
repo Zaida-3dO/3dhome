@@ -530,6 +530,21 @@ export const HAClient = (() => {
     // OUT of parseClimate so its flapping never repaints the sidebar row).
     // Fires nothing; recording here changes no existing behaviour.
     const rawStates = new Map();
+    // sun.sun -> cb({ azimuth, elevation }), degrees. Every HA install has
+    // the entity; the scene points its sun from it. Fired only when either
+    // value actually changed.
+    const sunCallbacks = [];
+    let lastSun = null;
+    function processSun(st) {
+      const a = st && st.attributes ? st.attributes : {};
+      const azimuth = Number(a.azimuth), elevation = Number(a.elevation);
+      if (!Number.isFinite(azimuth) || !Number.isFinite(elevation)) return false;
+      if (lastSun && lastSun.azimuth === azimuth && lastSun.elevation === elevation) return false;
+      lastSun = { azimuth, elevation };
+      sunCallbacks.forEach(cb => { try { cb({ azimuth, elevation }); } catch (e) { console.error(e); } });
+      return true;
+    }
+
     function noteRaw(st) {
       if (!st || !st.entity_id) return;
       if (!entityIndex.has(st.entity_id) && !climateIndex.has(st.entity_id)) return;
@@ -794,6 +809,7 @@ export const HAClient = (() => {
             try {
               msg.result.forEach(state => {
                 noteRaw(state);
+                if (state.entity_id === 'sun.sun') processSun(state);
                 if (entityIndex.has(state.entity_id)) processStateUpdate(state.entity_id, state, true);
                 // Sensors are folded in from the SAME get_states snapshot, so a
                 // room that is already occupied (or a door already open) is
@@ -821,6 +837,7 @@ export const HAClient = (() => {
           const { entity_id, new_state } = msg.event.data;
           if (!new_state) return;
           noteRaw(new_state);
+          if (entity_id === 'sun.sun') processSun(new_state);
           if (entityIndex.has(entity_id)) processStateUpdate(entity_id, new_state, false);
           else if (sensorIndex.has(entity_id)) processSensorUpdate(entity_id, new_state);
           if (fittingIndex.has(entity_id)) processFittingUpdate(entity_id, new_state);
@@ -969,6 +986,10 @@ export const HAClient = (() => {
       // cb(roomId, reading) with reading from parseClimate(). Fired only on
       // a real change of the parsed reading.
       onClimateChange(cb) { climateCallbacks.push(cb); },
+      // cb({ azimuth, elevation }) from sun.sun, degrees. See processSun.
+      onSunChange(cb) { sunCallbacks.push(cb); },
+      // Test seam: a sun.sun state object in, true if the callback fired.
+      _injectSunState(haState) { return processSun(haState); },
       getClimate(roomId) {
         const r = climateResolved.get(roomId);
         return r ? r.reading : null;
