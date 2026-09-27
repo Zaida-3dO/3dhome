@@ -15,6 +15,7 @@
 
 import { colorFromAttributes, DEFAULT_ACCENT_COLOR } from './light-color.js';
 import { normaliseVacuumBindings, parseVacuum, vacuumCommand, vacuumSegmentCommand } from './vacuum-control.js';
+import { normalisePlantBindings, plantEntities, parsePlant } from './plant-status.js';
 
 /**
  * Slider value -> a `cover.set_cover_position` call, fanned out to every
@@ -292,6 +293,21 @@ export const HAClient = (() => {
     vacuumBindings.forEach(b => {
       [b.entity, b.battery].filter(Boolean).forEach(eid =>
         (vacuumIndex.get(eid) || vacuumIndex.set(eid, []).get(eid)).push(b.itemId));
+    });
+
+    // ---- Plants (sensors.plants, keyed by furniture item id) ----
+    // READ-ONLY: no plant path ever sends. plantIndex: entityId -> [itemId]
+    // for every entity a plant reads (moisture, battery, status helper,
+    // temperature, watering). plantState: entityId -> last raw state.
+    // plantResolved: itemId -> { reading, key } last dispatched.
+    const plantBindings = normalisePlantBindings(sensors && sensors.plants);
+    const plantIndex = new Map();
+    const plantState = new Map();
+    const plantResolved = new Map();
+    const plantCallbacks = [];
+    plantBindings.forEach(b => {
+      plantEntities(b).forEach(eid =>
+        (plantIndex.get(eid) || plantIndex.set(eid, []).get(eid)).push(b.itemId));
     });
 
     if (sensors) {
@@ -605,6 +621,37 @@ export const HAClient = (() => {
       return true;
     }
 
+    /**
+     * Fold one of a plant's entities into every plant it serves. Notifies
+     * only when the parsed reading changed (a report that moves only the
+     * timestamp still changes `updated`, which the card shows).
+     */
+    function processPlantUpdate(entityId, haState) {
+      const itemIds = plantIndex.get(entityId);
+      if (!itemIds) return false;
+      plantState.set(entityId, haState);
+      let fired = false;
+      itemIds.forEach(itemId => { if (resolvePlant(itemId)) fired = true; });
+      return fired;
+    }
+    function resolvePlant(itemId) {
+      const b = plantBindings.get(itemId);
+      if (!b) return false;
+      const get = eid => (eid ? plantState.get(eid) || null : null);
+      const reading = parsePlant(b, { moisture: get(b.moisture), battery: get(b.battery), status: get(b.status),
+        temperature: get(b.temperature), watering: get(b.watering) });
+      if (reading.level == null) return false;   // the main reading has not arrived yet
+      const key = JSON.stringify(reading);
+      const prev = plantResolved.get(itemId);
+      if (prev && prev.key === key) return false;
+      plantResolved.set(itemId, { reading, key });
+      markFired('plant:' + itemId);
+      plantCallbacks.forEach(cb => {
+        try { cb(itemId, reading); } catch (e) { console.warn('HAClient plantCb:', e); }
+      });
+      return true;
+    }
+
     // ---- Full resync on every (re)connect ----
     //
     // Every path above notifies only on a CHANGE of its resolved value, which
@@ -657,6 +704,10 @@ export const HAClient = (() => {
       vacuumResolved.forEach(({ reading }, itemId) => {
         if (fired.has('vacuum:' + itemId)) return;
         emit(vacuumCallbacks, [itemId, reading], 'vacuumCb');
+      });
+      plantResolved.forEach(({ reading }, itemId) => {
+        if (fired.has('plant:' + itemId)) return;
+        emit(plantCallbacks, [itemId, reading], 'plantCb');
       });
     }
 
@@ -822,8 +873,10 @@ export const HAClient = (() => {
                 // robot listed before its battery sensor is not reported
                 // first with no battery and then again with it.
                 if (vacuumIndex.has(state.entity_id)) vacuumState.set(state.entity_id, state);
+                if (plantIndex.has(state.entity_id)) plantState.set(state.entity_id, state);
               });
               vacuumBindings.forEach(b => resolveVacuum(b.itemId));
+              plantBindings.forEach(b => resolvePlant(b.itemId));
             } finally { snapshotFired = null; }
             // Full resync: re-apply every target the snapshot did not
             // already fire, BEFORE 'connected' re-enables the controls.
@@ -843,6 +896,7 @@ export const HAClient = (() => {
           if (fittingIndex.has(entity_id)) processFittingUpdate(entity_id, new_state);
           if (climateIndex.has(entity_id)) processClimateUpdate(entity_id, new_state);
           if (vacuumIndex.has(entity_id)) processVacuumUpdate(entity_id, new_state);
+          if (plantIndex.has(entity_id)) processPlantUpdate(entity_id, new_state);
         }
       };
       ws.onclose = () => {
@@ -1004,6 +1058,14 @@ export const HAClient = (() => {
       },
       // The normalised binding for one robot (see vacuum-control.js), or null.
       vacuumBinding(itemId) { return vacuumBindings.get(itemId) || null; },
+      // cb(itemId, reading) with reading from parsePlant(). Fired only on a
+      // real change of the parsed reading (and once more on a reconnect).
+      onPlantChange(cb) { plantCallbacks.push(cb); },
+      getPlant(itemId) {
+        const r = plantResolved.get(itemId);
+        return r ? r.reading : null;
+      },
+      plantBinding(itemId) { return plantBindings.get(itemId) || null; },
       // Raw { state, attributes } last seen for a bound light / climate
       // entity, or null before it has reported. See rawStates above.
       getRawState(entityId) { return rawStates.get(entityId) || null; },
@@ -1031,6 +1093,10 @@ export const HAClient = (() => {
       _injectVacuumState(entityId, haState) {
         return processVacuumUpdate(entityId, haState);
       },
+      // Same seam for any entity a plant reads: true if a plant callback fired.
+      _injectPlantState(entityId, haState) {
+        return processPlantUpdate(entityId, haState);
+      },
       // Same seam for a room LIGHT entity (rooms.json rooms.<id>.<channel>):
       // full HA state object in; the onStateChange callbacks fire exactly as
       // they would for a live update (echo suppression bypassed).
@@ -1055,6 +1121,7 @@ export const HAClient = (() => {
     reduceBinarySensorStates,
     parseVacuum,
     vacuumCommand,
-    vacuumSegmentCommand
+    vacuumSegmentCommand,
+    parsePlant
   };
 })();

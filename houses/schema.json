@@ -4522,6 +4522,71 @@
                   }
                 }
               }
+            },
+            "plants": {
+              "type": "object",
+              "description": "Furniture item id -> a plant's Home Assistant binding. READ-ONLY: nothing is ever sent. The item id MUST exist in the paired geometry profile's `furniture[].id`: tapping that item opens the plant's card (moisture %, a Dry / OK / Wet status, when it last reported, battery and temperature when bound), and the sidebar's Controls view lists the same readings. An unavailable sensor reads 'Offline', never 0%. Needs rooms schemaVersion 1.5.",
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "anyOf": [
+                  { "required": ["moisture"] },
+                  { "required": ["watering"] }
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "moisture": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^sensor\\." }
+                    ],
+                    "description": "The soil moisture `sensor.*` (0-100 %). Required unless `watering` is given."
+                  },
+                  "watering": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^sensor\\." }
+                    ],
+                    "description": "For a plant with no probe: a watering countdown `sensor.*` (100 = watered today, 0 = due). The card shows it, and Water due at 0. With `moisture` too, the moisture is the main reading."
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional display name for the card. Without it the furniture item's `label` is used."
+                  },
+                  "battery": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^sensor\\." }
+                    ],
+                    "description": "Optional battery `sensor.*`: a % or a text gauge (high / low)."
+                  },
+                  "status": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^(sensor|binary_sensor)\\." }
+                    ],
+                    "description": "Optional needs-water helper, which then decides the status: a `binary_sensor.*` (on = dry) or a `sensor.*` warning (none / ok -> OK, dry / low / alarm -> Dry, wet / high -> Wet; anything else falls back to the thresholds)."
+                  },
+                  "temperature": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^sensor\\." }
+                    ],
+                    "description": "Optional temperature `sensor.*`, shown on the card."
+                  },
+                  "dryBelow": {
+                    "type": "number", "minimum": 0, "maximum": 100, "default": 20,
+                    "description": "Moisture % below which the status reads Dry, when no `status` helper decides. Must be below `wetAbove`."
+                  },
+                  "wetAbove": {
+                    "type": "number", "minimum": 0, "maximum": 100, "default": 80,
+                    "description": "Moisture % above which the status reads Wet, when no `status` helper decides."
+                  }
+                }
+              }
             }
           },
           "additionalProperties": false

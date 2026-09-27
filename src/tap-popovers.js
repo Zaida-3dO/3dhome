@@ -17,12 +17,15 @@
  *   door     ancestor userData.doorProfileId       -> sensors.doors[id]
  *   climate  (room)                                -> sensors.climate[room]
  *   vacuum   a furniture item's world box          -> sensors.vacuums[itemId]
+ *   plant    a furniture item's world box          -> sensors.plants[itemId]
  *
  * A robot vacuum is FURNITURE, and furniture renders merged into shared
  * buckets, so its meshes carry no identity. It is found by WHERE the tap
  * landed instead: the first solid hit's point, inside the world box of a
  * furniture item bound in sensors.vacuums (home.furnitureItemAt). Occlusion
- * is unchanged -- only the nearest solid hit is ever asked.
+ * is unchanged -- only the nearest solid hit is ever asked. A plant is found
+ * the same way; its card is READ-ONLY (moisture, status, battery) and sends
+ * nothing.
  *
  * Climate is keyed by ROOM (rooms.json 1.3, the sidebar's binding). Nothing on
  * main can be tapped for it yet: furniture renders merged into shared buckets,
@@ -44,6 +47,7 @@ import { ICONS, svgIcon } from './ui-icons.js';
 import { isColorChannel, supportsColor, swatchColor } from './light-color.js';
 import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCommand, vacuumStatusText,
   MOCK_VACUUM_READINGS, mockVacuumAfter } from './vacuum-control.js';
+import { normalisePlantBindings, plantStatusText, agoText, batteryText, mockPlantReading } from './plant-status.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -101,6 +105,19 @@ export function resolveTarget(obj, bindings) {
     }
   }
   return null;
+}
+
+/**
+ * A furniture item id -> the tap target it is bound as: a robot vacuum
+ * (sensors.vacuums) or a plant (sensors.plants), from their normalised
+ * binding Maps; null when it is neither. A vacuum binding wins if an id were
+ * bound as both.
+ */
+export function deviceTarget(id, vacuums, plants, object) {
+  const b = vacuums && vacuums.get(id);
+  if (b) return { kind: 'vacuum', id, entities: [b.entity], binding: b, object };
+  const p = plants && plants.get(id);
+  return p ? { kind: 'plant', id, entities: [p.moisture || p.watering], binding: p, object } : null;
 }
 
 /**
@@ -392,6 +409,7 @@ const STATUS = {
   offline: ['bad', 'Not connected', 'No Home Assistant configured. Changes only preview on the model.'],
   offlineMock: ['bad', 'Not connected', 'No Home Assistant configured. Showing sample temperatures; changes only preview.'],
   offlineSample: ['bad', 'Not connected', 'No Home Assistant configured. Showing a sample robot; the buttons only preview.'],
+  offlinePlant: ['bad', 'Not connected', 'No Home Assistant configured. Showing a sample plant reading.'],
 };
 
 /**
@@ -569,6 +587,26 @@ export const STYLE = `
   font: 12px/1.2 'Segoe UI', system-ui, sans-serif; cursor: pointer; }
 .tp-vroom:disabled { opacity: 0.35; cursor: not-allowed; }
 @media (hover: hover) { .tp-vroom:hover:not(:disabled) { background: rgba(255,255,255,0.1); } }
+/* Plant card (read-only): the moisture big, a status pill, then one muted
+   line with when HA last heard from it, the battery and the temperature. */
+.tp-pop[data-kind=plant] { --w: 220px; }
+.tp-ico.p-ok { fill: var(--ok); }
+.tp-ico.p-dry, .tp-ico.p-due { fill: var(--door-open); }
+.tp-ico.p-wet { fill: #60a5fa; }
+.tp-pmoist { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; min-width: 0; }
+.tp-pmoist svg { width: 16px; height: 16px; flex: none; fill: #60a5fa; }
+.tp-pmoist b { font-size: 20px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+.tp-pmoist.muted b { font-size: 15px; color: var(--ink-2); }
+.tp-pmoist.muted svg { fill: rgba(255,255,255,0.35); }
+.tp-pst { flex: none; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.2;
+  border: 1px solid transparent; }
+.tp-pst.ok { color: #bbf7d0; background: rgba(34,197,94,0.16); border-color: rgba(34,197,94,0.4); }
+.tp-pst.dry, .tp-pst.due { color: #fde68a; background: rgba(245,158,11,0.18); border-color: rgba(245,158,11,0.45); }
+.tp-pst.wet { color: #bfdbfe; background: rgba(96,165,250,0.16); border-color: rgba(96,165,250,0.45); }
+.tp-pmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 6px; font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.tp-pmeta .tp-batt { font-size: 11px; }
+.tp-pmeta .tp-batt svg { width: 12px; height: 12px; }
+.tp-pnote { margin-top: 5px; font-size: 11px; color: var(--ink-2); line-height: 1.3; }
 .tp-pop.chip { width: auto; max-width: 240px; padding: 8px 10px; border-radius: 999px; }
 .tp-pop.chip .tp-name { flex: 0 1 auto; }
 .tp-pop.chip .sep { color: var(--ink-2); }
@@ -655,6 +693,35 @@ export const popoverHtml = {
       '<div class="tp-row"><span class="tp-vstat' + cls + '" data-v>' + esc(vacuumStatusText(r)) + '</span>' + batt + '</div>' +
       btns + rooms + offlineLine(m));
   },
+  /**
+   * Plant (read-only). m: { name, status, haOff, reading, ago } -- reading
+   * from parsePlant (or a sample), ago the "updated" text. Unavailable reads
+   * "Offline", never 0%.
+   */
+  plant(m, dot) {
+    const shell = shellWith(dot);
+    const r = m.reading;
+    const level = r && r.level ? r.level : 'none';
+    const live = !!(r && r.available);
+    const watering = live && r.moisture == null && r.watering != null;
+    const val = live
+      ? '<span class="tp-pmoist" data-v>' + svg(I.drop) + (watering ? 'Countdown <b>' + r.watering + '%</b>' : '<b>' + r.moisture + '%</b>') + '</span>'
+      : '<span class="tp-pmoist muted" data-v>' + svg(I.drop) + '<b>' + (level === 'offline' ? 'Offline' : 'No reading') + '</b></span>';
+    const tip = !live ? '' : r.fromHa ? ' title="From Home Assistant"' : watering ? ' title="A countdown to the next watering"' :
+      ' title="From the moisture reading"';
+    const pill = !live ? '' :
+      '<span class="tp-pst ' + level + '" data-level="' + level + '"' + tip + '>' + esc(plantStatusText(r)) + '</span>';
+    const bt = batteryText(r);
+    const meta = [];
+    if (m.ago) meta.push('<span data-ago>' + (live ? 'Updated ' : 'Last reading ') + esc(m.ago) + '</span>');
+    if (bt) meta.push('<span class="tp-batt' + (r.batteryLow ? ' low' : '') + '" data-batt>' + svg(I.battery) + esc(bt) + '</span>');
+    if (r && r.temperature != null) meta.push('<span data-temp>' + r.temperature.toFixed(1) + '°</span>');
+    const note = level === 'offline'
+      ? '<div class="tp-pnote" data-offline-note>The sensor is not reporting. Soil sensors often drop off; a press of its button usually brings it back.</div>' : '';
+    return shell(ico(I.plant, live ? 'p-' + level : 'dim'), m.name, m.status,
+      '<div class="tp-row">' + val + pill + '</div>' +
+      (meta.length ? '<div class="tp-pmeta">' + meta.join('') + '</div>' : '') + note + offlineLine(m));
+  },
   climate(m, dot) {
     const shell = shellWith(dot);
     const f = v => (typeof v === 'number' && isFinite(v) ? v.toFixed(1) + '°' : '–');
@@ -707,13 +774,13 @@ export function attachTapPopovers(o) {
     doors: (o.sensors && o.sensors.doors) || {},
   };
   const vacuums = normaliseVacuumBindings(o.sensors && o.sensors.vacuums);
-  const vacuumIds = new Set(vacuums.keys());
+  const plants = normalisePlantBindings(o.sensors && o.sensors.plants);
+  const deviceIds = new Set([...vacuums.keys(), ...plants.keys()]);
   const furnitureLabels = new Map(((o.house && o.house.furniture) || []).map(f => [f.id, f.label || null]));
-  // A robot vacuum is found by where the tap landed (see the header).
-  const deviceAt = !vacuumIds.size || typeof home.furnitureItemAt !== 'function' ? null : h => {
-    const it = h && h.point ? home.furnitureItemAt(h.point, vacuumIds) : null;
-    const b = it && vacuums.get(it.id);
-    return b ? { kind: 'vacuum', id: it.id, entities: [b.entity], binding: b, object: h.object } : null;
+  // A robot vacuum or a plant is found by where the tap landed (see the header).
+  const deviceAt = !deviceIds.size || typeof home.furnitureItemAt !== 'function' ? null : h => {
+    const it = h && h.point ? home.furnitureItemAt(h.point, deviceIds) : null;
+    return it ? deviceTarget(it.id, vacuums, plants, h.object) : null;
   };
   const curtainNames = new Map(((o.house && o.house.curtains) || []).map(c => [c.id, c.name || c.id]));
   const doorNames = new Map(((o.house && o.house.doors) || []).map(d => [d.id, d.name || d.id]));
@@ -818,6 +885,17 @@ export function attachTapPopovers(o) {
     if (vacuumSim.has(id)) return vacuumSim.get(id);
     const h = ha();
     if (h && h.getVacuum) return h.getVacuum(id);
+    return null;
+  };
+  // Plant: the live reading from the client (or the ?debug=1 seam's); with
+  // no HA configured, the page's sample (S.plantMock) or this module's own.
+  const plantSim = new Map();
+  const plantOrder = new Map([...plants.keys()].map((id, i) => [id, i]));
+  const plantMock = new Map();
+  const plantReading = id => {
+    if (plantSim.has(id)) return plantSim.get(id);
+    const h = ha();
+    if (h && h.getPlant) return h.getPlant(id);
     return null;
   };
 
@@ -1044,6 +1122,28 @@ export function attachTapPopovers(o) {
         el.querySelectorAll('[data-a=room]').forEach(btn =>
           btn.addEventListener('click', () => { if (!btn.disabled) send('room', btn.dataset.room); }));
       },
+    },
+
+    plant: {
+      model(t) {
+        const c = conn();
+        let reading = plantReading(t.id), mock = false;
+        if (c == null && !reading) {
+          if (S.plantMock) reading = S.plantMock(t.id);
+          else {
+            if (!plantMock.has(t.id)) plantMock.set(t.id, mockPlantReading(plantOrder.get(t.id) || 0, plants.get(t.id)));
+            reading = plantMock.get(t.id);
+          }
+          mock = true;
+        }
+        const b = t.binding || plants.get(t.id) || {};
+        const na = !mock && (!reading || !reading.available);
+        return { status: mock ? 'offlinePlant' : statusKey('plant', c, na && isLive(c), false), mock, haOff: haOfflineConn(c),
+          reading, ago: reading ? agoText(reading.updated) : '',
+          name: t.label || b.name || furnitureLabels.get(t.id) || 'Plant' };
+      },
+      html(m) { return popoverHtml.plant(m, dot); },
+      bind() {},   // read-only: nothing to wire, nothing to send
     },
 
     door: {
@@ -1324,11 +1424,13 @@ export function attachTapPopovers(o) {
       if (kind === 'light') ents = (bindings.lights[id.split('/')[0]] || {})[id.split('/')[1]];
       else if (kind === 'climate') ents = typeof climateBinding[id] === 'string' ? [climateBinding[id]] : null;
       else if (kind === 'vacuum') ents = vacuums.has(id) ? [vacuums.get(id).entity] : null;
+      else if (kind === 'plant') ents = plants.has(id) ? deviceTarget(id, null, plants).entities : null;
       else ents = (bindings[kind + 's'] || {})[id];
       if (!ents) return false;
       const t = Object.assign({ kind, id, entities: ents }, extra || {});
       if (kind === 'light') { t.roomId = id.split('/')[0]; t.channel = id.split('/')[1]; }
       if (kind === 'vacuum') t.binding = vacuums.get(id);
+      if (kind === 'plant') t.binding = plants.get(id);
       open(t, x, y);
       return true;
     },
@@ -1338,7 +1440,9 @@ export function attachTapPopovers(o) {
       if (spec && spec.raw) Object.keys(spec.raw).forEach(k => sim.raw.set(k, spec.raw[k]));
       // vacuum: { <itemId>: reading } -- a parseVacuum-shaped reading.
       if (spec && spec.vacuum) Object.keys(spec.vacuum).forEach(k => vacuumSim.set(k, spec.vacuum[k]));
-      if (spec && spec.reset) { sim.status = undefined; sim.raw.clear(); vacuumSim.clear(); }
+      // plant: { <itemId>: reading } -- a parsePlant-shaped reading.
+      if (spec && spec.plant) Object.keys(spec.plant).forEach(k => plantSim.set(k, spec.plant[k]));
+      if (spec && spec.reset) { sim.status = undefined; sim.raw.clear(); vacuumSim.clear(); plantSim.clear(); }
       render(false);
     },
     /** Repaint an open card from the shared state now (never under a drag). */
