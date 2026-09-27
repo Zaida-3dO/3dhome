@@ -12,15 +12,16 @@
  * the FURNITURE ITEM id of the robot's dock (geometry.json `furniture[].id`),
  * which is what makes the model clickable:
  *
- *   "vacuums": {
- *     "kitchen_robot": {
- *       "entity":   "vacuum.example_robot",
- *       "battery":  "sensor.example_robot_battery_level",   // optional
- *       "segments": { "kitchen": 7, "lounge": 8 },           // optional
- *       "segmentService": "dreame_vacuum.vacuum_clean_segment" // optional
+ *   vacuums: {
+ *     kitchen_robot: {
+ *       entity:   <the vacuum.* entity id>,
+ *       battery:  <a sensor.* battery entity id>,        // optional
+ *       segments: { kitchen: 7, lounge: 8 },              // optional
+ *       segmentService: 'dreame_vacuum.vacuum_clean_segment' // optional
  *     }
  *   }
  *
+ * (docs/house-profile.md has the JSON.)
  * `segments` maps a ROOM id to the integration's own room (segment) number,
  * for "clean this room". Without it the card has no room buttons. The
  * segment service defaults to the Dreame integration's; another integration

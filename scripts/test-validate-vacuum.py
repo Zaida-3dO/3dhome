@@ -45,7 +45,7 @@ def check(name, cond, detail=None):
         print(f"FAIL {name}" + (f" -- {detail}" if detail is not None else ""))
 
 
-GOOD = {"entity": "vacuum.test_robot", "battery": "sensor.test_robot_battery",
+GOOD = {"entity": "vacuum.demo_robot", "battery": 'sensor.demo_robot_battery',
         "segments": {"room": 7}, "segmentService": "some_vac.clean_segment"}
 
 
@@ -73,10 +73,10 @@ def run(doc):
 # ---- 1. schema ---------------------------------------------------------------
 check("schema: a full binding validates", schema_errors(rooms_doc({"robot": GOOD})) == [],
       schema_errors(rooms_doc({"robot": GOOD})))
-check("schema: entity alone validates", schema_errors(rooms_doc({"robot": {"entity": "vacuum.x"}})) == [])
+check("schema: entity alone validates", schema_errors(rooms_doc({"robot": {"entity": "vacuum.demo_x"}})) == [])
 for label, b in [
-    ("non-vacuum entity", dict(GOOD, entity="light.x")),
-    ("non-sensor battery", dict(GOOD, battery="binary_sensor.x")),
+    ("non-vacuum entity", dict(GOOD, entity='light.demo_x')),
+    ("non-sensor battery", dict(GOOD, battery='binary_sensor.demo_x')),
     ("negative segment", dict(GOOD, segments={"room": -1})),
     ("fractional segment", dict(GOOD, segments={"room": 1.5})),
     ("unknown key", dict(GOOD, colour="red")),
