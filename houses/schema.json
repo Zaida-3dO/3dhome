@@ -986,21 +986,21 @@
       "properties": {
         "width": {
           "type": "number",
-          "exclusiveMinimum": 0,
+          "minimum": 10,
           "default": 547,
-          "description": "cm, along the facade (the slab's length and the front railing's run)."
+          "description": "cm, along the facade (the slab's length and the front railing's run). balcony.js floors this at 10."
         },
         "depth": {
           "type": "number",
-          "exclusiveMinimum": 0,
+          "minimum": 10,
           "default": 155,
-          "description": "cm, building face to the front of the railing."
+          "description": "cm, building face to the front of the railing. balcony.js floors this at 10."
         },
         "height": {
           "type": "number",
-          "exclusiveMinimum": 0,
+          "minimum": 10,
           "default": 125,
-          "description": "cm, slab bottom to the top of the rail."
+          "description": "cm, slab bottom to the top of the rail. balcony.js floors this at 10."
         },
         "slabThickness": {
           "type": "number",

@@ -138,6 +138,17 @@ _ph_item = dict(BOX_FREE, type=PLACEHOLDER_TYPE, params={"anything": [1, 2]})
 check("schema accepts: a placeholder type accepts any params",
       schema_errors(house([_ph_item]), PLACEHOLDER_SCHEMA) == [], schema_errors(house([_ph_item]), PLACEHOLDER_SCHEMA))
 
+# balcony.js floors width/depth/height at 10 cm (Math.max(10, ...)); the
+# schema's minimum must match so a house cannot ask for a size the builder
+# silently overrides. Mutation: schema minimum back to exclusiveMinimum 0 ->
+# fails (width 5 would validate but build 10 wide).
+BALCONY_ITEM = {"id": "porch", "room": "room", "type": "balcony", "at": [300, 300], "rotation": 0}
+for label, dim in [("width", "width"), ("depth", "depth"), ("height", "height")]:
+    item = dict(BALCONY_ITEM, params={dim: 5})
+    check(f"schema rejects: balcony {label} below 10", schema_errors(house([item])) != [], item)
+check("schema accepts: balcony at the 10 cm floor",
+      schema_errors(house([dict(BALCONY_ITEM, params={"width": 10, "depth": 10, "height": 10})])) == [])
+
 # ---- 2. validator: the clean house is clean ------------------------------------
 errs, warns = run_checks(house([BOX_WALL, BOX_FREE]))
 check("validator: clean house has no errors", errs == [], errs)
@@ -208,10 +219,25 @@ _, warns = run_checks(house([dict(BOX_FREE, type="spaceship", params={"width": 1
 check("warn: unregistered type", has(warns, "furniture/stool", "not registered"), warns)
 sofa = dict(BOX_FREE, type=PLACEHOLDER_TYPE)
 _, warns = run_checks(house([sofa]), PLACEHOLDER_SCHEMA)
-if (ROOT / "src" / "furniture" / (PLACEHOLDER_TYPE + ".js")).exists():
-    print(f"note: {PLACEHOLDER_TYPE}.js exists now -- the 'unbuilt type' case needs another unbuilt type")
-else:
+
+# "registered but unbuilt type": every real registry entry now has a builder
+# (sofa.js was the last), so this is exercised via a monkeypatched registry
+# rather than a real gap -- monkeypatch load_registry() to return the real
+# registry plus one type mapped to a module that does not exist on disk.
+_real_registry = vh.load_registry()
+_UNBUILT_TYPE = "not-built-yet"
+_patched_registry = dict(_real_registry or {}, **{_UNBUILT_TYPE: "not-built-yet.js"})
+_orig_load_registry = vh.load_registry
+vh.load_registry = lambda: _patched_registry
+try:
+    unbuilt = dict(BOX_FREE, type=_UNBUILT_TYPE, params={"anything": 1})
+    unbuilt_schema = copy.deepcopy(SCHEMA)
+    unbuilt_schema["$defs"][f"furnitureParams_{_UNBUILT_TYPE}"] = {"type": "object", "x-placeholder": True}
+    _, warns = run_checks(house([unbuilt]), unbuilt_schema)
+    # Mutation: comment out the "has no builder yet" report in validate-house.py -> fails.
     check("warn: registered but unbuilt type", has(warns, "furniture/stool", "no builder yet"), warns)
+finally:
+    vh.load_registry = _orig_load_registry
 check("warn: type with no schema defaults (footprint checks skipped)",
       has(warns, "furniture/stool", "no schema defaults"), warns)
 _, warns = run_checks(house([dict(sofa, params={"width": 100, "depth": 50, "height": 80})]), PLACEHOLDER_SCHEMA)
