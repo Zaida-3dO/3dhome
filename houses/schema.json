@@ -768,6 +768,8 @@
       ],
       "additionalProperties": false,
       "allOf": [
+        { "if": { "properties": { "type": { "const": "balcony" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_balcony" } } } },
+
         { "if": { "properties": { "type": { "const": "bathtub" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_bathtub" } } } },
 
         { "if": { "properties": { "type": { "const": "bed" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_bed" } } } },
@@ -809,6 +811,8 @@
         { "if": { "properties": { "type": { "const": "plant" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_plant" } } } },
 
         { "if": { "properties": { "type": { "const": "radiator" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_radiator" } } } },
+
+        { "if": { "properties": { "type": { "const": "robot-vacuum" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_robot-vacuum" } } } },
 
         { "if": { "properties": { "type": { "const": "shelf" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_shelf" } } } },
 
@@ -885,6 +889,98 @@
         "emissive"
       ],
       "description": "The closed finish palette (src/furniture/finishes.js)."
+    },
+
+    "furnitureParams_balcony": {
+      "type": "object",
+      "description": "Params for `balcony` (src/furniture/balcony.js): a cantilevered balcony -- a slab plus a balustrade of vertical metal bars or glass panels. The BACK (z = 0) is the building face, `width` runs along the facade and the front railing runs along z = depth. The envelope is ALWAYS width x depth x height (slab bottom to rail top). Left and right are as seen from the FRONT, looking at the building (+x is right). The clear gap between adjacent vertical members is held at or below 10 cm at full detail whatever barSpacing says. Each `default` equals balcony.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 547,
+          "description": "cm, along the facade (the slab's length and the front railing's run)."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 155,
+          "description": "cm, building face to the front of the railing."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 110,
+          "description": "cm, slab bottom to the top of the rail."
+        },
+        "slabThickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 15,
+          "description": "cm, the slab's thickness (y 0 .. slabThickness). Clamped to at most half the height."
+        },
+        "railingThickness": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 5,
+          "description": "cm, the top rail and post section. Clamped to a quarter of the smaller of width and depth."
+        },
+        "railing": {
+          "type": "string",
+          "enum": [
+            "bars",
+            "glass"
+          ],
+          "default": "bars",
+          "description": "`bars` = top rail, bottom rail and vertical metal bars; `glass` = top rail and glass panels between posts."
+        },
+        "barSpacing": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 11,
+          "description": "cm, the target CENTRE spacing of the bars. The clear gap between bars is held at or below 10 cm (and at least 1 cm) regardless."
+        },
+        "leftSide": {
+          "type": "string",
+          "enum": [
+            "railing",
+            "solid",
+            "none"
+          ],
+          "default": "railing",
+          "description": "The end at x = -width/2 (left as seen from the front): the same balustrade back to the building face, a solid panel, or open."
+        },
+        "rightSide": {
+          "type": "string",
+          "enum": [
+            "railing",
+            "solid",
+            "none"
+          ],
+          "default": "railing",
+          "description": "The end at x = +width/2 (right as seen from the front)."
+        },
+        "slabColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#bdbab3"
+        },
+        "railColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1c1c1e",
+          "description": "Rails, posts and bars (metal finish)."
+        },
+        "solidColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#d9d6cf",
+          "description": "A `solid` side panel."
+        },
+        "glassColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#cfe3e8",
+          "description": "Glass panels (glass finish, drawn on their own)."
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_bathtub": {
@@ -2429,6 +2525,81 @@
         "coverColor": {
           "$ref": "#/$defs/hexColor",
           "default": "#c8a878"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_robot-vacuum": {
+      "type": "object",
+      "description": "Params for `robot-vacuum` (src/furniture/robot-vacuum.js): a round robot vacuum on a self-emptying dock -- a rounded tower at the back (white lower part, champagne metal band, white lid) on a base plate with a front ramp, the robot at the front with its rear tucked under the tower. `dock: false` draws the robot alone, filling the envelope; set width = depth = robotDiameter and height = robotHeight then. With the dock, the plate is exactly width x depth and the lid top is exactly height; every other part is clamped inside that envelope. Each `default` equals robot-vacuum.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 35,
+          "description": "cm, the base plate's width (with the dock) or the robot's width (without)."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 48,
+          "description": "cm, back of the tower to the front of the robot."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 59,
+          "description": "cm, floor to the top of the tower lid (with the dock) or of the robot's lidar puck (without)."
+        },
+        "dock": {
+          "type": "boolean",
+          "default": true,
+          "description": "false = the robot alone; the envelope is then the robot."
+        },
+        "robotDiameter": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 35,
+          "description": "cm, clamped to the smaller of width and depth."
+        },
+        "robotHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 10,
+          "description": "cm, floor (or plate) to the top of the lidar puck; clamped to fit."
+        },
+        "towerWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 34,
+          "description": "cm, the dock tower's width, clamped to width."
+        },
+        "towerDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 24,
+          "description": "cm, the dock tower's depth from the back, clamped to depth."
+        },
+        "bodyColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f4f4f2",
+          "description": "Robot body, dock tower, lid and base plate."
+        },
+        "bandColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#b9a88a",
+          "description": "The band round the tower (metal finish)."
+        },
+        "puckColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#8a8c8e",
+          "description": "The lidar puck on the robot's top."
+        },
+        "ledColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#2fd0e0",
+          "description": "The status LED (emissive, drawn on its own)."
         }
       },
       "additionalProperties": false

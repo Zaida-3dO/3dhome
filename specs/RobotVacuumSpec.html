@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot Vacuum Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  pre.json { font-size:10px; background:#f7f5f0; border:1px solid #ece8e0; border-radius:4px; padding:8px; margin-top:10px; white-space:pre-wrap; word-break:break-all; }
+  @media (max-width: 760px) {
+    body { padding:12px; }
+    .grid { grid-template-columns:1fr; }
+    #c3d { height:420px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- The robot vacuum lives in src/furniture/robot-vacuum.js -- the SAME pure
+     builder module the house scene calls, following the furniture builder
+     contract (ESM, THREE injected, TYPE/DEFAULTS/build, metres, back face at
+     z=0, bottom at y=0). Loaded as a real ES module and stashed on window so
+     the Babel-transpiled app below can call it. -->
+<script type="module">
+  import * as M from '../src/furniture/robot-vacuum.js';
+  window.FurnitureRobotVacuum = M;
+  window.dispatchEvent(new Event('furniture-robot-vacuum-ready'));
+</script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   ROBOT VACUUM SPEC   ·   round robot vacuum on a self-emptying dock
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT, not a survey: a typical round robot
+   and dock. Measure your own and drive the geometry from the Tweaks panel.
+   ─────────────────────────────────────────────────────────────────────
+
+   Look: a rounded dock tower at the back (white lower part, a champagne
+   metal band round its middle, a white lid) on a thin base plate with a
+   small front ramp. The robot sits at the front of the plate, its front at
+   the envelope's front and its rear tucked into an alcove under the tower.
+   The robot: a round body with a chamfered top edge, a darker bumper band,
+   a lidar puck and a small glowing status LED.
+
+   Dock off draws the robot alone; the page then sets the envelope to the
+   robot's own size (width = depth = robot diameter, height = robot height).
+
+   The geometry is NOT built here -- it lives in src/furniture/robot-vacuum.js
+   and is unit-tested by scripts/test-robot-vacuum.mjs.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "width": 35,
+  "depth": 48,
+  "height": 59,
+  "dock": true,
+  "robotDiameter": 35,
+  "robotHeight": 10,
+  "towerWidth": 34,
+  "towerDepth": 24,
+  "bodyColor": "#f4f4f2",
+  "bandColor": "#b9a88a",
+  "puckColor": "#8a8c8e",
+  "ledColor": "#2fd0e0",
+  "detail": "full"
+}/*EDITMODE-END*/;
+
+// params for the builder = tweaks minus the page-only "detail" key
+function paramsOf(t) {
+  const { detail, ...p } = t;
+  return p;
+}
+
+// The envelope that goes with the dock state: the robot's own size without
+// the dock, the default dock envelope with it.
+function dockEdits(t, on) {
+  const D = window.FurnitureRobotVacuum.DEFAULTS;
+  return on
+    ? { dock: true, width: D.width, depth: D.depth, height: D.height }
+    : { dock: false, width: t.robotDiameter, depth: t.robotDiameter, height: t.robotHeight };
+}
+
+// Set by App during render (see BedSpec.html for why it is not an effect).
+let reportTriangles = null;
+
+function buildVacuumModel(t, group, THREE) {
+  const M = window.FurnitureRobotVacuum;
+  const item = M.build(THREE, paramsOf(t), { detail: t.detail });
+  const b = new THREE.Box3().setFromObject(item);
+  item.position.z = -(b.min.z + b.max.z) / 2;
+  group.add(item);
+  let tris = 0;
+  item.traverse(o => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  if (reportTriangles) reportTriangles(tris);
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(0.8, 32), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  floor.name = 'floor';
+  group.add(floor);
+}
+
+// ============== App ==============
+function App() {
+  const M = window.FurnitureRobotVacuum;
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [copied, setCopied] = React.useState('');
+  const [triangles, setTriangles] = React.useState(null);
+  reportTriangles = setTriangles;
+  // The shared ThreeView opens 3.8 m out, sized for a door; this item is
+  // well under a metre, so zoom in once on mount (its own wheel handler).
+  React.useEffect(() => {
+    const c = document.getElementById('c3d');
+    if (c) c.dispatchEvent(new WheelEvent('wheel', { deltaY: -750, cancelable: true }));
+  }, []);
+  const json = M ? JSON.stringify(M.toFurnitureJSON(paramsOf(t)), null, 2) : '';
+  const copy = () => {
+    const done = () => { setCopied('copied'); setTimeout(() => setCopied(''), 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
+    else setCopied('clipboard unavailable — select the JSON below');
+  };
+  const setDock = on => setTweak(dockEdits(t, on));
+  return (
+    <>
+      <h1>Robot Vacuum Spec</h1>
+      <div className="sub">All units cm. A round robot vacuum on a self-emptying dock: rounded tower with a champagne band, base plate with a ramp, robot with a lidar puck and a status LED. Use the Tweaks panel to change size, dock and colours.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Width</td><td className="num">{t.width.toFixed(0)}</td><td><b>Variable</b> -- the base plate (dock) or the robot</td></tr>
+              <tr><td>Depth</td><td className="num">{t.depth.toFixed(0)}</td><td><b>Variable</b> -- tower back to robot front</td></tr>
+              <tr><td>Height</td><td className="num">{t.height.toFixed(0)}</td><td><b>Variable</b> -- the tower lid (dock) or the puck</td></tr>
+              <tr><td>Robot diameter</td><td className="num">{t.robotDiameter.toFixed(0)}</td><td>clamped to min(width, depth)</td></tr>
+              <tr><td>Robot height</td><td className="num">{t.robotHeight.toFixed(0)}</td><td>clamped to fit</td></tr>
+              <tr><td>Tower width</td><td className="num">{t.towerWidth.toFixed(0)}</td><td>clamped to width</td></tr>
+              <tr><td>Tower depth</td><td className="num">{t.towerDepth.toFixed(0)}</td><td>clamped to depth</td></tr>
+              <tr><td>Robot under the tower</td><td className="num">{t.dock ? Math.max(0, Math.min(t.towerDepth, t.depth) - (t.depth - Math.min(t.robotDiameter, t.width, t.depth))).toFixed(0) : '—'}</td><td>derived</td></tr>
+              <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail (caps 600 full / 200 low)</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            With the dock, the base plate is exactly width x depth and the lid top is exactly height; every other
+            part is clamped inside that envelope, so any combination of numbers builds a valid item. Without the
+            dock the robot fills the envelope, so keep width = depth for a round robot (the Dock toggle does that).
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Look</h2>
+          <div className="legend">
+            A rounded white dock tower stands at the back: a white lower part, a champagne metal band round its
+            middle and a white lid. It stands on a thin white base plate that runs the full depth and ends in a
+            small ramp. The robot sits at the front of the plate, its rear tucked into an alcove under the tower:
+            a round white body with a chamfered top edge, a darker bumper band (dropped at low detail), a grey
+            lidar puck and a small glowing status LED.
+          </div>
+          <div className="row">
+            <button className={'btn' + (t.dock ? ' active' : '')} onClick={() => setDock(true)}>Robot on dock</button>
+            <button className={'btn' + (!t.dock ? ' active' : '')} onClick={() => setDock(false)}>Robot alone</button>
+            <button className="btn" onClick={copy}>Copy as furniture JSON</button>
+            {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
+          </div>
+          <pre className="json">{json}</pre>
+        </div>
+
+        <div className="card full">
+          <h2>3D — robot vacuum</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildVacuumModel}
+            heightOf={tt => tt.height * 0.01}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Dock" />
+        <TweakToggle label="Dock" value={t.dock} onChange={v => setDock(v)} />
+
+        <TweakSection label="Size" />
+        <TweakSlider label="Width" value={t.width} min={20} max={60} step={1} unit="cm"
+          onChange={v => setTweak('width', v)} />
+        <TweakSlider label="Depth" value={t.depth} min={20} max={70} step={1} unit="cm"
+          onChange={v => setTweak('depth', v)} />
+        <TweakSlider label="Height" value={t.height} min={6} max={80} step={1} unit="cm"
+          onChange={v => setTweak('height', v)} />
+        <TweakSlider label="Robot diameter" value={t.robotDiameter} min={20} max={45} step={1} unit="cm"
+          onChange={v => setTweak(t.dock ? { robotDiameter: v } : { robotDiameter: v, width: v, depth: v })} />
+        <TweakSlider label="Robot height" value={t.robotHeight} min={6} max={15} step={0.5} unit="cm"
+          onChange={v => setTweak(t.dock ? { robotHeight: v } : { robotHeight: v, height: v })} />
+        <TweakSlider label="Tower width" value={t.towerWidth} min={15} max={50} step={1} unit="cm"
+          onChange={v => setTweak('towerWidth', v)} />
+        <TweakSlider label="Tower depth" value={t.towerDepth} min={10} max={40} step={1} unit="cm"
+          onChange={v => setTweak('towerDepth', v)} />
+
+        <TweakSection label="Colours" />
+        <TweakColor label="Body (robot, tower, plate)" value={t.bodyColor}
+          onChange={v => setTweak('bodyColor', v)} />
+        <TweakColor label="Band (metal)" value={t.bandColor}
+          onChange={v => setTweak('bandColor', v)} />
+        <TweakColor label="Lidar puck" value={t.puckColor}
+          onChange={v => setTweak('puckColor', v)} />
+        <TweakColor label="Status LED (glows)" value={t.ledColor}
+          onChange={v => setTweak('ledColor', v)} />
+
+        <TweakSection label="Render" />
+        <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
+          onChange={v => setTweak('detail', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+// The builder module is an ES module script; wait for it if Babel got here first.
+function mount() { ReactDOM.createRoot(document.getElementById('root')).render(<App />); }
+if (window.FurnitureRobotVacuum) mount();
+else window.addEventListener('furniture-robot-vacuum-ready', mount, { once: true });
+
+// Standalone viewing: the shared TweaksPanel stays closed until it receives
+// __activate_edit_mode. Self-post it so the panel is visible with no host.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>

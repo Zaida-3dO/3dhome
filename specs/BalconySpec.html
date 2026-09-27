@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Balcony Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  pre.json { font-size:10px; background:#f7f5f0; border:1px solid #ece8e0; border-radius:4px; padding:8px; margin-top:10px; white-space:pre-wrap; word-break:break-all; }
+  @media (max-width: 760px) {
+    body { padding:12px; }
+    .grid { grid-template-columns:1fr; }
+    #c3d { height:420px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- The balcony lives in src/furniture/balcony.js -- the SAME pure builder
+     module the house scene calls, following the furniture builder contract
+     (ESM, THREE injected, TYPE/DEFAULTS/build, metres, back face at z=0,
+     bottom at y=0). Loaded as a real ES module and stashed on window so the
+     Babel-transpiled app below can call it. -->
+<script type="module">
+  import * as M from '../src/furniture/balcony.js';
+  window.FurnitureBalcony = M;
+  window.dispatchEvent(new Event('furniture-balcony-ready'));
+</script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   BALCONY SPEC   ·   cantilevered slab + metal-bar or glass balustrade
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT, not a survey. Measure your own
+   balcony and drive the geometry from the Tweaks panel.
+   ─────────────────────────────────────────────────────────────────────
+
+   Frame: the BACK (z = 0) is the building face, `width` runs along the
+   facade and the front railing runs along z = depth. `height` is slab
+   bottom to rail top. Left and right are as seen from the FRONT, looking
+   at the building (+x is right).
+
+   The grey wall drawn behind the balcony is page context only; it is not
+   part of the builder's output.
+
+   The geometry is NOT built here -- it lives in src/furniture/balcony.js
+   and is unit-tested by scripts/test-balcony.mjs.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "width": 547,
+  "depth": 155,
+  "height": 110,
+  "slabThickness": 15,
+  "railingThickness": 5,
+  "railing": "bars",
+  "barSpacing": 11,
+  "leftSide": "railing",
+  "rightSide": "railing",
+  "slabColor": "#bdbab3",
+  "railColor": "#1c1c1e",
+  "solidColor": "#d9d6cf",
+  "glassColor": "#cfe3e8",
+  "detail": "full"
+}/*EDITMODE-END*/;
+
+// Page presets. After the spec-page regroup lands these move into
+// <SpecVariants>; until then they are plain buttons in the Look card.
+const PRESETS = [
+  { name: 'Black bars, railing both ends', edits: { railing: 'bars', leftSide: 'railing', rightSide: 'railing' } },
+  { name: 'Glass panels', edits: { railing: 'glass', leftSide: 'railing', rightSide: 'railing' } },
+  { name: 'Recessed (solid both ends)', edits: { railing: 'bars', leftSide: 'solid', rightSide: 'solid' } },
+  { name: 'Front rail only', edits: { railing: 'bars', leftSide: 'none', rightSide: 'none' } },
+];
+
+function paramsOf(t) {
+  const { detail, ...p } = t;
+  return p;
+}
+
+// Set by App during render (see BedSpec.html for why it is not an effect).
+let reportTriangles = null;
+
+function buildBalconyModel(t, group, THREE) {
+  const M = window.FurnitureBalcony;
+  const item = M.build(THREE, paramsOf(t), { detail: t.detail });
+  const b = new THREE.Box3().setFromObject(item);
+  const dz = -(b.min.z + b.max.z) / 2;
+  item.position.z = dz;
+  group.add(item);
+  let tris = 0;
+  item.traverse(o => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  if (reportTriangles) reportTriangles(tris);
+  // context only: the building face behind the balcony (not builder output)
+  const wW = t.width * 0.01 + 1.5;
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(wW, 3.2, 0.1), new THREE.MeshStandardMaterial({ color: 0x55565a, roughness: 1 }));
+  wall.position.set(0, 3.2 / 2 - 0.6, dz - 0.05);
+  wall.receiveShadow = true;
+  wall.name = 'context-wall';
+  group.add(wall);
+}
+
+// ============== App ==============
+function App() {
+  const M = window.FurnitureBalcony;
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [copied, setCopied] = React.useState('');
+  const [triangles, setTriangles] = React.useState(null);
+  reportTriangles = setTriangles;
+  // The shared ThreeView opens 3.8 m out, sized for a door; a balcony is
+  // over 5 m wide, so zoom out once on mount (its own wheel handler).
+  React.useEffect(() => {
+    const c = document.getElementById('c3d');
+    if (c) c.dispatchEvent(new WheelEvent('wheel', { deltaY: 1500, cancelable: true }));
+  }, []);
+  const json = M ? JSON.stringify(M.toFurnitureJSON(paramsOf(t)), null, 2) : '';
+  const copy = () => {
+    const done = () => { setCopied('copied'); setTimeout(() => setCopied(''), 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
+    else setCopied('clipboard unavailable — select the JSON below');
+  };
+  const gap = Math.min(10, Math.max(1, t.barSpacing - Math.min(1.6, t.railingThickness)));
+  const isPreset = p => Object.keys(p.edits).every(k => t[k] === p.edits[k]);
+  return (
+    <>
+      <h1>Balcony Spec</h1>
+      <div className="sub">All units cm. A cantilevered balcony: a slab and a balustrade of black metal bars or glass panels; each end a railing, a solid panel or open. Use the Tweaks panel to change size, railing and ends.</div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Width <span style={{opacity:0.6}}>(along the facade)</span></td><td className="num">{t.width.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Depth <span style={{opacity:0.6}}>(building face to railing front)</span></td><td className="num">{t.depth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Height <span style={{opacity:0.6}}>(slab bottom to rail top)</span></td><td className="num">{t.height.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Slab thickness</td><td className="num">{t.slabThickness.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Railing above the slab</td><td className="num">{(t.height - t.slabThickness).toFixed(0)}</td><td>derived</td></tr>
+              <tr><td>Rail / post section</td><td className="num">{t.railingThickness.toFixed(1)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Bar spacing (centres)</td><td className="num">{t.barSpacing.toFixed(1)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Largest clear gap between bars</td><td className="num">{t.railing === 'bars' ? '≤ ' + gap.toFixed(1) : '—'}</td><td>never above 10</td></tr>
+              <tr><td>Usable floor (inside the railing)</td><td className="num">{((t.width * (t.depth - t.railingThickness)) / 10000).toFixed(2)} m²</td><td>derived</td></tr>
+              <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail (caps 1500 full / 450 low)</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            The bars on each run are counted so no clear gap -- bar to bar, bar to post, bar to the building face --
+            is wider than min(bar spacing - bar, 10 cm), then spread evenly. Low detail keeps every second bar (a
+            distance version, not a safety drawing); a glass railing at low detail is one pane per run.
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Look</h2>
+          <div className="legend">
+            A light concrete slab, full width and depth, with a balustrade along its front edge: a black metal top
+            rail, a bottom rail and slim vertical black bars, or glass panels between slim posts under the same top
+            rail. Each end is the same balustrade running back to the building face, a solid panel (where the
+            balcony sits between two walls) or open.
+          </div>
+          <div className="row">
+            {PRESETS.map(p => (
+              <button key={p.name} className={'btn' + (isPreset(p) ? ' active' : '')} onClick={() => setTweak(p.edits)}>{p.name}</button>
+            ))}
+          </div>
+          <div className="row">
+            <button className="btn" onClick={copy}>Copy as furniture JSON</button>
+            {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
+          </div>
+          <pre className="json">{json}</pre>
+        </div>
+
+        <div className="card full">
+          <h2>3D — balcony</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildBalconyModel}
+            heightOf={tt => tt.height * 0.01}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Size" />
+        <TweakSlider label="Width (along facade)" value={t.width} min={120} max={800} step={1} unit="cm"
+          onChange={v => setTweak('width', v)} />
+        <TweakSlider label="Depth" value={t.depth} min={60} max={300} step={1} unit="cm"
+          onChange={v => setTweak('depth', v)} />
+        <TweakSlider label="Height (slab + railing)" value={t.height} min={60} max={150} step={1} unit="cm"
+          onChange={v => setTweak('height', v)} />
+        <TweakSlider label="Slab thickness" value={t.slabThickness} min={5} max={30} step={1} unit="cm"
+          onChange={v => setTweak('slabThickness', v)} />
+
+        <TweakSection label="Railing" />
+        <TweakRadio label="Railing" value={t.railing} options={['bars', 'glass']}
+          onChange={v => setTweak('railing', v)} />
+        <TweakSlider label="Rail thickness" value={t.railingThickness} min={2} max={10} step={0.5} unit="cm"
+          onChange={v => setTweak('railingThickness', v)} />
+        <TweakSlider label="Bar spacing" value={t.barSpacing} min={5} max={20} step={0.5} unit="cm"
+          onChange={v => setTweak('barSpacing', v)} />
+
+        <TweakSection label="Ends (seen from the front)" />
+        <TweakRadio label="Left end" value={t.leftSide} options={['railing', 'solid', 'none']}
+          onChange={v => setTweak('leftSide', v)} />
+        <TweakRadio label="Right end" value={t.rightSide} options={['railing', 'solid', 'none']}
+          onChange={v => setTweak('rightSide', v)} />
+
+        <TweakSection label="Colours" />
+        <TweakColor label="Slab" value={t.slabColor}
+          onChange={v => setTweak('slabColor', v)} />
+        <TweakColor label="Rails and bars (metal)" value={t.railColor}
+          onChange={v => setTweak('railColor', v)} />
+        <TweakColor label="Solid end panel" value={t.solidColor}
+          onChange={v => setTweak('solidColor', v)} />
+        <TweakColor label="Glass" value={t.glassColor}
+          onChange={v => setTweak('glassColor', v)} />
+
+        <TweakSection label="Render" />
+        <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
+          onChange={v => setTweak('detail', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+// The builder module is an ES module script; wait for it if Babel got here first.
+function mount() { ReactDOM.createRoot(document.getElementById('root')).render(<App />); }
+if (window.FurnitureBalcony) mount();
+else window.addEventListener('furniture-balcony-ready', mount, { once: true });
+
+// Standalone viewing: the shared TweaksPanel stays closed until it receives
+// __activate_edit_mode. Self-post it so the panel is visible with no host.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>
