@@ -4461,6 +4461,46 @@
                   { "pattern": "^climate\\." }
                 ]
               }
+            },
+            "vacuums": {
+              "type": "object",
+              "description": "Furniture item id -> a robot vacuum's Home Assistant binding. The item id MUST exist in the paired geometry profile's `furniture[].id` (the robot's dock): clicking that item opens the vacuum's control card (status, battery, Start / Pause / Return to dock, and a 'clean this room' button per bound segment), and the sidebar's Controls view shows the same block. Needs rooms schemaVersion 1.4.",
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "required": ["entity"],
+                "additionalProperties": false,
+                "properties": {
+                  "entity": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^vacuum\\." }
+                    ],
+                    "description": "The `vacuum.*` entity: its state (docked, cleaning, paused, returning, idle, error) and its `status` / `error` attributes drive the card, and vacuum.start / vacuum.pause / vacuum.return_to_base are the buttons."
+                  },
+                  "battery": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^sensor\\." }
+                    ],
+                    "description": "Optional battery sensor (0-100). Without it the vacuum's own `battery_level` attribute is used, if it has one."
+                  },
+                  "segments": {
+                    "type": "object",
+                    "description": "Optional. Room id -> the integration's own room (segment) number, one 'clean this room' button each. Room ids MUST exist in the paired geometry profile's `rooms`.",
+                    "propertyNames": { "$ref": "#/$defs/roomId" },
+                    "additionalProperties": { "type": "integer", "minimum": 0 }
+                  },
+                  "segmentService": {
+                    "type": "string",
+                    "pattern": "^[a-z_]+\\.[a-z0-9_]+$",
+                    "default": "dreame_vacuum.vacuum_clean_segment",
+                    "description": "The service a room clean calls, with `segments: [n]` and the vacuum as target. Defaults to the Dreame integration's."
+                  }
+                }
+              }
             }
           },
           "additionalProperties": false

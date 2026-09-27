@@ -12,7 +12,11 @@
  *      tower's front (the robot starts before the tower ends).
  *   3. The status LED is emissive AND kept.
  *   4. dock: false has no dock meshes at all.
- *   5. Triangle caps: full <= 600, low <= 200, low <= 0.6 x full.
+ *   5. Triangle caps: full <= 2800, low <= 600, low <= 0.3 x full.
+ *   8. The robot is a TRUE circle: every side vertex of the body at one
+ *      radius, on >= 64 radial segments at full and >= 32 at low; a rounded
+ *      top edge at full; the bumper round the FRONT only; a raised turret
+ *      above the body; seams at full only; a bevelled dock lid at full.
  *   6. No THREE lights anywhere in the group.
  *   7. toFurnitureJSON emits only the non-default keys.
  *
@@ -147,10 +151,11 @@ function envelope(tag, params) {
   for (const [tag, p] of [['dock', {}], ['robot alone', { dock: false, width: 35, depth: 35, height: 10 }]]) {
     const tf = triangles(V.build(THREE, p, { detail: 'full' }));
     const tl = triangles(V.build(THREE, p, { detail: 'low' }));
-    // Mutation: lathe segments 16 -> 32 -> full cap fails; low seg 8 -> 16 -> low caps fail.
-    check(tag + ': full <= 600 triangles', tf <= 600, tf);
-    check(tag + ': low <= 200 triangles', tl <= 200, tl);
-    check(tag + ': low <= 0.6 x full', tl <= 0.6 * tf, { tf, tl });
+    // Mutation: ROBOT_SEGMENTS.full 64 -> 128 -> full cap fails; low 32 -> 64
+    // (or the full-detail seams kept at low) -> a low cap fails.
+    check(tag + ': full <= 2800 triangles', tf <= 2800, tf);
+    check(tag + ': low <= 600 triangles', tl <= 600, tl);
+    check(tag + ': low <= 0.3 x full', tl <= 0.3 * tf, { tf, tl });
     console.log('robot-vacuum ' + tag + ': full ' + tf + ' / low ' + tl + ' triangles');
   }
 }
@@ -173,6 +178,89 @@ function envelope(tag, params) {
   check('toFurnitureJSON: type', j.type === 'robot-vacuum');
   check('toFurnitureJSON: only non-default keys', JSON.stringify(j.params) === JSON.stringify({ depth: 35, height: 10, dock: false }), j.params);
   check('toFurnitureJSON: DEFAULTS -> empty params', Object.keys(V.toFurnitureJSON(V.DEFAULTS).params).length === 0);
+}
+
+// ---- 8. a true circle, a rounded top edge, bumper, turret, seams, bevel ------
+{
+  const P = V.DEFAULTS;
+  for (const detail of ['full', 'low']) {
+    const g = V.build(THREE, { dock: false, width: 35, depth: 35, height: 10 }, { detail });
+    const body = byName(g, 'robot-body');
+    const pos = body.geometry.attributes.position;
+    // The side: every vertex at the body's widest radius. All of them at ONE
+    // radius (a circle, not an ellipse or a polygon's corners-vs-edges), and
+    // at enough distinct angles.
+    let maxR = 0;
+    for (let i = 0; i < pos.count; i++) maxR = Math.max(maxR, Math.hypot(pos.getX(i), pos.getZ(i)));
+    const angles = new Set();
+    let off = 0;
+    for (let i = 0; i < pos.count; i++) {
+      const rr = Math.hypot(pos.getX(i), pos.getZ(i));
+      if (rr < maxR * 0.999) continue;
+      if (Math.abs(rr - maxR) > 1e-6) off++;
+      angles.add(Math.round(Math.atan2(pos.getX(i), pos.getZ(i)) * 1e4));
+    }
+    const want = V.ROBOT_SEGMENTS[detail];
+    // Mutation: ROBOT_SEGMENTS.full 64 -> 16 (the old look) -> fails.
+    check(detail + ': body is round on >= ' + want + ' segments', want >= (detail === 'full' ? 64 : 32) && angles.size >= want, { angles: angles.size, want });
+    check(detail + ': side vertices all at one radius', off === 0, off);
+    const bb = bboxCm(g);
+    // The bumper is ~1.4 mm proud of the body and wraps the front only, so
+    // the plan may differ by that much front-to-back -- and no more.
+    // Mutation: robot.scale.set(W / m * 1.1, ...) -> the plan is an ellipse -> fails.
+    check(detail + ': plan is a circle (width == depth)', Math.abs((bb.maxX - bb.minX) - (bb.maxZ - bb.minZ)) < 0.2, bb);
+
+    // Bumper: round the FRONT. Its bbox reaches the robot's front (+z) and
+    // stops well short of the rear.
+    const bump = bboxCm(byName(g, 'robot-bumper'));
+    const rob = bboxCm(g.getObjectByName('robot'));
+    // Mutation: phiStart -arcLen / 2 -> Math.PI - arcLen / 2 (bumper at the back) -> fails.
+    check(detail + ': bumper at the front', Math.abs(bump.maxZ - rob.maxZ) < 0.05 && bump.minZ > rob.minZ + 5, { bump, rob });
+
+    // Turret: rises above the body top to the full height.
+    const tur = bboxCm(byName(g, 'robot-turret'));
+    const bod = bboxCm(body);
+    // Mutation: turret placed at y = 0 -> fails.
+    check(detail + ': turret stands on the body and reaches the top', tur.minY >= bod.maxY - 0.01 && Math.abs(tur.maxY - 10) < 0.05, { tur, bod });
+
+    const seams = meshes(g, m => /^robot-seam/.test(m.name));
+    // Mutation: `if (full)` around the seams -> `if (true)` -> low fails.
+    check(detail + ': seams at full only', detail === 'full' ? seams.length === 2 : seams.length === 0, seams.length);
+  }
+  // Rounded top edge (full): a vertex midway round the edge -- inside the
+  // side radius AND below the top face. A plain chamfer has none that far in.
+  {
+    const g = V.build(THREE, { dock: false, width: 35, depth: 35, height: 10 }, { detail: 'full' });
+    const pos = byName(g, 'robot-body').geometry.attributes.position;
+    let top = 0, maxR = 0;
+    for (let i = 0; i < pos.count; i++) { top = Math.max(top, pos.getY(i)); maxR = Math.max(maxR, Math.hypot(pos.getX(i), pos.getZ(i))); }
+    // The edge radius the builder uses: min(bodyH * 0.3, r * 0.2), bodyH =
+    // 0.8 x height -> 2.4 cm for a 10 cm robot of 35 cm.
+    const e = Math.min(0.08 * 0.3, 0.175 * 0.2);
+    let mid = 0;
+    for (let i = 0; i < pos.count; i++) {
+      const rr = Math.hypot(pos.getX(i), pos.getZ(i)), y = pos.getY(i);
+      if (rr > maxR - e * 0.99 && rr < maxR - 1e-4 && y > top - e * 0.99 && y < top - 1e-4) mid++;
+    }
+    // Mutation: arc(side - e, bodyH - e, e, 3) -> arc(..., 1) (a chamfer) -> fails.
+    check('full: the top edge is rounded (arc points between side and top)', mid >= 2 * V.ROBOT_SEGMENTS.full, mid);
+  }
+  // Dock lid (full): bevelled -- its top cap is inset from its sides.
+  {
+    const g = V.build(THREE, {}, { detail: 'full' });
+    const lid = byName(g, 'dock-tower-lid');
+    const pos = lid.geometry.attributes.position;
+    let maxY = -Infinity, sideX = 0, capX = 0;
+    for (let i = 0; i < pos.count; i++) maxY = Math.max(maxY, pos.getY(i));
+    for (let i = 0; i < pos.count; i++) {
+      const x = Math.abs(pos.getX(i));
+      sideX = Math.max(sideX, x);
+      if (pos.getY(i) > maxY - 1e-6) capX = Math.max(capX, x);
+    }
+    // Mutation: towerPart('dock-tower-lid', ..., true) -> false -> fails.
+    check('full: dock lid top edge is bevelled', sideX * 100 - capX * 100 > 0.5, { sideX, capX });
+    check('full: dock lid side is still the tower width', Math.abs(sideX * 200 - P.towerWidth) < 0.05, sideX);
+  }
 }
 
 console.log(failures ? 'FAILED -- ' + failures + ' failed, ' + passes + ' passed' : 'ok -- ' + passes + ' passed, 0 failed');

@@ -449,8 +449,14 @@ const onReading = (over = {}) => HAClient.parseClimate({
     /climateSender\.markDirty\(roomId\)/.test(html) && (html.match(/curtainSender\.markDirty\(curtainId\)/g) || []).length === 2);
   check('index: curtain row paints the reported position, not the animated one',
     /const pct = curtainShownPct\(cu\.id\);/.test(html));
-  check('index: no callService outside the senders and sendToHA',
-    (html.match(/ha\.callService(Debounced)?\(/g) || []).length === 4);
+  // Five: the two senders, sendToHA's two light calls, and vacuumSend (the
+  // robot vacuum block), which is itself gated on haOffline + 'connected'.
+  check('index: no callService outside the senders, sendToHA and vacuumSend',
+    (html.match(/ha\.callService(Debounced)?\(/g) || []).length === 5);
+  const vacSend = (html.match(/function vacuumSend\([\s\S]*?\n      \}/) || [''])[0];
+  check('index: vacuumSend refuses offline and sends only when connected',
+    /if \(!b \|\| haOffline\(ha\)\) return;/.test(vacSend) && /ha\.status === 'connected'/.test(vacSend) &&
+    /ha\.callService\(/.test(vacSend), vacSend.slice(0, 200));
 }
 
 // ---------------------------------------------------------------------------

@@ -16,6 +16,13 @@
  *   curtain  ancestor group named 'curtain:<id>'   -> sensors.curtains[id]
  *   door     ancestor userData.doorProfileId       -> sensors.doors[id]
  *   climate  (room)                                -> sensors.climate[room]
+ *   vacuum   a furniture item's world box          -> sensors.vacuums[itemId]
+ *
+ * A robot vacuum is FURNITURE, and furniture renders merged into shared
+ * buckets, so its meshes carry no identity. It is found by WHERE the tap
+ * landed instead: the first solid hit's point, inside the world box of a
+ * furniture item bound in sensors.vacuums (home.furnitureItemAt). Occlusion
+ * is unchanged -- only the nearest solid hit is ever asked.
  *
  * Climate is keyed by ROOM (rooms.json 1.3, the sidebar's binding). Nothing on
  * main can be tapped for it yet: furniture renders merged into shared buckets,
@@ -35,6 +42,8 @@
 
 import { ICONS, svgIcon } from './ui-icons.js';
 import { isColorChannel, supportsColor, swatchColor } from './light-color.js';
+import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCommand, vacuumStatusText,
+  MOCK_VACUUM_READINGS, mockVacuumAfter } from './vacuum-control.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -98,8 +107,12 @@ export function resolveTarget(obj, bindings) {
  * Decide a tap from raycast hits (sorted nearest-first). Returns
  * { target, hit } for a target, { target:null, hit } when the first solid
  * thing is not a target (OCCLUDED), or { target:null, hit:null }.
+ *
+ * @param deviceAt  optional (hit) => target|null, asked about the FIRST
+ *   SOLID hit only: a device found by where it was hit rather than by what
+ *   mesh was hit (a robot vacuum inside a merged furniture bucket).
  */
-export function pickFromHits(hits, bindings) {
+export function pickFromHits(hits, bindings, deviceAt) {
   for (let i = 0; i < hits.length; i++) {
     const h = hits[i];
     const o = h.object;
@@ -108,6 +121,8 @@ export function pickFromHits(hits, bindings) {
     const t = resolveTarget(o, bindings);
     if (t) return { target: t, hit: h };
     if (materialOpacity(o.material, h.face ? h.face.materialIndex : 0) < OPACITY_SOLID) continue;
+    const d = typeof deviceAt === 'function' ? deviceAt(h) : null;
+    if (d) return { target: d, hit: h };
     return { target: null, hit: h };
   }
   return { target: null, hit: null };
@@ -376,6 +391,7 @@ const STATUS = {
   haOffline: ['bad', 'HA offline', 'Home Assistant is not connected. Controls are disabled until it reconnects.'],
   offline: ['bad', 'Not connected', 'No Home Assistant configured. Changes only preview on the model.'],
   offlineMock: ['bad', 'Not connected', 'No Home Assistant configured. Showing sample temperatures; changes only preview.'],
+  offlineSample: ['bad', 'Not connected', 'No Home Assistant configured. Showing a sample robot; the buttons only preview.'],
 };
 
 /**
@@ -418,7 +434,7 @@ ${sel} .tp-crow .tp-range { margin: 0; }
 ${sel} .tp-color { --sq: 20px; --pad: 12px; }
 ${sel} .tp-pop.chip { padding: 10px 12px; }`;
 
-const STYLE = `
+export const STYLE = `
 .tp-pop { --w:200px; --ib-w:30px; --ib-h:${GF.ibH}px; --sw-w:36px; --sw-h:${GF.swH}px; --thumb:14px;
   --ink:#fff; --ink-2:rgba(255,255,255,0.62); --accent:#6366f1; --ok:#22c55e; --warn:#eab308; --bad:#ef4444;
   --amber:#ffd43b; --heat:#ff8a3d; --door-open:#f59e0b;
@@ -527,6 +543,32 @@ const STYLE = `
 .tp-color:disabled { opacity: 0.35; cursor: not-allowed; }
 .tp-color:focus-visible { outline: 2px solid #a5b4fc; outline-offset: -2px; }
 .tp-range.off { --fill: rgba(255,255,255,0.4); }
+/* Robot vacuum card: a status line with the battery, three labelled buttons,
+   then one chip per bound room. */
+.tp-pop[data-kind=vacuum] { --w: 236px; }
+.tp-vstat { font-size: 13px; font-weight: 600; color: var(--ink); min-width: 0; line-height: 1.25; }
+.tp-vstat.err { color: #fca5a5; }
+.tp-vstat.muted { color: var(--ink-2); }
+.tp-batt { display: inline-flex; align-items: center; gap: 3px; flex: none; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.tp-batt svg { width: 14px; height: 14px; fill: currentColor; }
+.tp-batt.low { color: #fca5a5; }
+.tp-vbtns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-top: 8px; }
+.tp-vb { position: relative; display: flex; align-items: center; justify-content: center; gap: 4px; height: var(--ib-h); padding: 0 4px;
+  border-radius: 7px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.07); color: #fff; cursor: pointer;
+  font: 600 12px/1 'Segoe UI', system-ui, sans-serif; }
+.tp-vb svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
+.tp-vb::after { content: ''; position: absolute; inset: -${GF.ibHitY}px -2px; }
+.tp-vb:disabled { opacity: 0.35; cursor: not-allowed; }
+.tp-vb:active:not(:disabled) { background: rgba(99,102,241,0.35); }
+.tp-vb.primary:not(:disabled) { background: var(--accent); border-color: transparent; }
+@media (hover: hover) { .tp-vb:hover:not(:disabled) { background: rgba(255,255,255,0.14); } .tp-vb.primary:hover:not(:disabled) { background: #7c7ff2; } }
+.tp-vb:focus-visible, .tp-vroom:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
+.tp-vrooms-h { margin-top: 9px; font-size: 11px; color: var(--ink-2); }
+.tp-vrooms { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.tp-vroom { border: 1px solid rgba(255,255,255,0.14); background: transparent; color: var(--ink); border-radius: 999px; padding: 4px 9px;
+  font: 12px/1.2 'Segoe UI', system-ui, sans-serif; cursor: pointer; }
+.tp-vroom:disabled { opacity: 0.35; cursor: not-allowed; }
+@media (hover: hover) { .tp-vroom:hover:not(:disabled) { background: rgba(255,255,255,0.1); } }
 .tp-pop.chip { width: auto; max-width: 240px; padding: 8px 10px; border-radius: 999px; }
 .tp-pop.chip .tp-name { flex: 0 1 auto; }
 .tp-pop.chip .sep { color: var(--ink-2); }
@@ -583,6 +625,36 @@ export const popoverHtml = {
       (m.na ? '' : '<input class="tp-range" data-a="pos" type="range" min="0" max="100" value="' + m.pct + '" aria-label="Open percentage"' + dis + '>') +
       offlineLine(m));
   },
+  /**
+   * Robot vacuum. m: { name, status, haOff, reading, actions, rooms:
+   * [{ roomId, name }] } -- `actions` from vacuumActions; every button is
+   * also disabled while HA is offline.
+   */
+  vacuum(m, dot) {
+    const shell = shellWith(dot);
+    const r = m.reading;
+    const na = !r || !r.available || !r.state;
+    const off = m.haOff;
+    const dis = ok => (!ok || off ? ' disabled' : '');
+    const a = m.actions || {};
+    const cls = na ? ' muted' : r.state === 'error' ? ' err' : '';
+    const batt = r && r.battery != null
+      ? '<span class="tp-batt' + (r.battery <= 20 ? ' low' : '') + '" data-batt>' + svg(I.battery) + r.battery + '%</span>' : '';
+    const primaryStart = a.start && !a.pause;
+    const btns = na ? '' : '<div class="tp-vbtns">' +
+      '<button class="tp-vb' + (primaryStart ? ' primary' : '') + '" data-a="start" aria-label="' + (a.resume ? 'Resume' : 'Start') + ' cleaning"' + dis(a.start) + '>' +
+        svg(I.play) + (a.resume ? 'Resume' : 'Start') + '</button>' +
+      '<button class="tp-vb" data-a="pause" aria-label="Pause"' + dis(a.pause) + '>' + svg(I.pause) + 'Pause</button>' +
+      '<button class="tp-vb" data-a="dock" aria-label="Return to dock"' + dis(a.dock) + '>' + svg(I.home) + 'Dock</button>' +
+      '</div>';
+    const rooms = na || !(m.rooms && m.rooms.length) ? '' :
+      '<div class="tp-vrooms-h">Clean a room</div><div class="tp-vrooms">' +
+      m.rooms.map(rm => '<button class="tp-vroom" data-a="room" data-room="' + esc(rm.roomId) + '"' + dis(a.rooms) + '>' + esc(rm.name) + '</button>').join('') +
+      '</div>';
+    return shell(ico(I.robot, na ? 'dim' : ''), m.name, m.status,
+      '<div class="tp-row"><span class="tp-vstat' + cls + '" data-v>' + esc(vacuumStatusText(r)) + '</span>' + batt + '</div>' +
+      btns + rooms + offlineLine(m));
+  },
   climate(m, dot) {
     const shell = shellWith(dot);
     const f = v => (typeof v === 'number' && isFinite(v) ? v.toFixed(1) + '°' : '–');
@@ -634,6 +706,15 @@ export function attachTapPopovers(o) {
     curtains: (o.sensors && o.sensors.curtains) || {},
     doors: (o.sensors && o.sensors.doors) || {},
   };
+  const vacuums = normaliseVacuumBindings(o.sensors && o.sensors.vacuums);
+  const vacuumIds = new Set(vacuums.keys());
+  const furnitureLabels = new Map(((o.house && o.house.furniture) || []).map(f => [f.id, f.label || null]));
+  // A robot vacuum is found by where the tap landed (see the header).
+  const deviceAt = !vacuumIds.size || typeof home.furnitureItemAt !== 'function' ? null : h => {
+    const it = h && h.point ? home.furnitureItemAt(h.point, vacuumIds) : null;
+    const b = it && vacuums.get(it.id);
+    return b ? { kind: 'vacuum', id: it.id, entities: [b.entity], binding: b, object: h.object } : null;
+  };
   const curtainNames = new Map(((o.house && o.house.curtains) || []).map(c => [c.id, c.name || c.id]));
   const doorNames = new Map(((o.house && o.house.doors) || []).map(d => [d.id, d.name || d.id]));
   const ha = () => (o.getHa ? o.getHa() : null);
@@ -684,7 +765,7 @@ export function attachTapPopovers(o) {
     dir.normalize();
     rc.set(origin, dir);
     rc.far = dist + 0.05;
-    const res = pickFromHits(rc.intersectObjects(home.scene.children, true), bindings);
+    const res = pickFromHits(rc.intersectObjects(home.scene.children, true), bindings, deviceAt);
     rc.far = Infinity;
     if (res.target) return res.target.id === t.id && res.target.kind === t.kind;
     return !res.hit;
@@ -693,7 +774,7 @@ export function attachTapPopovers(o) {
   let lastPickMs = 0;
   function pickAt(clientX, clientY) {
     const t0 = performance.now();
-    const res = pickFromHits(raycastAt(clientX, clientY), bindings);
+    const res = pickFromHits(raycastAt(clientX, clientY), bindings, deviceAt);
     let out;
     if (res.target) {
       out = { target: res.target, point: res.hit.point };
@@ -729,6 +810,16 @@ export function attachTapPopovers(o) {
       '</b><small>' + esc(s[2]) + '</small></span></button>';
   };
   const climateMock = new Map();
+  // Robot vacuum: the live reading from the client (or the ?debug=1 seam's
+  // simulated one); with no HA configured, a sample that the buttons move.
+  const vacuumMock = new Map();
+  const vacuumSim = new Map();
+  const vacuumReading = id => {
+    if (vacuumSim.has(id)) return vacuumSim.get(id);
+    const h = ha();
+    if (h && h.getVacuum) return h.getVacuum(id);
+    return null;
+  };
 
   const VIEWS = {
     light: {
@@ -906,6 +997,52 @@ export function attachTapPopovers(o) {
         const dn = el.querySelector('[data-a=down]'), up = el.querySelector('[data-a=up]');
         if (dn) dn.addEventListener('click', () => step(-1));
         if (up) up.addEventListener('click', () => step(1));
+      },
+    },
+
+    vacuum: {
+      model(t) {
+        const c = conn();
+        let reading = vacuumReading(t.id), mock = false;
+        if (c == null && !reading) {
+          // The page may share one sample robot with its sidebar (S.vacuumMock).
+          if (S.vacuumMock) reading = S.vacuumMock(t.id);
+          else {
+            if (!vacuumMock.has(t.id)) vacuumMock.set(t.id, MOCK_VACUUM_READINGS.docked);
+            reading = vacuumMock.get(t.id);
+          }
+          mock = true;
+        }
+        const na = !mock && (!reading || !reading.available);
+        const b = t.binding || vacuums.get(t.id) || { segments: [] };
+        return { status: mock ? 'offlineSample' : statusKey('vacuum', c, na && isLive(c), false), mock, haOff: haOfflineConn(c), reading,
+          actions: vacuumActions(reading),
+          rooms: b.segments.map(sg => ({ roomId: sg.roomId, name: roomName(sg.roomId) })),
+          name: t.label || furnitureLabels.get(t.id) || 'Robot vacuum' };
+      },
+      html(m) { return popoverHtml.vacuum(m, dot); },
+      bind(t, el, ctl) {
+        const b = t.binding || vacuums.get(t.id);
+        const send = (action, roomId) => {
+          if (writeBlocked() || !b) return;
+          const m = VIEWS.vacuum.model(t);
+          if (m.mock) {
+            // No HA configured: the sample robot moves, nothing is sent.
+            const next = mockVacuumAfter(action, m.reading);
+            if (next) { if (S.setVacuumMock) S.setVacuumMock(t.id, next); else vacuumMock.set(t.id, next); }
+          } else if (canSend()) {
+            const seg = roomId != null ? b.segments.find(s => s.roomId === roomId) : null;
+            const cmd = action === 'room'
+              ? (seg ? vacuumSegmentCommand(b.entity, seg.segment, m.reading, b.segmentService) : null)
+              : vacuumCommand(action, b.entity, m.reading);
+            if (cmd) ha().callService(cmd.domain, cmd.service, cmd.data, cmd.target);
+          }
+          onChange(); ctl.refresh(true);
+        };
+        el.querySelectorAll('[data-a=start],[data-a=pause],[data-a=dock]').forEach(btn =>
+          btn.addEventListener('click', () => { if (!btn.disabled) send(btn.dataset.a); }));
+        el.querySelectorAll('[data-a=room]').forEach(btn =>
+          btn.addEventListener('click', () => { if (!btn.disabled) send('room', btn.dataset.room); }));
       },
     },
 
@@ -1186,10 +1323,12 @@ export function attachTapPopovers(o) {
       let ents;
       if (kind === 'light') ents = (bindings.lights[id.split('/')[0]] || {})[id.split('/')[1]];
       else if (kind === 'climate') ents = typeof climateBinding[id] === 'string' ? [climateBinding[id]] : null;
+      else if (kind === 'vacuum') ents = vacuums.has(id) ? [vacuums.get(id).entity] : null;
       else ents = (bindings[kind + 's'] || {})[id];
       if (!ents) return false;
       const t = Object.assign({ kind, id, entities: ents }, extra || {});
       if (kind === 'light') { t.roomId = id.split('/')[0]; t.channel = id.split('/')[1]; }
+      if (kind === 'vacuum') t.binding = vacuums.get(id);
       open(t, x, y);
       return true;
     },
@@ -1197,7 +1336,9 @@ export function attachTapPopovers(o) {
     simulate(spec) {
       if (spec && 'status' in spec) sim.status = spec.status;
       if (spec && spec.raw) Object.keys(spec.raw).forEach(k => sim.raw.set(k, spec.raw[k]));
-      if (spec && spec.reset) { sim.status = undefined; sim.raw.clear(); }
+      // vacuum: { <itemId>: reading } -- a parseVacuum-shaped reading.
+      if (spec && spec.vacuum) Object.keys(spec.vacuum).forEach(k => vacuumSim.set(k, spec.vacuum[k]));
+      if (spec && spec.reset) { sim.status = undefined; sim.raw.clear(); vacuumSim.clear(); }
       render(false);
     },
     close: () => close(),

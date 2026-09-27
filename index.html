@@ -150,6 +150,33 @@
     }
     .room-list-dot.on { background: #ffd43b; box-shadow: 0 0 8px #ffd43b; }
 
+    /* Robot vacuum block (Controls view): one per sensors.vacuums binding,
+       the same state and actions as its tap card (src/vacuum-control.js). */
+    .vac-block { margin: 6px 16px 12px; padding: 10px 12px; border-radius: 9px;
+      border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); }
+    .vac-head { display: flex; align-items: center; gap: 7px; }
+    .vac-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; }
+    .vac-batt { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+    .vac-batt svg { width: 14px; height: 14px; fill: currentColor; }
+    .vac-batt.low { color: #fca5a5; opacity: 1; }
+    .vac-status { margin-top: 6px; font-size: 12px; opacity: 0.75; }
+    .vac-status.err { color: #fca5a5; opacity: 1; }
+    .vac-sample { margin-top: 4px; font-size: 11px; opacity: 0.45; }
+    .vac-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+    .vac-btn { display: flex; align-items: center; justify-content: center; gap: 4px; height: 32px; border-radius: 7px;
+      border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.07); color: #fff; cursor: pointer;
+      font-size: 12px; font-weight: 600; }
+    .vac-btn svg { width: 15px; height: 15px; fill: currentColor; }
+    .vac-btn.primary:not(:disabled) { background: #6366f1; border-color: transparent; }
+    .vac-btn:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
+    .vac-btn.primary:hover:not(:disabled) { background: #7c7ff2; }
+    .vac-btn:disabled, .vac-room:disabled { opacity: 0.35; cursor: not-allowed; }
+    .vac-rooms-h { margin-top: 10px; font-size: 11px; opacity: 0.5; }
+    .vac-rooms { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+    .vac-room { border: 1px solid rgba(255,255,255,0.14); background: transparent; color: #fff; border-radius: 999px;
+      padding: 4px 10px; font-size: 12px; cursor: pointer; }
+    .vac-room:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
+
     /* Control section */
     .control-section { padding: 8px 16px; }
     .control-group { margin-bottom: 20px; }
@@ -785,6 +812,8 @@
     import { sidebarReduce, SIDEBAR_INITIAL } from './src/sidebar-pin.js?v=__VERSION__';
     import { isColorChannel, colorFromAttributes, supportsColor } from './src/light-color.js?v=__VERSION__';
     import { ICONS, svgIcon }  from './src/ui-icons.js?v=__VERSION__';
+    import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCommand, vacuumStatusText,
+             MOCK_VACUUM_READINGS, mockVacuumAfter } from './src/vacuum-control.js?v=__VERSION__';
 
     // ── Why there is no DOMContentLoaded wrapper here ──────────────────────
     // There used to be one, and for classic scripts it was correct: an inline
@@ -2058,6 +2087,11 @@
         // Temperature row. Fired only when the parsed reading changes.
         ha.onClimateChange((roomId, reading) => applyClimate(roomId, reading));
 
+        // Robot vacuum blocks (Controls view). Fired only on a real change
+        // of the parsed reading; a status change enables/disables buttons.
+        ha.onVacuumChange(() => refreshVacuumBlocks());
+        ha.onStatusChange(() => refreshVacuumBlocks());
+
         // Cover -> animate that curtain (and, through it, the room's
         // daylight). Cornice light -> that curtain's cornice strip. Both fire
         // only on a real change, like the sensor callbacks above.
@@ -2092,6 +2126,10 @@
           curtainLocal: (id, pct) => { home.setCurtainOpen(id, pct, null); curtainTarget.set(id, pct); },
           climate: roomId => climateReading.get(roomId) || null,
           climateEntity: roomId => climateEntityForRoom(roomId),
+          // The sample robot (no HA configured): one state shared with the
+          // sidebar block, so a Start in either shows in both.
+          vacuumMock: id => vacuumMockFor(id),
+          setVacuumMock: (id, reading) => { vacuumMock.set(id, reading); },
         },
         curtainSender, climateSender,
         onChange: () => renderPanel(),
@@ -2405,11 +2443,14 @@
             </button>`;
           }).join('');
 
+          html += vacuumBlocksHtml();
+
           panelBody.innerHTML = html;
 
           panelBody.querySelectorAll('.room-list-item').forEach(btn => {
             btn.addEventListener('click', () => { selectedRoom = btn.dataset.room; renderPanel(); });
           });
+          wireVacuumBlocks(panelBody);
         } else {
           const rm = Home3DScene.ROOMS[selectedRoom];
           const rid = selectedRoom;
@@ -2469,6 +2510,95 @@
         if (ic) ic.classList.toggle('heat', climateHeating(selectedRoom));
       }
       setInterval(refreshClimateIcon, 2000);
+
+      // ---- Robot vacuum blocks (Controls view) ----
+      //
+      // One per rooms.json sensors.vacuums binding: the same reading, the
+      // same enabled buttons and the same service calls as the robot's tap
+      // card (src/vacuum-control.js), sent through the client's callService.
+      // With no Home Assistant configured (the demo), a sample robot that the
+      // buttons move; nothing is sent. Offline, every button is disabled.
+      const vacuumBindings = normaliseVacuumBindings(sensors && sensors.vacuums);
+      const vacuumMock = new Map();
+      const vacuumLabels = new Map(((house && house.furniture) || []).map(f => [f.id, f.label || null]));
+      function vacuumMockFor(id) {
+        if (!vacuumMock.has(id)) vacuumMock.set(id, MOCK_VACUUM_READINGS.docked);
+        return vacuumMock.get(id);
+      }
+      // { reading, mock } -- mock only when there is no client at all.
+      function vacuumReadingFor(id) {
+        if (ha) return { reading: ha.getVacuum(id), mock: false };
+        return { reading: vacuumMockFor(id), mock: true };
+      }
+      function vacuumBlockHtml(id) {
+        const b = vacuumBindings.get(id);
+        const { reading: r, mock } = vacuumReadingFor(id);
+        const a = vacuumActions(r);
+        const off = haOffline(ha);
+        const na = !r || !r.available || !r.state;
+        const dis = ok => (!ok || off ? ' disabled' : '');
+        const name = vacuumLabels.get(id) || 'Robot vacuum';
+        const batt = r && r.battery != null
+          ? '<span class="vac-batt' + (r.battery <= 20 ? ' low' : '') + '">' + svgIcon(ICONS.battery, '') + r.battery + '%</span>' : '';
+        const rooms = na || !b.segments.length ? '' :
+          '<div class="vac-rooms-h">Clean a room</div><div class="vac-rooms">' +
+          b.segments.map(sg => '<button class="vac-room" data-vac-a="room" data-room="' + esc(sg.roomId) + '"' + dis(a.rooms) + '>' +
+            esc((Home3DScene.ROOMS[sg.roomId] || {}).name || sg.roomId) + '</button>').join('') + '</div>';
+        return '<div class="vac-block" data-vac="' + esc(id) + '">' +
+          '<div class="vac-head">' + svgIcon(ICONS.robot, 'row-ico' + (na ? ' dim' : '')) +
+          '<span class="vac-name">' + esc(name) + '</span>' + batt + '</div>' +
+          '<div class="vac-status' + (!na && r.state === 'error' ? ' err' : '') + '">' + esc(vacuumStatusText(r)) +
+          (off ? ' &middot; HA offline' : '') + '</div>' +
+          (mock ? '<div class="vac-sample">Sample state: no Home Assistant configured</div>' : '') +
+          (na ? '' : '<div class="vac-btns">' +
+            '<button class="vac-btn' + (a.start && !a.pause ? ' primary' : '') + '" data-vac-a="start"' + dis(a.start) + '>' +
+              svgIcon(ICONS.play, '') + (a.resume ? 'Resume' : 'Start') + '</button>' +
+            '<button class="vac-btn" data-vac-a="pause"' + dis(a.pause) + '>' + svgIcon(ICONS.pause, '') + 'Pause</button>' +
+            '<button class="vac-btn" data-vac-a="dock"' + dis(a.dock) + '>' + svgIcon(ICONS.home, '') + 'Dock</button>' +
+            '</div>') +
+          rooms + '</div>';
+      }
+      function vacuumBlocksHtml() {
+        if (!vacuumBindings.size) return '';
+        return '<div class="panel-section-title">Devices</div>' +
+          Array.from(vacuumBindings.keys()).map(vacuumBlockHtml).join('');
+      }
+      function vacuumSend(id, action, roomId) {
+        const b = vacuumBindings.get(id);
+        if (!b || haOffline(ha)) return;
+        const { reading, mock } = vacuumReadingFor(id);
+        if (mock) {
+          const next = mockVacuumAfter(action, reading);
+          if (next) vacuumMock.set(id, next);
+        } else if (ha && ha.status === 'connected') {
+          const seg = roomId != null ? b.segments.find(sg => sg.roomId === roomId) : null;
+          const cmd = action === 'room'
+            ? (seg ? vacuumSegmentCommand(b.entity, seg.segment, reading, b.segmentService) : null)
+            : vacuumCommand(action, b.entity, reading);
+          if (cmd) ha.callService(cmd.domain, cmd.service, cmd.data, cmd.target);
+        }
+        refreshVacuumBlocks();
+      }
+      function wireVacuumBlock(block) {
+        const id = block.getAttribute('data-vac');
+        block.querySelectorAll('[data-vac-a]').forEach(btn => btn.addEventListener('click', () => {
+          if (!btn.disabled) vacuumSend(id, btn.getAttribute('data-vac-a'), btn.getAttribute('data-room'));
+        }));
+      }
+      function wireVacuumBlocks(root) { root.querySelectorAll('[data-vac]').forEach(wireVacuumBlock); }
+      // Repaint only the blocks, and only while the Controls view shows them.
+      function refreshVacuumBlocks() {
+        if (!panelReady || selectedRoom || panelView === 'settings') return;
+        panelBody.querySelectorAll('[data-vac]').forEach(block => {
+          const id = block.getAttribute('data-vac');
+          if (!vacuumBindings.has(id)) return;
+          const tmp = document.createElement('div');
+          tmp.innerHTML = vacuumBlockHtml(id);
+          const fresh = tmp.firstChild;
+          block.replaceWith(fresh);
+          wireVacuumBlock(fresh);
+        });
+      }
 
       function roomRowKeys(rid) {
         const s = home.lightState[rid] || {};

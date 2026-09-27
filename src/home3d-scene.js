@@ -26,7 +26,7 @@ import {
   windowDaylight, corniceSpotLayout, corniceLightCount, corniceLightBudget
 } from './wall-fittings.js';
 import {
-  loadFurnitureModules, buildFurnitureSliced, scheduleFurnitureAttach, fadeRegistrations,
+  loadFurnitureModules, buildFurnitureSliced, scheduleFurnitureAttach, fadeRegistrations, furnitureItemAt,
   wallFadeTarget, wallFadeDepthWrite,
   disposeFurniture
 } from './furniture.js';
@@ -5528,6 +5528,15 @@ export const Home3DScene = (() => {
         }
       },
       getFurnitureVisible() { return furnitureVisible; },
+      // The built furniture item whose world box holds `point` (a world
+      // position, e.g. a raycast hit), optionally only among `onlyIds` (a
+      // Set). { id, type } or null -- null too while furniture is hidden or
+      // not yet built. Furniture renders merged, so this is how a tap on a
+      // bucket names its item (src/tap-popovers.js, the robot vacuum).
+      furnitureItemAt(point, onlyIds) {
+        if (!furnitureResult || !furnitureVisible) return null;
+        return furnitureItemAt(furnitureResult.byId, point, onlyIds);
+      },
       // Diagnostics for the perf measurement and the visual review: what was
       // built (draws, triangles, which rooms' proxies dropped to low detail)
       // and when it attached, on the performance.now() clock.
