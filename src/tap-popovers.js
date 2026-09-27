@@ -391,6 +391,7 @@ const STATUS = {
   haOffline: ['bad', 'HA offline', 'Home Assistant is not connected. Controls are disabled until it reconnects.'],
   offline: ['bad', 'Not connected', 'No Home Assistant configured. Changes only preview on the model.'],
   offlineMock: ['bad', 'Not connected', 'No Home Assistant configured. Showing sample temperatures; changes only preview.'],
+  offlineSample: ['bad', 'Not connected', 'No Home Assistant configured. Showing a sample robot; the buttons only preview.'],
 };
 
 /**
@@ -1014,7 +1015,7 @@ export function attachTapPopovers(o) {
         }
         const na = !mock && (!reading || !reading.available);
         const b = t.binding || vacuums.get(t.id) || { segments: [] };
-        return { status: statusKey('vacuum', c, na && isLive(c), mock), mock, haOff: haOfflineConn(c), reading,
+        return { status: mock ? 'offlineSample' : statusKey('vacuum', c, na && isLive(c), false), mock, haOff: haOfflineConn(c), reading,
           actions: vacuumActions(reading),
           rooms: b.segments.map(sg => ({ roomId: sg.roomId, name: roomName(sg.roomId) })),
           name: t.label || furnitureLabels.get(t.id) || 'Robot vacuum' };
