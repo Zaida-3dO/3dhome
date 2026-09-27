@@ -37,7 +37,7 @@ import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import {
   FINISH_TYPES, makeFinishTexture, alongToMetres, finishRectOnBox, createFinishBatch, addLongFace,
-  addCrossFace, buildFinishGeometry, revealEnds, finishKey
+  addCrossFace, buildFinishGeometry, revealEnds, finishKey, gridOriginY
 } from './wall-finish.js';
 
 export const Home3DScene = (() => {
@@ -1356,12 +1356,16 @@ export const Home3DScene = (() => {
         if (!finishBatches.has(key)) {
           finishBatches.set(key, { batch: createFinishBatch(), wallId: id, finish: f.finish, look: f.look, outer: !!outer });
         }
+        const range = [Math.max(WALL_BOTTOM_Y, f.from != null ? f.from * S : -Infinity),
+                       Math.min(WALL_TOP_Y, f.to != null ? f.to * S : Infinity)];
         return {
           finish: f.finish, normal: f.normal, face: f.face, reveals: !!f.reveals,
           batch: finishBatches.get(key).batch,
           span: alongToMetres({ x1, y1, x2, y2 }, f.along, S),
-          range: [Math.max(WALL_BOTTOM_Y, f.from != null ? f.from * S : -Infinity),
-                  Math.min(WALL_TOP_Y, f.to != null ? f.to * S : Infinity)],
+          range: range,
+          // The world height the tile grid starts at: 0 (the floor) unless
+          // the entry anchors it at its own band's bottom (gridAnchor "from").
+          vOrigin: gridOriginY(f.gridAnchor, range),
           // An END face: its wall distance, from the AUTHORED end point
           // projected onto this (corner-extended) centreline.
           endS: f.face === 'end' ? ((tx(f.at[0]) - wx1) * dx + (tz(f.at[1]) - wz1) * dz) / len : null
@@ -1371,7 +1375,7 @@ export const Home3DScene = (() => {
       wallFinishes.forEach(wf => {
         if (wf.face !== 'end' || !(wf.range[1] - wf.range[0] > 0.005)) return;
         const facing = (wf.normal[0] * dx + wf.normal[1] * dz) >= 0 ? 1 : -1;
-        addCrossFace(wf.batch, frame, wf.endS, facing, wf.range[0], wf.range[1]);
+        addCrossFace(wf.batch, frame, wf.endS, facing, wf.range[0], wf.range[1], wf.vOrigin);
       });
       // One wall box centred at (mx,mz): length lm (m), vertical centre yc, height h.
       // Reuses the segment's rotation + normal so sub-boxes of a descending
@@ -1408,12 +1412,12 @@ export const Home3DScene = (() => {
           const rect = finishRectOnBox(boxSpan, boxY, wf.span, wf.range);
           if (!rect) return;
           const r = rect.full ? { s0: boxSpan[0], s1: boxSpan[1], y0: boxY[0], y1: boxY[1] } : rect;
-          addLongFace(wf.batch, frame, wf.normal, r.s0, r.s1, r.y0, r.y1);
+          addLongFace(wf.batch, frame, wf.normal, r.s0, r.s1, r.y0, r.y1, wf.vOrigin);
           // Reveals: the finish returns round a full-height box's ends -- the
           // jambs of the openings beside it and the wall's own ends.
           if (wf.reveals && revealEnds(h, WALL_FULL_H)) {
-            if (r.s0 - boxSpan[0] < 1e-3) addCrossFace(wf.batch, frame, boxSpan[0], -1, r.y0, r.y1);
-            if (boxSpan[1] - r.s1 < 1e-3) addCrossFace(wf.batch, frame, boxSpan[1], 1, r.y0, r.y1);
+            if (r.s0 - boxSpan[0] < 1e-3) addCrossFace(wf.batch, frame, boxSpan[0], -1, r.y0, r.y1, wf.vOrigin);
+            if (boxSpan[1] - r.s1 < 1e-3) addCrossFace(wf.batch, frame, boxSpan[1], 1, r.y0, r.y1, wf.vOrigin);
           }
         });
         const wall = new THREE.Mesh(new THREE.BoxGeometry(wallWidthM, h, lm), mat);

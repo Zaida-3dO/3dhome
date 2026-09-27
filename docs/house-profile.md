@@ -315,6 +315,20 @@ found the same way a window finds its room face); give exactly one.
   wall's goes down through the slab).
 - `along` — `[start, end]` in plan cm on the wall's long axis, the same numbers
   as a door's `centre`. Omit for the whole length.
+- `gridAnchor` — where the grid starts vertically. `"floor"` (the default) puts
+  the joints at 0, 25, 50 … cm above the floor for the default tile, whatever
+  `from` is, so every band on every wall courses together. `"from"` starts the
+  grid at the band's own `from`, so a whole tile sits exactly on it — one row
+  of tile straight off a 93 cm countertop is:
+
+  ```json
+  { "finish": "tile", "room": "bathroom", "from": 93, "to": 118, "gridAnchor": "from" }
+  ```
+
+  With the default anchor that same band would show a joint at 100 — a 7 cm
+  sliver under an 18 cm piece. The grid's start **along** the wall is not
+  anchored (column joints run from the wall's start), and a reveal courses with
+  the face it returns from.
 - `brick` is the running-bond buff brick from the WindowSpec and
   BalconyWindowSpec pages, at real UK brick size. `tile` is the bathroom spec
   pages' tile: a 40 × 25 cm landscape tile in a 0.4 cm joint, greige

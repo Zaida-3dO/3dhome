@@ -12,7 +12,8 @@
  * Each entry puts ONE procedural finish on ONE face of the wall, optionally
  * only over a height band (`from`/`to`, cm above the floor) and a span along
  * the wall (`along`, plan cm on the wall's long axis, the same convention as
- * a door's `centre`). The face is named by `side` -- `exterior` (derived: the
+ * a door's `centre`); `gridAnchor: "from"` starts the tile grid at the
+ * band's bottom instead of the floor (see GRID_ANCHORS). The face is named by `side` -- `exterior` (derived: the
  * long face pointing away from the house), a compass side (a long face, or an
  * END face when the compass points along the wall, e.g. the north face of a
  * pillar authored north-south), or `start`/`end` -- or by `room` (the long
@@ -431,8 +432,9 @@ export function finishRectOnBox(box, boxY, span, range) {
  *     start), over height [y0, y1] -- a segment end face, or the reveal
  *     (jamb) of an opening.
  *
- * UVs are metres: u along the face, v = world height, so every finish keeps
- * its real size and a long face's coursing runs on across boxes.
+ * UVs are metres: u along the face, v = world height (less the finish's
+ * grid origin -- gridOriginY), so every finish keeps its real size and a
+ * long face's coursing runs on across boxes.
  *
  * `frame` is the wall's world frame: { wx1, wz1 } its start, { ux, uz } its
  * unit direction, `T` its thickness (m).
@@ -458,27 +460,58 @@ function pushQuad(batch, corners, normal, uvs) {
   batch.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
 }
 
-/** A long-face quad. `n` is the face's outward plan normal. */
-export function addLongFace(batch, frame, n, s0, s1, y0, y1) {
+/**
+ * Where a finish's grid starts vertically -- its `gridAnchor`:
+ *
+ *   'floor' (default) -- the grid is anchored at world height 0, the floor
+ *            top: tile joints at 0, 25, 50 ... cm whatever the band is, so
+ *            every band on every wall courses together.
+ *   'from'  -- the grid is anchored at the band's own bottom, so a whole
+ *            tile (or brick course) starts exactly on it: a 93-118 band on a
+ *            93 cm counter is ONE full 25 cm row, not a 7 cm sliver at 93-100
+ *            and an 18 cm piece above.
+ */
+export const GRID_ANCHORS = Object.freeze(['floor', 'from']);
+
+/**
+ * The world height (m) a finish's texture v = 0 sits at: 0 for 'floor', the
+ * band's bottom as drawn (`range[0]`, already clamped to the wall) for
+ * 'from'. The texture's v = 0 is a grout joint (the canvas is one tile with
+ * half a joint round its edge), so this is where a row of joints lies.
+ */
+export function gridOriginY(anchor, range) {
+  return anchor === 'from' && range && Number.isFinite(range[0]) ? range[0] : 0;
+}
+
+/**
+ * A long-face quad. `n` is the face's outward plan normal. `vOrigin` is the
+ * world height (m) the texture's v = 0 sits at -- gridOriginY(); 0 = the floor.
+ */
+export function addLongFace(batch, frame, n, s0, s1, y0, y1, vOrigin = 0) {
   const { wx1, wz1, ux, uz, T } = frame;
   const off = T / 2 + FINISH_OFFSET;
   const P = (s, y) => [wx1 + ux * s + n[0] * off, y, wz1 + uz * s + n[1] * off];
   // u runs left-to-right as seen from outside the face: along the wall when
   // the wall's direction is to the viewer's right, else against it.
   const sigma = (n[1] * ux - n[0] * uz) < 0 ? -1 : 1;
+  const v0 = y0 - vOrigin, v1 = y1 - vOrigin;
   pushQuad(batch, [P(s0, y0), P(s1, y0), P(s1, y1), P(s0, y1)], [n[0], 0, n[1]],
-    [[sigma * s0, y0], [sigma * s1, y0], [sigma * s1, y1], [sigma * s0, y1]]);
+    [[sigma * s0, v0], [sigma * s1, v0], [sigma * s1, v1], [sigma * s0, v1]]);
 }
 
-/** A cross-face quad (segment end, or an opening's reveal) at wall distance s. */
-export function addCrossFace(batch, frame, s, facing, y0, y1) {
+/**
+ * A cross-face quad (segment end, or an opening's reveal) at wall distance s.
+ * `vOrigin` as addLongFace, so a reveal courses with the face it returns from.
+ */
+export function addCrossFace(batch, frame, s, facing, y0, y1, vOrigin = 0) {
   const { wx1, wz1, ux, uz, T } = frame;
   const sp = s + facing * FINISH_OFFSET;
   const px = -uz, pz = ux;   // across the wall
   const P = (t, y) => [wx1 + ux * sp + px * t, y, wz1 + uz * sp + pz * t];
   const h = T / 2;
+  const v0 = y0 - vOrigin, v1 = y1 - vOrigin;
   pushQuad(batch, [P(-h, y0), P(h, y0), P(h, y1), P(-h, y1)], [ux * facing, 0, uz * facing],
-    [[-h, y0], [h, y0], [h, y1], [-h, y1]]);
+    [[-h, v0], [h, v0], [h, v1], [-h, v1]]);
 }
 
 /** The batch as one BufferGeometry (null when empty). */
