@@ -16,6 +16,9 @@
  *      attribute-only republish fires nothing, a battery change fires, a
  *      reconnect re-emits, the resync sends no command, and a button's
  *      command goes out as exactly one call_service of the right shape.
+ *   6. Picking: furnitureItemAt picks the smallest containing box;
+ *      pickFromHits asks deviceAt about the first SOLID hit only; the card
+ *      enables each button only when it applies and disables all offline.
  *
  * Each check names the one-line mutation it catches.
  */
@@ -179,6 +182,59 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     console.log = log; console.warn = warn;
     fake.restore();
   }
+}
+
+// ---- 6. picking a vacuum by where the tap landed, and its card -------------
+{
+  const T = await imp('src/tap-popovers.js');
+  const F = await imp('src/furniture.js');
+  const byId = {
+    rug: { type: 'rug', worldBox: { min: [0, 0, 0], max: [3, 0.02, 2] } },
+    robot: { type: 'robot-vacuum', worldBox: { min: [1, 0, 1], max: [1.35, 0.59, 1.48] } },
+    sofa: { type: 'sofa', worldBox: { min: [2, 0, 0], max: [3, 0.9, 1] } }
+  };
+  // Mutation: `vol < bestVol` -> `vol > bestVol` -> the rug wins -> fails.
+  check('furnitureItemAt: the smallest containing box wins', (F.furnitureItemAt(byId, { x: 1.1, y: 0.01, z: 1.2 }) || {}).id === 'robot');
+  check('furnitureItemAt: onlyIds filters', F.furnitureItemAt(byId, { x: 2.5, y: 0.5, z: 0.5 }, new Set(['robot'])) === null);
+  check('furnitureItemAt: a point on a face counts (1 cm pad)', (F.furnitureItemAt(byId, { x: 1.355, y: 0.3, z: 1.2 }, new Set(['robot'])) || {}).id === 'robot');
+  check('furnitureItemAt: outside -> null', F.furnitureItemAt(byId, { x: 5, y: 0, z: 5 }) === null);
+
+  const mesh = (name, opacity) => ({ isMesh: true, name, visible: true, parent: null, userData: {},
+    material: { transparent: opacity < 1, opacity, visible: true } });
+  const wall = mesh('wall', 1), faded = mesh('faded', 0.05), bucket = mesh('bucket', 1);
+  const deviceAt = h => (h.object === bucket ? { kind: 'vacuum', id: 'robot' } : null);
+  const r1 = T.pickFromHits([{ object: faded, point: {} }, { object: bucket, point: {} }], {}, deviceAt);
+  // Mutation: drop the deviceAt call in pickFromHits -> fails.
+  check('pickFromHits: a device behind a see-through wall is picked', r1.target && r1.target.kind === 'vacuum', r1);
+  const r2 = T.pickFromHits([{ object: wall, point: {} }, { object: bucket, point: {} }], {}, deviceAt);
+  // Mutation: ask deviceAt about every hit, not just the first solid one -> fails.
+  check('pickFromHits: a solid wall in front still occludes it', !r2.target && r2.hit.object === wall, r2);
+  check('pickFromHits: no deviceAt -> as before', T.pickFromHits([{ object: bucket, point: {} }], {}).target === null);
+  // A see-through hit is never asked, even if its point lies in the box.
+  const everywhere = h => ({ kind: 'vacuum', id: 'robot', via: h.object.name });
+  const r3 = T.pickFromHits([{ object: faded, point: {} }, { object: wall, point: {} }], {}, everywhere);
+  // Mutation: ask deviceAt before the see-through skip -> the faded hit wins -> fails.
+  check('pickFromHits: deviceAt asked about the first SOLID hit only', r3.target && r3.target.via === 'wall', r3.target);
+
+  const R = V.MOCK_VACUUM_READINGS;
+  const dot = k => '<i data-st="' + k + '"></i>';
+  const card = (reading, haOff) => T.popoverHtml.vacuum({ name: 'Robot', status: 'ok', haOff: !!haOff, reading,
+    actions: V.vacuumActions(reading), rooms: [{ roomId: 'kitchen', name: 'Kitchen' }] }, dot);
+  const disabled = (html, a) => new RegExp('data-a="' + a + '"[^>]*disabled').test(html);
+  const docked = card(R.docked);
+  // Mutation: dis(a.dock) -> dis(true) -> dock enabled while docked -> fails.
+  check('card: docked -> Start on, Pause and Dock off', !disabled(docked, 'start') && disabled(docked, 'pause') && disabled(docked, 'dock'));
+  check('card: status and battery shown', docked.indexOf('Charging completed') !== -1 && docked.indexOf('100%') !== -1);
+  check('card: a room chip per bound segment', /data-a="room" data-room="kitchen"/.test(docked));
+  const cleaning = card(R.cleaning);
+  check('card: cleaning -> Start and rooms off, Pause on', disabled(cleaning, 'start') && !disabled(cleaning, 'pause') && disabled(cleaning, 'room'));
+  check('card: paused -> Resume', card(R.paused).indexOf('Resume') !== -1);
+  const off = card(R.docked, true);
+  // Mutation: dis = ok => (!ok ? ...) (ignore haOff) -> fails.
+  check('card: HA offline -> every button disabled', disabled(off, 'start') && disabled(off, 'room') && off.indexOf('HA offline') !== -1);
+  const na = card(R.unavailable);
+  check('card: unavailable -> no buttons', na.indexOf('data-a="start"') === -1 && na.indexOf('Unavailable') !== -1);
+  check('card: an error names the fault', card(R.error).indexOf('Right wheel motor') !== -1);
 }
 
 console.log(failures ? 'FAILED -- ' + failures + ' failed, ' + passes + ' passed' : 'ok -- ' + passes + ' passed, 0 failed');

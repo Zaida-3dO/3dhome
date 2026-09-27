@@ -24,6 +24,14 @@ export const ICONS = {
   pinOutline: 'M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12M8.8,14L10,12.8V4H14V12.8L15.2,14H8.8Z',
   minus: 'M19,13H5V11H19V13Z',
   plus: 'M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z',
+  // Robot vacuum controls: play / pause / home are MDI's. The robot and the
+  // battery are simple glyphs drawn for this file (not MDI): a round body
+  // with a turret, and a battery outline.
+  play: 'M8,5.14V19.14L19,12.14L8,5.14Z',
+  pause: 'M14,19H18V5H14M6,19H10V5H6V19Z',
+  home: 'M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z',
+  robot: 'M12,3A9,9 0 1,1 12,21A9,9 0 1,1 12,3M12,5A7,7 0 1,0 12,19A7,7 0 1,0 12,5M12,7.5A2.5,2.5 0 1,1 12,12.5A2.5,2.5 0 1,1 12,7.5M8,15H16V16.5H8Z',
+  battery: 'M9,2H15V4H17A1,1 0 0,1 18,5V21A1,1 0 0,1 17,22H7A1,1 0 0,1 6,21V5A1,1 0 0,1 7,4H9V2M8,6V20H16V6H8Z',
 };
 
 /** One icon as inline SVG markup. `cls` is the svg's class attribute. */

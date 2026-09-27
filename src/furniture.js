@@ -91,6 +91,29 @@ export function placeGroup(group, placement, tx, tz) {
   return group;
 }
 
+/**
+ * The furniture item whose world box contains `point` ({x, y, z}, metres),
+ * from a build result's byId, grown by `pad` metres (default 1 cm) so a hit
+ * exactly on a face counts. The SMALLEST containing box wins, so a robot on
+ * a rug, or a lamp on a table, is found rather than what it stands on.
+ * Returns { id, type } or null. Only items in `onlyIds` (a Set) when given.
+ */
+export function furnitureItemAt(byId, point, onlyIds, pad) {
+  if (!byId || !point) return null;
+  const p = pad == null ? 0.01 : pad;
+  let best = null, bestVol = Infinity;
+  Object.keys(byId).forEach(id => {
+    if (onlyIds && !onlyIds.has(id)) return;
+    const b = byId[id].worldBox;
+    if (!b) return;
+    if (point.x < b.min[0] - p || point.x > b.max[0] + p || point.y < b.min[1] - p || point.y > b.max[1] + p ||
+      point.z < b.min[2] - p || point.z > b.max[2] + p) return;
+    const vol = (b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) * (b.max[2] - b.min[2]);
+    if (vol < bestVol) { bestVol = vol; best = { id, type: byId[id].type }; }
+  });
+  return best;
+}
+
 /** How long one builder's prepare() may take before the build goes ahead without it (ms). */
 export const PREPARE_TIMEOUT_MS = 15000;
 
@@ -265,6 +288,11 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
     const group = builder.build(THREE, params, { detail: det, assetBase: item.assetBase });
     if (!group || !group.isObject3D) throw new Error('build() did not return a THREE.Object3D');
     placeGroup(group, placement, o.tx, o.tz);
+    // The placed item's world box (metres), kept on byId so a tap on the
+    // merged buckets can still name the item it landed on (home3d-scene's
+    // furnitureItemAt -- how a bound robot vacuum is clicked).
+    const wb = new THREE.Box3().setFromObject(group);
+    const worldBox = wb.isEmpty() ? null : { min: wb.min.toArray(), max: wb.max.toArray() };
     const flat = flattenGroup(THREE, group, { label: 'furniture "' + item.id + '" (' + item.type + ')' });
     let dynamicGroup = null;
     if (flat.dynamic.length) {
@@ -277,7 +305,7 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
       dynamicGroup.userData = { furniture: 'dynamic', itemId: item.id, type: item.type };
     }
     disposeBuilt(group);
-    return { parts: flat.parts, warnings: flat.warnings, dynamicGroup: dynamicGroup };
+    return { parts: flat.parts, warnings: flat.warnings, dynamicGroup: dynamicGroup, worldBox: worldBox };
   }
 
   // Room by room (stable within a room), so a slice boundary falls between
@@ -313,7 +341,7 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
     });
     byId[item.id] = { id: item.id, room: item.room, type: item.type, placement: placement,
       fadeWallId: fadeWallId, caster: caster, triangles: tris, parts: flat.parts.length,
-      dynamicParts: flat.dynamicGroup ? flat.dynamicGroup.children.length : 0 };
+      dynamicParts: flat.dynamicGroup ? flat.dynamicGroup.children.length : 0, worldBox: flat.worldBox };
     if (caster && wantProxies) {
       if (!casters.has(item.room)) casters.set(item.room, []);
       casters.get(item.room).push({ item, builder, params, placement, parts: flat.parts });
