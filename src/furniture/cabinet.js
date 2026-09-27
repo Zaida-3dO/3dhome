@@ -959,7 +959,12 @@ function buildInterior(THREE, group, spec, x0, x1, yBot, yTop, ic, low) {
   const innerL = atLeft ? -W / 2 + T : x0 + DIV_T / 2;
   const innerR = atRight ? W / 2 - T : x1 - DIV_T / 2;
   const zBack = ic.backZ;
-  const zFront = ic.carcassFront - 0.002;
+  // With overlay fronts, the carcass ends just behind the leaves (carcassFront
+  // already accounts for that) so a 2 mm clearance off it is enough. Without
+  // overlay, the carcass runs to full depth but the glass pane itself sits
+  // well behind that -- clear the pane's own back face instead (see the
+  // interiorCtx comment at its construction site).
+  const zFront = (ic.overlayFronts ? ic.carcassFront : Math.min(ic.carcassFront, ic.glassBackZ)) - 0.002;
   const floorTop = yBot + INTERIOR_FLOOR_T;
   const ceil = yTop;
   const lining = spec.lining || null;
@@ -1209,7 +1214,13 @@ export function build(THREE, params, opts) {
     const frontsGroup = new THREE.Group();
     frontsGroup.name = 'cabinetFronts';
     group.add(frontsGroup);
-    const interiorCtx = { W, CARC_T, backZ, carcassFront: CD, sideWindows, fin, color };
+    // Without overlay fronts, the carcass runs all the way to `depth` (CD ==
+    // D), well in front of a glass cell's own pane -- buildInterior must stop
+    // short of the PANE's back face instead, or its floor/lining/shelves run
+    // through the glass (see buildGlassOrMirrorCell for the same maths).
+    const glassPaneT = Math.min(GLASS_PANE_T, frontThickness(D) - PANE_RECESS - 0.002);
+    const glassBackZ = faceZ - FRAME_BACKSET - PANE_RECESS - glassPaneT;
+    const interiorCtx = { W, CARC_T, backZ, carcassFront: CD, glassBackZ, overlayFronts: overlay, sideWindows, fin, color };
     const handleMaxY = H - CARC_T;
 
     rows.forEach((row, ri) => {

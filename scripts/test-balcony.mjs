@@ -10,7 +10,9 @@
  *      every side mode.
  *   2. The largest CLEAR gap between adjacent vertical members of the front
  *      railing (bars and corner posts), measured on the built geometry, is
- *      <= 10 cm -- including with a barSpacing that asks for more.
+ *      <= 10 cm -- including with a barSpacing that asks for more. The same
+ *      holds for the left/right side runs, measured along z and including
+ *      the building face (z = 0) and the front corner post as boundaries.
  *   3. The front rail's max z is the depth (the railing is at the front).
  *   4. leftSide / rightSide 'none' removes that side's parts, 'solid' adds a
  *      solid panel on that side (and only that side; +x is right).
@@ -53,11 +55,11 @@ const meshes = (group, pred) => group.children.filter(o => o.isMesh && (!pred ||
 const byName = (group, name) => meshes(group, m => m.name === name)[0];
 
 /**
- * The x-intervals (cm) of every separate box in a merged box geometry: each
- * box is a run of consecutive vertices (24, or 16 for an open box).
- * Returns sorted [x0, x1] pairs, one per box.
+ * The interval (cm) along `axis` ('x' or 'z') of every separate box in a
+ * merged box geometry: each box is a run of consecutive vertices (24, or 16
+ * for an open box). Returns sorted [lo, hi] pairs, one per box.
  */
-function boxIntervalsX(mesh) {
+function boxIntervalsAlong(mesh, axis) {
   mesh.updateMatrixWorld(true);
   const pos = mesh.geometry.attributes.position;
   // boxes built with end caps have +-y faces (24 vertices each); open (low
@@ -72,22 +74,38 @@ function boxIntervalsX(mesh) {
     let lo = Infinity, hi = -Infinity;
     for (let i = s; i < s + perBox; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
-      lo = Math.min(lo, v.x * 100); hi = Math.max(hi, v.x * 100);
+      const c = (axis === 'x' ? v.x : v.z) * 100;
+      lo = Math.min(lo, c); hi = Math.max(hi, c);
     }
     out.push([lo, hi]);
   }
   return out.sort((a, b) => a[0] - b[0]);
 }
 
-/** The max clear gap along x between the front run's vertical members. */
-function frontMaxGap(g) {
+/** The x-intervals (cm) of every separate box in a merged box geometry. */
+const boxIntervalsX = mesh => boxIntervalsAlong(mesh, 'x');
+
+/**
+ * The max clear gap along a run's own axis between its vertical members,
+ * INCLUDING the run's fixed boundaries: for 'front' the two ends of the
+ * railing span (already posts/solid, so no extra boundary is added here);
+ * for 'left'/'right' the building face at z = 0 and the front corner post
+ * that the side run butts up against at its far end.
+ */
+function runMaxGap(g, runName) {
+  const axis = runName === 'front' ? 'x' : 'z';
   const members = [];
-  meshes(g, m => m.userData.run === 'front' && m.userData.vertical).forEach(m => members.push(...boxIntervalsX(m)));
+  meshes(g, m => m.userData.run === runName && m.userData.vertical).forEach(m => members.push(...boxIntervalsAlong(m, axis)));
+  if (runName !== 'front') {
+    members.push([0, 0]); // the building face, z = 0
+    meshes(g, m => m.userData.run === 'front' && m.userData.role === 'post').forEach(m => members.push(...boxIntervalsAlong(m, axis)));
+  }
   members.sort((a, b) => a[0] - b[0]);
   let max = 0;
   for (let i = 1; i < members.length; i++) max = Math.max(max, members[i][0] - members[i - 1][1]);
   return { max, count: members.length };
 }
+const frontMaxGap = g => runMaxGap(g, 'front');
 
 // ---- 1. envelope ---------------------------------------------------------------
 {
@@ -126,6 +144,21 @@ function frontMaxGap(g) {
     // with Math.floor instead of Math.ceil fails DEFAULTS.
     check(tag + ': front max clear gap <= 10 cm', count > 2 && max <= 10 + 1e-6, { max, count });
     check(tag + ': front clear gap is real (> 1 cm)', max > 1, { max });
+  }
+  // Side runs (leftSide/rightSide: 'railing'): the same <= 10 cm clear-gap
+  // rule applies, including the gap at the building face (z = 0) and at the
+  // front corner post the side run butts against.
+  for (const [tag, params] of [['DEFAULTS', {}], ['barSpacing 25 asks for too much', { barSpacing: 25 }],
+    ['small', { width: 200, depth: 90 }]]) {
+    const g = B.build(THREE, params, { detail: 'full' });
+    for (const side of ['left', 'right']) {
+      const { max, count } = runMaxGap(g, side);
+      // Mutation: side run starting at z = 14 instead of 0 (a 14 cm gap at
+      // the building face) -> fails, because z = 0 is included as a
+      // boundary member here even though it is not part of the run itself.
+      check(tag + ': ' + side + ' max clear gap <= 10 cm', count > 1 && max <= 10 + 1e-6, { max, count });
+      check(tag + ': ' + side + ' clear gap is real (> 1 cm)', max > 1, { max });
+    }
   }
   // The DEFAULT bars: about barSpacing apart, so not needlessly dense.
   const g = B.build(THREE, {}, { detail: 'full' });
