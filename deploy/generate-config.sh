@@ -163,6 +163,14 @@ esac
 WS_RECONNECT=$(json_int "$HOME3D_WS_RECONNECT_MS" 5000)
 POLL_INTERVAL=$(json_int "$HOME3D_POLL_INTERVAL_MS" 5000)
 
+# The diagnostics page's Save button (docs/diagnostics.md). true ONLY when
+# deploy/entrypoint.sh has switched the save endpoint on and says so; a
+# standalone static deploy has no endpoint, so it stays false there.
+case "${HOME3D_DIAGNOSTICS_SAVE:-}" in
+  true) DIAG_SAVE=true ;;
+  *)    DIAG_SAVE=false ;;
+esac
+
 VERSION=$APP_VERSION
 [ -z "$VERSION" ] && VERSION=dev
 
@@ -197,7 +205,8 @@ window.HOME3D_CONFIG = {
   token: $J_TOKEN,
   house: $J_HOUSE,
   wsReconnectMs: $WS_RECONNECT,
-  pollIntervalMs: $POLL_INTERVAL
+  pollIntervalMs: $POLL_INTERVAL,
+  diagnosticsSave: $DIAG_SAVE
 };
 EOF
 
@@ -270,6 +279,20 @@ else
   log "note: $ROOT/index.html not found; skipped version stamping"
 fi
 
+# The /diagnostics page (diagnostics.html) carries the same placeholders on
+# its import map and module imports, and is stamped the same way. Optional:
+# a web root without it is not an error.
+if [ -f "$ROOT/diagnostics.html" ] && grep -q '__VERSION__' "$ROOT/diagnostics.html" 2>/dev/null; then
+  STAMP_TMP="$ROOT/.diagnostics.html.$$"
+  if sed "s|__VERSION__|${SAFE_VERSION}|g" "$ROOT/diagnostics.html" > "$STAMP_TMP"; then
+    mv "$STAMP_TMP" "$ROOT/diagnostics.html"
+    log "stamped version '$SAFE_VERSION' into diagnostics.html"
+  else
+    rm -f "$STAMP_TMP"
+    log "WARN: could not stamp the version into diagnostics.html; left unchanged."
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # Stamp every RELATIVE ES-module import with the same version.
 #
@@ -281,7 +304,7 @@ fi
 # every returning client ("does not provide an export named ..."). Every
 # module URL has to change per release, so no module graph can mix versions.
 #
-# WHAT. In src/**/*.js, specs/*.html, specs/*.jsx and index.html, every quoted
+# WHAT. In src/**/*.js, specs/*.html, specs/*.jsx, index.html and diagnostics.html, every quoted
 # specifier starting ./ or ../ that follows `from`, `import` or `import(` gets
 # ?v=<version>, replacing any query it already had. Idempotent, and a restart
 # with a different APP_VERSION restamps cleanly. Bare specifiers ('three') and
@@ -299,7 +322,7 @@ STAMP_SED="s@((from|import)[[:space:]]*[(]?[[:space:]]*)(['\"])([.][.]?/[^'\"?#]
 stamped_files=0
 for f in $(find "$ROOT/src" -type f -name '*.js' 2>/dev/null) \
          $(find "$ROOT/specs" -maxdepth 1 -type f \( -name '*.html' -o -name '*.jsx' \) 2>/dev/null) \
-         "$ROOT/index.html"
+         "$ROOT/index.html" "$ROOT/diagnostics.html"
 do
   [ -f "$f" ] || continue
   IMPORT_TMP="$f.stamp.$$"
