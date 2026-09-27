@@ -186,6 +186,9 @@ export const DEFAULTS = Object.freeze({
   overlayFronts: false,
   color: '#f2f0ec',
   topColor: '#f2f0ec',
+  // Multiplies the colour of the matte/satin/gloss body (see BODY_GAIN): > 1
+  // lifts a white that the scene's tone mapping renders grey.
+  gain: 1,
   shelfLights: false,
   handles: true,
   // null: both carcass sides are plain (see the tall display cabinet preset
@@ -204,8 +207,20 @@ export function resolveFinish(p) {
 }
 
 /** A material from the shared palette, with keep-flag bookkeeping left to the caller. */
+// The body gain of the cabinet being built (params.gain, set by build() for
+// the duration of one synchronous build). It multiplies the colour of every
+// matte / satin / gloss part -- the carcass, the fronts, the top -- so a white
+// can read WHITE under the scene's tone mapping (a colour of #ffffff alone
+// renders light grey there). Linear, may exceed 1, like model.js's gain;
+// merge.js carries such colours in its float vertex colours. Glass, mirror,
+// metal and emissive parts are left alone.
+let BODY_GAIN = 1;
+const GAIN_FINISHES = Object.freeze(['matte', 'satin', 'gloss']);
+
 function finish(THREE, cls, color) {
-  return makeFinish(THREE, cls, color);
+  const m = makeFinish(THREE, cls, color);
+  if (BODY_GAIN !== 1 && GAIN_FINISHES.indexOf(m.userData.finish) !== -1) m.color.multiplyScalar(BODY_GAIN);
+  return m;
 }
 
 function tag(mesh, name) {
@@ -254,11 +269,15 @@ const STRIP_PROUD = 0.002;     // the LED strip's face in front of the channel f
 const GLOW_SHARE = 0.35;       // the glow band: this much LED colour over the front's colour
 const GLOW_DIM = 1;            // ... at this brightness (the base white carries the rest)
 // A level that follows a light (channel.light) washes the drawer front below
-// it in WASH_WEIGHTS.length bands over the top WASH_SHARE of that front (at
-// most WASH_MAX_H), strongest at the channel.
-const WASH_WEIGHTS = Object.freeze([1, 0.6, 0.33, 0.15]);
+// it: one unlit quad over the top WASH_SHARE of that front (at most
+// WASH_MAX_H), WASH_OFF in front of it, its alpha falling smoothly through
+// WASH_ALPHA's rows (top first) -- a soft glow that is strongest at the
+// channel, with no hard band edge and nothing coplanar with the front.
 const WASH_SHARE = 0.45;
 const WASH_MAX_H = 0.08;
+const WASH_OFF = 0.0006;
+const WASH_ALPHA = Object.freeze([1, 0.72, 0.42, 0.16, 0]);
+const WASH_OPACITY = 0.8;
 const STRIP_BACK_T = 0.006;    // the carcass back's thickness (full detail): side strips start 2 cm in front of it
 
 /** Is the fronts row a light channel? */
@@ -410,21 +429,38 @@ function leafRect(x0, x1, yBot, yTop, revealY, edges) {
 /** A leaf, optionally with a glow band along its top edge (below a light channel). */
 function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor, glowLight) {
   if (glowColor && glowLight) {
-    // A level that FOLLOWS a light washes the front below it: WASH_WEIGHTS
-    // bands, top down, each a slice of the same front in the same plane,
-    // fading from the channel (light-parts.js scales each by its weight).
+    // A level that FOLLOWS a light washes the front below it: the leaf stays
+    // whole, and ONE unlit quad lies WASH_OFF in front of its top, fading
+    // smoothly (vertex alpha over WASH_ALPHA's rows) from the channel down
+    // over min(WASH_MAX_H, WASH_SHARE of the leaf). light-parts.js colours it
+    // and sets its opacity from the channel's state; off, it is hidden.
     const base = /^#[0-9a-fA-F]{6}$/.test(baseColor) ? baseColor : '#ffffff';
     const washH = Math.min(WASH_MAX_H, (r.ly1 - r.ly0) * WASH_SHARE);
-    const step = washH / WASH_WEIGHTS.length;
-    WASH_WEIGHTS.forEach((w, i) => {
-      const band = slab(THREE, group, finish(THREE, 'emissive', glowTint(glowColor, baseColor)),
-        r.lx0, r.lx1, r.ly1 - step * (i + 1), r.ly1 - step * i, faceZ - T, faceZ, 'channelGlow');
-      band.castShadow = false;
-      tagLightPart(band, glowLight, 'glow');
-      band.userData.baseColor = base;
-      band.userData.glowWeight = w;
+    const w = r.lx1 - r.lx0;
+    const geo = new THREE.PlaneGeometry(w, washH, 1, WASH_ALPHA.length - 1);
+    const n = geo.attributes.position.count;           // 2 per row, top row first
+    const rgba = new Float32Array(n * 4);
+    for (let v = 0; v < n; v++) {
+      rgba.set([1, 1, 1, WASH_ALPHA[Math.floor(v / 2)]], v * 4);
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(rgba, 4));
+    const washMat = new THREE.MeshBasicMaterial({
+      color: glowColor, vertexColors: true, transparent: true, opacity: WASH_OPACITY,
+      depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
     });
-    return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1 - washH, faceZ - T, faceZ, name);
+    washMat.userData.finish = 'emissive';
+    const wash = new THREE.Mesh(geo, washMat);
+    wash.position.set((r.lx0 + r.lx1) / 2, r.ly1 - washH / 2, faceZ + WASH_OFF);
+    wash.name = 'channelGlow';
+    wash.userData.keep = true;
+    wash.castShadow = false;
+    wash.receiveShadow = false;
+    wash.renderOrder = 1;
+    group.add(wash);
+    tagLightPart(wash, glowLight, 'glow');
+    wash.userData.baseColor = base;
+    wash.userData.wash = true;
+    return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1, faceZ - T, faceZ, name);
   }
   if (glowColor) {
     // The glow band is part of the leaf -- the top slice of the same front,
@@ -1092,6 +1128,16 @@ function buildContents(THREE, group, kind, b) {
  */
 export function build(THREE, params, opts) {
   const p = Object.assign({}, DEFAULTS, params);
+  const gain = typeof p.gain === 'number' && Number.isFinite(p.gain) && p.gain > 0 ? p.gain : 1;
+  BODY_GAIN = gain;
+  try {
+    return buildCabinet(THREE, p, opts);
+  } finally {
+    BODY_GAIN = 1;
+  }
+}
+
+function buildCabinet(THREE, p, opts) {
   const detail = (opts && opts.detail) || 'full';
   const low = detail === 'low';
 

@@ -1503,6 +1503,12 @@
           "$ref": "#/$defs/hexColor",
           "default": "#f2f0ec"
         },
+        "gain": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1,
+          "description": "Multiplies the colour of the matte/satin/gloss body (carcass, fronts, top); linear, may exceed 1. A white body renders light grey under the scene's tone mapping, and > 1 lifts it back to white (the LED bedside tables use 1.5). Glass, mirror, metal and emissive parts are not affected."
+        },
         "shelfLights": {
           "type": "boolean",
           "default": false,

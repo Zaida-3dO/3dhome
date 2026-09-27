@@ -216,25 +216,22 @@ function levelFixtures(preset, centreY, side) {
   pose({ on: true, bri: 100, color: '#ff0000' }, { on: false, bri: 100, color: '#00ff00' });
   check('top ON: its strips show, in its colour, lit', of('bedside_north_top', 'strip').every(o =>
     o.visible && hex(o.material.color) === '#ff0000' && hex(o.material.emissive) === '#ff0000' && o.material.emissiveIntensity >= 0.99));
-  const band = of('bedside_north_top', 'glow').find(o => o.userData.glowWeight === 1);
-  const faint = of('bedside_north_top', 'glow').find(o => o.userData.glowWeight === 0.15);
-  check('top ON: the wash fades down the drawer (the band at the channel is redder and brighter than the lowest)',
-    band && faint && band.material.color.g < faint.material.color.g - 0.2 &&
-    band.material.emissiveIntensity > faint.material.emissiveIntensity * 3, [hex(band.material.color), hex(faint.material.color)]);
-  check('top ON: the drawer below is washed in its colour (red over white)', band &&
-    band.material.color.r > band.material.color.g + 0.3 && band.material.emissiveIntensity > 0.9 &&
-    hex(band.material.emissive) === hex(band.material.color), hex(band.material.color));
+  const wash = of('bedside_north_top', 'glow')[0];
+  check('top ON: the drawer below is washed in its colour (one visible unlit quad, in red)', wash &&
+    wash.visible && wash.userData.wash === true && hex(wash.material.color) === '#ff0000' &&
+    Math.abs(wash.material.opacity - LP.WASH_MAX_OPACITY) < 1e-9, wash && [wash.visible, hex(wash.material.color), wash.material.opacity]);
   check('bottom OFF: its strips are hidden (just the recess)', of('bedside_north_bottom', 'strip').every(o => !o.visible));
-  const offBands = of('bedside_north_bottom', 'glow');
-  check('bottom OFF: its drawer is the plain front, every band of it', offBands.length === 4 && offBands.every(b =>
-    hex(b.material.color) === p.color && hex(b.material.emissive) === '#000000' && b.material.emissiveIntensity === 0),
-    offBands.map(b => [hex(b.material.color), hex(b.material.emissive)]));
+  const offWash = of('bedside_north_bottom', 'glow');
+  check('bottom OFF: its wash is hidden, leaving the plain front', offWash.length === 1 && offWash.every(o => !o.visible));
 
-  const fullG = band.material.color.g, fullK = band.material.emissiveIntensity;
+  const fullOpacity = wash.material.opacity;
   pose({ on: true, bri: 10, color: '#ff0000' }, { on: true, bri: 100, color: '#0000ff' });
-  const dim = band.material;
-  check('top at 10%: the wash is weaker than at 100% (less red over the white, dimmer)',
-    dim.color.g > fullG + 0.1 && dim.emissiveIntensity < fullK - 0.3, [hex(dim.color), dim.emissiveIntensity, fullG, fullK]);
+  check('top at 10%: the wash is fainter than at 100%, but still there',
+    wash.visible && wash.material.opacity < fullOpacity - 0.4 && wash.material.opacity >= LP.WASH_MAX_OPACITY * LP.WASH_MIN_SHARE - 1e-9,
+    [wash.material.opacity, fullOpacity]);
+  check('bottom back ON: its wash shows again, in the new colour', offWash.every(o => o.visible && hex(o.material.color) === '#0000ff'));
+  pose({ on: true, bri: 0, color: '#ff0000' }, { on: true, bri: 100, color: '#0000ff' });
+  check('on at 0%: no wash', !wash.visible);
   check('bottom back ON: its strips show again, in the new colour', of('bedside_north_bottom', 'strip').every(o =>
     o.visible && hex(o.material.color) === '#0000ff'));
   check('a dimmed strip still reads lit', of('bedside_north_top', 'strip').every(o => o.material.emissiveIntensity >= LP.STRIP_MIN_INTENSITY));
