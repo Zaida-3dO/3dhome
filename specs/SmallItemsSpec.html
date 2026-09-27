@@ -174,11 +174,27 @@ const PRESETS = {
     // render at its full requested depth rather than being clamped to fit.
     'Flat, on riser': { riser: true, depth: 25 },
     'Curved super-ultrawide': { curved: true },
-    'Curved, on riser': { curved: true, riser: true, depth: 25 }
+    'Curved, on riser': { curved: true, riser: true, depth: 25 },
+    // A 49in 32:9 super-ultrawide on a true 1000R arc (curveRadius 100),
+    // from a maker's published set dimensions: 114.76 wide, 53.72 high and
+    // 41.64 deep on its stand, 36.35 high and 29.1 deep without it, an
+    // active area 119.19 x 33.52 (so a ~1.5 bezel). The foot is not
+    // published; 37 x 30 is a measured approximation. Black bezel, white
+    // gloss back and stand, and the round light ring on the back.
+    'Curved 49in 32:9, 1000R, white': {
+      curved: true, curveRadius: 100, width: 114.8, height: 53.7, depth: 41.6,
+      panelHeight: 36.4, panelDepth: 29.1, bezel: 1.5, color: '#111111', coreLight: true
+    },
+    'Curved 49in 32:9, 1000R, white, dark stand': {
+      curved: true, curveRadius: 100, width: 114.8, height: 53.7, depth: 41.6,
+      panelHeight: 36.4, panelDepth: 29.1, bezel: 1.5, color: '#111111', coreLight: true,
+      standColor: '#1c1c1e', standFinish: 'matte'
+    }
   },
   'pc-tower': {
     'Glass side panel': {},
-    'No glass panel': { glassPanel: false }
+    'No glass panel': { glassPanel: false },
+    'White, glass side panel': { color: '#f1f1ef', glassColor: '#e2ecef', interiorColor: '#e6e6e4' }
   }
 };
 
@@ -231,10 +247,19 @@ function addLampPreview(THREE, group, p, lamp) {
   wall.receiveShadow = true;
   group.add(floor, wall);
   if (!lamp.on) return;
+  // The brightness is spread over five lights along the tube, a little in
+  // front of it, so the light falls as a soft band the tube's length rather
+  // than a blown-out disc on the wall a few cm behind. A one-sided lamp
+  // glows towards the room only, so its lights sit further forward and the
+  // wall behind gets the spill, not the full glare.
   const baseH = Math.min(p.baseHeight, p.height * 0.5) / 100;
-  const light = new THREE.PointLight(new THREE.Color(p.color), lamp.brightness, 6, 2);
-  light.position.set(0, baseH + (p.height / 100 - baseH) / 2, Math.min(p.width, p.depth) / 200);
-  group.add(light);
+  const tubeH = p.height / 100 - baseH;
+  const cz = Math.min(p.width, p.depth) / 200 + (p.oneSidedGlow ? 0.25 : 0.15);
+  [0.1, 0.3, 0.5, 0.7, 0.9].forEach(f => {
+    const light = new THREE.PointLight(new THREE.Color(p.color), lamp.brightness / 5, 6, 2);
+    light.position.set(0, baseH + tubeH * f, cz);
+    group.add(light);
+  });
 }
 
 function heightOfItem(t) {
@@ -256,7 +281,7 @@ function SmallItemObject({ type }) {
   const [copied, setCopied] = React.useState(false);
   // Tube floor lamp light preview (page-only): on/off and brightness; the
   // colour is the lamp's own `color` param.
-  const [lamp, setLamp] = React.useState({ on: true, brightness: 3 });
+  const [lamp, setLamp] = React.useState({ on: true, brightness: 1 });
 
   if (!ready) {
     return <div className="sub">Loading src/furniture/small-items.js…</div>;
@@ -330,7 +355,7 @@ function SmallItemObject({ type }) {
                 <input type="color" value={params.color} onChange={e => setParam('color', e.target.value)} />
               </label>
               <label className="legend" style={{ marginTop: 0 }}>brightness{' '}
-                <input type="range" min="0" max="10" step="0.5" value={lamp.brightness}
+                <input type="range" min="0" max="4" step="0.1" value={lamp.brightness}
                   onChange={e => setLamp(Object.assign({}, lamp, { brightness: Number(e.target.value) }))} />
               </label>
             </div>

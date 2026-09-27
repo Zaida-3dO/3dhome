@@ -128,7 +128,9 @@ const SMALL = [
   ['monitor: flat', 'monitor', P('monitor')],
   ['monitor: flat on riser', 'monitor', P('monitor', { riser: true, depth: 25 })],
   ['monitor: curved', 'monitor', P('monitor', { curved: true })],
-  ['pc-tower', 'pc-tower', P('pc-tower')]
+  ['monitor: curved 49in 1000R', 'monitor', P('monitor', { curved: true, curveRadius: 100, width: 114.8, height: 53.7, depth: 41.6, panelHeight: 36.4, panelDepth: 29.1, bezel: 1.5, color: '#111111', coreLight: true })],
+  ['pc-tower', 'pc-tower', P('pc-tower')],
+  ['pc-tower: white', 'pc-tower', P('pc-tower', { color: '#f1f1ef', glassColor: '#e2ecef', interiorColor: '#e6e6e4' })]
 ];
 SMALL.forEach(([tag, type, p]) => run(tag, T[type].build, p));
 

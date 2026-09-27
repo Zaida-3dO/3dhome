@@ -131,6 +131,14 @@ function paramsFor(type, delta) {
   return Object.assign({}, T[type].DEFAULTS, delta || {});
 }
 
+// The curved 49in 32:9 1000R preset and the white tower, exactly as
+// specs/SmallItemsSpec.html declares them.
+const G9 = Object.freeze({
+  curved: true, curveRadius: 100, width: 114.8, height: 53.7, depth: 41.6,
+  panelHeight: 36.4, panelDepth: 29.1, bezel: 1.5, color: '#111111', coreLight: true
+});
+const WHITE_TOWER = Object.freeze({ color: '#f1f1ef', glassColor: '#e2ecef', interiorColor: '#e6e6e4' });
+
 const CASES = [
   // ---- tv ----
   ['tv: flat, thin bezel', 'tv', paramsFor('tv')],
@@ -183,10 +191,14 @@ const CASES = [
   ['monitor: flat, on riser', 'monitor', paramsFor('monitor', { riser: true, depth: 25 })],
   ['monitor: curved super-ultrawide', 'monitor', paramsFor('monitor', { curved: true })],
   ['monitor: curved, on riser', 'monitor', paramsFor('monitor', { curved: true, riser: true, depth: 25 })],
+  ['monitor: curved 49in 1000R, white', 'monitor', paramsFor('monitor', G9)],
+  ['monitor: curved 49in 1000R, white, dark stand', 'monitor', paramsFor('monitor', Object.assign({}, G9, { standColor: '#1c1c1e', standFinish: 'matte' }))],
+  ['monitor: curved 49in 1000R, on riser', 'monitor', paramsFor('monitor', Object.assign({}, G9, { riser: true, height: G9.height + 10 }))],
 
   // ---- pc-tower ----
   ['pc-tower: glass side panel', 'pc-tower', paramsFor('pc-tower')],
-  ['pc-tower: no glass panel', 'pc-tower', paramsFor('pc-tower', { glassPanel: false })]
+  ['pc-tower: no glass panel', 'pc-tower', paramsFor('pc-tower', { glassPanel: false })],
+  ['pc-tower: white, glass side panel', 'pc-tower', paramsFor('pc-tower', WHITE_TOWER)]
 ];
 
 for (const [tag, type, p] of CASES) {
@@ -372,6 +384,91 @@ checkSpeakerFront('subwoofer', 'subwoofer', paramsFor('subwoofer'), true);
   });
   check('tube lamp: the base is designed (foot, chamfer, collar, trim) plus a tube cap', baseParts >= 5 && metalParts >= 2,
     { baseParts, metalParts });
+}
+
+// ============================================================================
+// monitor, curveRadius > 0 (item ac6ae502): a TRUE arc of that radius, its
+// back where the maker's "without stand" depth puts it, and each part in
+// its own colour.
+// ============================================================================
+function colourOf(o) { return '#' + o.material.color.getHexString(); }
+{
+  // The dark-stand variant, so the stand's colour differs from the back's.
+  const p = paramsFor('monitor', Object.assign({}, G9, { standColor: '#1c1c1e', standFinish: 'matte' }));
+  const g = T.monitor.build(THREE, p, { detail: 'full' });
+  g.updateMatrixWorld(true);
+  const screen = named(g, 'monitorScreen'), bezel = named(g, 'monitorBezel'), shell = named(g, 'monitorBackShell');
+  check('monitor arc: a screen, a bezel skin and a back shell', screen.length === 1 && bezel.length === 1 && shell.length === 1);
+  if (screen.length) {
+    // Every screen vertex lies on one of two circles round the same vertical
+    // axis: the front face (R - 2mm) and the back face (3mm behind it). The
+    // axis sits where the front corners at z = depth put it.
+    const R = p.curveRadius / 100, d = p.depth / 100, halfW = p.width / 200;
+    const zc = d + Math.sqrt(R * R - halfW * halfW);
+    const pos = screen[0].geometry.attributes.position;
+    let front = 0, bad = 0;
+    for (let i = 0; i < pos.count; i++) {
+      const r = Math.hypot(pos.getX(i), zc - pos.getZ(i));
+      if (Math.abs(r - (R - 0.002)) < 1e-4) front++;
+      else if (Math.abs(r - (R - 0.005)) >= 1e-4) bad++;
+    }
+    check('monitor arc: the screen is bent round the declared radius', front > 20 && bad === 0, { front, bad });
+    // The sag: the screen's centre is well behind its ends (a 1000R arc
+    // 115cm across sags ~18cm).
+    const sb = meshBox(screen[0]);
+    check('monitor arc: the screen curves ~18cm deep over its width', near((sb.max.z - sb.min.z) * 100, 18, 1.5), (sb.max.z - sb.min.z) * 100);
+  }
+  const housing = named(g, 'monitorHousing');
+  check('monitor arc: a rear housing whose back is at depth - panelDepth', housing.length === 1 &&
+    near(meshBox(housing[0]).min.z * 100, p.depth - p.panelDepth, 0.1), housing.length && meshBox(housing[0]).min.z * 100);
+  const foot = named(g, 'monitorFoot'), neck = named(g, 'monitorNeck');
+  check('monitor arc: a foot on the floor and a neck up to the panel', foot.length === 1 && neck.length === 1 &&
+    near(meshBox(foot[0]).min.y, 0, 1e-6) && near(meshBox(neck[0]).max.y * 100, p.height - p.panelHeight / 2, 0.1));
+  if (bezel.length && shell.length && foot.length && neck.length && housing.length) {
+    check('monitor arc: bezel in `color`, back in `backColor`, stand in `standColor`',
+      colourOf(bezel[0]) === p.color && colourOf(shell[0]) === p.backColor && colourOf(housing[0]) === p.backColor &&
+      colourOf(foot[0]) === p.standColor && colourOf(neck[0]) === p.standColor,
+      [colourOf(bezel[0]), colourOf(shell[0]), colourOf(foot[0])]);
+  }
+  const ring = named(g, 'monitorCoreLight');
+  check('monitor arc: coreLight is a glowing ring on the back, kept', ring.length === 1 && housing.length === 1 &&
+    Fin.partFinish(ring[0], ring[0].material).finish === 'emissive' && Fin.partKeep(ring[0], ring[0].material).keep === true &&
+    meshBox(ring[0]).max.z < meshBox(housing[0]).min.z + 0.01);
+  const noRing = T.monitor.build(THREE, paramsFor('monitor', Object.assign({}, G9, { coreLight: false })), { detail: 'full' });
+  check('monitor arc: coreLight:false has no ring', named(noRing, 'monitorCoreLight').length === 0);
+  // curveRadius 0 is the old segmented bow, untouched.
+  const legacy = T.monitor.build(THREE, paramsFor('monitor', { curved: true }), { detail: 'full' });
+  check('monitor: curveRadius 0 keeps the segmented bow', named(legacy, 'monitorScreen').length === 0 && triCount(legacy) > 0);
+}
+
+// ============================================================================
+// pc-tower (item ac6ae502): through the glass, a real inside; in the colours
+// asked for; nothing crossing the glass.
+// ============================================================================
+{
+  const p = paramsFor('pc-tower', WHITE_TOWER);
+  const g = T['pc-tower'].build(THREE, p, { detail: 'full' });
+  g.updateMatrixWorld(true);
+  const parts = ['towerShroud', 'towerBoard', 'towerGpu', 'towerCooler', 'towerFan'];
+  check('pc-tower: board, cooler + fan, graphics card and shroud inside', parts.every(n => named(g, n).length === 1),
+    parts.map(n => named(g, n).length));
+  const glass = named(g, 'towerGlass');
+  check('pc-tower: one glass side panel, in glassColor, kept', glass.length === 1 && colourOf(glass[0]) === p.glassColor &&
+    Fin.partKeep(glass[0], glass[0].material).keep === true);
+  if (glass.length) {
+    const gx = meshBox(glass[0]).min.x;
+    const crossing = parts.flatMap(n => named(g, n)).filter(o => meshBox(o).max.x > gx - 1e-6);
+    check('pc-tower: nothing inside reaches the glass', crossing.length === 0, crossing.map(o => o.name));
+  }
+  if (parts.every(n => named(g, n).length === 1)) {
+    check('pc-tower: the case in `color`, the board in `interiorColor`',
+      colourOf(named(g, 'towerTop')[0]) === p.color && colourOf(named(g, 'towerShroud')[0]) === p.color &&
+      colourOf(named(g, 'towerBoard')[0]) === p.interiorColor && colourOf(named(g, 'towerGpu')[0]) === p.interiorColor);
+  }
+  const low = T['pc-tower'].build(THREE, p, { detail: 'low' });
+  check('pc-tower low: the plain box, no inside', named(low, 'towerBoard').length === 0);
+  const solid = T['pc-tower'].build(THREE, paramsFor('pc-tower', { glassPanel: false }), { detail: 'full' });
+  check('pc-tower no glass: no inside built', named(solid, 'towerBoard').length === 0 && named(solid, 'towerGlass').length === 0);
 }
 
 // ============================================================================
