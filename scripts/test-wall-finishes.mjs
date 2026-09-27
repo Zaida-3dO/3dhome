@@ -13,7 +13,7 @@
  *      face -- `exterior`, a compass side, or a `room` -- to the right plan
  *      normal, and drops bad entries with a warning.
  *   2. The brick IS the spec pages' brick: every constant that sets its look
- *      is read out of specs/WindowSpec.html and specs/BalconyWindowSpec.html
+ *      is read out of both window objects' blocks in specs/WindowSpec.html
  *      and compared, so they cannot drift apart.
  *   3. The tiles (brick and the tile placeholder) are deterministic; brick is
  *      running bond, uses all six shades within the spec's +/-9 jitter, and a
@@ -137,8 +137,25 @@ function house(extraSegments) {
 }
 
 // ---- 2. the brick is the spec pages' brick ----------------------------------
-for (const page of ['specs/WindowSpec.html', 'specs/BalconyWindowSpec.html']) {
-  const src = fs.readFileSync(path.join(root, page), 'utf8');
+// Both window objects (the pivot window and the balcony window) live on
+// specs/WindowSpec.html, each in its own <script type="text/babel"> block
+// (BalconyWindowSpec.html is a redirect stub since the spec-page regroup), so
+// each block's copy of the brick is checked on its own.
+const brickCopies = [];
+{
+  const html = fs.readFileSync(path.join(root, 'specs/WindowSpec.html'), 'utf8');
+  const re = /<script type="text\/babel">([\s\S]*?)<\/script>/g;
+  let m;
+  while ((m = re.exec(html))) {
+    if (!m[1].includes('function makeBrickTexture')) continue;
+    const id = (m[1].match(/window\.__specObjects\['([^']+)'\]/) || [])[1] || '?';
+    brickCopies.push(['specs/WindowSpec.html#' + id, m[1]]);
+  }
+}
+check("WindowSpec.html carries both window objects' brick (pivot + balcony)",
+  brickCopies.map(c => c[0]).join() === 'specs/WindowSpec.html#pivot-window,specs/WindowSpec.html#balcony-window',
+  brickCopies.map(c => c[0]));
+for (const [page, src] of brickCopies) {
   const num = re => { const m = src.match(re); return m ? Number(m[1]) : NaN; };
   check(page + ': BRICK_MODULE_W', num(/BRICK_MODULE_W\s*=\s*([\d.]+)/) === F.BRICK_MODULE_W);
   check(page + ': BRICK_MODULE_H', num(/BRICK_MODULE_H\s*=\s*([\d.]+)/) === F.BRICK_MODULE_H);

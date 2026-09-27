@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Model Spec — a .glb from the house profile</title>
+<title>Imported model — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -35,6 +35,18 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Imported model",
+  "description": "All units cm. A piece of furniture drawn from a .glb that lives in the house profile, fitted into width × depth × height. Demo file: a CC0 test armchair.",
+  "objects": [
+    { "id": "model", "label": "Imported model", "types": ["model"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -142,9 +154,7 @@ function App() {
     setTimeout(() => setCopied(false), 1500);
   };
   return (
-    <>
-      <h1>Model Spec</h1>
-      <div className="sub">All units cm. A piece of furniture drawn from a .glb that lives in the house profile, fitted into width × depth × height. Demo file: a CC0 test armchair.</div>
+    <SpecPage>
 
       <div className="grid">
         <div className="card">
@@ -202,7 +212,7 @@ function App() {
         <TweakSection label="Failure" />
         <TweakToggle label="Missing file" value={t.missing} onChange={v => setTweak('missing', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

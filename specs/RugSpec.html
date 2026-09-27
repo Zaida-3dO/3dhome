@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rug Spec — Tweakable</title>
+<title>Rug — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -34,6 +34,19 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). A procedural rug LOOK, not a furniture type
+     yet, so it signs off no registry type. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Rug",
+  "description": "All units cm. A procedural shag-rug look: zig-zag bands through a palette, with seeded pile noise. Use the Tweaks panel to change it.",
+  "objects": [
+    { "id": "rug", "label": "Rug", "types": [] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -191,8 +204,7 @@ function App() {
     else setCopied('clipboard unavailable — select the JSON below');
   };
   return (
-    <>
-      <h1>Rug Spec</h1>
+    <SpecPage>
       <div className="sub">
         All units cm. A procedural shag-rug look: zig-zag bands through a palette, with seeded pile noise.
         {TEXTURE_URL ? ' Previewing an IMAGE from ?texture= (the procedural pattern is off).' : ''}
@@ -267,7 +279,7 @@ function App() {
         <TweakSlider label="Depth" value={t.depthCm} min={40} max={300} step={1} unit="cm"
           onChange={v => setTweak('depthCm', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

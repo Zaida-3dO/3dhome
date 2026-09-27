@@ -522,7 +522,7 @@
     "window": {
       "type": "object",
       "title": "A window or a balcony glazing run",
-      "description": "An opening carved through a wall plus a glazed assembly, positioned exactly like a door: `wall` id + `centre` along it, so it follows the wall when the wall moves.\n\nWhich face of the wall is the room's is DERIVED from `room` (the side of the wall's centreline the room lies on), so there is no inside/outside field to contradict it.\n\nThe frame sits flush with the host wall's OUTER face and reaches into the wall; the room side of the wall shows a plain reveal. For a cavity wall modelled as two parallel segments (an inner and an outer leaf), put the frame's leaf in `wall` and the other leaf in `throughWalls`: the opening is cut through both and the cill spans the whole sandwich.\n\nTwo kinds, after the two spec pages:\n  window  — WindowSpec: a fixed lower pane under a centre-pivot upper sash, split by a transom at `topSplit`.\n  balcony — BalconyWindowSpec: a wide fixed pane beside a hinged glass door that swings OUTWARD, the door at the `doorSide` end.\n\nAdded in schemaVersion 1.1.",
+      "description": "An opening carved through a wall plus a glazed assembly, positioned exactly like a door: `wall` id + `centre` along it, so it follows the wall when the wall moves.\n\nWhich face of the wall is the room's is DERIVED from `room` (the side of the wall's centreline the room lies on), so there is no inside/outside field to contradict it.\n\nThe frame sits flush with the host wall's OUTER face and reaches into the wall; the room side of the wall shows a plain reveal. For a cavity wall modelled as two parallel segments (an inner and an outer leaf), put the frame's leaf in `wall` and the other leaf in `throughWalls`: the opening is cut through both and the cill spans the whole sandwich.\n\nTwo kinds, after the two spec pages:\n  window  — WindowSpec (Pivot window): a fixed lower pane under a centre-pivot upper sash, split by a transom at `topSplit`.\n  balcony — the Balcony window on WindowSpec: a wide fixed pane beside a hinged glass door that swings OUTWARD, the door at the `doorSide` end.\n\nAdded in schemaVersion 1.1.",
       "properties": {
         "id": {
           "type": "string",
@@ -537,7 +537,7 @@
           "type": "string",
           "enum": ["window", "balcony"],
           "default": "window",
-          "description": "`window` = fixed lower pane + centre-pivot upper sash (WindowSpec). `balcony` = fixed pane + hinged outward-swinging glass door (BalconyWindowSpec)."
+          "description": "`window` = fixed lower pane + centre-pivot upper sash (WindowSpec). `balcony` = fixed pane + hinged outward-swinging glass door (WindowSpec, Balcony window)."
         },
         "room": {
           "$ref": "#/$defs/roomId",
@@ -3978,7 +3978,7 @@
               "group": {
                 "type": "string",
                 "minLength": 1,
-                "description": "OPTIONAL section heading this spec button renders under in the Settings panel, e.g. \"Home fittings\". Purely presentational: the page recognises a fixed set of names (Doors & Windows, Home fittings, Living room, Kitchen, Bedroom, Home office, Hallway, Store) and buckets anything absent or unrecognised into an \"Other\" section, so a typo here can never hide a spec page — it just lands in the wrong bucket."
+                "description": "OPTIONAL section heading this spec button renders under in the Settings panel, e.g. \"Home fittings\". Purely presentational: the page recognises four department headings (Doors & Windows, Home fittings, Furniture, Decor & accessories -- a room spec such as a bathroom belongs under Home fittings) and buckets anything absent or unrecognised into an \"Other\" section, so a typo here can never hide a spec page — it just lands in the wrong bucket."
               }
             }
           },

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Radiator Spec — Tweakable</title>
+<title>Radiators — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -33,6 +33,18 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Radiators",
+  "description": "One design for every house radiator — a white compact panel radiator with vertical ribs, a smart valve on the END of the radiator at a chosen corner and the lockshield at the bottom of the other end, with an optional clip-on shelf or framed slatted box. Width/height/depth are ALWAYS the item's outer envelope (the body, the end-valve room and any cover); the body itself is bodyWidth/bodyHeight/bodyDepth. Pipes run down to the floor: pipeDrop, which equals the item's elevation. Defaults are the standard house radiator. Pick a variant (one per room) above, or use the Tweaks panel.",
+  "objects": [
+    { "id": "radiator", "label": "Radiator", "types": ["radiator"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -345,15 +357,14 @@ function applyPreset(setTweak, params) {
   Object.keys(params).forEach(k => setTweak(k, params[k]));
 }
 
-function PresetButtons({ setTweak }) {
+// The presets are this radiator's VARIANTS (one per room), picked from the
+// shared picker bar. Each carries a full param set, so it matches on all of
+// them; only the colours are left as you set them. `params` is passed through
+// as the SAME object, which is how applyPreset finds the preset's elevation.
+const radiatorVariantId = name => name.split(':')[0].toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+function radiatorVariants() {
   const PRESETS = window.FurnitureRadiator ? window.FurnitureRadiator.PRESETS : [];
-  return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      {PRESETS.map(p => (
-        <TweakButton key={p.name} label={p.name} onClick={() => applyPreset(setTweak, p.params)} secondary />
-      ))}
-    </div>
-  );
+  return PRESETS.map(p => ({ id: radiatorVariantId(p.name), label: p.name, params: p.params }));
 }
 
 function App() {
@@ -373,9 +384,9 @@ function App() {
   // artefact of the arithmetic.
   const wallGap = Math.round(Math.max(0, wallGapRaw) * 10) / 10;
   return (
-    <>
-      <h1>Radiator Spec</h1>
-      <div className="sub">One design for every house radiator — a white compact panel radiator with vertical ribs, a smart valve on the END of the radiator at a chosen corner and the lockshield at the bottom of the other end, with an optional clip-on shelf or framed slatted box. Width/height/depth are ALWAYS the item's outer envelope (the body, the end-valve room and any cover); the body itself is bodyWidth/bodyHeight/bodyDepth. Pipes run down to the floor: pipeDrop, which equals the item's elevation. Defaults are the standard house radiator. Use the Tweaks panel or a preset below.</div>
+    <SpecPage>
+      <SpecVariants variants={radiatorVariants()} values={t}
+        onSelect={id => applyPreset(setTweak, radiatorVariants().find(v => v.id === id).params)} />
 
       <div className="grid">
         <div className="card">
@@ -420,12 +431,6 @@ function App() {
         <div className="card full">
           <h2>Valve corner</h2>
           <CornerPicker value={t.valveCorner} onChange={v => setTweak('valveCorner', v)} />
-        </div>
-
-        <div className="card full">
-          <h2>Presets</h2>
-          <PresetButtons setTweak={setTweak} />
-          <div className="legend">One preset per room. Each sets the envelope, body size, valve corner, cover, shelf overrun and body elevation, plus the elevation it is hung at (and pipeDrop to match); only the colours stay as you left them.</div>
         </div>
 
         <div className="card full">
@@ -481,7 +486,7 @@ function App() {
         <TweakSlider label="Shelf overrun right" value={t.shelfExtendRight} min={0} max={30} step={0.5} unit="cm"
           onChange={v => setTweak('shelfExtendRight', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Wall Panel Spec — Tweakable</title>
+<title>Wall panels — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -28,6 +28,19 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). Black/oak slats are VARIANTS of the slat panel. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Wall panels",
+  "description": "All units cm. Two independent panel types built by the real furniture module (src/furniture/wall-panels.js), not a page-local reimplementation. Pick an object and a variant, then fine-tune in the Tweaks panel.",
+  "objects": [
+    { "id": "slat-panel",        "label": "Slat panel", "types": ["slat-panel"] },
+    { "id": "hex-panel-cluster", "label": "Hex panel cluster", "types": ["hex-panel-cluster"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -196,26 +209,18 @@ function App() {
   const preset = SLAT_PRESETS[t.slatPreset] || SLAT_PRESETS.black;
   const hexCount = countHexes(HEX_LIVING_ROOM_COLUMNS);
 
+  // Black/oak are VARIANTS of the slat panel (same geometry, different finish).
+  const slatVariants = Object.keys(SLAT_PRESETS)
+    .map(key => ({ id: key, label: SLAT_PRESETS[key].label, params: { slatPreset: key } }));
   return (
-    <>
-      <h1>Wall Panel Spec</h1>
-      <div className="sub">All units cm. Two independent panel types built by the real furniture module (src/furniture/wall-panels.js) — not a page-local reimplementation. Use the Tweaks panel to switch type and preset.</div>
+    <SpecPage objectId={t.panelType} onObject={id => setTweak('panelType', id)}>
+      {isSlat && <SpecVariants variants={slatVariants} values={t} onSelect={key => setTweak('slatPreset', key)} />}
 
       <div className="grid">
         <div className="card">
-          <h2>Panel type</h2>
-          <div className="row" style={{ marginTop: 0 }}>
-            <button className={isSlat ? 'btn active' : 'btn'} onClick={() => setTweak('panelType', 'slat-panel')}>Slat panel</button>
-            <button className={!isSlat ? 'btn active' : 'btn'} onClick={() => setTweak('panelType', 'hex-panel-cluster')}>Hex panel cluster</button>
-          </div>
+          <h2>{isSlat ? 'Slat panel' : 'Hex panel cluster'}</h2>
           {isSlat ? (
             <>
-              <div className="row">
-                {Object.entries(SLAT_PRESETS).map(([key, p]) => (
-                  <button key={key} className={t.slatPreset === key ? 'btn active' : 'btn'}
-                    onClick={() => setTweak('slatPreset', key)}>{p.label}</button>
-                ))}
-              </div>
               <div className="note">{preset.label}: slat {preset.slatColor}, backing {preset.backingColor}. The oak preset is the bedroom headboard wall — light oak slats (with a subtle grain map) on a black felt backing; both presets share the real Acupanel geometry (slat 2.7cm wide, 4.0cm pitch, 1.0cm deep, 0.9cm backing).</div>
             </>
           ) : (
@@ -282,18 +287,8 @@ function App() {
       </div>
 
       <TweaksPanel>
-        <TweakSection label="Panel type" />
-        <TweakRadio label="Type" value={t.panelType}
-          options={[{ value: 'slat-panel', label: 'Slat' }, { value: 'hex-panel-cluster', label: 'Hex cluster' }]}
-          onChange={v => setTweak('panelType', v)} />
-
         {isSlat && (
           <>
-            <TweakSection label="Slat preset" />
-            <TweakRadio label="Preset" value={t.slatPreset}
-              options={[{ value: 'black', label: 'Black' }, { value: 'oak', label: 'Oak' }]}
-              onChange={v => setTweak('slatPreset', v)} />
-
             <TweakSection label="Size" />
             <TweakSlider label="Width" value={t.slatWidthCm} min={60} max={400} step={1} unit="cm"
               onChange={v => setTweak('slatWidthCm', v)} />
@@ -328,7 +323,7 @@ function App() {
           </>
         )}
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

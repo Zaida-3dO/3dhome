@@ -943,57 +943,56 @@
 
       // Specs section — growable list. Each entry becomes a button in Settings
       // that opens the spec page in a new tab. Add more { name, path, group }
-      // here as specs are built; no other change needed. Paths are fixed/known
-      // even for specs still on an unmerged branch — such a link simply 404s
-      // harmlessly until that branch merges, at which point it resolves with no
-      // code change.
+      // here as specs are built; no other change needed.
       //
-      // `group` is optional and purely presentational: it decides which
-      // collapsible section of the Specs list a button renders under (see
-      // SPEC_GROUP_ORDER below). An entry with no group, or a group name not in
-      // SPEC_GROUP_ORDER, falls into "Other" rather than being dropped — a typo
-      // in a group name must never hide a spec page.
+      // One entry per spec PAGE, and a page is a FAMILY of objects (its
+      // spec-manifest lists them; SpecPage in specs/tweaks-panel.jsx is the
+      // one picker for objects and variants inside it). `name` is what the
+      // sidebar shows. Pages that were folded into a family (e.g.
+      // MainEntranceDoorSpec -> DoorSpec) are redirect stubs and are NOT
+      // listed. scripts/test-spec-pages.mjs checks every real page is listed
+      // exactly once, every listed page is real, and every group is known.
+      //
+      // `group` is the sidebar heading: a DEPARTMENT (what the thing is part
+      // of), never a room -- a wardrobe can be in any room. An entry with no
+      // group, or a group name not in SPEC_GROUP_ORDER, falls into "Other"
+      // rather than being dropped — a typo in a group name must never hide a
+      // spec page.
       const SPEC_PAGES = [
-        { name: 'DoorSpec',             path: 'specs/DoorSpec.html',             group: 'Doors & Windows' },
-        { name: 'WindowSpec',           path: 'specs/WindowSpec.html',           group: 'Doors & Windows' },
-        { name: 'MainEntranceDoorSpec', path: 'specs/MainEntranceDoorSpec.html', group: 'Doors & Windows' },
-        { name: 'BalconyWindowSpec',    path: 'specs/BalconyWindowSpec.html',    group: 'Doors & Windows' },
-        { name: 'CurtainSpec',          path: 'specs/CurtainSpec.html',          group: 'Doors & Windows' },
-        { name: 'WallPanelSpec',        path: 'specs/WallPanelSpec.html',        group: 'Home fittings' },
-        { name: 'WallDecorSpec',        path: 'specs/WallDecorSpec.html',        group: 'Home fittings' },
-        { name: 'ClockSpec',            path: 'specs/ClockSpec.html',            group: 'Home fittings' },
-        { name: 'GamingChairSpec',      path: 'specs/GamingChairSpec.html',      group: 'Home office' },
-        { name: 'StandingDeskSpec',     path: 'specs/StandingDeskSpec.html',     group: 'Home office' },
-        { name: 'DiningSpec',           path: 'specs/DiningSpec.html',           group: 'Kitchen' },
-        { name: 'CabinetSpec',          path: 'specs/CabinetSpec.html',          group: 'Home fittings' },
-        { name: 'PlantSpec',            path: 'specs/PlantSpec.html',            group: 'Plants' },
-        { name: 'KitchenSpec',          path: 'specs/KitchenSpec.html',          group: 'Kitchen' },
-        { name: 'SmallItemsSpec',       path: 'specs/SmallItemsSpec.html',       group: 'Home fittings' },
-        { name: 'DigitalPianoSpec',     path: 'specs/DigitalPianoSpec.html',     group: 'Home office' },
-        { name: 'BedSpec',              path: 'specs/BedSpec.html',              group: 'Bedroom' },
-        { name: 'SofaSpec',             path: 'specs/SofaSpec.html',             group: 'Living room' },
-        { name: 'RugSpec',              path: 'specs/RugSpec.html',              group: 'Living room' },
-        { name: 'RadiatorSpec',         path: 'specs/RadiatorSpec.html',         group: 'Home fittings' },
-        { name: 'RobotVacuumSpec',      path: 'specs/RobotVacuumSpec.html',      group: 'Kitchen' },
-        { name: 'BalconySpec',          path: 'specs/BalconySpec.html',          group: 'Home fittings' },
-        { name: 'BathroomFittingsSpec', path: 'specs/BathroomFittingsSpec.html', group: 'Bathroom' },
-        { name: 'ModelSpec',            path: 'specs/ModelSpec.html',            group: 'Furniture' },
+        { name: 'Doors',                 path: 'specs/DoorSpec.html',         group: 'Doors & Windows' },
+        { name: 'Windows',               path: 'specs/WindowSpec.html',       group: 'Doors & Windows' },
+        { name: 'Curtains',              path: 'specs/CurtainSpec.html',      group: 'Doors & Windows' },
+        { name: 'Radiators',             path: 'specs/RadiatorSpec.html',     group: 'Home fittings' },
+        { name: 'Wall panels',           path: 'specs/WallPanelSpec.html',    group: 'Home fittings' },
+        { name: 'Fitted kitchen',        path: 'specs/KitchenSpec.html',      group: 'Home fittings' },
+        { name: 'Bathroom fittings',     path: 'specs/BathroomFittingsSpec.html', group: 'Home fittings' },
+        { name: 'Balcony',               path: 'specs/BalconySpec.html',      group: 'Home fittings' },
+        { name: 'Beds & Sofas',          path: 'specs/BedSpec.html',          group: 'Furniture' },
+        { name: 'Cabinets & Wardrobes',  path: 'specs/CabinetSpec.html',      group: 'Furniture' },
+        { name: 'Dining table & chairs', path: 'specs/DiningSpec.html',       group: 'Furniture' },
+        { name: 'Digital piano',         path: 'specs/DigitalPianoSpec.html', group: 'Furniture' },
+        { name: 'Standing desk',         path: 'specs/StandingDeskSpec.html', group: 'Furniture' },
+        { name: 'Gaming chair',          path: 'specs/GamingChairSpec.html',  group: 'Furniture' },
+        { name: 'Imported model',        path: 'specs/ModelSpec.html',        group: 'Furniture' },
+        { name: 'Small items',           path: 'specs/SmallItemsSpec.html',   group: 'Decor & accessories' },
+        { name: 'Robot vacuum',          path: 'specs/RobotVacuumSpec.html',  group: 'Decor & accessories' },
+        { name: 'Wall clock',            path: 'specs/ClockSpec.html',        group: 'Decor & accessories' },
+        { name: 'Plants',                path: 'specs/PlantSpec.html',        group: 'Decor & accessories' },
+        { name: 'Rug',                   path: 'specs/RugSpec.html',          group: 'Decor & accessories' },
       ];
 
-      // Fixed display order for known groups. "Other" is always last and is
+      // Fixed display order for the headings. "Other" is always last and is
       // never listed here explicitly — it is the catch-all for an absent or
       // unrecognised group name, appended after every named section.
+      //   Doors & Windows      the building's openings, and what covers them
+      //   Home fittings        fixed to the building (a tradesperson moves it)
+      //   Furniture            free-standing pieces you could carry elsewhere
+      //   Decor & accessories  small things and plants
       const SPEC_GROUP_ORDER = [
         'Doors & Windows',
         'Home fittings',
-        'Living room',
-        'Kitchen',
-        'Bedroom',
-        'Bathroom',
-        'Home office',
-        'Hallway',
-        'Store',
-        'Plants',
+        'Furniture',
+        'Decor & accessories',
       ];
       const SPEC_GROUP_OTHER = 'Other';
 

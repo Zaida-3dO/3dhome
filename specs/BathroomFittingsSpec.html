@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bathroom Fittings Spec — Tweakable</title>
+<title>Bathroom fittings — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -33,6 +33,28 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). One OBJECT per bathroom.js type; each type's
+     presets are its VARIANTS. The mirror cabinet is a `cabinet` preset, so it is
+     signed off on CabinetSpec (Cabinets & Wardrobes); it still appears in this
+     page's line-up. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Bathroom fittings",
+  "description": "All units cm. Generic bathroom fittings: bath, WC, vanity counter with basin, shower set, bath / shower screen, shower tray and towel rail, built by src/furniture/bathroom.js. Pick an object and a variant, or \"All fittings\" to see them lined up. Illustrative sizes only.",
+  "objects": [
+    { "id": "bathtub",        "label": "Bath", "types": ["bathtub"] },
+    { "id": "toilet",         "label": "WC", "types": ["toilet"] },
+    { "id": "vanity-counter", "label": "Vanity counter", "types": ["vanity-counter"] },
+    { "id": "shower-set",     "label": "Shower set", "types": ["shower-set"] },
+    { "id": "shower-screen",  "label": "Screen", "types": ["shower-screen"] },
+    { "id": "shower-tray",    "label": "Shower tray", "types": ["shower-tray"] },
+    { "id": "towel-rail",     "label": "Towel rail", "types": ["towel-rail"] },
+    { "id": "all-fittings",   "label": "All fittings", "types": ["bathtub", "toilet", "vanity-counter", "shower-set", "shower-screen", "shower-tray", "towel-rail"] }
+  ]
+}
+</script>
 
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN. -->
 <script src="../vendor/react.production.min.js"></script>
@@ -73,7 +95,8 @@
    rounded-rectangle rings -- curved, single-sided, gloss palette finish.
    ===================================================================== */
 
-// The mirror cabinet: a `cabinet` preset, not a bathroom.js type.
+// The mirror cabinet: a `cabinet` preset, not a bathroom.js type. Its spec is on
+// CabinetSpec (Cabinets & Wardrobes); it stays in this page's line-up only.
 function mirrorCabinetParams(w, h, d, doors) {
   const cells = [];
   for (let i = 0; i < doors; i++) cells.push({ kind: 'mirror', width: +(w / doors).toFixed(3) });
@@ -145,7 +168,6 @@ function App() {
   const [tris, setTris] = React.useState(null);
   const [copied, setCopied] = React.useState('');
   reportStats = setTris;   // set during render: ThreeView's effect runs before App's
-  const names = Object.keys(allPresets());
   const single = t.preset !== ALL && allPresets()[t.preset];
   const r = single ? resolved(t.preset) : null;
   const B = window.FurnitureBathroom;
@@ -168,10 +190,17 @@ function App() {
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
     else setCopied('clipboard unavailable — select the JSON below');
   };
+  // OBJECT = the bathroom.js type (or the line-up); VARIANTS = that type's presets.
+  const bathPresets = window.FurnitureBathroom.PRESETS;
+  const objectId = t.preset === ALL ? 'all-fittings' : (bathPresets[t.preset] ? bathPresets[t.preset].type : 'all-fittings');
+  const presetsOf = type => Object.keys(bathPresets).filter(n => bathPresets[n].type === type);
+  const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const variants = objectId === 'all-fittings' ? [] : presetsOf(objectId).map(n => ({ id: slug(n), label: n, params: { preset: n } }));
   return (
-    <>
-      <h1>Bathroom Fittings Spec</h1>
-      <div className="sub">All units cm. Generic bathroom fittings for the live house: pick a preset in Tweaks (or "{ALL}"). Illustrative sizes only.</div>
+    <SpecPage objectId={objectId}
+      onObject={id => setTweak('preset', id === 'all-fittings' ? ALL : presetsOf(id)[0])}>
+      {variants.length > 0 && <SpecVariants variants={variants} values={t}
+        onSelect={id => setTweak('preset', variants.find(v => v.id === id).params.preset)} />}
       <div className="grid">
         <div className="card">
           <h2>Numbers</h2>
@@ -208,12 +237,10 @@ function App() {
         </div>
       </div>
       <TweaksPanel>
-        <TweakSection label="Fitting" />
-        <TweakSelect label="Preset" value={t.preset} options={[ALL, ...names]} onChange={v => setTweak('preset', v)} />
         <TweakSection label="Render" />
         <TweakRadio label="Detail" value={t.detail} options={['full', 'low']} onChange={v => setTweak('detail', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

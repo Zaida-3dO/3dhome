@@ -195,7 +195,8 @@ for (const c of [{}, { chaise: 'left' }, { chaise: 'none', width: 220, depth: 97
 // ---- registry wiring -------------------------------------------------------------------------
 {
   const { REGISTRY } = await imp('src/furniture/registry.js');
-  check('registry: sofa -> sofa.js, SofaSpec', REGISTRY.sofa && REGISTRY.sofa.path === 'sofa.js' && REGISTRY.sofa.key === null && REGISTRY.sofa.spec === 'SofaSpec', REGISTRY.sofa);
+  // The sofa is signed off on Beds & Sofas (BedSpec); SofaSpec.html is a redirect stub.
+  check('registry: sofa -> sofa.js, BedSpec', REGISTRY.sofa && REGISTRY.sofa.path === 'sofa.js' && REGISTRY.sofa.key === null && REGISTRY.sofa.spec === 'BedSpec', REGISTRY.sofa);
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

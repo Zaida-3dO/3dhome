@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Digital Piano Spec — Tweakable</title>
+<title>Digital piano — Spec</title>
 <style>
   *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
   body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
@@ -36,6 +36,21 @@
 <body>
 <div id="root"></div>
 
+<!-- Which objects this page holds (SpecPage in tweaks-panel.jsx reads it; so
+     does scripts/test-spec-pages.mjs). The ottoman used to live here too; it
+     is upholstered seating, not part of the piano set, so it moved to BedSpec
+     (Beds & Sofas) -- see `moved` on the SpecPage below. -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Digital piano",
+  "description": "A digital piano and its bench, sold and placed as a set. All units cm. Both are built by the real furniture module (src/furniture/digital-piano.js), not a page-local reimplementation.",
+  "objects": [
+    { "id": "digital-piano", "label": "Digital piano", "types": ["digital-piano"] },
+    { "id": "piano-bench",   "label": "Piano bench", "types": ["piano-bench"] }
+  ]
+}
+</script>
+
 <!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
 <script src="../vendor/react.production.min.js"></script>
 <script src="../vendor/react-dom.production.min.js"></script>
@@ -58,13 +73,14 @@
 
 <script type="text/babel">
 /* =====================================================================
-   DIGITAL PIANO SPEC   ·   stage piano + bench + ottoman
+   DIGITAL PIANO SPEC   ·   stage piano + bench
 
    Plan of record: plan-furniture-system-r2.md (PR8). Builder module:
    src/furniture/digital-piano.js, multi-type (`digital-piano`, `piano-bench`,
-   `ottoman`).
+   `ottoman`). The ottoman's spec is on BedSpec (Beds & Sofas) -- it is
+   upholstered seating, not part of the piano set.
 
-   Three independent types, switched with a segmented control:
+   Two objects, switched with the shared SpecPage object row:
 
      DIGITAL PIANO — a slim white 88-key digital piano on its matching
      panel stand (two solid side panels and a back board): recessed keybed
@@ -76,11 +92,7 @@
      seat with rolled edges, an apron with an adjustment knob at each end,
      four square tapered legs. Default ~58 x 34 x 50.
 
-     OTTOMAN — a simple channel-tufted-lid ottoman on four short legs,
-     included alongside the other two as a cheap third type. Default
-     ~92 x 46 x 40, teal velvet.
-
-   All three are built by calling the REAL builder
+   Both are built by calling the REAL builder
    (window.__digitalPianoModule.TYPES[type].build), not a page-local copy --
    so this page can never drift from what the house loader actually draws.
    ===================================================================== */
@@ -101,13 +113,6 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "apronHeight": 7,
   "seatColor": "#f3f1ec",
   "baseColor": "#f7f7f4",
-
-  "ottomanWidth": 92,
-  "ottomanDepth": 46,
-  "ottomanHeight": 40,
-  "channelCount": 5,
-  "ottomanColor": "#2e6e6b",
-  "legColor": "#3a2f28",
 
   "detail": "full"
 }/*EDITMODE-END*/;
@@ -131,7 +136,7 @@ function buildItemModel(t, group, THREE, ctx) {
     });
     built = impl.build(THREE, params, { detail: t.detail });
     heightM = t.pianoHeight * 0.01;
-  } else if (t.itemType === 'piano-bench') {
+  } else {
     const impl = mod.TYPES['piano-bench'];
     const params = Object.assign({}, impl.DEFAULTS, {
       width: t.benchWidth, depth: t.benchDepth, height: t.benchHeight,
@@ -139,14 +144,6 @@ function buildItemModel(t, group, THREE, ctx) {
     });
     built = impl.build(THREE, params, { detail: t.detail });
     heightM = t.benchHeight * 0.01;
-  } else {
-    const impl = mod.TYPES['ottoman'];
-    const params = Object.assign({}, impl.DEFAULTS, {
-      width: t.ottomanWidth, depth: t.ottomanDepth, height: t.ottomanHeight,
-      channelCount: t.channelCount, color: t.ottomanColor, legColor: t.legColor
-    });
-    built = impl.build(THREE, params, { detail: t.detail });
-    heightM = t.ottomanHeight * 0.01;
   }
   // Every type's frame has its back at z=0; centre it on the view target the
   // same way every other free-standing spec page does.
@@ -195,8 +192,7 @@ function App() {
   }, [moduleReady]);
 
   const isPiano = t.itemType === 'digital-piano';
-  const isBench = t.itemType === 'piano-bench';
-  const isOttoman = t.itemType === 'ottoman';
+  const isBench = !isPiano;
 
   function paramsOf() {
     const mod = window.__digitalPianoModule;
@@ -211,16 +207,10 @@ function App() {
       const out = {}; for (const k of Object.keys(p)) if (p[k] !== impl.DEFAULTS[k]) out[k] = p[k];
       return { type: 'digital-piano', params: out };
     }
-    if (isBench) {
-      const impl = mod.TYPES['piano-bench'];
-      const p = { width: t.benchWidth, depth: t.benchDepth, height: t.benchHeight, apronHeight: t.apronHeight, seatColor: t.seatColor, baseColor: t.baseColor };
-      const out = {}; for (const k of Object.keys(p)) if (p[k] !== impl.DEFAULTS[k]) out[k] = p[k];
-      return { type: 'piano-bench', params: out };
-    }
-    const impl = mod.TYPES['ottoman'];
-    const p = { width: t.ottomanWidth, depth: t.ottomanDepth, height: t.ottomanHeight, channelCount: t.channelCount, color: t.ottomanColor, legColor: t.legColor };
+    const impl = mod.TYPES['piano-bench'];
+    const p = { width: t.benchWidth, depth: t.benchDepth, height: t.benchHeight, apronHeight: t.apronHeight, seatColor: t.seatColor, baseColor: t.baseColor };
     const out = {}; for (const k of Object.keys(p)) if (p[k] !== impl.DEFAULTS[k]) out[k] = p[k];
-    return { type: 'ottoman', params: out };
+    return { type: 'piano-bench', params: out };
   }
 
   const [copied, setCopied] = React.useState('');
@@ -232,23 +222,13 @@ function App() {
   };
 
   return (
-    <>
-      <h1>Digital Piano Spec</h1>
-      <div className="sub">All units cm. Three independent types built by the real furniture module (src/furniture/digital-piano.js) — not a page-local reimplementation. Use the Tweaks panel to switch type.</div>
+    <SpecPage objectId={t.itemType} onObject={id => setTweak('itemType', id)}
+      moved={{ ottoman: 'BedSpec.html' }}>
+      {isPiano && <div className="sub">A slim white 88-key digital piano on its matching panel stand: 36 individual black keys, a lit display, speaker grilles and a small music rest. Use the Tweaks panel to change size and colours.</div>}
+      {isBench && <div className="sub">A classic adjustable piano bench: button-tufted faux-leather seat, an apron with an adjustment knob at each end, four square tapered legs. Use the Tweaks panel to change size and colours.</div>}
+      {!moduleReady && <div className="sub">Loading src/furniture/digital-piano.js…</div>}
 
       <div className="grid">
-        <div className="card">
-          <h2>Item type</h2>
-          <div className="row" style={{ marginTop: 0 }}>
-            <button className={isPiano ? 'btn active' : 'btn'} onClick={() => setTweak('itemType', 'digital-piano')}>Digital piano</button>
-            <button className={isBench ? 'btn active' : 'btn'} onClick={() => setTweak('itemType', 'piano-bench')}>Piano bench</button>
-            <button className={isOttoman ? 'btn active' : 'btn'} onClick={() => setTweak('itemType', 'ottoman')}>Ottoman</button>
-          </div>
-          {isPiano && <div className="note">A slim white 88-key digital piano on its matching panel stand: 36 individual black keys, a lit display, speaker grilles and a small music rest.</div>}
-          {isBench && <div className="note">A classic adjustable piano bench: button-tufted faux-leather seat, an apron with an adjustment knob at each end, four square tapered legs.</div>}
-          {isOttoman && <div className="note">A teal velvet ottoman with a channel-tufted lid, on four short legs.</div>}
-          {!moduleReady && <div className="note">Loading src/furniture/digital-piano.js…</div>}
-        </div>
 
         <div className="card">
           <h2>Numbers</h2>
@@ -277,18 +257,6 @@ function App() {
               </tbody>
             </table>
           )}
-          {isOttoman && (
-            <table>
-              <tbody>
-                <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
-                <tr><td>Width</td><td className="num">{t.ottomanWidth.toFixed(0)}</td><td><b>Variable</b></td></tr>
-                <tr><td>Depth</td><td className="num">{t.ottomanDepth.toFixed(0)}</td><td><b>Variable</b></td></tr>
-                <tr><td>Height</td><td className="num">{t.ottomanHeight.toFixed(0)}</td><td><b>Variable</b></td></tr>
-                <tr><td>Channel count</td><td className="num">{t.channelCount.toFixed(0)}</td><td><b>Variable</b></td></tr>
-                <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
-              </tbody>
-            </table>
-          )}
           <div className="row">
             <button className="btn" onClick={copy}>Copy as furniture JSON</button>
             {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
@@ -297,21 +265,16 @@ function App() {
         </div>
 
         <div className="card full">
-          <h2>3D — {isPiano ? 'Digital piano' : isBench ? 'Piano bench' : 'Ottoman'}</h2>
+          <h2>3D — {isPiano ? 'Digital piano' : 'Piano bench'}</h2>
           <ThreeView
             t={t}
             buildModel={buildItemModel}
-            heightOf={tt => (tt.itemType === 'digital-piano' ? tt.pianoHeight : tt.itemType === 'piano-bench' ? tt.benchHeight : tt.ottomanHeight) * 0.01}
+            heightOf={tt => (tt.itemType === 'digital-piano' ? tt.pianoHeight : tt.benchHeight) * 0.01}
           />
         </div>
       </div>
 
       <TweaksPanel>
-        <TweakSection label="Item type" />
-        <TweakRadio label="Type" value={t.itemType}
-          options={[{ value: 'digital-piano', label: 'Piano' }, { value: 'piano-bench', label: 'Bench' }, { value: 'ottoman', label: 'Ottoman' }]}
-          onChange={v => setTweak('itemType', v)} />
-
         {isPiano && (
           <>
             <TweakSection label="Piano size" />
@@ -352,30 +315,11 @@ function App() {
           </>
         )}
 
-        {isOttoman && (
-          <>
-            <TweakSection label="Ottoman size" />
-            <TweakSlider label="Width" value={t.ottomanWidth} min={60} max={130} step={1} unit="cm"
-              onChange={v => setTweak('ottomanWidth', v)} />
-            <TweakSlider label="Depth" value={t.ottomanDepth} min={30} max={65} step={1} unit="cm"
-              onChange={v => setTweak('ottomanDepth', v)} />
-            <TweakSlider label="Height" value={t.ottomanHeight} min={30} max={50} step={1} unit="cm"
-              onChange={v => setTweak('ottomanHeight', v)} />
-            <TweakSlider label="Channel count" value={t.channelCount} min={3} max={9} step={1} unit=""
-              onChange={v => setTweak('channelCount', v)} />
-            <TweakSection label="Ottoman colours" />
-            <TweakColor label="Body (velvet)" value={t.ottomanColor}
-              onChange={v => setTweak('ottomanColor', v)} />
-            <TweakColor label="Legs" value={t.legColor}
-              onChange={v => setTweak('legColor', v)} />
-          </>
-        )}
-
         <TweakSection label="Render" />
         <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
           onChange={v => setTweak('detail', v)} />
       </TweaksPanel>
-    </>
+    </SpecPage>
   );
 }
 

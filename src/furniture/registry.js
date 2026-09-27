@@ -15,7 +15,11 @@
  *         and `key` is the property of TYPES to use.
  *   spec  the public spec page (specs/<spec>.html) that signs the type off,
  *         or null. scripts/test-furniture-defaults.mjs fails if that page has
- *         merged but the module at `path` has not.
+ *         merged but the module at `path` has not, and
+ *         scripts/test-spec-pages.mjs fails unless that page's spec-manifest
+ *         lists the type (and no other page's does). A page is a FAMILY, not
+ *         a module: the ottoman is built in digital-piano.js but signed off on
+ *         BedSpec (Beds & Sofas), with the bed and the sofa.
  *
  * Modules are loaded lazily with dynamic import(), only for types a house
  * actually uses. A module that does not exist yet is a warning and a skip,
@@ -61,7 +65,7 @@ export const REGISTRY = Object.freeze({
 
   'monitor': { path: 'small-items.js', key: 'monitor', spec: 'SmallItemsSpec' },
 
-  'ottoman': { path: 'digital-piano.js', key: 'ottoman', spec: 'DigitalPianoSpec' },
+  'ottoman': { path: 'digital-piano.js', key: 'ottoman', spec: 'BedSpec' },
 
   'pc-tower': { path: 'small-items.js', key: 'pc-tower', spec: 'SmallItemsSpec' },
 
@@ -85,7 +89,7 @@ export const REGISTRY = Object.freeze({
 
   'slat-panel': { path: 'wall-panels.js', key: 'slat-panel', spec: 'WallPanelSpec' },
 
-  'sofa': { path: 'sofa.js', key: null, spec: 'SofaSpec' },
+  'sofa': { path: 'sofa.js', key: null, spec: 'BedSpec' },
 
   'speaker': { path: 'small-items.js', key: 'speaker', spec: 'SmallItemsSpec' },
 
@@ -105,9 +109,9 @@ export const REGISTRY = Object.freeze({
 
   'wall-clock': { path: 'wall-clock.js', key: null, spec: 'ClockSpec' },
 
-  'wall-sconce': { path: 'wall-sconce.js', key: null, spec: 'WallDecorSpec' },
+  'wall-sconce': { path: 'wall-sconce.js', key: null, spec: 'SmallItemsSpec' },
 
-  'wall-sign': { path: 'wall-sign.js', key: null, spec: 'WallDecorSpec' },
+  'wall-sign': { path: 'wall-sign.js', key: null, spec: 'SmallItemsSpec' },
 
 });
 

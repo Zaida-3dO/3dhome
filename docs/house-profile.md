@@ -462,7 +462,7 @@ that bounds one of its arms.)
   every side, leaving wall below the cill and a lintel above.
 - `kind: "window"` (the default) is WindowSpec: a fixed lower pane under a
   centre-pivot top sash, split at `topSplit` of the glazed height.
-  `kind: "balcony"` is BalconyWindowSpec: a wide fixed pane beside a glass door
+  `kind: "balcony"` is the Balcony window on WindowSpec: a wide fixed pane beside a glass door
   that swings **outward**, at the `doorSide` end of the run (and hinged on it).
 - The frame sits flush with the wall's **outer** face; the room side shows a
   plain reveal the depth of the wall. A **cavity wall** modelled as two parallel
@@ -1468,13 +1468,27 @@ guard, is dropped with a console warning rather than failing the load — the sa
 document must never cost you the building.
 
 **`group` is optional and purely presentational.** It decides which collapsible
-section of the Settings > Specs list the button renders under. The page
-recognises a fixed set of names — Doors & Windows, Home fittings, Living room,
-Kitchen, Bedroom, Home office, Hallway, Store — and buckets anything absent or
-unrecognised into an "Other" section at the end, so a typo in a group name can
-never hide a spec page; it just lands in the wrong bucket. The engine's own
-built-in specs (DoorSpec, WindowSpec, etc.) all declare `"group": "Doors &
-Windows"`.
+section of the Settings > Specs list the button renders under. The headings are
+*departments* — what a thing is part of — never rooms, because a wardrobe or a
+plant can be in any room:
+
+| Heading | Holds |
+|---|---|
+| Doors & Windows | the building's openings, and what covers them |
+| Home fittings | things fixed to the building: radiators, wall panels, a fitted kitchen, a bathroom |
+| Furniture | free-standing pieces you could carry to another room |
+| Decor & accessories | small things and plants |
+
+A room spec a profile brings, like a bathroom, belongs under **Home fittings**.
+Anything absent or unrecognised is bucketed into an "Other" section at the end,
+so a typo in a group name can never hide a spec page; it just lands in the wrong
+bucket.
+
+A spec page is a **family** of objects, not one object: the engine's own pages
+declare their objects in a `<script type="application/json" id="spec-manifest">`
+block and use the shared picker in `specs/tweaks-panel.jsx` (`SpecPage` for the
+objects, `SpecVariants` for each object's presets). A profile page with one
+object and no presets needs neither; see that file's header if yours has more.
 
 Unlike an overlay script, **nothing here executes in the page's origin**. A spec
 page is opened as an ordinary link, so it cannot read the page's state or act on
