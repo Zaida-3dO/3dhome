@@ -17,6 +17,11 @@
  *   5. The door chip says "Unknown" offline with no reading, "Unavailable"
  *      only when the sensor (or a live HA) says so.
  *   6. The coarse/fine hit areas of the row controls never overlap the slider.
+ *   7. lightName never repeats the room ("Home office office ambience").
+ *   8. marqueePlan: names that fit stay still; overflow slides with ~1.5 s
+ *      pauses; reduced motion wraps instead.
+ *   9. The accent light's colour square: inline with the slider, current
+ *      colour, disabled offline; the main light has none.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -244,6 +249,66 @@ console.log('lightName');
   ok(T.lightName('Study', 'main', '') === 'Study light', 'no label -> "{Room} light"');
   ok(T.lightName('Lounge', 'ambient', 'TV backlight') === 'Lounge TV backlight', 'ALL-CAPS words survive sentence case');
   ok(T.sentenceCase('Living Room radiator') === 'Living room radiator', 'sentenceCase lowers Capitalised words after the first');
+}
+
+console.log('lightName: no duplicated room words');
+{
+  ok(T.lightName('Home office', 'ambient', 'Office ambience') === 'Home office ambience',
+    '"Home office" + "Office ambience" -> "Home office ambience" (not "Home office office ambience")');
+  ok(T.lightName('Living Room', 'ambient', 'Room glow') === 'Living room glow', 'one-word overlap at the end of the room name');
+  ok(T.lightName('Home office', 'ambient', 'Home Office ambience') === 'Home office ambience', 'label with the whole room (any case): kept');
+  ok(T.lightName('Home office', 'ambient', 'Desk ambience') === 'Home office desk ambience', 'no overlap: prefixed as before');
+  ok(T.lightName('Hall', 'ambient', 'Hallway strip') === 'Hall hallway strip', 'whole words only: "Hall" does not overlap "Hallway"');
+  ok(T.joinRoomName('Main bedroom', 'Bedroom wardrobe LED') === 'Main bedroom wardrobe LED', 'joinRoomName merges the overlap, keeps the rest');
+  ok(T.joinRoomName('', 'Cove') === 'Cove' && T.joinRoomName('Lounge', '') === 'Lounge', 'joinRoomName with an empty side');
+}
+
+console.log('marqueePlan');
+{
+  const fit = T.marqueePlan(150, 176);
+  ok(fit.mode === 'fit' && fit.distance === 0, 'a name that fits does not move');
+  ok(T.marqueePlan(177, 176).mode === 'fit', 'a 1px sub-pixel overflow still counts as fitting (no twitch)');
+  const sc = T.marqueePlan(300, 176);
+  ok(sc.mode === 'scroll' && sc.distance === 124, 'overflow -> scroll by exactly the hidden width');
+  ok(sc.offsets.length === 5 && sc.offsets[0] === 0 && sc.offsets[4] === 1 && sc.offsets.every((v, i, a) => !i || v >= a[i - 1]),
+    'offsets run 0..1 in order');
+  const pauseMs = sc.offsets[1] * sc.duration;
+  ok(Math.abs(pauseMs - 1500) < 5, 'pauses ~1.5 s before moving (' + Math.round(pauseMs) + ' ms)');
+  ok(Math.abs((sc.offsets[3] - sc.offsets[2]) * sc.duration - 1500) < 5, 'pauses ~1.5 s at the end before returning');
+  ok(Math.abs((sc.offsets[2] - sc.offsets[1]) - (sc.offsets[4] - sc.offsets[3])) < 1e-3, 'slides out and back at the same speed');
+  ok(T.marqueePlan(190, 176).duration >= 3000 + 800, 'a tiny overflow still slides slowly (>= 400 ms each way)');
+  ok(T.marqueePlan(600, 176).duration > sc.duration, 'a longer name takes longer (constant speed)');
+  const rm = T.marqueePlan(300, 176, { reducedMotion: true });
+  ok(rm.mode === 'wrap', 'prefers-reduced-motion -> wrap to two lines, no motion');
+  ok(T.marqueePlan(150, 176, { reducedMotion: true }).mode === 'fit', 'reduced motion + fits -> nothing changes');
+}
+
+console.log('popover markup: title + accent colour square');
+{
+  const dot = () => '';
+  const base = { status: 'ok', na: false, haOff: false, on: true, bri: 17, name: 'Home office ambience' };
+  const amb = T.popoverHtml.light(Object.assign({ colorable: true, color: '#00CCFF' }, base), dot);
+  ok(/<span class="tp-name"><span class="tp-name-in">Home office ambience<\/span><\/span>/.test(amb), 'title wrapped for the marquee');
+  ok(/<div class="tp-crow"><input class="tp-color" data-a="color" type="color" value="#00ccff"[^>]*><input class="tp-range/.test(amb),
+    'accent: the colour square sits INLINE, left of the brightness slider, showing the current colour');
+  ok(/aria-label="Colour"/.test(amb), 'colour square is labelled');
+  const main = T.popoverHtml.light(Object.assign({ colorable: false }, base), dot);
+  ok(!/type="color"/.test(main) && !/tp-crow/.test(main), 'main light: no colour square, unchanged layout');
+  const off = T.popoverHtml.light(Object.assign({ colorable: true, color: '#00ccff' }, base, { haOff: true }), dot);
+  ok(/data-a="color"[^>]*\sdisabled/.test(off), 'HA offline: colour square disabled');
+  const na = T.popoverHtml.light(Object.assign({ colorable: true, color: '#00ccff' }, base, { na: true }), dot);
+  ok(!/type="color"/.test(na), 'entity unavailable: no colour square (as with the slider)');
+  const unk = T.popoverHtml.light(Object.assign({ colorable: true }, base), dot);
+  ok(/value="#ff3300"/.test(unk), 'unknown colour: the scene default, never an invalid value (which shows black)');
+  const white = T.popoverHtml.light(Object.assign({ colorable: false, color: '#00ccff' }, base), dot);
+  ok(!/type="color"/.test(white) && /data-a="bri"/.test(white), 'white-only accent entity: slider, no colour square');
+  const src = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
+  ok(!/text-overflow: ellipsis/.test(src), 'no ellipsis on the title');
+  ok(/\.tp-name\.marq \{[\s\S]{0,300}?mask-image: linear-gradient/.test(src),'overflowing title fades its edges (mask)');
+  ok(/\.tp-name\.wrap \{[^}]*-webkit-line-clamp: 2/.test(src), 'reduced motion wraps to two lines');
+  ok(/if \(p\.hover \|\| p\.hold \|\| p\.ctl\.dragging\) p\.marq\.pause\(\); else p\.marq\.play\(\);/.test(src),
+    'marquee pauses while hovered or while a slider is held/dragged');
+  ok(/\$\{sel\} \.tp-color \{ --sq: 20px; --pad: 12px; \}/.test(src), 'coarse pointer: colour square hit area 20 + 2x12 = 44px');
 }
 
 if (failed) { console.log('\n' + failed + ' FAILED'); process.exit(1); }

@@ -13,6 +13,8 @@
  *   ha.connect();
  */
 
+import { colorFromAttributes, DEFAULT_ACCENT_COLOR } from './light-color.js';
+
 /**
  * Slider value -> a `cover.set_cover_position` call, fanned out to every
  * motor bound to a curtain. Pure and framework-free on purpose: the sidebar
@@ -613,26 +615,25 @@ export const HAClient = (() => {
       if (group === 'main') {
         result.bri = (attrs.brightness != null) ? Math.round(attrs.brightness / 2.55) : (on ? 100 : 0);
         result.temp = (attrs.color_temp_kelvin != null) ? attrs.color_temp_kelvin : 4000;
-      } else if (group === 'ambient') {
-        result.bri = (attrs.brightness != null) ? Math.round(attrs.brightness / 2.55) : (on ? 80 : 0);
-        if (attrs.rgb_color && Array.isArray(attrs.rgb_color)) {
-          const [r, g, b] = attrs.rgb_color;
-          result.color = '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
-        } else {
-          result.color = '#ff3300';
-        }
       } else if (group === 'galaxy') {
         result.bri = (attrs.brightness != null) ? Math.round(attrs.brightness / 2.55) : (on ? 50 : 0);
+      } else if (group === 'ambient') {
+        // The room's ambience. Colour from rgb_color, else hs_color (some
+        // integrations report only that). ON with no colour reported: the
+        // accent default, as before. OFF (HA nulls the colour attributes):
+        // no colour at all, so the last known colour stands rather than
+        // being overwritten with a made-up default.
+        result.bri = (attrs.brightness != null) ? Math.round(attrs.brightness / 2.55) : (on ? 80 : 0);
+        const color = colorFromAttributes(attrs) || (on ? DEFAULT_ACCENT_COLOR : null);
+        if (color) result.color = color;
       } else {
         // Any other named channel (a desk strip on its own entity, say) is an
-        // accent light like 'ambient': it follows brightness AND colour. Only
-        // on/off before, so a coloured strip on its own entity could not
-        // show its colour. With no rgb_color the colour is left as it was.
+        // accent light like 'ambient': it follows brightness AND colour
+        // (rgb_color, else hs_color). With no colour reported the colour is
+        // left as it was.
         result.bri = (attrs.brightness != null) ? Math.round(attrs.brightness / 2.55) : (on ? 100 : 0);
-        if (attrs.rgb_color && Array.isArray(attrs.rgb_color)) {
-          const [r, g, b] = attrs.rgb_color;
-          result.color = '#' + [r, g, b].map(c => (c | 0).toString(16).padStart(2, '0')).join('');
-        }
+        const color = colorFromAttributes(attrs);
+        if (color) result.color = color;
       }
 
       return result;

@@ -119,6 +119,17 @@
     .panel-title { font-size: 14px; font-weight: 600; }
     .panel-area { font-size: 11px; opacity: 0.4; }
     .panel-close { background: none; border: none; color: #666; cursor: pointer; font-size: 18px; padding: 0; }
+    .panel-header-right { display: flex; align-items: center; gap: 10px; }
+    /* Pin (collapsible widths only -- hidden on the wide layout below):
+       filled = pinned, outline = unpinned. See src/sidebar-pin.js. */
+    .panel-pin {
+      position: relative; width: 22px; height: 22px; display: grid; place-items: center;
+      background: none; border: none; padding: 0; cursor: pointer; color: #888;
+    }
+    .panel-pin svg { width: 17px; height: 17px; fill: currentColor; }
+    .panel-pin[aria-pressed="true"] { color: #a5b4fc; }
+    .panel-pin:hover { color: #fff; }
+    .panel-pin::after { content: ''; position: absolute; inset: -11px; }
 
     .panel-body { flex: 1; overflow-y: auto; padding: 4px 0; }
 
@@ -147,6 +158,15 @@
       margin-bottom: 10px;
     }
     .control-label { font-size: 12px; font-weight: 600; opacity: 0.7; }
+    /* Section title: the popover's MDI icon (src/ui-icons.js) + the label. */
+    .control-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .row-ico { width: 16px; height: 16px; flex: none; fill: rgba(255,255,255,0.72); }
+    .row-ico.light-on { fill: #ffd43b; filter: drop-shadow(0 0 4px rgba(255,212,59,0.55)); }
+    .row-ico.heat { fill: #ff8a3d; filter: drop-shadow(0 0 4px rgba(255,138,61,0.5)); }
+    .row-ico.motion-on { fill: #9cc8ff; }
+    .row-ico.d-open { fill: #f59e0b; }
+    .row-ico.d-closed { fill: #22c55e; }
+    .row-ico.dim { fill: rgba(255,255,255,0.4); }
 
     /* Toggle switch */
     .toggle {
@@ -196,19 +216,21 @@
     .status-tag-on { background: rgba(74,158,255,0.22); color: #9cc8ff; }
     .status-tag-unavailable { opacity: 0.55; }
 
-    /* Small action buttons in a row header (curtain Open / Close). */
+    /* Icon buttons in a row header (curtain Close / Open) -- the popover's. */
     .row-btns { display: flex; gap: 6px; }
-    .row-btn {
-      font-size: 11px; font-weight: 600; padding: 5px 11px; border-radius: 6px;
-      border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.06);
+    .row-ib {
+      width: 32px; height: 28px; border-radius: 7px; display: grid; place-items: center; padding: 0;
+      border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.07);
       color: #fff; cursor: pointer;
     }
-    .row-btn:hover { background: rgba(255,255,255,0.12); }
-    .row-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .row-ib svg { width: 18px; height: 18px; fill: currentColor; }
+    .row-ib:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
+    .row-ib:active:not(:disabled) { background: rgba(99,102,241,0.35); }
+    .row-ib:disabled { opacity: 0.35; cursor: not-allowed; }
 
     /* HA offline: every control that sends a command is disabled (see
        haOffline in src/room-panel.js), and this note says why. */
-    .toggle:disabled, .color-swatch:disabled, .color-input:disabled { opacity: 0.35; cursor: not-allowed; }
+    .toggle:disabled, .color-square:disabled { opacity: 0.35; cursor: not-allowed; }
     .ha-offline-note {
       display: flex; align-items: center; gap: 8px; margin-bottom: 14px;
       padding: 8px 10px; border-radius: 8px; font-size: 11px; line-height: 1.35;
@@ -216,26 +238,33 @@
     }
     .ha-offline-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #ef4444; }
 
-    /* Color swatches */
-    .color-swatches { display: flex; gap: 5px; flex-wrap: wrap; }
-    .color-swatch {
-      width: 26px; height: 26px; border-radius: 5px;
-      border: 1px solid rgba(255,255,255,0.2);
-      cursor: pointer; padding: 0;
+    /* Ambience: ONE colour square (the light's current colour) inline with
+       the brightness slider and its value:  [■] ───●─── 17%.  A native
+       colour input; its box is the hit area and its padding insets the
+       visible swatch (negative margins keep the layout at swatch size) --
+       44px on a touch screen. */
+    .inline-row { display: flex; align-items: center; gap: 10px; }
+    .inline-row .slider { flex: 1 1 auto; width: auto; min-width: 0; }
+    .inline-val { font-size: 11px; opacity: 0.6; min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+    .color-square {
+      --sq: 22px; --pad: 4px; flex: none; cursor: pointer;
+      width: calc(var(--sq) + 2 * var(--pad)); height: calc(var(--sq) + 2 * var(--pad));
+      margin: calc(-1 * var(--pad)); padding: 0; border: 0; background: none;
+      -webkit-appearance: none; appearance: none;
     }
-    .color-swatch.selected { border: 2px solid #fff; }
-    .color-input {
-      width: 100%; height: 28px; border: none; border-radius: 4px;
-      cursor: pointer; background: transparent; margin-top: 8px;
+    .color-square::-webkit-color-swatch-wrapper { padding: var(--pad); }
+    .color-square::-webkit-color-swatch { border: 1px solid rgba(255,255,255,0.35); border-radius: 5px; }
+    .color-square::-moz-color-swatch { border: 1px solid rgba(255,255,255,0.35); border-radius: 5px; }
+    .color-square:focus-visible { outline: 2px solid #a5b4fc; outline-offset: -2px; }
+    @media (pointer: coarse) {
+      .color-square { --pad: 11px; }
+      .inline-row { gap: 14px; }
+      .row-ib { width: 40px; height: 36px; }
     }
-
-    /* Strip positions info */
-    .strip-info {
-      padding: 8px 10px; border-radius: 6px;
-      background: rgba(255,255,255,0.04);
-      font-size: 10px; opacity: 0.4; line-height: 1.5; margin-top: 6px;
-    }
-    .strip-info-title { font-weight: 600; margin-bottom: 2px; }
+    /* ?debug=1&tpCoarse=1 forces touch sizing on a desktop (verification). */
+    .tp-force-coarse .color-square { --pad: 11px; }
+    .tp-force-coarse .inline-row { gap: 14px; }
+    .tp-force-coarse .row-ib { width: 40px; height: 36px; }
 
     /* Sun mode button group */
     .sun-mode-group {
@@ -337,6 +366,7 @@
     @media (min-width: 1500px) {
       .panel { transform: translateX(0) !important; }
       .panel-close { display: none !important; }
+      .panel-pin { display: none !important; }   /* always open: nothing to pin */
       .top-right-btns { display: none !important; }
       #scene-container { width: calc(100vw - 300px); }
       /* Keep the compass inside the visible canvas, not under the always-open
@@ -635,7 +665,10 @@
         <span class="panel-title" id="panel-title">Controls</span>
         <span class="panel-area" id="panel-area"></span>
       </div>
-      <button class="panel-close" id="panel-close">&times;</button>
+      <div class="panel-header-right">
+        <button class="panel-pin" id="panel-pin" type="button" aria-pressed="false" aria-label="Pin sidebar" title="Pin sidebar"></button>
+        <button class="panel-close" id="panel-close" aria-label="Close sidebar">&times;</button>
+      </div>
     </div>
     <div class="panel-body" id="panel-body"></div>
     <div class="panel-footer" id="panel-footer">
@@ -747,7 +780,11 @@
     // Settings sidebar "Door numbers" switch).
     import { DoorDebugOverlay } from './src/overlays/door-debug-overlay.js?v=__VERSION__';
     // Tap a 3D object -> popover for its bound HA entity (spike).
-    import { attachTapPopovers } from './src/tap-popovers.js?v=__VERSION__';
+    import { attachTapPopovers, climateActivity } from './src/tap-popovers.js?v=__VERSION__';
+    // The sidebar's open / pinned state machine (collapsible widths only).
+    import { sidebarReduce, SIDEBAR_INITIAL } from './src/sidebar-pin.js?v=__VERSION__';
+    import { isColorChannel, colorFromAttributes, supportsColor } from './src/light-color.js?v=__VERSION__';
+    import { ICONS, svgIcon }  from './src/ui-icons.js?v=__VERSION__';
 
     // ── Why there is no DOMContentLoaded wrapper here ──────────────────────
     // There used to be one, and for classic scripts it was correct: an inline
@@ -1265,7 +1302,12 @@
         // compileAsync), so the overlay can never be stranded on screen.
         onCompileStart: () => window.__home3dLoading.status('Preparing lighting…'),
         onReady: () => window.__home3dLoading.dismiss(),
-        onRoomClick: isPreview ? undefined : (roomId => { selectedRoom = roomId; openPanel(); renderPanel(); })
+        // A room tapped in the 3D view opens the sidebar UNPINNED (or, open
+        // already, switches it to that room): see src/sidebar-pin.js.
+        onRoomClick: isPreview ? undefined : (roomId => {
+          roomTapPending = true;   // this tap is a room, not the empty background
+          selectedRoom = roomId; sidebarEvent('roomTap'); renderPanel();
+        })
       });
 
       // Apply a ?camera=<preset> view override on load (no-op if unset/unknown,
@@ -1311,7 +1353,43 @@
         //   __home3dSensors.climate('lounge', { state: 'heat',
         //     attributes: { current_temperature: 21.3, temperature: 21.5,
         //                   min_temp: 5, max_temp: 30, target_temp_step: 0.5 } })
-        climate: (roomId, haState) => applyClimate(roomId, HAClient.parseClimate(haState)),
+        // hvac_action is kept OUT of parseClimate (see ha-client.js), so the
+        // raw state is also recorded for the sidebar's heating thermometer:
+        //   __home3dSensors.climate('lounge', { state: 'heat',
+        //     attributes: { ..., hvac_action: 'heating' } })
+        climate: (roomId, haState) => {
+          const eid = climateEntityForRoom(roomId);
+          if (eid) climateRawDebug.set(eid, haState);
+          applyClimate(roomId, HAClient.parseClimate(haState));
+          refreshClimateIcon();
+        },
+        // An accent channel's colour as HA would report it (rgb_color or
+        // hs_color), through the same parser the live path uses -- no
+        // command is sent:
+        //   __home3dSensors.lightColor('study', 'ambient', { rgb_color: [0, 204, 255] })
+        lightColor: (roomId, channel, attrs) => {
+          const ls = home.lightState[roomId] && home.lightState[roomId][channel];
+          const c = colorFromAttributes(attrs);
+          if (!ls || !c) return false;
+          ls.color = c; home.updateLights();
+          if (selectedRoom === roomId) refreshRoomRow(channel);
+          return true;
+        },
+        // A light entity's supported_color_modes, for the colour square's
+        // gate (sidebar AND popover) -- no command sent:
+        //   __home3dSensors.lightColorModes('study', 'ambient', ['color_temp'])  // white-only
+        lightColorModes: (roomId, channel, modes) => {
+          const ents = rooms && rooms[roomId] && rooms[roomId][channel];
+          const eid = Array.isArray(ents) && ents.length ? ents[0] : null;
+          if (!eid) return false;
+          const raw = { state: 'on', attributes: { supported_color_modes: modes } };
+          lightRawDebug.set(eid, raw);
+          if (tapPopovers) tapPopovers.simulate({ raw: { [eid]: raw } });
+          if (selectedRoom === roomId) refreshRoomRow(channel);
+          return true;
+        },
+        // The sidebar's pin state machine, for verification.
+        sidebar: () => Object.assign({ collapsible: !isWideScreen(), panelOpen: panel.classList.contains('open') }, sidebarState),
         getClimateSliderDisabled: () => {
           const el = panelBody.querySelector('[data-action="climate-target"]');
           return el ? el.disabled : null;
@@ -1813,14 +1891,72 @@
         panel.classList.remove('open'); topRightBtns.style.display = ''; selectedRoom = null;
       }
 
+      // ---- Pinned sidebar (collapsible widths only) ----
+      // sidebarReduce (src/sidebar-pin.js, unit-tested) decides; this applies
+      // it. Opened by the Controls button -> pinned: only X closes it.
+      // Opened by tapping a room -> unpinned: a tap on the empty canvas or
+      // on an object, a page scroll, or the start of an orbit / pan / zoom
+      // closes it. Not persisted: a reload starts closed and unpinned.
+      let sidebarState = SIDEBAR_INITIAL;
+      let roomTapPending = false;
+      const panelPin = document.getElementById('panel-pin');
+      function paintPin() {
+        const on = !!sidebarState.pinned;
+        panelPin.setAttribute('aria-pressed', String(on));
+        const label = on ? 'Unpin sidebar' : 'Pin sidebar';
+        panelPin.setAttribute('aria-label', label);
+        panelPin.title = label;
+        panelPin.innerHTML = svgIcon(on ? ICONS.pin : ICONS.pinOutline);
+      }
+      function sidebarEvent(ev) {
+        const prev = sidebarState;
+        sidebarState = sidebarReduce(prev, ev, { collapsible: !isWideScreen() });
+        if (sidebarState.open && !panel.classList.contains('open')) openPanel();
+        else if (!sidebarState.open && prev.open) closePanel();
+        paintPin();
+      }
+      paintPin();
+
       // Auto-open on wide screens
-      if (isWideScreen()) { openPanel(); setTimeout(() => renderPanel(), 0); }
+      if (isWideScreen()) { sidebarEvent('controls'); setTimeout(() => renderPanel(), 0); }
       window.addEventListener('resize', () => {
-        if (isWideScreen()) { openPanel(); renderPanel(); }
+        if (isWideScreen()) { sidebarEvent('controls'); renderPanel(); }
       });
 
-      lightsBtn.addEventListener('click', () => { selectedRoom = null; panelView = 'controls'; openPanel(); renderPanel(); });
-      panelClose.addEventListener('click', closePanel);
+      lightsBtn.addEventListener('click', () => { selectedRoom = null; panelView = 'controls'; sidebarEvent('controls'); renderPanel(); });
+      panelClose.addEventListener('click', () => sidebarEvent('close'));
+      panelPin.addEventListener('click', () => sidebarEvent('togglePin'));
+
+      // Auto-close triggers (each a no-op while pinned, closed, or wide).
+      // Background: a canvas tap that was neither a room (roomTapPending, set
+      // by onRoomClick, which runs first -- the scene registered its click
+      // listener earlier) nor a popover target (tap-popovers stops that
+      // click before it reaches the canvas, and reports it via onObjectTap).
+      if (!isPreview) {
+        let gesture = null;   // { x, y, moved } for the pointer that is down
+        container.addEventListener('pointerdown', e => {
+          roomTapPending = false;
+          gesture = { x: e.clientX, y: e.clientY, moved: false };
+        });
+        container.addEventListener('pointermove', e => {
+          if (!gesture || gesture.moved) return;
+          if (Math.abs(e.clientX - gesture.x) > 5 || Math.abs(e.clientY - gesture.y) > 5) {
+            gesture.moved = true;
+            sidebarEvent('cameraStart');   // an orbit (or two-finger pan) has begun
+          }
+        });
+        const endGesture = () => { gesture = null; };
+        container.addEventListener('pointerup', endGesture);
+        container.addEventListener('pointercancel', endGesture);
+        container.addEventListener('wheel', () => sidebarEvent('cameraStart'), { passive: true });
+        container.addEventListener('touchmove', e => { if (e.touches.length >= 2) sidebarEvent('cameraStart'); }, { passive: true });
+        container.addEventListener('click', e => {
+          if (roomTapPending) { roomTapPending = false; return; }
+          if (e.detail === 0) return;   // a keyboard-synthesised click, not a tap
+          sidebarEvent('background');
+        });
+        window.addEventListener('scroll', () => sidebarEvent('scroll'), { passive: true });
+      }
       // Back affordance is shared by the room-detail panel AND the Settings
       // view. From Settings it returns to Controls; from a room it clears the
       // selection (also returning to Controls). Settings takes priority so
@@ -1943,7 +2079,9 @@
         THREE, home, container, Home3DScene, house,
         rooms: rooms || {}, sensors: sensors || {},
         getHa: () => ha, HAClient,
-        sendLight: (roomId, channel, state, debounceMs) => sendToHA(roomId, channel, state, debounceMs),
+        sendLight: (roomId, channel, state, debounceMs, withColor) => sendToHA(roomId, channel, state, debounceMs, withColor),
+        // Close an UNPINNED sidebar on an object tap; the popover still opens.
+        onObjectTap: () => sidebarEvent('objectTap'),
         state: {
           doorStatus: id => (doorStatus.has(id) ? doorStatus.get(id) : null),
           curtainAvailable: id => (curtainAvailableState.has(id) ? curtainAvailableState.get(id) : null),
@@ -1962,7 +2100,11 @@
       if (tapPopovers) home.onDispose(() => tapPopovers.dispose());
 
       // Phase 3: Send state from 3D controls → HA
-      function sendToHA(roomId, group, state, debounceMs) {
+      // withColor: the user chose a colour -- send rgb_color to any colour
+      // channel. 'ambient' has always carried its colour on every turn_on;
+      // other accent channels only when the colour was actually picked, so a
+      // plain toggle never repaints a light with a default nobody chose.
+      function sendToHA(roomId, group, state, debounceMs, withColor) {
         if (!ha || !haConfig || haOffline(ha)) return;
         const entities = haConfig.rooms[roomId]?.[group];
         if (!entities?.length) return;
@@ -1976,7 +2118,7 @@
           const data = {};
           if (state.bri !== undefined) data.brightness = Math.round(state.bri * 2.55);
           if (state.temp !== undefined && group === 'main') data.color_temp_kelvin = state.temp;
-          if (state.color !== undefined && group === 'ambient') {
+          if (state.color !== undefined && (group === 'ambient' || (withColor && isColorChannel(group)))) {
             const c = state.color;
             data.rgb_color = [parseInt(c.slice(1,3),16), parseInt(c.slice(3,5),16), parseInt(c.slice(5,7),16)];
           }
@@ -2019,32 +2161,6 @@
         if (!available) curtainSender.cancel(curtainId);
         if (curtainSender.isDragging(curtainId)) curtainSender.markDirty(curtainId);
         else refreshRoomRow('curtain:' + curtainId);
-      }
-
-      // Renders the "Strip positions" list for an accent channel group.
-      //
-      // The group shape comes from the house loader, which emits `positions`:
-      // a list of {at, heightCm, label, size} objects. This used to read a
-      // `pos` key holding bare strings — a key NOTHING in the codebase has
-      // ever written — so it threw `Cannot read properties of undefined
-      // (reading 'map')` and broke room selection outright, but only for a
-      // room whose accent channel was switched ON (the only path that reaches
-      // this markup). `label` is optional: it is authored per fixture, and
-      // auto-placed fixtures have no label at all, so fall back to the
-      // position rather than rendering an empty bullet.
-      function stripInfoHtml(group) {
-        const positions = (group && group.positions) || [];
-        if (!positions.length) return '';
-        const rows = positions.map(p => {
-          const label = p.label || (Array.isArray(p.at)
-            ? `position ${Math.round(p.at[0])}, ${Math.round(p.at[1])}`
-            : 'unnamed strip');
-          return `<div>&#8226; ${esc(label)}</div>`;
-        }).join('');
-        return `<div class="strip-info">
-                <div class="strip-info-title">Strip positions:</div>
-                ${rows}
-              </div>`;
       }
 
       // ---- Panel rendering ----
@@ -2267,6 +2383,36 @@
       // frame. Order follows the spec: lights, ambient (+ galaxy), door(s),
       // motion, curtains, temperature. A row whose entity the room lacks is
       // simply absent from this list.
+      // Is the room's radiator firing right now? From hvac_action, which
+      // parseClimate deliberately drops (it flaps), so it is read from the
+      // client's raw cache -- or the ?debug=1 seam's -- when the row paints,
+      // and re-checked by the cheap tick below (a class flip, not a repaint).
+      const climateRawDebug = new Map();   // entity id -> raw state (debug seam only)
+      // Can the room's ambient entity take a colour? supported_color_modes
+      // from the client's raw cache (or the ?debug=1 seam); unknown -> yes.
+      const lightRawDebug = new Map();     // entity id -> raw state (debug seam only)
+      function ambientColorable(rid) {
+        const ents = rooms && rooms[rid] && rooms[rid].ambient;
+        const eid = Array.isArray(ents) && ents.length ? ents[0] : null;
+        if (!eid) return true;
+        const raw = lightRawDebug.get(eid) || (ha && ha.getRawState ? ha.getRawState(eid) : null);
+        return supportsColor(raw && raw.attributes);
+      }
+      function climateHeating(rid) {
+        const eid = climateEntityForRoom(rid);
+        if (!eid) return false;
+        const raw = climateRawDebug.get(eid) || (ha && ha.getRawState ? ha.getRawState(eid) : null);
+        const reading = climateReading.get(rid);
+        const act = raw && raw.attributes ? raw.attributes.hvac_action : undefined;
+        return climateActivity(act, !!(reading && reading.off)) === 'heating';
+      }
+      function refreshClimateIcon() {
+        if (!selectedRoom || !panelReady) return;
+        const ic = panelBody.querySelector('[data-row="climate"] .row-ico');
+        if (ic) ic.classList.toggle('heat', climateHeating(selectedRoom));
+      }
+      setInterval(refreshClimateIcon, 2000);
+
       function roomRowKeys(rid) {
         const s = home.lightState[rid] || {};
         const keys = [];
@@ -2295,7 +2441,10 @@
         if (key === 'main') return mainLightRowHtml(s.main, offline);
         // Exactly ONE ambience switch per room: the room's single ambient
         // group, never a switch per fixture.
-        if (key === 'ambient') return ambientRowHtml(s.ambient, ambientRowLabel(lc.ambient, rm && rm.name), stripInfoHtml(lc.ambient), offline);
+        // Label from rooms.json's binding when geometry draws no fixture
+        // (ambientRowLabel); the colour square only when the bound entity
+        // can take a colour (ambientColorable).
+        if (key === 'ambient') return ambientRowHtml(s.ambient, ambientRowLabel(lc.ambient, rm && rm.name), offline, ambientColorable(rid));
         if (key === 'galaxy') return galaxyRowHtml(s.galaxy, offline);
         if (key.startsWith('door:')) {
           const doors = roomDoorRows[rid] || [];
@@ -2313,7 +2462,7 @@
           if (pct === null || pct === undefined) return '';
           return curtainRowHtml(cu, pct, curtainIsAvailable(cu.id), offline);
         }
-        if (key === 'climate') return climateRowHtml(climateReading.get(rid) || null, offline);
+        if (key === 'climate') return climateRowHtml(climateReading.get(rid) || null, offline, climateHeating(rid));
         return '';
       }
 
@@ -2372,14 +2521,15 @@
           });
           if (action === 'bri-ambient') onWrite(el, 'input', e => {
             s.ambient.bri = +e.target.value; home.updateLights();
-            el.previousElementSibling.textContent = `Brightness: ${s.ambient.bri}%`;
+            el.nextElementSibling.textContent = `${s.ambient.bri}%`;
             sendToHA(rid, 'ambient', s.ambient, 200);
           });
-          if (action === 'color-ambient') onWrite(el, 'click', () => {
-            s.ambient.color = el.dataset.color; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 0); refreshRoomRow('ambient');
-          });
-          if (action === 'color-input-ambient') onWrite(el, 'input', e => {
-            s.ambient.color = e.target.value; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 200); refreshRoomRow('ambient');
+          // The colour square: the native picker fires 'input' as the user
+          // moves through it -- debounced like the sliders, and the row is
+          // NOT repainted (that would replace the input under an open picker;
+          // the square already shows the value it holds).
+          if (action === 'color-ambient') onWrite(el, 'input', e => {
+            s.ambient.color = e.target.value; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 200, true);
           });
           if (action === 'bri-galaxy') onWrite(el, 'input', e => {
             s.galaxy.bri = +e.target.value; home.updateLights();

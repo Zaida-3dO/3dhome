@@ -9,6 +9,12 @@
  * which is the only place the "one user action, one command" rules live.
  */
 
+import { ICONS, svgIcon } from './ui-icons.js';
+import { swatchColor } from './light-color.js';
+// One sentence-case rule for sidebar headers and popover titles alike.
+import { sentenceCase } from './tap-popovers.js';
+export { sentenceCase };
+
 /** Minimal HTML escaper for profile-supplied text (labels, ids). */
 export function esc(s) {
   return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -90,6 +96,15 @@ export function haOfflineRowHtml() {
 }
 
 // ---- Row markup ------------------------------------------------------------
+// Each section header carries the same MDI icon as the matching tap popover
+// (src/ui-icons.js) and a sentence-case title -- never ALL CAPS.
+
+const rowIco = (path, cls) => svgIcon(path, 'row-ico' + (cls ? ' ' + cls : ''));
+
+/** A section header's left side: icon + title. `title` is escaped here. */
+export function sectionTitleHtml(iconPath, title, iconCls) {
+  return `<span class="control-title">${rowIco(iconPath, iconCls)}<span class="control-label">${esc(title)}</span></span>`;
+}
 // Every row is one `.control-group` carrying `data-row="<key>"`, which is what
 // lets index.html repaint ONE row in place when its entity reports, instead of
 // rebuilding the whole panel.
@@ -97,9 +112,10 @@ export function haOfflineRowHtml() {
 export function doorRowHtml(door, status, showName) {
   const text = doorLabel(status);
   const cls = status === 'on' ? 'open' : status === 'off' ? 'closed' : 'unavailable';
+  const icon = status === 'on' ? rowIco(ICONS.doorOpen, 'd-open') : rowIco(ICONS.doorClosed, status === 'off' ? 'd-closed' : 'dim');
   return `<div class="control-group status-row" data-row="door:${esc(door.id)}">
     <div class="control-header">
-      <span class="status-text status-${cls}" data-status="door">${esc(text)}</span>
+      <span class="control-title">${icon}<span class="status-text status-${cls}" data-status="door">${esc(text)}</span></span>
       ${showName ? `<span class="status-sub">${esc(door.name || door.id)}</span>` : ''}
     </div>
   </div>`;
@@ -109,7 +125,7 @@ export function motionRowHtml(status) {
   const cls = status === 'on' ? 'on' : status === 'off' ? 'off' : 'unavailable';
   return `<div class="control-group status-row" data-row="motion">
     <div class="control-header">
-      <span class="control-label">MOTION</span>
+      ${sectionTitleHtml(ICONS.motion, 'Motion', cls === 'on' ? 'motion-on' : '')}
       <span class="status-tag status-tag-${cls}" data-status="motion">${esc(motionLabel(status))}</span>
     </div>
   </div>`;
@@ -124,7 +140,7 @@ export function mainLightRowHtml(s, offline) {
   const dis = offline ? ' disabled' : '';
   let h = `<div class="control-group" data-row="main">
     <div class="control-header">
-      <span class="control-label">MAIN LIGHT</span>
+      ${sectionTitleHtml(s.on ? ICONS.bulb : ICONS.bulbOff, 'Main light', s.on ? 'light-on' : '')}
       <button class="toggle ${s.on ? 'on' : ''}" data-action="toggle-main"${dis}>
         <div class="toggle-knob"></div>
       </button>
@@ -143,31 +159,29 @@ export function mainLightRowHtml(s, offline) {
   return h + '</div>';
 }
 
-export const AMBIENT_SWATCHES = ['#ff3300', '#ff6600', '#ffaa00', '#ff0066', '#cc00ff', '#6600ff', '#0066ff', '#00ccff', '#00ff66', '#ffffff'];
-
-/** `name` is the ambient group's display name; `stripHtml` is pre-rendered. */
-export function ambientRowHtml(s, name, stripHtml, offline) {
+/**
+ * The ambience row. `name` is the ambient group's display name. While on:
+ * ONE colour square showing the channel's current colour, inline with the
+ * brightness slider and its value -- [■] ───●─── 17%. The square is a native
+ * colour input: tapping it opens the platform picker. `colorable` false (the
+ * bound entity is white-only: supportsColor in src/light-color.js) drops the
+ * square and leaves the slider.
+ */
+export function ambientRowHtml(s, name, offline, colorable) {
   const dis = offline ? ' disabled' : '';
   let h = `<div class="control-group" data-row="ambient">
     <div class="control-header">
-      <span class="control-label">${esc(String(name).toUpperCase())}</span>
+      ${sectionTitleHtml(s.on ? ICONS.bulb : ICONS.bulbOff, sentenceCase(name), s.on ? 'light-on' : '')}
       <button class="toggle ${s.on ? 'on' : ''}" data-action="toggle-ambient"${dis}>
         <div class="toggle-knob"></div>
       </button>
     </div>`;
   if (s.on) {
-    h += `<div class="slider-row">
-      <div class="slider-label">Brightness: ${s.bri}%</div>
-      <input type="range" class="slider" min="5" max="100" value="${s.bri}" data-action="bri-ambient"${dis}>
-    </div>
-    <div class="slider-row">
-      <div class="slider-label">Color</div>
-      <div class="color-swatches">
-        ${AMBIENT_SWATCHES.map(c => `<button class="color-swatch ${s.color === c ? 'selected' : ''}" style="background:${c}" data-action="color-ambient" data-color="${c}"${dis}></button>`).join('')}
-      </div>
-      <input type="color" class="color-input" value="${esc(s.color)}" data-action="color-input-ambient"${dis}>
-    </div>
-    ${stripHtml || ''}`;
+    h += `<div class="slider-row inline-row">
+      ${colorable === false ? '' : `<input type="color" class="color-square" value="${esc(swatchColor(s.color))}" data-action="color-ambient" aria-label="Colour" title="Colour"${dis}>`}
+      <input type="range" class="slider" min="5" max="100" value="${s.bri}" data-action="bri-ambient" aria-label="Brightness"${dis}>
+      <span class="inline-val">${s.bri}%</span>
+    </div>`;
   }
   return h + '</div>';
 }
@@ -176,7 +190,7 @@ export function galaxyRowHtml(s, offline) {
   const dis = offline ? ' disabled' : '';
   let h = `<div class="control-group" data-row="galaxy">
     <div class="control-header">
-      <span class="control-label">GALAXY PROJECTOR</span>
+      ${sectionTitleHtml(s.on ? ICONS.bulb : ICONS.bulbOff, 'Galaxy projector', s.on ? 'light-on' : '')}
       <button class="toggle galaxy ${s.on ? 'on' : ''}" data-action="toggle-galaxy"${dis}>
         <div class="toggle-knob"></div>
       </button>
@@ -195,10 +209,10 @@ export function curtainRowHtml(cu, pct, available, offline) {
   const dis = (available && !offline) ? '' : ' disabled';
   return `<div class="control-group" data-row="curtain:${esc(cu.id)}">
     <div class="control-header">
-      <span class="control-label">${esc(String(cu.label).toUpperCase())}</span>
+      ${sectionTitleHtml(shown > 0 ? ICONS.curtains : ICONS.curtainsClosed, sentenceCase(cu.label), available ? '' : 'dim')}
       <span class="row-btns">
-        <button class="row-btn" data-action="curtain-cmd" data-cmd="open" data-curtain="${esc(cu.id)}"${dis}>Open</button>
-        <button class="row-btn" data-action="curtain-cmd" data-cmd="close" data-curtain="${esc(cu.id)}"${dis}>Close</button>
+        <button class="row-ib" data-action="curtain-cmd" data-cmd="close" data-curtain="${esc(cu.id)}" aria-label="Close curtain" title="Close"${dis}>${svgIcon(ICONS.cClose)}</button>
+        <button class="row-ib" data-action="curtain-cmd" data-cmd="open" data-curtain="${esc(cu.id)}" aria-label="Open curtain" title="Open"${dis}>${svgIcon(ICONS.cOpen)}</button>
       </span>
     </div>
     <div class="slider-row">
@@ -209,11 +223,13 @@ export function curtainRowHtml(cu, pct, available, offline) {
   </div>`;
 }
 
-export function climateRowHtml(reading, offline) {
+/** `heating`: hvac_action says the radiator is firing now -- the
+ *  thermometer turns orange (see climateHeating in index.html). */
+export function climateRowHtml(reading, offline, heating) {
   const v = climateView(reading);
   return `<div class="control-group" data-row="climate">
     <div class="control-header">
-      <span class="control-label">TEMPERATURE</span>
+      ${sectionTitleHtml(ICONS.thermometer, 'Temperature', heating ? 'heat' : '')}
       <span class="status-sub" data-status="climate-current">Now ${esc(v.current)}</span>
     </div>
     <div class="slider-row">
