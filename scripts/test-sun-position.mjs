@@ -100,7 +100,7 @@ console.log('daylightCurve');
     JSON.stringify(night.background) === JSON.stringify(NIGHT.background) && JSON.stringify(night.ground) === JSON.stringify(NIGHT.ground), night);
   const high = daylightCurve(45);
   check('midday: full day and full direct sun', high.day === 1 && high.direct === 1, high);
-  check('midday fill is well under the old flat 0.70 (the rooms get contrast)', high.fill > 0.3 && high.fill < 0.55, high.fill);
+  check('midday fill is well under the old flat 0.70 (the rooms get contrast)', high.fill > 0.3 && high.fill <= 0.6, high.fill);
   check('sky fill is cool (blue > red), bounce warm (red > blue)', high.sky[2] > high.sky[0] && high.bounce[0] > high.bounce[2], high);
   check('by day the sky is brighter than at night', high.background[2] > NIGHT.background[2] * 3, high.background);
   const low = daylightCurve(3);

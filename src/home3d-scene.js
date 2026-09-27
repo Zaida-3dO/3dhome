@@ -975,7 +975,7 @@ export const Home3DScene = (() => {
   // The pools blend multiply-add (floor * (1 + gain)), so a gain of 1 doubles
   // the floor's brightness under full sun.
   const DAYLIGHT_SUN_POOL_GAIN = 1.4; // window-shaped direct-sun pool
-  const DAYLIGHT_SKY_POOL_GAIN = 0.25; // soft sky pool, sun round the other side
+  const DAYLIGHT_SKY_POOL_GAIN = 0.3;  // soft sky pool, every window by day
   const DAYLIGHT_SPOT_GAIN = 7;       // shared per-room SpotLight intensity
 
   /**
@@ -1759,6 +1759,10 @@ export const Home3DScene = (() => {
           const m = new THREE.Mesh(new THREE.BoxGeometry(fj, H + fh, fdep), frameMat);
           m.position.set(lx, (H + fh) / 2, 0);
           m.castShadow = true;
+          // Receives too: an unshadowed frame is lit by the sun straight
+          // through the building whenever it faces the sun, which a sun that
+          // moves round the house now does (a glowing door outline).
+          m.receiveShadow = true;
           mount.add(m);
         };
         jamb(-fj / 2);
@@ -1766,6 +1770,7 @@ export const Home3DScene = (() => {
         const head = new THREE.Mesh(new THREE.BoxGeometry(w + 2 * fj, fh, fdep), frameMat);
         head.position.set(w / 2, H + fh / 2, 0);
         head.castShadow = true;
+        head.receiveShadow = true;
         mount.add(head);
         // swinging leaf: pivot at the hinge (local origin); leaf extends +X to the latch edge
         const pivot = new THREE.Group();
@@ -1991,18 +1996,24 @@ export const Home3DScene = (() => {
           return [[a[0], v.openBot, a[1]], [b[0], v.openBot, b[1]],
             [b[0], v.openTop, b[1]], [a[0], v.openTop, a[1]]];
         };
-        // Capacity: a pool clipped by an L-shaped room stays well under 16
-        // vertices; 3 * 14 triangle corners is ample and fixed, so updating
-        // it is a sub-range upload, never a reallocation.
-        const MAX_CORNERS = 42;
+        // Capacity: the sky pool's 2 triangles plus a sun pool clipped by an
+        // L-shaped room (well under 16 vertices): 48 triangle corners is ample
+        // and fixed, so updating it is a sub-range upload, never a
+        // reallocation. Per-vertex colour carries sun vs sky light, so both
+        // pools are ONE mesh and one draw call per window.
+        const MAX_CORNERS = 48;
         const pos = new Float32Array(MAX_CORNERS * 3);
         const uv = new Float32Array(MAX_CORNERS * 2);
+        const col = new Float32Array(MAX_CORNERS * 3);
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
         geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2).setUsage(THREE.DynamicDrawUsage));
+        geo.setAttribute('color', new THREE.BufferAttribute(col, 3).setUsage(THREE.DynamicDrawUsage));
         geo.setDrawRange(0, 0);
         const mat = new THREE.MeshBasicMaterial({
-          map: patchTex, color: 0x000000, transparent: true,
+          // color = the curtains' transmission x tint (updateDaylight);
+          // vertex colour = sun or sky light x gain (updateDaylightPools).
+          map: patchTex, color: 0x000000, vertexColors: true, transparent: true,
           // out = src * dst + dst: the floor's own colour, brightened.
           blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
           blendSrc: THREE.DstColorFactor, blendDst: THREE.OneFactor,
@@ -3847,23 +3858,33 @@ export const Home3DScene = (() => {
     const daylightSunColor = new THREE.Color(1, 1, 1);
     const daylightSkyColor = new THREE.Color(1, 1, 1);
 
-    // Rebuild each window's floor mesh for the current sun: its sun pool when
-    // direct sun comes in through it, else its sky pool by day, else nothing.
-    // Called when the SUN moves (60 s tick, a preset, a time override), never
-    // per frame; a curtain moving only needs updateDaylight().
+    // Rebuild each window's floor mesh for the current sun: by day its soft
+    // SKY pool (the diffuse light any window lets in), plus its SUN pool when
+    // direct sun comes in through it. Called when the SUN moves (60 s tick, a
+    // preset, a time override), never per frame; a curtain moving only needs
+    // updateDaylight().
     function updateDaylightPools() {
+      // Direct sun on a floor scales with how high the sun is (a low sun's
+      // pool is long and faint), but never so far that a morning pool vanishes.
+      const sunK = daylightDirect * (0.5 + 0.5 * daylightHigh) * DAYLIGHT_SUN_POOL_GAIN;
+      const skyK = daylightSunF * DAYLIGHT_SKY_POOL_GAIN;
       daylight.windows.forEach(e => {
-        const posAttr = e.geo.attributes.position, uvAttr = e.geo.attributes.uv;
-        const pos = posAttr.array, uv = uvAttr.array;
+        const posAttr = e.geo.attributes.position, uvAttr = e.geo.attributes.uv, colAttr = e.geo.attributes.color;
+        const pos = posAttr.array, uv = uvAttr.array, col = colAttr.array;
         const cap = pos.length / 3;
         let n = 0;
-        const put = (x, z, u, v) => {
+        const put = (x, z, u, v, c, k) => {
           if (n >= cap) return;
           pos[n * 3] = x; pos[n * 3 + 1] = e.poolY; pos[n * 3 + 2] = z;
           uv[n * 2] = u; uv[n * 2 + 1] = v;
+          col[n * 3] = c.r * k; col[n * 3 + 1] = c.g * k; col[n * 3 + 2] = c.b * k;
           n++;
         };
-        const poly = (daylightDirect > 0.001 && e.roomPoly)
+        if (skyK > 0.001) {
+          const c = e.skyCorners, UV = [[0, 0], [1, 0], [0, 1], [1, 1]];
+          [0, 2, 1, 1, 2, 3].forEach(i => put(c[i][0], c[i][1], UV[i][0], UV[i][1], daylightSkyColor, skyK));
+        }
+        const poly = (sunK > 0.001 && e.roomPoly)
           ? windowSunPool({ outer: e.outer, inner: e.inner, inward: e.inward,
               toSun: daylightToSun, room: e.roomPoly, floorY: 0 })
           : null;
@@ -3871,38 +3892,27 @@ export const Home3DScene = (() => {
           // uv (0.5, 0) is the patch texture's full-strength texel: a sun pool
           // is evenly lit with a sharp edge, as direct sun is.
           const tris = THREE.ShapeUtils.triangulateShape(poly.map(p => new THREE.Vector2(p[0], p[1])), []);
-          tris.forEach(t => t.forEach(i => put(poly[i][0], poly[i][1], 0.5, 0)));
-          e.mode = 'sun';
-          e.pool = poly;
-        } else if (daylightSunF > 0.001) {
-          const c = e.skyCorners, UV = [[0, 0], [1, 0], [0, 1], [1, 1]];
-          [0, 2, 1, 1, 2, 3].forEach(i => put(c[i][0], c[i][1], UV[i][0], UV[i][1]));
-          e.mode = 'sky';
-          e.pool = null;
-        } else {
-          e.mode = 'none';
-          e.pool = null;
+          tris.forEach(t => t.forEach(i => put(poly[i][0], poly[i][1], 0.5, 0, daylightSunColor, sunK)));
         }
+        e.mode = poly ? 'sun' : (skyK > 0.001 ? 'sky' : 'none');
+        e.pool = poly;
+        e.poolK = n ? Math.max(skyK, poly ? sunK : 0) : 0;
         e.geo.setDrawRange(0, n);
         posAttr.needsUpdate = true;
         uvAttr.needsUpdate = true;
+        colAttr.needsUpdate = true;
       });
     }
 
     function updateDaylight() {
       const pctOf = id => (curtainById[id] ? curtainById[id].built.getOpen() : null);
-      // Direct sun on a floor scales with how high the sun is (a low sun's
-      // pool is long and faint), but never so far that a morning pool vanishes.
-      const sunK = daylightDirect * (0.5 + 0.5 * daylightHigh) * DAYLIGHT_SUN_POOL_GAIN;
-      const skyK = daylightSunF * DAYLIGHT_SKY_POOL_GAIN;
       daylight.windows.forEach(e => {
         const d = windowDaylight(e.win, e.curtains, pctOf);
         e.transmit = d.transmit;
         e.tint = d.tint;
-        const col = e.mode === 'sun' ? daylightSunColor : daylightSkyColor;
-        const k = (e.mode === 'sun' ? sunK : e.mode === 'sky' ? skyK : 0) * d.transmit;
-        e.mat.color.setRGB(col.r * d.tint[0] * k, col.g * d.tint[1] * k, col.b * d.tint[2] * k);
-        e.patch.visible = k > 0.001;
+        // The light itself is in the vertex colours; the curtains scale it.
+        e.mat.color.setRGB(d.tint[0] * d.transmit, d.tint[1] * d.transmit, d.tint[2] * d.transmit);
+        e.patch.visible = (e.poolK || 0) * d.transmit > 0.001;
       });
       // The room's shared daylight spot: placed at, and aimed through, the
       // windows actually letting light in -- weighted by width, curtain
@@ -4915,9 +4925,10 @@ export const Home3DScene = (() => {
       // The light itself. Without sun shadows (the low tier) nothing stops an
       // unshadowed sun, so a low one would light interior walls straight
       // through the building: hold it steep there -- azimuth still follows
-      // the day, and the pools carry the real angle. Never below 2 deg either,
-      // so the shadow camera is never edge-on (it is dark by then anyway).
-      const lightEl = (quality.sunShadow && ren.shadowMap.enabled) ? Math.max(s.elevation, 2) : Math.max(s.elevation, 60);
+      // the day, and the pools carry the real angle. With shadows it is held
+      // above 3 deg, so the shadow camera is never edge-on to the floor (the
+      // light has faded out by then anyway).
+      const lightEl = (quality.sunShadow && ren.shadowMap.enabled) ? Math.max(s.elevation, 3) : Math.max(s.elevation, 60);
       const ld = sunDirection(s.azimuth, lightEl, NORTH_OFFSET);
       sun.position.set(HOUSE_CX + ld[0] * 25, ld[1] * 25, HOUSE_CZ + ld[2] * 25);
       sun.intensity = c.sunIntensity;
