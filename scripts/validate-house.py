@@ -1024,6 +1024,37 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
 
     check_curtain_binding(rooms_doc, geo, sensors, (major, minor), report)
     check_climate_binding(rooms_doc, sensors, geo_room_ids, (major, minor), report)
+    check_vacuum_binding(rooms_doc, geo, sensors, geo_room_ids, (major, minor), report)
+
+
+def check_vacuum_binding(rooms_doc, geo, sensors, geo_room_ids, version, report):
+    """`sensors.vacuums`: furniture item id -> a robot vacuum binding. The
+    item is what gets clicked, so an id with no furniture item behind it can
+    never be reached -- an error. So is a segment bound to a room that does
+    not exist. The schema already enforces the shape and the domains.
+    """
+    vacuums = sensors.get("vacuums") or {}
+    if not vacuums:
+        return
+    if version < (1, 4):
+        report.warn(
+            "rooms.json/schemaVersion",
+            "`sensors.vacuums` needs schemaVersion 1.4 or newer, but this profile "
+            f"declares '{rooms_doc.get('schemaVersion')}' -- bump it; nothing else enforces this coupling",
+        )
+    furniture_ids = {f.get("id") for f in geo.get("furniture", [])}
+    for iid, binding in vacuums.items():
+        if iid not in furniture_ids:
+            report.error(
+                f"rooms.json/sensors/vacuums/{iid}",
+                f"vacuum bound to furniture item '{iid}', which has no matching item in geometry.json's furniture",
+            )
+        for rid in ((binding or {}).get("segments") or {}):
+            if rid not in geo_room_ids:
+                report.error(
+                    f"rooms.json/sensors/vacuums/{iid}/segments/{rid}",
+                    f"segment bound to room '{rid}', which has no matching room in geometry.json",
+                )
 
 
 def check_climate_binding(rooms_doc, sensors, geo_room_ids, version, report):

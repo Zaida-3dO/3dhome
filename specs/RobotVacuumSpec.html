@@ -59,6 +59,11 @@
      the Babel-transpiled app below can call it. -->
 <script type="module">
   import * as M from '../src/furniture/robot-vacuum.js';
+  // The control card below is the app's own tap card (src/tap-popovers.js),
+  // rendered from a SAMPLE reading: this page never talks to Home Assistant.
+  import { popoverHtml, STYLE } from '../src/tap-popovers.js';
+  import * as VC from '../src/vacuum-control.js';
+  window.VacuumCard = { popoverHtml, STYLE, VC };
   window.FurnitureRobotVacuum = M;
   window.dispatchEvent(new Event('furniture-robot-vacuum-ready'));
 </script>
@@ -102,13 +107,49 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "bandColor": "#b9a88a",
   "puckColor": "#8a8c8e",
   "ledColor": "#2fd0e0",
-  "detail": "full"
+  "detail": "full",
+  "haState": "docked"
 }/*EDITMODE-END*/;
 
-// params for the builder = tweaks minus the page-only "detail" key
+// params for the builder = tweaks minus the page-only "detail" and
+// "haState" (the control card's sample state) keys
 function paramsOf(t) {
-  const { detail, ...p } = t;
+  const { detail, haState, ...p } = t;
   return p;
+}
+
+// The robot's control card, exactly as the house shows it when the robot is
+// clicked, driven by a sample reading. Its buttons move the sample (Start ->
+// cleaning, Dock -> returning, ...); nothing is sent anywhere.
+function VacuumCardPreview({ state, onState }) {
+  const K = window.VacuumCard;
+  React.useEffect(() => {
+    if (!K || document.getElementById('tp-style')) return;
+    const el = document.createElement('style');
+    el.id = 'tp-style';
+    el.textContent = K.STYLE;
+    document.head.appendChild(el);
+  }, []);
+  if (!K) return null;
+  const reading = K.VC.MOCK_VACUUM_READINGS[state] || K.VC.MOCK_VACUUM_READINGS.docked;
+  const dot = () => '<span class="tp-status bad" title="Sample state: not connected"><i></i></span>';
+  const html = K.popoverHtml.vacuum({
+    name: 'Robot vacuum', status: 'offlineMock', haOff: false, reading,
+    actions: K.VC.vacuumActions(reading),
+    rooms: [{ roomId: 'kitchen', name: 'Kitchen' }, { roomId: 'lounge', name: 'Lounge' }]
+  }, dot);
+  const onClick = e => {
+    const b = e.target.closest && e.target.closest('button[data-a]');
+    if (!b || b.disabled) return;
+    const next = K.VC.mockVacuumAfter(b.dataset.a, reading);
+    if (next) onState(next.state);
+  };
+  return (
+    <div style={{ background: '#1a1a1c', borderRadius: 4, padding: 16, minHeight: 200 }}>
+      <div className="tp-pop" data-kind="vacuum" style={{ position: 'static' }} onClick={onClick}
+        dangerouslySetInnerHTML={{ __html: html }} />
+    </div>
+  );
 }
 
 // The envelope that goes with the dock state: the robot's own size without
@@ -205,6 +246,18 @@ function App() {
           <pre className="json">{json}</pre>
         </div>
 
+        <div className="card">
+          <h2>Control card (sample state)</h2>
+          <VacuumCardPreview state={t.haState} onState={v => setTweak('haState', v)} />
+          <div className="legend">
+            Clicking the robot in the house opens this card, bound through rooms.json
+            <code> sensors.vacuums</code> (keyed by this item's furniture id). Start / Pause / Dock call
+            vacuum.start, vacuum.pause and vacuum.return_to_base; each is enabled only when it would change
+            something. A room button calls the integration's segment clean. The sidebar's Controls view shows
+            the same block. Here the state is a sample: pick one in the Tweaks panel, or press a button.
+          </div>
+        </div>
+
         <div className="card full">
           <h2>3D — robot vacuum</h2>
           <ThreeView
@@ -244,6 +297,11 @@ function App() {
           onChange={v => setTweak('puckColor', v)} />
         <TweakColor label="Status LED (glows)" value={t.ledColor}
           onChange={v => setTweak('ledColor', v)} />
+
+        <TweakSection label="Control card" />
+        <TweakSelect label="Sample state" value={t.haState}
+          options={['docked', 'cleaning', 'paused', 'returning', 'error', 'unavailable']}
+          onChange={v => setTweak('haState', v)} />
 
         <TweakSection label="Render" />
         <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}

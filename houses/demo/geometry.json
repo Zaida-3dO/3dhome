@@ -640,6 +640,7 @@
     { "id": "lounge_sideboard", "room": "lounge", "type": "box", "wall": 1, "centre": 150,
       "params": { "width": 160, "depth": 45, "height": 75, "color": "#5b4a3c" },
       "label": "Sideboard", "notes": "Under 100 cm: stays solid when the north wall fades." },
+    { "id": "kitchen_robot", "room": "kitchen", "type": "robot-vacuum", "wall": 1, "centre": 520, "label": "Robot vacuum", "notes": "Bound in rooms.json sensors.vacuums: click it for its control card (sample state here, since the demo has no Home Assistant)." },
     { "id": "kitchen_glass_case", "room": "kitchen", "type": "box", "wall": 1, "centre": 355,
       "params": { "width": 80, "depth": 40, "height": 180, "color": "#cfe3ea", "finish": "glass" },
       "label": "Glass case", "notes": "Glass never joins a wall fade; it keeps its own opacity." },

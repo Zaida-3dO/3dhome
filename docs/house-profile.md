@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.3"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys and `1.3` its `climate` key. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.4"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key and `1.4` its `vacuums` key. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -1015,6 +1015,7 @@ renders exactly as it did before — both features simply stay dark.
 | `curtains` | **curtain id**, from the geometry's `curtains[].id` | The curtain follows the `cover.*` entity's `current_position` (0 closed, 100 open), and the window's daylight with it |
 | `corniceLights` | **curtain id** | The curtain's cornice strip follows the light entity: on/off, brightness and colour |
 | `climate` | **room id** | ONE `climate.*` entity (a string, not a list) for the room panel's temperature row |
+| `vacuums` | **furniture item id**, from the geometry's `furniture[].id` | A robot vacuum: click the item for its control card; the sidebar's Controls view shows the same block |
 
 Several entities on one target are OR-ed: any one of them reading `on` means
 occupied, or open. `unavailable` and `unknown` count as `off`, so a sensor that
@@ -1171,6 +1172,44 @@ thermostat and a radiator valve, say — names the one its panel row drives here
 so switching between them is a one-value edit. `climate` needs `schemaVersion`
 `"1.3"`.
 
+#### Robot vacuums
+
+```json
+"sensors": {
+  "vacuums": {
+    "kitchen_robot": {
+      "entity":   "vacuum.example_robot",
+      "battery":  "sensor.example_robot_battery_level",
+      "segments": { "kitchen": 7, "lounge": 8 }
+    }
+  }
+}
+```
+
+Keyed by the **furniture item** that draws the robot and its dock (a
+`robot-vacuum` item in `geometry.json`). Furniture renders merged, so the
+item is found by where a tap lands: a tap whose first solid hit falls inside
+that item's box opens the vacuum's card. The card, and a matching block in the
+sidebar's Controls view, show:
+
+- the status (the integration's own `status` attribute when it has one,
+  `Charging completed` say, else the vacuum state) and the battery, from
+  `battery` or, without it, the vacuum's `battery_level` attribute;
+- **Start** (`vacuum.start`; **Resume** while paused), **Pause**
+  (`vacuum.pause`) and **Dock** (`vacuum.return_to_base`). Each is enabled
+  only when it would change something: no Start while cleaning, no Dock while
+  docked, no Pause unless cleaning or returning;
+- one **clean this room** button per `segments` entry: room id -> the
+  integration's own room number, sent as `segments: [n]` to
+  `segmentService` (default `dreame_vacuum.vacuum_clean_segment`, the Dreame
+  integration's; name another integration's service there).
+
+Every button is disabled while Home Assistant is offline or the vacuum is
+unavailable. A house with no Home Assistant (the demo) shows a sample robot
+that the buttons move, and sends nothing. `vacuums` needs `schemaVersion`
+`"1.4"`; the validator errors on an item id or a segment room the geometry
+does not have.
+
 Leave `url` and `fallbackUrl` out of a committed profile. A hostname in a
 tracked file discloses infrastructure; supply them through runtime config
 instead. And, again: **the token is never in this file.**
@@ -1319,6 +1358,9 @@ that a JSON Schema cannot express:
   both appearing only in a profile that declares `schemaVersion` 1.2+
 - `sensors.climate` room ids resolving against the geometry, each value a single
   `climate.*` id, and appearing only in a profile that declares `schemaVersion` 1.3+
+- `sensors.vacuums` item ids resolving against the geometry's furniture, their
+  `segments` room ids against its rooms, and appearing only in a profile that
+  declares `schemaVersion` 1.4+
 - a `site.latitude` precise enough to locate a building rather than a city
 - which side of its wall each window, curtain and wall-anchored item faces,
   using the same probe the engine uses: **error** if the room is on neither

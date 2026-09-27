@@ -433,7 +433,7 @@ ${sel} .tp-crow .tp-range { margin: 0; }
 ${sel} .tp-color { --sq: 20px; --pad: 12px; }
 ${sel} .tp-pop.chip { padding: 10px 12px; }`;
 
-const STYLE = `
+export const STYLE = `
 .tp-pop { --w:200px; --ib-w:30px; --ib-h:${GF.ibH}px; --sw-w:36px; --sw-h:${GF.swH}px; --thumb:14px;
   --ink:#fff; --ink-2:rgba(255,255,255,0.62); --accent:#6366f1; --ok:#22c55e; --warn:#eab308; --bad:#ef4444;
   --amber:#ffd43b; --heat:#ff8a3d; --door-open:#f59e0b;
@@ -1004,8 +1004,13 @@ export function attachTapPopovers(o) {
         const c = conn();
         let reading = vacuumReading(t.id), mock = false;
         if (c == null && !reading) {
-          if (!vacuumMock.has(t.id)) vacuumMock.set(t.id, MOCK_VACUUM_READINGS.docked);
-          reading = vacuumMock.get(t.id); mock = true;
+          // The page may share one sample robot with its sidebar (S.vacuumMock).
+          if (S.vacuumMock) reading = S.vacuumMock(t.id);
+          else {
+            if (!vacuumMock.has(t.id)) vacuumMock.set(t.id, MOCK_VACUUM_READINGS.docked);
+            reading = vacuumMock.get(t.id);
+          }
+          mock = true;
         }
         const na = !mock && (!reading || !reading.available);
         const b = t.binding || vacuums.get(t.id) || { segments: [] };
@@ -1023,7 +1028,7 @@ export function attachTapPopovers(o) {
           if (m.mock) {
             // No HA configured: the sample robot moves, nothing is sent.
             const next = mockVacuumAfter(action, m.reading);
-            if (next) vacuumMock.set(t.id, next);
+            if (next) { if (S.setVacuumMock) S.setVacuumMock(t.id, next); else vacuumMock.set(t.id, next); }
           } else if (canSend()) {
             const seg = roomId != null ? b.segments.find(s => s.roomId === roomId) : null;
             const cmd = action === 'room'

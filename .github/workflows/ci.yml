@@ -312,10 +312,23 @@ jobs:
           # and with oversized parts (clamped), the robot's front is at
           # z = depth with its rear tucked under the tower, the status LED is
           # emissive and kept, dock:false has no dock meshes, no lights, the
-          # triangle caps (600 full / 200 low, low <= 0.6 x full) and that
-          # toFurnitureJSON emits only non-default keys.
+          # triangle caps (2800 full / 600 low, low <= 0.3 x full), that
+          # toFurnitureJSON emits only non-default keys, and the look: a TRUE
+          # circle on 64 / 32 segments, a rounded top edge, the bumper round
+          # the front, a turret above the body, seams at full only, a
+          # bevelled dock lid.
           set -euo pipefail
           node scripts/test-robot-vacuum.mjs
+      - name: Robot vacuum Home Assistant control (fake HA, no real calls)
+        run: |
+          # src/vacuum-control.js + the client fold + the tap card: bindings,
+          # parseVacuum, each button enabled only when it applies, the exact
+          # service call per button and per room, one reading per snapshot,
+          # no repaint on an attribute-only republish, a resync that sends no
+          # command, picking a merged robot by its world box, and every
+          # button disabled offline. Runs against scripts/fake-ha-websocket.mjs.
+          set -euo pipefail
+          node scripts/test-vacuum-control.mjs
       - name: Balcony builder envelope, bar gap, side modes and caps
         run: |
           # Asserts src/furniture/balcony.js beyond the generic contract: the
@@ -652,6 +665,8 @@ jobs:
         run: python scripts/test-validate-furniture.py
       - name: footstepPath validator checks (outside waypoint, segment leaving the room, door gap empties the trail)
         run: python scripts/test-validate-footstep-path.py
+      - name: sensors.vacuums schema and validator checks (unknown furniture item, unknown segment room, version)
+        run: python scripts/test-validate-vacuum.py
       - name: sh3d-furniture / furniture-apply tests
         run: python scripts/test-sh3d-furniture.py
 
