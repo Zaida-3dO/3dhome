@@ -1106,6 +1106,32 @@
           "default": 15,
           "description": "cm, the slab's thickness (y 0 .. slabThickness). Clamped to at most half the height."
         },
+        "floor": {
+          "type": "string",
+          "enum": [
+            "decking",
+            "slab"
+          ],
+          "default": "decking",
+          "description": "`decking` = dark charcoal composite boards running along the facade (parallel to x) with gaps between them and fine longitudinal grooves, over a dark structure, with a dark metal edge trim (railColor) round the front and both ends; the deck top is still at slabThickness. `slab` = the plain slab in slabColor."
+        },
+        "deckColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#2e2e30",
+          "description": "The decking boards (floor `decking`)."
+        },
+        "boardWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 14.5,
+          "description": "cm, the target width of one decking board; boards are widened evenly to fill the depth. Clamped to 2 .. 60."
+        },
+        "boardGap": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.6,
+          "description": "cm, the gap between decking boards. Clamped to at most 5."
+        },
         "railingThickness": {
           "type": "number",
           "exclusiveMinimum": 0,

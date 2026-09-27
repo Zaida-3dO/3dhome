@@ -18,6 +18,9 @@
  *      solid panel on that side (and only that side; +x is right).
  *   5. The glass railing's panes are glass and kept.
  *   6. Triangle caps at DEFAULTS: full <= 1500, low <= 450, low <= 0.6 x full.
+ *   7. The decking floor (the default): boards run along x, with real gaps,
+ *      deck top at slabThickness, kept; a metal edge trim; 'slab' and low
+ *      detail fall back to one slab box.
  *
  * Each check names the one-line mutation of balcony.js it catches.
  */
@@ -254,6 +257,70 @@ const frontMaxGap = g => runMaxGap(g, 'front');
   const lights = [];
   B.build(THREE, {}, { detail: 'full' }).traverse(o => { if (o.isLight) lights.push(o.type); });
   check('no lights', lights.length === 0, lights);
+}
+
+// ---- 7. decking floor ---------------------------------------------------------------
+{
+  const P = B.DEFAULTS;
+  check("DEFAULTS floor is 'decking'", P.floor === 'decking');
+  const g = B.build(THREE, {}, { detail: 'full' });
+  const deck = byName(g, 'deck-boards');
+  check('decking: a deck-boards mesh', !!deck);
+  const boardsZ = deck ? boxIntervalsAlong(deck, 'z') : [];
+  const boardsX = deck ? boxIntervalsAlong(deck, 'x') : [];
+  // Mutation: boardSpans rounding to a single board, or the boards built as
+  // one slab -> fails (155 deep / ~15 per board is about ten).
+  check('decking: about depth / (boardWidth + gap) boards', boardsZ.length >= 9 && boardsZ.length <= 11 &&
+    deck.userData.boards === boardsZ.length, boardsZ.length);
+  // Mutation: boards laid along z (box(z0, z1, ..., -D/2, D/2)) -> each
+  // board is then narrow in x and long in z -> fails. Boards run PARALLEL
+  // to the facade.
+  check('decking: every board runs the full width along x (parallel to the facade)',
+    boardsX.length > 0 && boardsX.every(([lo, hi]) => hi - lo >= P.width - 2 * 1 - 0.5), boardsX.slice(0, 2));
+  check('decking: every board is about boardWidth across (z)',
+    boardsZ.every(([lo, hi]) => Math.abs(hi - lo - P.boardWidth) <= 1.5), boardsZ.slice(0, 2));
+  // Mutation: boardGap ignored (gap 0) -> fails.
+  let minGap = Infinity, maxGap = 0;
+  for (let i = 1; i < boardsZ.length; i++) {
+    const d = boardsZ[i][0] - boardsZ[i - 1][1];
+    minGap = Math.min(minGap, d); maxGap = Math.max(maxGap, d);
+  }
+  check('decking: real gaps between boards, about boardGap', Math.abs(minGap - P.boardGap) <= 0.05 && Math.abs(maxGap - P.boardGap) <= 0.05, { minGap, maxGap });
+  const db = deck && bboxCm(deck);
+  // Mutation: boards y range slabT .. slabT + bt -> the deck top rises -> fails.
+  check('decking: deck top is at slabThickness (level with the threshold)', !!db && Math.abs(db.maxY - P.slabThickness) <= 0.05, db);
+  check('decking: boards stop short of the front trim', !!db && db.maxZ < P.depth - 0.5 && db.minZ >= -0.01, db);
+  check('decking: boards are matte in deckColor', !!deck && deck.material.userData.finish === 'matte' &&
+    deck.material.color.getHex() === parseInt(P.deckColor.slice(1), 16));
+  // Mutation: drop the deck keep line -> fails (a finish-bucket merge would
+  // strip the groove map in the browser).
+  check('decking: boards are kept', !!deck && Fin.partKeep(deck).keep === true);
+  const slab = bboxCm(byName(g, 'slab'));
+  check('decking: the structure sits below the boards', slab.maxY < P.slabThickness - 1 && Math.abs(slab.minY) <= 0.05, slab);
+  const trim = byName(g, 'edge-trim');
+  const tb = trim && bboxCm(trim);
+  // Mutation: trim in mats.slab -> finish fails; trim front at D - 1 -> z fails.
+  check('decking: dark metal edge trim at the front and both ends', !!trim && trim.material.userData.finish === 'metal' &&
+    Math.abs(tb.maxZ - P.depth) <= 0.05 && Math.abs(tb.maxX - tb.minX - P.width) <= 0.05 && Math.abs(tb.maxY - P.slabThickness) <= 0.05, tb);
+  check('decking: three trim boxes', !!trim && boxIntervalsX(trim).length === 3);
+
+  // floor 'slab' is the old look.
+  const s = B.build(THREE, { floor: 'slab' }, { detail: 'full' });
+  check("floor 'slab': no boards, no trim", !byName(s, 'deck-boards') && !byName(s, 'edge-trim'));
+  const ss = byName(s, 'slab');
+  check("floor 'slab': slab in slabColor up to slabThickness", ss.material.color.getHex() === parseInt(P.slabColor.slice(1), 16) &&
+    Math.abs(bboxCm(ss).maxY - P.slabThickness) <= 0.05);
+
+  // Low detail: one charcoal slab box, no boards (the triangle cap holds).
+  const l = B.build(THREE, {}, { detail: 'low' });
+  const ls = byName(l, 'slab');
+  // Mutation: low using DECK_UNDER or slabColor -> fails.
+  check('decking low: no boards, slab in deckColor to the deck top', !byName(l, 'deck-boards') &&
+    ls.material.color.getHex() === parseInt(P.deckColor.slice(1), 16) && Math.abs(bboxCm(ls).maxY - P.slabThickness) <= 0.05);
+
+  // The placement's 11 cm slab keeps the deck top at 11.
+  const h = byName(B.build(THREE, { slabThickness: 11 }, { detail: 'full' }), 'deck-boards');
+  check('decking: slabThickness 11 -> deck top 11', Math.abs(bboxCm(h).maxY - 11) <= 0.05, bboxCm(h));
 }
 
 // ---- toFurnitureJSON ----------------------------------------------------------------
