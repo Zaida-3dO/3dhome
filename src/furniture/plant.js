@@ -275,7 +275,7 @@ function lathe(THREE, profile, radial, cx, cz) {
 // duplicated vertices) so the leaf reads from both sides.
 // Triangles per leaf: 2 x ((segs - 1) x 4 + 2).
 // ---------------------------------------------------------------------
-const LEAF_SHAPES = {
+export const LEAF_SHAPES = {
   // corn / peace-lily: narrow stalk-ish base, widest just past mid, pointed
   lance: t => (t < 0.08 ? 0.18 : Math.pow(Math.sin(Math.PI * Math.min(1, (t - 0.02) / 1.0)), 0.75)),
   // pothos: wide lobed base, widest in the lower third, long point
@@ -289,7 +289,7 @@ const LEAF_SHAPES = {
   stalked: t => (t < 0.4 ? 0.07 : Math.pow(Math.sin(Math.PI * Math.min(1, (t - 0.4) / 0.6)), 0.7)),
 };
 
-function leafGeometry(THREE, spec) {
+export function leafGeometry(THREE, spec) {
   const {
     base, ang, len, width, pitch0, pitch1, segs, shape, fold = 0.18, bendPow = 1.4, pitches, roll = 0,
   } = spec;
@@ -312,12 +312,24 @@ function leafGeometry(THREE, spec) {
     p = p.clone().add(new THREE.Vector3(dh[0] * Math.cos(pitch) * step, Math.sin(pitch) * step, dh[1] * Math.cos(pitch) * step));
     spine.push(p);
   }
+  // Row placement. With n >= 2 segments the rows sit at t = i/n (row 0 at
+  // the base). With ONE segment that would leave only the base row and
+  // the tip -- a needle whose widest point is the narrow base. So a
+  // one-segment leaf is a DIAMOND instead: a single base point, one row at
+  // the profile's widest t, and the tip (4 faces a side instead of 2).
+  const diamond = n === 1;
+  let tw = 0.5;
+  if (diamond) {
+    let best = -1;
+    for (let k = 1; k < 20; k++) { const w = prof(k / 20); if (w > best) { best = w; tw = k / 20; } }
+  }
   const pos = [];
+  if (diamond) pos.push(base.x, base.y, base.z);
   for (let i = 0; i < n; i++) {                       // rows 0..n-1: edge, midrib, edge
-    const t = i / n;
+    const t = diamond ? tw : i / n;
     const hw = (width / 2) * prof(t);
-    const c = spine[i];
-    const pitch = rowPitch(i, n);
+    const c = diamond ? spine[0].clone().lerp(spine[1], tw) : spine[i];
+    const pitch = diamond ? rowPitch(0, 1) : rowPitch(i, n);
     const lift = hw * fold;                            // midrib raised along the leaf normal-ish
     const up = [-dh[0] * Math.sin(pitch), Math.cos(pitch), -dh[1] * Math.sin(pitch)];
     // `roll` twists the blade about its spine, so a leaf heading straight
@@ -331,20 +343,24 @@ function leafGeometry(THREE, spec) {
   }
   const tip = spine[n];
   pos.push(tip.x, tip.y, tip.z);
+  const o = diamond ? 1 : 0;                           // offset past the base point
   // the two edge polylines (base to tip), for margin strips
   const left = [], right = [];
+  if (diamond) { left.push(base.clone()); right.push(base.clone()); }
   for (let i = 0; i < n; i++) {
-    left.push(new THREE.Vector3(pos[i * 9], pos[i * 9 + 1], pos[i * 9 + 2]));
-    right.push(new THREE.Vector3(pos[i * 9 + 6], pos[i * 9 + 7], pos[i * 9 + 8]));
+    const r = o * 3 + i * 9;
+    left.push(new THREE.Vector3(pos[r], pos[r + 1], pos[r + 2]));
+    right.push(new THREE.Vector3(pos[r + 6], pos[r + 7], pos[r + 8]));
   }
   left.push(tip.clone()); right.push(tip.clone());
-  const tipIdx = n * 3;
+  const tipIdx = o + n * 3;
   const idx = [];
+  if (diamond) idx.push(0, 1, 2, 0, 2, 3);             // base point -> the widest row
   for (let i = 0; i < n - 1; i++) {
     const a = i * 3, b = (i + 1) * 3;
     idx.push(a, b, a + 1, a + 1, b, b + 1, a + 1, b + 1, a + 2, a + 2, b + 1, b + 2);
   }
-  const l = (n - 1) * 3;
+  const l = o + (n - 1) * 3;
   idx.push(l, tipIdx, l + 1, l + 1, tipIdx, l + 2);
   // back side: duplicate the vertices, reverse the winding
   const vcount = pos.length / 3;
@@ -492,7 +508,7 @@ function buildPot(ctx, style, y0) {
       const x = pos.getX(i), z = pos.getZ(i), y = pos.getY(i);
       if (y < y0 + h * 0.2) continue;
       const a = Math.atan2(z, x);
-      const f = 1 + 0.045 * Math.cos(a * radial / 2 * 2);
+      const f = 1 + 0.045 * Math.cos(a * radial / 2);   // +/- on alternate columns
       pos.setX(i, x * f); pos.setZ(i, z * f);
     }
     geo.computeVertexNormals();
@@ -576,7 +592,9 @@ function buildCornPlant(ctx) {
       // lower leaves: long reach, strong bend (they splay out and droop).
       const baseOff = Math.hypot(top.x, top.z);
       const want = Math.max(0.02, (reach - baseOff - leafW / 2) * (up ? 0.4 + 0.3 * rand() : 0.8 + 0.2 * rand()));
-      const bend = up ? 0.5 + 0.5 * rand() : 1.2 + 0.5 * rand();
+      // lower/middle leaves bend hard enough that their tips droop BELOW
+      // horizontal (the photographed fountain); crown leaves arch gently
+      const bend = up ? 0.8 + 0.5 * rand() : 1.7 + 0.5 * rand();
       const maxReach = len * Math.cos(bend / 2);
       const aRise = bend / 2 + Math.acos(Math.min(1, want / maxReach));
       const pitches = [Math.min(1.55, aRise), Math.min(1.55, aRise) - bend];
@@ -751,6 +769,7 @@ function buildPothos(ctx) {
         add(leafGeometry(THREE, {
           base: at, ang: la, len: leafL * (0.8 + 0.3 * rand()), width: leafW,
           pitch0: 0.2, pitch1: -0.5 - 0.4 * rand(), segs: low ? 1 : 3, shape: 'heart', fold: 0.15,
+          roll: (rand() - 0.5) * 1.2,   // tilt: leaves face every which way, not all flat
         }), 'matte', p.leafColor, 'leaf');
       }
     }
@@ -889,7 +908,7 @@ const BUILDERS = {
  * to its diameter (a mismatched envelope would stretch it into an oval). */
 export const PRESETS = Object.freeze({
   'corn-plant-tall': Object.freeze({
-    kind: 'corn-plant', width: 56, depth: 50, height: 166,
+    kind: 'corn-plant', width: 55.5, depth: 45.5, height: 166,
     potStyle: 'egg', potHeight: 56, potTopDiameter: 30, potColor: '#a67c4e',
     plantHeight: 110, stemCount: 3, spread: 60, leafLength: 45, leafWidth: 6, leafColor: '#1f3a1c', seed: 7,
   }),
@@ -916,14 +935,14 @@ export const PRESETS = Object.freeze({
     plantHeight: 29.8, leafCount: 3, leafWidth: 4.5, leafColor: '#35502a', accentColor: '#c9c46a', seed: 12,
   }),
   'pothos-upright-ribbed-pot': Object.freeze({
-    kind: 'pothos', habit: 'upright', width: 31, depth: 33, height: 30,
+    kind: 'pothos', habit: 'upright', width: 32.5, depth: 35.5, height: 30,
     potStyle: 'ribbed-footed', potHeight: 14, potTopDiameter: 11, potColor: '#f1efea',
-    plantHeight: 26.2, stemCount: 4, spread: 34, leafCount: 8, leafLength: 9, leafWidth: 6, leafColor: '#2f5a24', seed: 13,
+    plantHeight: 30.8, stemCount: 4, spread: 34, leafCount: 8, leafLength: 9, leafWidth: 6, leafColor: '#2f5a24', seed: 13,
   }),
   'pothos-trailing': Object.freeze({
-    kind: 'pothos', habit: 'trailing', trail: 50, width: 46.5, depth: 36, height: 70,
+    kind: 'pothos', habit: 'trailing', trail: 50, width: 46.5, depth: 35, height: 70,
     potStyle: 'cylinder', potHeight: 14, potTopDiameter: 16, potColor: '#8d8f8c',
-    plantHeight: 20, stemCount: 5, spread: 55, leafCount: 26, leafLength: 9, leafWidth: 7, leafColor: '#3f7a2a', seed: 14,
+    plantHeight: 20, stemCount: 5, spread: 55, leafCount: 32, leafLength: 9, leafWidth: 7, leafColor: '#3f7a2a', seed: 14,
   }),
   'ficus-bowl-pot': Object.freeze({
     kind: 'ficus', width: 24, depth: 23, height: 42,

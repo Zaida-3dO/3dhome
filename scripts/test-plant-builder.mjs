@@ -157,6 +157,68 @@ for (const [name, preset] of Object.entries(PRESETS)) {
   if (preset.kind !== 'jade') check(name + ': ' + leaves.length + ' leaves, all two-sided', leaves.length > 0 && bad === 0, { leaves: leaves.length, bad });
 }
 
+// ---- 4b. no leaf is a needle: its widest point is never at the base -----------
+// A one-segment leaf used to be the base row plus the tip, so its widest
+// point was the narrow base (a needle). Mutation: drop the diamond branch in
+// leafGeometry (diamond = false) -> every 1-segment leaf fails.
+{
+  const { leafGeometry, LEAF_SHAPES } = P;
+  for (const shape of Object.keys(LEAF_SHAPES)) for (const segs of [1, 2, 3, 4]) {
+    const g = leafGeometry(THREE, { base: new THREE.Vector3(0, 0, 0), ang: 0, len: 0.3, width: 0.06, pitch0: 0.3, pitch1: -0.3, segs, shape });
+    const pos = g.attributes.position, vc = pos.count / 2;
+    // measure widths across x (heading is +z, so the blade's width runs along x)
+    const rows = new Map();
+    for (let i = 0; i < vc; i++) {
+      const z = Math.round(pos.getZ(i) * 1e5);
+      const r = rows.get(z) || { min: Infinity, max: -Infinity, z: pos.getZ(i) };
+      r.min = Math.min(r.min, pos.getX(i)); r.max = Math.max(r.max, pos.getX(i)); rows.set(z, r);
+    }
+    const list = [...rows.values()].sort((a, b) => a.z - b.z);
+    const widths = list.map(r => r.max - r.min);
+    const wi = widths.indexOf(Math.max(...widths));
+    check('leaf ' + shape + ' x ' + segs + ' seg: widest point is past the base', wi > 0 && widths[wi] > widths[0] * 1.2, widths.map(w => +(w * 100).toFixed(2)));
+    // >= 60 %: with rows only at t = i/n a coarse leaf can miss its exact
+    // widest t (the stalked blade at 2 segments reaches 62 %); no kind builds
+    // that combination, and 1 segment always hits the widest t exactly.
+    check('leaf ' + shape + ' x ' + segs + ' seg: reaches most of the requested width', widths[wi] >= 0.06 * (segs === 1 ? 0.95 : 0.6), widths[wi]);
+  }
+  // and on real builds: the ficus's small leaves (always one segment) are
+  // as wide as asked, not slivers
+  const g = build(THREE, PRESETS['ficus-bowl-pot'], { detail: 'full' });
+  const ws = meshes(g, /^leaf$/).map(o => { const b = bboxCm(o); return Math.max(b.maxX - b.minX, b.maxZ - b.minZ); });
+  check('ficus: leaves span at least their width (not needles)', Math.min(...ws) >= PRESETS['ficus-bowl-pot'].leafWidth * 0.8, Math.min(...ws));
+}
+
+// ---- 4c. the ribbed-footed pot is actually fluted ------------------------------
+// Mutation: back to cos(a * radial / 2 * 2) (always 1) -> every column the
+// same radius -> fails.
+{
+  const g = build(THREE, PRESETS['pothos-upright-ribbed-pot'], { detail: 'full' });
+  const pot = meshes(g, /^pot$/)[0];
+  pot.updateMatrixWorld(true);
+  const a = pot.geometry.attributes.position;
+  const top = new Set();
+  let maxY = -Infinity;
+  for (let i = 0; i < a.count; i++) maxY = Math.max(maxY, a.getY(i));
+  for (let i = 0; i < a.count; i++) if (Math.abs(a.getY(i) - maxY) < 1e-6) top.add(Math.hypot(a.getX(i), a.getZ(i)).toFixed(5));
+  check('ribbed-footed pot: rim radius alternates (fluted)', top.size >= 2, [...top]);
+}
+
+// ---- 4d. corn: lower leaves droop below horizontal toward the tip -------------
+// Mutation: bend 1.7 -> 0.5 for lower leaves -> tips stay above their base -> fails.
+{
+  const g = build(THREE, PRESETS['corn-plant-tall'], { detail: 'full' });
+  g.updateMatrixWorld(true);
+  const leaves = meshes(g, /^leaf$/);
+  let drooping = 0;
+  for (const o of leaves) {
+    const vc = o.geometry.attributes.position.count / 2;
+    const base = wv(o, 1), tip = wv(o, vc - 1), mid = wv(o, 4);
+    if (tip.y < mid.y) drooping++;
+  }
+  check('corn: at least half the leaves droop toward their tips', drooping >= leaves.length / 2, { drooping, of: leaves.length });
+}
+
 // ---- 5. seed determinism, every kind -------------------------------------------
 function layout(g) {
   const pts = [];
