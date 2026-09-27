@@ -157,6 +157,24 @@ for (const [name, preset] of Object.entries(PRESETS)) {
   if (preset.kind !== 'jade') check(name + ': ' + leaves.length + ' leaves, all two-sided', leaves.length > 0 && bad === 0, { leaves: leaves.length, bad });
 }
 
+// ---- 1b. the envelope is exact for ANY seed and odd sizes -----------------------
+// (code review 676d6500: a rigid pot that set ONE side of the footprint made
+// the plant under-fill its envelope). Mutation: accept a rigid scale without
+// the exact-bbox check -> fails on several seeds.
+for (const [name, pr] of Object.entries(PRESETS)) {
+  const sizes = [null, { width: 60, depth: 60 }, { width: 10, depth: 5, height: 30 }];
+  for (const sz of sizes) for (let seed = 1; seed <= 30; seed += (sz ? 7 : 1)) {
+    for (const d of ['full', 'low']) {
+      const q = Object.assign({}, pr, sz || {}, { seed });
+      const b = bboxCm(build(THREE, q, { detail: d }));
+      const ok = near(b.maxX - b.minX, q.width, 0.5) && near((b.maxX + b.minX) / 2, 0, 0.5) &&
+        near(b.minZ, 0, 0.5) && near(b.maxZ, q.depth, 0.5) && near(b.minY, 0, 0.5) && near(b.maxY, q.height, 0.5);
+      if (!ok) check(name + ' seed ' + seed + (sz ? ' ' + JSON.stringify(sz) : '') + ' (' + d + '): bbox = envelope', false, b);
+      else passes++;
+    }
+  }
+}
+
 // ---- 4b. no leaf is a needle: its widest point is never at the base -----------
 // A one-segment leaf used to be the base row plus the tip, so its widest
 // point was the narrow base (a needle). Mutation: drop the diamond branch in
@@ -283,8 +301,38 @@ for (const k of KINDS) {
     const a = o.geometry.attributes.position, vc = a.count / 2, rows = (vc - 1) / 3;
     if (rows < 2) return false;
     const w = r => new THREE.Vector3(a.getX(r * 3), a.getY(r * 3), a.getZ(r * 3)).distanceTo(new THREE.Vector3(a.getX(r * 3 + 2), a.getY(r * 3 + 2), a.getZ(r * 3 + 2)));
-    return w(0) >= 0.85 * w(rows - 1);
+    // the row ~2/3 along is (near) the full requested width, the base row
+    // narrower but not a point: parallel-sided for most of the length
+    return w(rows - 1) >= 0.9 * PRESETS['corn-plant-tall'].leafWidth * CM && w(0) >= 0.4 * w(rows - 1);
   }));
+  // leaves attach to the cane: every leaf base lies on a cane's axis
+  // (within the cane radius). Mutation: base at the cane TOP's x/z -> the
+  // leaning cane leaves the lower bases ~1 cm off -> fails.
+  // each cane's axis: the centres of its bottom and top rings (world space)
+  const caneAxes = meshes(g, /^cane$/).map(c => {
+    const a = c.geometry.attributes.position, vs = [];
+    for (let i = 0; i < a.count; i++) vs.push(new THREE.Vector3(a.getX(i), a.getY(i), a.getZ(i)).applyMatrix4(c.matrixWorld));
+    const ys = vs.map(v => v.y), lo = Math.min(...ys), hi = Math.max(...ys);
+    const ctr = sel => { const q = vs.filter(sel); return q.reduce((m, v) => m.add(v), new THREE.Vector3()).multiplyScalar(1 / q.length); };
+    // ring vertices sit within a cane radius of their end, even on a lean
+    return [ctr(v => v.y < lo + 0.02), ctr(v => v.y > hi - 0.02)];
+  });
+  const off = leaves.map(o => {
+    const b = o.geometry.userData.spine[0].clone().applyMatrix4(o.matrixWorld);
+    return Math.min(...caneAxes.map(([p0, p1]) => {
+      const t = (b.y - p0.y) / (p1.y - p0.y);
+      if (t < -0.05 || t > 1.05) return Infinity;
+      const q = p0.clone().lerp(p1, t);
+      return Math.hypot(q.x - b.x, q.z - b.z);
+    }));
+  });
+  check('corn: leaf bases sit on their cane (within its radius)', Math.max(...off) <= 0.02, Math.max(...off) / CM);
+  // low detail aims its one-segment leaves to reach as far as the arched
+  // full leaves, so the footprint (and the fit) matches. Mutation: low pitch
+  // = the plain mean of the two segments -> reaches further -> fails.
+  const fsF = build(THREE, PRESETS['corn-plant-tall'], { detail: 'full' }).userData.fitScale;
+  const fsL = build(THREE, PRESETS['corn-plant-tall'], { detail: 'low' }).userData.fitScale;
+  check('corn: low-detail footprint within 12 % of full (leaf angle matched)', Math.abs(fsL.x / fsF.x - 1) <= 0.12 && Math.abs(fsL.z / fsF.z - 1) <= 0.12, { fsF, fsL });
 }
 
 // ---- 7. wall planter geometry -------------------------------------------------

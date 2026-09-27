@@ -76,7 +76,9 @@ export const WALL_CONTENTS = Object.freeze(['spiky', 'succulent', 'snake-plant']
 // (potHeight + plantHeight = 56 + 110 = 166). A caller resizes the whole
 // plant by overriding width/depth/height -- fitToEnvelope() makes that exact.
 /** Parts that keep a single horizontal scale in the envelope fit (see
- * fitToEnvelope). Each is built centred on the plant's axis. */
+ * fitToEnvelope). Each is built with position 0 and its shape baked about
+ * the raw origin: the plant's axis for pots, a point on the wall for the
+ * wall planter's soil. */
 const RIGID_PARTS = new Set(['pot', 'soil', 'saucer', 'nurseryRim', 'water']);
 
 export const DEFAULTS = Object.freeze({
@@ -147,45 +149,48 @@ function fitToEnvelope(THREE, group, widthM, depthM, heightM) {
   wrapper.name = group.name;
   wrapper.userData = group.userData;
   wrapper.userData.fitScale = { x: sx, y: sy, z: sz };
-  // RIGID parts (the pot and what sits in it) take ONE horizontal scale
-  // about their own axis, so a pot stays round whatever the
-  // foliage does to the fit -- e.g. at low detail, where fewer leaves
-  // change the raw footprint. They always sit inside the foliage's
-  // footprint, so the envelope is still set by the rest.
-  // If the rigid parts themselves set the raw footprint on an axis, that
-  // axis's scale is forced (else the envelope would miss); if they set it
-  // on both, they take the plain per-axis fit like everything else.
-  const rb = new THREE.Box3();
-  group.children.forEach(c => { if (RIGID_PARTS.has(c.name)) rb.expandByObject(c); });
-  const EPSR = 1e-4;
-  const touchX = !rb.isEmpty() && rb.max.x - rb.min.x >= rawW - EPSR;
-  const touchZ = !rb.isEmpty() && rb.max.z - rb.min.z >= rawD - EPSR;
-  // Otherwise they take the VERTICAL scale sy -- the "whole plant got
-  // bigger/smaller" factor, ~1 for a preset -- so a pot keeps its true
-  // diameter even when the foliage's footprint differs between details;
-  // failing that, min(sx, sz); failing that, the plain per-axis fit.
-  const fits = r => rb.min.x * r - ax * sx >= -widthM / 2 - EPSR && rb.max.x * r - ax * sx <= widthM / 2 + EPSR &&
-    rb.min.z * r - az * sz >= -EPSR && rb.max.z * r - az * sz <= depthM + EPSR;
-  const cands = touchX ? [sx] : touchZ ? [sz] : [sy, Math.min(sx, sz)];
-  const sr = cands.find(fits);
-  const rigidOn = !(touchX && touchZ) && sr !== undefined;
-  for (const child of group.children.slice()) {
-    const rigid = rigidOn && RIGID_PARTS.has(child.name);
-    child.position.x = (child.position.x - ax) * sx;
-    child.position.y = (child.position.y - ay) * sy;
-    child.position.z = (child.position.z - az) * sz;
-    if (rigid) {
-      // Every rigid part is built around the plant's axis (x = z = 0 raw),
-      // with its position at 0, so the line above already moved that axis
-      // to where the fit maps it; scaling by sr is then about that axis.
-      child.scale.x *= sr; child.scale.z *= sr;
-    } else {
-      child.scale.x *= sx;
-      child.scale.z *= sz;
-    }
-    child.scale.y *= sy;
-    wrapper.add(child);
+  const children = group.children.slice();
+  children.forEach(c => wrapper.add(c));
+  const orig = children.map(c => ({ p: c.position.clone(), s: c.scale.clone() }));
+  // Place every child with the per-axis fit; RIGID parts (the pot and what
+  // sits in it) instead take ONE horizontal scale `sr` (when given), so a
+  // pot stays round whatever the foliage does to the fit -- e.g. at low
+  // detail, where fewer leaves change the raw footprint.
+  const place = sr => {
+    children.forEach((child, i) => {
+      const o = orig[i];
+      child.position.set((o.p.x - ax) * sx, (o.p.y - ay) * sy, (o.p.z - az) * sz);
+      // A rigid part's raw position is 0 and its shape is baked about the
+      // raw origin (the plant's axis; for the wall planter's soil, a point
+      // on the wall), so scaling it by sr is about where the fit maps that
+      // origin.
+      const rigid = sr !== undefined && RIGID_PARTS.has(child.name);
+      child.scale.set(o.s.x * (rigid ? sr : sx), o.s.y * sy, o.s.z * (rigid ? sr : sz));
+    });
+    wrapper.updateMatrixWorld(true);
+  };
+  // The envelope must come out EXACT: try the rigid scales in order of
+  // preference -- sy (the "whole plant got bigger/smaller" factor, ~1 for
+  // a preset, so a pot keeps its true diameter), then min/max of sx, sz --
+  // and keep the first whose built bbox is still exactly the envelope on
+  // all six sides. A pot that sets one side of the footprint fails that
+  // check for any sr other than that axis's own scale. If none holds, fall
+  // back to the plain per-axis fit (always exact, pot possibly oval).
+  const TOL = 1e-4;
+  const exact = () => {
+    const b = new THREE.Box3().setFromObject(wrapper);
+    return Math.abs(b.min.x + widthM / 2) < TOL && Math.abs(b.max.x - widthM / 2) < TOL &&
+      Math.abs(b.min.y) < TOL && Math.abs(b.max.y - heightM) < TOL &&
+      Math.abs(b.min.z) < TOL && Math.abs(b.max.z - depthM) < TOL;
+  };
+  const hasRigid = children.some(c => RIGID_PARTS.has(c.name));
+  const cands = hasRigid ? [sy, Math.min(sx, sz), Math.max(sx, sz)] : [];
+  for (const sr of cands) {
+    place(sr);
+    if (exact()) { wrapper.userData.rigidScale = sr; return wrapper; }
   }
+  place(undefined);
+  wrapper.userData.rigidScale = null;
   return wrapper;
 }
 
@@ -582,7 +587,7 @@ function buildPot(ctx, style, y0) {
 // CORN PLANT (Dracaena fragrans)
 // =====================================================================
 function buildCornPlant(ctx) {
-  const { THREE, p, low, rand, add } = ctx;
+  const { THREE, p, low, rand, leafRand, add } = ctx;
   const pot = buildPot(ctx, p.potStyle || 'egg', 0);
   const rimY = pot.rimY;
   if (!low) {
@@ -611,7 +616,10 @@ function buildCornPlant(ctx) {
     const topY = rimY + plantH * fr;
     const lean = 0.03 * (s === 0 ? 0.3 : 1);
     const top = V(THREE, bx + Math.sin(ang) * lean, topY, bz + Math.cos(ang) * lean);
-    add(tube(THREE, V(THREE, bx, rimY - 0.05, bz), top, caneR * 1.1, caneR, 5, true), 'matte', '#4a3622', 'cane');
+    const foot = V(THREE, bx, rimY - 0.05, bz);
+    add(tube(THREE, foot, top, caneR * 1.1, caneR, 5, true), 'matte', '#4a3622', 'cane');
+    // a point ON the cane's axis at height y (the cane leans), where a leaf attaches
+    const onCane = y => foot.clone().lerp(top, (y - foot.y) / (top.y - foot.y));
     if (!low) {
       // pale ring scars banding the bare cane below its tuft (full detail
       // only): short, slightly proud rings in a pale tan
@@ -634,9 +642,9 @@ function buildCornPlant(ctx) {
     for (let i = 0; i < n; i++) {
       const t = n === 1 ? 1 : i / (n - 1);             // 0 = lowest, 1 = crown
       const y = topY - tuftH * (1 - t);
-      const a = i * 2.39996 + rand() * 0.5;             // golden-angle spiral
+      const a = i * 2.39996 + leafRand() * 0.5;             // golden-angle spiral
       const up = t > 0.6;                               // upper leaves stand up
-      const len = leafLen * lenScale * (0.9 + 0.2 * rand());
+      const len = leafLen * lenScale * (0.9 + 0.2 * leafRand());
       // Every leaf ARCHES in two segments: it rises at pitch `a`, then its
       // outer half droops at a - bend. Its horizontal reach is then
       // len/2 * (cos a + cos(a - bend)) = len cos(bend/2) cos(a - bend/2),
@@ -644,11 +652,12 @@ function buildCornPlant(ctx) {
       // the leaf keeps its full photographed length and only its angle
       // changes. Upper leaves: short reach, gentle bend (they stand up);
       // lower leaves: long reach, strong bend (they splay out and droop).
-      const baseOff = Math.hypot(top.x, top.z);
-      const want = Math.max(0.02, (reach - baseOff - leafW / 2) * (up ? 0.75 + 0.25 * rand() : 0.85 + 0.15 * rand()));
+      const at = onCane(y);
+      const baseOff = Math.hypot(at.x, at.z);
+      const want = Math.max(0.02, (reach - baseOff - leafW / 2) * (up ? 0.75 + 0.25 * leafRand() : 0.85 + 0.15 * leafRand()));
       // lower/middle leaves bend hard enough that their tips droop BELOW
       // horizontal (the photographed fountain); crown leaves arch gently
-      const bend = up ? 0.8 + 0.5 * rand() : 1.7 + 0.5 * rand();
+      const bend = up ? 0.8 + 0.5 * leafRand() : 1.7 + 0.5 * leafRand();
       const maxReach = len * Math.cos(bend / 2);
       const aRise = bend / 2 + Math.acos(Math.min(1, want / maxReach));
       const pitches = [Math.min(1.55, aRise), Math.min(1.55, aRise) - bend];
@@ -658,10 +667,10 @@ function buildCornPlant(ctx) {
       const lowPitch = Math.sign(m || 1) * Math.acos(Math.min(1, Math.cos((pitches[0] - pitches[1]) / 2) * Math.cos(m)));
       const segs = low ? 1 : 2;
       add(leafGeometry(THREE, {
-        base: V(THREE, top.x, y, top.z), ang: a, len, width: leafW,
+        base: at, ang: a, len, width: leafW,
         pitch0: pitches[0], pitch1: pitches[1], pitches: low ? [lowPitch] : pitches, segs, shape: 'strap', fold: 0.2,
-        rowT: low ? undefined : [0.06, 0.66],
-        roll: (rand() - 0.5) * 1.6,
+        rowT: low ? undefined : [0, 0.66],   // row 0 AT the base: attached to the cane
+        roll: (leafRand() - 0.5) * 1.6,
       }), 'satin', p.leafColor, 'leaf');
     }
   }
@@ -996,7 +1005,7 @@ const BUILDERS = {
  * to its diameter (a mismatched envelope would stretch it into an oval). */
 export const PRESETS = Object.freeze({
   'corn-plant-tall': Object.freeze({
-    kind: 'corn-plant', width: 61.5, depth: 60.5, height: 166,
+    kind: 'corn-plant', width: 60, depth: 59.5, height: 166,
     potStyle: 'egg', potHeight: 56, potTopDiameter: 30, potColor: '#a67c4e',
     plantHeight: 110, stemCount: 3, spread: 60, leafLength: 45, leafWidth: 6, leafColor: '#1f3a1c', seed: 7,
   }),
