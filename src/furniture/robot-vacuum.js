@@ -188,11 +188,12 @@ export function build(THREE, params, opts) {
   }
 
   if (p.dock === false) {
-    // The robot alone, filling the envelope: a unit-radius robot scaled to
-    // W x D in plan (a circle whenever W == D, the intended use).
-    const r = 0.5;
-    const robot = buildRobot(THREE, r, H * CM, full, mats, add);
-    robot.scale.set(W * CM, 1, D * CM);
+    // The robot alone, filling the envelope: a round robot of the smaller
+    // plan size, stretched along the other axis only when W != D (the
+    // intended use is W == D, so no stretch and true-size details).
+    const m = Math.min(W, D);
+    const robot = buildRobot(THREE, m * CM / 2, H * CM, full, mats, add);
+    robot.scale.set(W / m, 1, D / m);
     robot.position.set(0, 0, D * CM / 2);
     group.add(robot);
   } else {
@@ -209,10 +210,12 @@ export function build(THREE, params, opts) {
     // ---- base plate (full width and depth) + ramp at the front ------------
     const rampLen = Math.min(RAMP_LEN, D * 0.25);
     const plateD = D - rampLen;
+    // The plate is too thin to shadow anything; casting would only speckle
+    // its own top with shadow acne.
     add(group, new THREE.BoxGeometry(W * CM, plateT * CM, plateD * CM), mats.plate, 'dock-plate',
-      0, plateT * CM / 2, plateD * CM / 2);
+      0, plateT * CM / 2, plateD * CM / 2).castShadow = false;
     add(group, rampGeometry(THREE, W * CM, plateT * CM, rampLen * CM), mats.plate, 'dock-ramp',
-      0, 0, plateD * CM);
+      0, 0, plateD * CM).castShadow = false;
 
     // ---- tower -----------------------------------------------------------
     // Below alcoveTop only a back block stands (the robot's rear slides in
