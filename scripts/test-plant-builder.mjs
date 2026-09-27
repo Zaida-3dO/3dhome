@@ -274,6 +274,40 @@ for (const k of KINDS) {
   })());
 }
 
+// ---- 8b. pots render ROUND: each preset's footprint is its natural one --------
+// Mutation: set any preset's depth 30 % off its natural footprint -> the fit
+// stretches the pot into an oval -> fails.
+for (const [name, pr] of Object.entries(PRESETS)) {
+  if (pr.kind === 'wall-planter') continue;
+  const g = build(THREE, pr, { detail: 'full' });
+  const pb = bboxCm(meshes(g, /^pot$/)[0]);
+  const w = pb.maxX - pb.minX, d = pb.maxZ - pb.minZ;
+  // 7 %: a 10-sided lathe is itself ~5 % wider across its flats one way
+  // than the other; an oval from the fit was 25-35 % before this fix.
+  check(name + ': pot is round (x/z within 7 %)', Math.abs(w / d - 1) <= 0.07, { w, d });
+  check(name + ': pot keeps its diameter within 10 %', Math.abs(w / pr.potTopDiameter - 1) <= 0.2, { w, dia: pr.potTopDiameter });
+}
+{
+  // the peace lily at low detail keeps its leaf count, capped at 7
+  const lo = n => meshes(build(THREE, Object.assign({}, PRESETS['peace-lily-glass-vase'], { leafCount: n }), { detail: 'low' }), /^leaf$/).length;
+  // Mutation: back to a fixed 7 at low -> leafCount 4 gives 7 -> fails.
+  check('peace lily low: respects a small leafCount', lo(4) === 4, lo(4));
+  check('peace lily low: capped at 7', lo(12) === 7, lo(12));
+}
+{
+  // the small planter's succulent stands ~6-8 cm tall
+  const g = build(THREE, PRESETS['wall-planter-small'], { detail: 'full' });
+  const leaves = meshes(g, /^leaf$/);
+  const top = Math.max(...leaves.map(o => bboxCm(o).maxY)), base = Math.min(...leaves.map(o => bboxCm(o).minY));
+  check('succulent tuft is ~6-8 cm tall', top - base >= 5.5 && top - base <= 8.5, top - base);
+}
+{
+  // pale banding on the corn plant's bare canes (full only)
+  const f = meshes(build(THREE, PRESETS['corn-plant-tall'], { detail: 'full' }), /^caneBand$/).length;
+  const l = meshes(build(THREE, PRESETS['corn-plant-tall'], { detail: 'low' }), /^caneBand$/).length;
+  check('corn: pale bands on the canes at full, none at low', f >= 2 && l === 0, { f, l });
+}
+
 // ---- 9. snake plant margins -----------------------------------------------------
 {
   const full = build(THREE, PRESETS['snake-plant-small'], { detail: 'full' });
@@ -292,6 +326,16 @@ for (const k of KINDS) {
   const below = meshes(g, /^leaf$/).filter(o => bboxCm(o).minY < potBottom - 5).length;
   // mutation: trail ignored (pot at y = 0) -> potBottom 0 -> nothing below -> fails
   check('trailing pothos: pot raised by trail, vines hang below it', potBottom > 20 && below >= 5, { potBottom, below });
+  // `trail` is EXACT after the envelope fit, at both details and any trail,
+  // so a placement's `elevation = surface - trail` puts the pot on the
+  // surface. Mutation: drop the pinTrail() call -> pot base off by cm -> fails.
+  for (const t of [10, 30, 50, 80]) for (const d of ['full', 'low']) {
+    const gt = build(THREE, Object.assign({}, pr, { trail: t, height: Math.max(pr.height, t + 25) }), { detail: d });
+    const pb = bboxCm(meshes(gt, /^pot$/)[0]).minY;
+    const bb = bboxCm(gt);
+    check('trailing pothos: pot base at exactly trail=' + t + ' (' + d + ')', near(pb, t, 0.5), pb);
+    check('trailing pothos: envelope still exact after pinning (trail ' + t + ', ' + d + ')', near(bb.minY, 0, 0.5) && near(bb.maxY, Math.max(pr.height, t + 25), 0.5), bb);
+  }
   const up = build(THREE, Object.assign({}, pr, { habit: 'upright' }), { detail: 'full' });
   const upPot = bboxCm(meshes(up, /^pot$/)[0]).minY;
   check('upright pothos: pot on the ground, trail ignored', near(upPot, 0, 0.5), upPot);

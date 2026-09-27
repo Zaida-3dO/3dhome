@@ -166,7 +166,44 @@ export function build(THREE, params, opts) {
   raw.userData.kind = kind;
   const ctx = makeCtx(THREE, raw, p, detail);
   BUILDERS[kind](ctx);
-  return fitToEnvelope(THREE, raw, p.width * CM, p.depth * CM, p.height * CM);
+  const fitted = fitToEnvelope(THREE, raw, p.width * CM, p.depth * CM, p.height * CM);
+  if (kind === 'pothos' && p.habit === 'trailing' && p.trail > 0) pinTrail(THREE, fitted, p);
+  return fitted;
+}
+
+/**
+ * Make `trail` EXACT after the envelope fit. The fit scales y uniformly, so
+ * the pot base would land at trail x (height / raw height), not at `trail`,
+ * and the placement rule `elevation = surface - trail` would be off by
+ * centimetres. Bake every part's transform into its geometry, then remap y
+ * piecewise-linearly so the pot base goes to exactly `trail` while y = 0
+ * (the vine tips) and y = height (the crown) stay put. Both pieces are
+ * monotone, so nothing folds or crosses.
+ */
+function pinTrail(THREE, group, p) {
+  const H = p.height * CM;
+  const T = Math.min(p.trail * CM, H * 0.95);
+  group.updateMatrixWorld(true);
+  const pot = group.children.find(o => o.name === 'pot');
+  if (!pot) return;
+  const pb = new THREE.Box3().setFromObject(pot).min.y;          // fitted pot base
+  if (!(pb > 1e-6 && pb < H - 1e-6)) return;
+  const inv = new THREE.Matrix4().copy(group.matrixWorld).invert();
+  for (const o of group.children) {
+    if (!o.isMesh) continue;
+    const m = new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld);
+    o.geometry.applyMatrix4(m);
+    o.position.set(0, 0, 0); o.rotation.set(0, 0, 0); o.scale.set(1, 1, 1);
+    const a = o.geometry.attributes.position;
+    for (let i = 0; i < a.count; i++) {
+      const y = a.getY(i);
+      a.setY(i, y <= pb ? y * (T / pb) : T + (y - pb) * ((H - T) / (H - pb)));
+    }
+    a.needsUpdate = true;
+    o.geometry.computeVertexNormals();
+    o.geometry.computeBoundingBox(); o.geometry.computeBoundingSphere();
+  }
+  group.userData.trailPinned = T;
 }
 
 // Convenience alias matching the sibling builders' naming.
@@ -506,6 +543,17 @@ function buildCornPlant(ctx) {
     const lean = 0.03 * (s === 0 ? 0.3 : 1);
     const top = V(THREE, bx + Math.sin(ang) * lean, topY, bz + Math.cos(ang) * lean);
     add(tube(THREE, V(THREE, bx, rimY - 0.05, bz), top, caneR * 1.1, caneR, 5, true), 'matte', '#4a3622', 'cane');
+    if (!low) {
+      // pale ring scars banding the bare cane below its tuft (full detail
+      // only): short, slightly proud rings in a pale tan
+      const bare = plantH * fr * 0.8 - 0.35;
+      const rings = bare > 0.1 ? Math.min(2, Math.floor(bare / 0.12)) : 0;
+      for (let r = 1; r <= rings; r++) {
+        const t = r / (rings + 1) * Math.max(0, bare) / (plantH * fr + 0.05);
+        const c = V(THREE, bx, rimY - 0.05, bz).lerp(top, t);
+        add(tube(THREE, c.clone().add(V(THREE, 0, -0.004, 0)), c.clone().add(V(THREE, 0, 0.004, 0)), caneR * 1.25, caneR * 1.25, 5, true), 'matte', '#b9a98a', 'caneBand');
+      }
+    }
     // TUFT: leaves spiral up the top ~35 cm of the cane (less on short canes)
     const n = LEAVES[s] !== undefined ? LEAVES[s] : LEAVES[LEAVES.length - 1];
     const tuftH = Math.min(0.35, plantH * fr * 0.8);
@@ -581,13 +629,15 @@ function buildWallPlanter(ctx) {
   const contents = WALL_CONTENTS.indexOf(p.contents) !== -1 ? p.contents : 'spiky';
   let n, shape, lenR, wid, margin = false;
   if (contents === 'spiky') { n = low ? 3 : 20; shape = 'sword'; lenR = [0.55, 0.95]; wid = 0.02; }
-  else if (contents === 'succulent') { n = low ? 3 : 8; shape = 'oval'; lenR = [0.35, 0.6]; wid = W * 0.18; }
+  // the small planter's succulent stands ~6-8 cm tall (a tuft of fleshy
+  // leaves reaching almost to the top of the room above the opening)
+  else if (contents === 'succulent') { n = low ? 3 : 8; shape = 'oval'; lenR = [0.8, 1.0]; wid = W * 0.16; }
   else { n = low ? 3 : 4; shape = 'sword'; lenR = [0.8, 0.98]; wid = 0.04; margin = !low; }
   for (let i = 0; i < n; i++) {
     const a = (i / n) * Math.PI * 2 + rand() * 0.6;
     const len = room * (lenR[0] + (lenR[1] - lenR[0]) * rand());
-    const pitch0 = contents === 'succulent' ? 0.7 + 0.5 * rand() : 1.35 + 0.15 * rand();
-    const pitch1 = contents === 'succulent' ? 0.9 + 0.4 * rand() : 1.2 + 0.25 * rand();
+    const pitch0 = contents === 'succulent' ? 1.05 + 0.3 * rand() : 1.35 + 0.15 * rand();
+    const pitch1 = contents === 'succulent' ? 0.95 + 0.4 * rand() : 1.2 + 0.25 * rand();
     const base = V(THREE, cx + (rand() - 0.5) * W * 0.15, cy, cz + (rand() - 0.5) * D * 0.2);
     const spec = { base, ang: a, len, width: wid, pitch0, pitch1, segs: low ? 1 : 2, shape, fold: 0.15 };
     const g = leafGeometry(THREE, spec);
@@ -625,7 +675,8 @@ function buildPeaceLily(ctx) {
   const cap = lathe(THREE, [[0, h * 0.8], [pot.innerR * 0.8, h * 0.88], [pot.innerR * 0.55, h * 1.0], [0, h * 1.02]], low ? 5 : 7, 0, 0);
   add(cap, 'matte', '#3b2b1d', 'soil');
   // leaves on long arching stalks
-  const n = low ? 7 : Math.max(4, Math.round(p.leafCount));
+  const nFull = Math.max(4, Math.round(p.leafCount));
+  const n = low ? Math.min(7, nFull) : nFull;
   const top = (p.plantHeight * CM);
   for (let i = 0; i < n; i++) {
     const a = i * 2.39996 + rand() * 0.4;
@@ -832,10 +883,13 @@ const BUILDERS = {
 /** Named presets. Descriptive names only -- no real names of people,
  * plants or places in a public repo. Sizes: the corn plant and the wall
  * planters are measured; the other kinds are estimated from photographs
- * against objects of known size (spec pages say so). */
+ * against objects of known size (spec pages say so). Each preset's
+ * width/depth is the footprint its own seeded layout naturally builds to,
+ * so the envelope fit scales x and z by ~1 and the pot stays ROUND and true
+ * to its diameter (a mismatched envelope would stretch it into an oval). */
 export const PRESETS = Object.freeze({
   'corn-plant-tall': Object.freeze({
-    kind: 'corn-plant', width: 60, depth: 60, height: 166,
+    kind: 'corn-plant', width: 56, depth: 50, height: 166,
     potStyle: 'egg', potHeight: 56, potTopDiameter: 30, potColor: '#a67c4e',
     plantHeight: 110, stemCount: 3, spread: 60, leafLength: 45, leafWidth: 6, leafColor: '#1f3a1c', seed: 7,
   }),
@@ -852,33 +906,33 @@ export const PRESETS = Object.freeze({
     potColor: '#f2f0ea', frameColor: '#b8945a', leafColor: '#2f4a28', accentColor: '#c9cf8a', seed: 5,
   }),
   'peace-lily-glass-vase': Object.freeze({
-    kind: 'peace-lily', width: 50, depth: 45, height: 55,
+    kind: 'peace-lily', width: 38.5, depth: 45.5, height: 55,
     potStyle: 'glass-bubble', potHeight: 16, potTopDiameter: 18, glassColor: '#dcecef',
-    plantHeight: 39, leafCount: 10, leafLength: 24, leafWidth: 7, leafColor: '#1d3a1e', accentColor: '#9fae84', seed: 11,
+    plantHeight: 41.3, leafCount: 10, leafLength: 24, leafWidth: 7, leafColor: '#1d3a1e', accentColor: '#9fae84', seed: 11,
   }),
   'snake-plant-small': Object.freeze({
-    kind: 'snake-plant', width: 18, depth: 16, height: 38,
+    kind: 'snake-plant', width: 15.5, depth: 18, height: 38,
     potStyle: 'tapered', potHeight: 13, potTopDiameter: 15, potColor: '#c99a8e',
-    plantHeight: 25, leafCount: 3, leafWidth: 4.5, leafColor: '#35502a', accentColor: '#c9c46a', seed: 12,
+    plantHeight: 29.8, leafCount: 3, leafWidth: 4.5, leafColor: '#35502a', accentColor: '#c9c46a', seed: 12,
   }),
   'pothos-upright-ribbed-pot': Object.freeze({
-    kind: 'pothos', habit: 'upright', width: 34, depth: 26, height: 30,
+    kind: 'pothos', habit: 'upright', width: 31, depth: 33, height: 30,
     potStyle: 'ribbed-footed', potHeight: 14, potTopDiameter: 11, potColor: '#f1efea',
-    plantHeight: 16, stemCount: 4, spread: 34, leafCount: 8, leafLength: 9, leafWidth: 6, leafColor: '#2f5a24', seed: 13,
+    plantHeight: 26.2, stemCount: 4, spread: 34, leafCount: 8, leafLength: 9, leafWidth: 6, leafColor: '#2f5a24', seed: 13,
   }),
   'pothos-trailing': Object.freeze({
-    kind: 'pothos', habit: 'trailing', trail: 50, width: 55, depth: 45, height: 78,
+    kind: 'pothos', habit: 'trailing', trail: 50, width: 46.5, depth: 36, height: 70,
     potStyle: 'cylinder', potHeight: 14, potTopDiameter: 16, potColor: '#8d8f8c',
     plantHeight: 20, stemCount: 5, spread: 55, leafCount: 26, leafLength: 9, leafWidth: 7, leafColor: '#3f7a2a', seed: 14,
   }),
   'ficus-bowl-pot': Object.freeze({
-    kind: 'ficus', width: 30, depth: 28, height: 42,
+    kind: 'ficus', width: 24, depth: 23, height: 42,
     potStyle: 'bowl', potHeight: 11, potTopDiameter: 18, potColor: '#d9cdb4',
-    plantHeight: 31, stemCount: 4, spread: 30, leafCount: 36, leafLength: 5.5, leafWidth: 3.2, leafColor: '#3c6a2c', seed: 15,
+    plantHeight: 35.7, stemCount: 4, spread: 30, leafCount: 36, leafLength: 5.5, leafWidth: 3.2, leafColor: '#3c6a2c', seed: 15,
   }),
   'jade-small': Object.freeze({
-    kind: 'jade', width: 22, depth: 20, height: 28,
+    kind: 'jade', width: 15, depth: 17, height: 28,
     potStyle: 'cylinder', potHeight: 11, potTopDiameter: 12, potColor: '#c8642e',
-    plantHeight: 17, stemCount: 3, spread: 22, leafCount: 16, leafLength: 5, leafWidth: 2.8, leafColor: '#6f9a45', seed: 16,
+    plantHeight: 23.0, stemCount: 3, spread: 22, leafCount: 16, leafLength: 5, leafWidth: 2.8, leafColor: '#6f9a45', seed: 16,
   }),
 });
