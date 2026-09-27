@@ -763,7 +763,8 @@ def check_rooms_binding(rooms_doc, geo, report):
                 report.warn(
                     f"rooms.json/rooms/{rid}/{ch}",
                     "entities bound to a channel with no fixtures in geometry.json -- "
-                    "the entity will switch nothing visible",
+                    "the sidebar still switches the entity, but nothing drawn follows this channel "
+                    "(fine when a cornice or furniture light is what it groups)",
                 )
 
     for rid, ch in sorted(x for x in geo_channels if x[0] is not None):
@@ -825,6 +826,31 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
 
     check_curtain_binding(rooms_doc, geo, sensors, (major, minor), report)
     check_climate_binding(rooms_doc, sensors, geo_room_ids, (major, minor), report)
+    check_furniture_light_binding(geo, sensors, report)
+
+
+def check_furniture_light_binding(geo, sensors, report):
+    """`sensors.furnitureLights`: furniture item id -> light entities its
+    glowing parts follow. A binding to an item that does not exist can never
+    drive anything, so it is an error; one to an item with nothing that glows
+    (a standing desk without `ledStrip`) is a warning.
+    """
+    bound = sensors.get("furnitureLights") or {}
+    if not bound:
+        return
+    items = {f.get("id"): f for f in (geo.get("furniture") or [])}
+    for fid in bound:
+        item = items.get(fid)
+        if item is None:
+            report.error(
+                f"rooms.json/sensors/furnitureLights/{fid}",
+                f"light bound to furniture '{fid}', which has no matching item in geometry.json",
+            )
+        elif item.get("type") == "standing-desk" and not (item.get("params") or {}).get("ledStrip"):
+            report.warn(
+                f"rooms.json/sensors/furnitureLights/{fid}",
+                f"'{fid}' is a standing desk with no `ledStrip` -- the light has nothing to drive",
+            )
 
 
 def check_climate_binding(rooms_doc, sensors, geo_room_ids, version, report):

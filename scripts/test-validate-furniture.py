@@ -218,5 +218,21 @@ _, warns = run_checks(house([
 ]))
 check("no worktop warning when the runs only meet", not has(warns, "worktop"), warns)
 
+# ---- furniture lights (rooms.json sensors.furnitureLights) ----------------------
+_geo = house([
+    {"id": "desk_lit", "room": "room", "type": "standing-desk", "at": [200, 200], "params": {"ledStrip": True}},
+    {"id": "desk_dark", "room": "room", "type": "standing-desk", "at": [350, 200]},
+])
+def _fl(bound):
+    r = vh.Report("t")
+    vh.check_furniture_light_binding(_geo, {"furnitureLights": bound}, r)
+    return [f"{w}: {m}" for w, m in r.errors], [f"{w}: {m}" for w, m in r.warnings]
+errs, warns = _fl({"desk_lit": ['light.demo_desk']})
+check("furnitureLights: a lit desk binds cleanly", not errs and not warns, (errs, warns))
+errs, _ = _fl({"ghost": ['light.demo_desk']})
+check("furnitureLights: an item that does not exist is an error", has(errs, "ghost", "no matching item"), errs)
+_, warns = _fl({"desk_dark": ['light.demo_desk']})
+check("furnitureLights: a desk with no ledStrip is warned about", has(warns, "desk_dark", "ledStrip"), warns)
+
 print(("FAILED" if failures else "ok") + f" -- {passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)
