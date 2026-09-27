@@ -2388,7 +2388,7 @@
 
     "furnitureParams_radiator": {
       "type": "object",
-      "description": "Params for `radiator` (src/furniture/radiator.js): a white compact panel radiator with vertical ribs, a smart thermostatic valve on the END of the radiator at a chosen corner and a lockshield on the other end, pipes dropping from both, and an optional cover (a clip-on shelf with a raised front lip, or a framed slatted box). width/height/depth ALWAYS describe the WHOLE OUTER ENVELOPE -- body, end valves, pipes and cover -- because scripts/validate-house.py's footprint/overlap/ceiling checks and src/furniture/place.js read these three params with no idea a body/valve/cover split exists. The end valves need room beside the body (12.1 cm on the smart-valve end, 5.9 cm on the other), so the default 98-wide envelope holds an 80-wide body. The optional bodyWidth/bodyHeight/bodyDepth describe the RADIATOR BODY itself, defaulting to a snug fit (the largest body the envelope leaves room for) and clamped strictly inside any cover. There is no `elevation` param here: a wall-hung radiator is placed by the furniture ITEM's own top-level `elevation` field ($defs/furnitureItem.elevation) -- an earlier `params.elevation` was dead and was removed, per item 2bc314c9. `bodyElevation` is different: it lifts the body INSIDE the envelope, for a floor-standing box cover. Each `default` equals radiator.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `radiator` (src/furniture/radiator.js): a white compact panel radiator with vertical ribs, a smart thermostatic valve on the END of the radiator at a chosen corner and a lockshield on the other end, pipes dropping from both, and an optional cover (a clip-on shelf with a raised front lip, or a framed slatted box). width/height/depth ALWAYS describe the WHOLE OUTER ENVELOPE -- body, end valves and cover; the pipes too, except that they continue `pipeDrop` cm below the bottom to reach the floor -- because scripts/validate-house.py's footprint/overlap/ceiling checks and src/furniture/place.js read these three params with no idea a body/valve/cover split exists. The end valves need room beside the body (12.1 cm on the smart-valve end, 5.9 cm on the other), so the default 98-wide envelope holds an 80-wide body. The optional bodyWidth/bodyHeight/bodyDepth describe the RADIATOR BODY itself, defaulting to a snug fit (the largest body the envelope leaves room for) and clamped strictly inside any cover. There is no `elevation` param here: a wall-hung radiator is placed by the furniture ITEM's own top-level `elevation` field ($defs/furnitureItem.elevation) -- an earlier `params.elevation` was dead and was removed, per item 2bc314c9. `bodyElevation` is different: it lifts the body INSIDE the envelope, for a floor-standing box cover. Each `default` equals radiator.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": {
           "type": "number",
@@ -2467,6 +2467,12 @@
           "minimum": 0,
           "default": 0,
           "description": "cm, how far a 'shelf' cover runs past the body's right end. Ignored for other covers."
+        },
+        "pipeDrop": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "description": "cm the pipes continue BELOW the item's own bottom (y=0), so they reach the room floor. Set it equal to the item's top-level `elevation` (17 for a radiator hung 17 cm up; 0 for a floor-standing box cover). The pipes are the ONE part allowed outside width/height/depth, and only downward by exactly this much: they hug the wall beside the radiator's ends, inside the envelope's width and depth, so the footprint and ceiling checks are unaffected."
         }
       },
       "additionalProperties": false

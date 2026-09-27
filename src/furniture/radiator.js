@@ -33,7 +33,20 @@
  * src/furniture/place.js read these three params directly, with no idea a
  * "body vs cover vs valves" split exists, so everything this module draws —
  * body, valves, pipes, shelf, box — lands inside width x height x depth, and
- * at 'full' detail with a snug body the bbox EQUALS it. This is a hard rule.
+ * at 'full' detail with a snug body the bbox EQUALS it. This is a hard rule,
+ * with ONE documented exception: the pipes.
+ *
+ * PIPES AND `pipeDrop`. The real pipes run from the valves down to the room
+ * floor. For a wall-hung radiator the floor is the item's `elevation` below
+ * this module's y=0, which the builder cannot see, so `pipeDrop` (cm,
+ * default 0) says how far below y=0 the pipes continue. Set it equal to the
+ * item's own `elevation` (17 for a wall-hung radiator 17 cm up; 0 for the
+ * floor-standing box, whose envelope already starts at the floor). The pipes
+ * are the only part allowed below y=0, and only by exactly `pipeDrop`: 1.5 cm
+ * tubes that hug the wall beside the radiator's ends, never wider than the
+ * envelope and never in front of it. Everything else stays inside W x H x D
+ * with its bottom at y=0, so the validator's footprint/ceiling checks (which
+ * read width/height/depth and the item elevation) are unaffected.
  *
  * Because the valves sit on the radiator's ENDS, the envelope reserves room
  * beside the body for them: TRV_REACH_CM on the smart-valve end and
@@ -55,7 +68,7 @@
  * — it was dead and removed per item 2bc314c9). `bodyElevation` exists for a
  * floor-standing box cover, whose envelope starts at the floor while the
  * radiator inside it hangs 17 cm up. The pipes always run down to the
- * envelope's bottom (y=0), so with bodyElevation they reach the floor.
+ * envelope's bottom (y=0) and then `pipeDrop` further (see above).
  *
  * COVER — `params.cover`: 'none' | 'shelf' | 'box'.
  *   'shelf'  a clip-on wooden shelf (coverColor, pine by default) resting on
@@ -161,6 +174,7 @@ export const DEFAULTS = Object.freeze({
   bodyElevation: 0,      // cm, the body's bottom inside the envelope
   shelfExtendLeft: 0,    // cm, shelf overrun past the body's left end ('shelf' only)
   shelfExtendRight: 0,   // cm, shelf overrun past the body's right end ('shelf' only)
+  pipeDrop: 0,           // cm the pipes run BELOW y=0 -- set it to the item's elevation
   // bodyWidth/bodyHeight/bodyDepth are intentionally ABSENT: they default to
   // a snug fit, derived by layout() below.
 });
@@ -246,7 +260,8 @@ export function layout(params) {
     box = { xo, zf, stileW, slot, topRail, bottomRail, kick, innerX, panelY0, panelY1, panelW, slats };
   }
 
-  return { cover, corner, W, H, D, body, valveSide, trvY, lockshieldY, shelf, box };
+  const pipeDrop = Math.max(0, num(o.pipeDrop, 0));
+  return { cover, corner, W, H, D, body, valveSide, trvY, lockshieldY, shelf, box, pipeDrop };
 }
 
 /**
@@ -286,7 +301,7 @@ export function oppositeCorner(corner) {
  */
 const P = (width, height, depth, bodyWidth, cover, valveCorner, extra) => Object.freeze(Object.assign({
   width, height, depth, bodyWidth, bodyHeight: 60, bodyDepth: 12, thickness: 10,
-  valveCorner, cover, bodyElevation: 0, shelfExtendLeft: 0, shelfExtendRight: 0,
+  valveCorner, cover, bodyElevation: 0, shelfExtendLeft: 0, shelfExtendRight: 0, pipeDrop: 17,
 }, extra || {}));
 export const PRESETS = Object.freeze([
   { name: 'Office: 80 wide, no cover, valve bottom-right (corner unconfirmed)', elevation: 17,
@@ -296,7 +311,7 @@ export const PRESETS = Object.freeze([
   { name: 'Living room: 100 wide (width unconfirmed), shelf, valve top-left', elevation: 17,
     params: P(118, 63.6, 15.5, 100, 'shelf', 'top-left', { shelfExtendLeft: 12, shelfExtendRight: 3 }) },
   { name: 'Hallway: 50 wide in a 75x92 slatted box, valve top-left', elevation: 0,
-    params: P(75, 92, 19, 50, 'box', 'top-left', { bodyElevation: 17 }) },
+    params: P(75, 92, 19, 50, 'box', 'top-left', { bodyElevation: 17, pipeDrop: 0 }) },
   { name: 'Kitchen: 40 wide, no cover, valve bottom-left', elevation: 17,
     params: P(58, 60, 12, 40, 'none', 'bottom-left') },
 ]);
@@ -358,6 +373,17 @@ export function build(THREE, params, opts) {
     return m;
   };
 
+  /** A half-round running along x, centred at (y, z) cm, its round side
+   * facing up ('up') or into the room ('front'). */
+  const roundX = (name, x0, x1, y, z, r, finish, hex, facing) => {
+    const geo = new THREE.CylinderGeometry(r * CM, r * CM, (x1 - x0) * CM, 8, 1, false, 0, Math.PI);
+    const m = add(geo, name, finish, hex);
+    // the cylinder's axis is y with the half on +x: Rz(90) puts the axis on x
+    // and the half facing +y; a further Rx(90) turns the half to face +z
+    m.rotation.set(facing === 'front' ? Math.PI / 2 : 0, 0, Math.PI / 2);
+    m.position.set(((x0 + x1) / 2) * CM, y * CM, z * CM);
+    return m;
+  };
   const bodyHex = new THREE.Color(o.color || DEFAULTS.color).getHex();
   const DARK = 0x3a3a3a;
   const CHROME = 0xb9bdc2;
@@ -433,14 +459,24 @@ export function build(THREE, params, opts) {
     boxCm('coverShelf', sx0, sx1, by0, by1, zb0, L.D, 'matte', coverHex);
     // the RAISED lip: stands up on the board's front edge
     const lipT = Math.min(SHELF_LIP_T_CM, (L.D - zb0) / 2);
-    boxCm('coverShelfLip', sx0, sx1, by1, by1 + SHELF_LIP_H_CM, L.D - lipT, L.D, 'matte', coverHex);
     if (full) {
-      // a dark clip hooked over each end of the radiator, at the rear so it
-      // clears the valve bodies and pipes
-      const cz0 = Math.max(0.2, b.gap - 0.5), cz1 = cz0 + 1.2;
-      const cy0 = Math.max(b.y0, b.y1 - 5);
-      boxCm('coverShelfClip_L', b.x0 - 0.35, b.x0 - 0.05, cy0, by0, cz0, cz1, 'metal', 0x2b2b2e);
-      boxCm('coverShelfClip_R', b.x1 + 0.05, b.x1 + 0.35, cy0, by0, cz0, cz1, 'metal', 0x2b2b2e);
+      // rounded top: a square base plus a half-round along its length, 1 mm
+      // short at each end so its caps never share the base's end planes
+      const r = Math.min(lipT / 2, SHELF_LIP_H_CM / 2);
+      boxCm('coverShelfLip', sx0, sx1, by1, by1 + SHELF_LIP_H_CM - r, L.D - lipT, L.D, 'matte', coverHex);
+      roundX('coverShelfLipRound', sx0 + 0.1, sx1 - 0.1, by1 + SHELF_LIP_H_CM - r, L.D - r, r, 'matte', coverHex, 'up');
+    } else {
+      boxCm('coverShelfLip', sx0, sx1, by1, by1 + SHELF_LIP_H_CM, L.D - lipT, L.D, 'matte', coverHex);
+    }
+    if (full) {
+      // a dark clip hooked over each end of the radiator, 7 cm down its end,
+      // deep enough to read from the front; its front stops short of the
+      // valve body's axis so it clears the valve stubs, heads and pipes
+      const cz0 = Math.max(0.2, b.gap - 0.5);
+      const cz1 = Math.max(cz0 + 1.2, b.gap + b.thickness / 2 - TRV_STUB_R_CM - 0.3);
+      const cy0 = Math.max(b.y0, b.y1 - 7);
+      boxCm('coverShelfClip_L', b.x0 - 0.45, b.x0 - 0.05, cy0, by0, cz0, cz1, 'matte', 0x1f1f22);
+      boxCm('coverShelfClip_R', b.x1 + 0.05, b.x1 + 0.45, cy0, by0, cz0, cz1, 'matte', 0x1f1f22);
     }
   }
 
@@ -449,14 +485,31 @@ export function build(THREE, params, opts) {
     const white = (o.coverColor && o.coverColor !== DEFAULTS.coverColor) ? coverHex : 0xf6f6f3;
     const zf = X.zf, zb = X.zf - BOX_FRAME_CM;
     const topY = H - BOX_TOP_CM;
-    // top board: the whole envelope width and depth
-    boxCm('coverTop', -W / 2, W / 2, topY, H, 0, D, 'matte', white);
+    // top board: the whole envelope width and depth, with a rounded front
+    // edge at full detail (the half-round is 1 mm short at each end)
+    if (full) {
+      const r = BOX_TOP_CM / 2;
+      boxCm('coverTop', -W / 2, W / 2, topY, H, 0, D - r, 'matte', white);
+      roundX('coverTopNosing', -W / 2 + 0.1, W / 2 - 0.1, topY + r, D - r, r, 'matte', white, 'front');
+    } else {
+      boxCm('coverTop', -W / 2, W / 2, topY, H, 0, D, 'matte', white);
+    }
     // side panels, behind the front frame
     boxCm('coverSide_L', -X.xo, -X.xo + BOX_SIDE_CM, 0, topY, 0, zb, 'matte', white);
     boxCm('coverSide_R', X.xo - BOX_SIDE_CM, X.xo, 0, topY, 0, zb, 'matte', white);
     // stiles, running to the floor as legs
     boxCm('coverStile_L', -X.xo, -X.innerX, 0, topY, zb, zf, 'matte', white);
     boxCm('coverStile_R', X.innerX, X.xo, 0, topY, zb, zf, 'matte', white);
+    if (full) {
+      // a routed vertical groove down the middle of each stile, drawn as a
+      // shadow line 0.5 mm proud of the stile face (never coplanar with it)
+      const gw = Math.min(0.6, (X.xo - X.innerX) * 0.1);
+      for (const sx of [-1, 1]) {
+        const gx = sx * (X.innerX + X.xo) / 2;
+        const groove = add(new THREE.PlaneGeometry(gw * CM, (topY - 3) * CM), `coverStileGroove_${sx < 0 ? 'L' : 'R'}`, 'matte', 0xb4b4ae);
+        groove.position.set(gx * CM, ((topY - 3) / 2 + 1.5) * CM, (zf + 0.05) * CM);
+      }
+    }
     // rails; the vent slot is the gap between the top rail and the top board
     boxCm('coverRail_top', -X.innerX, X.innerX, X.panelY1, topY - X.slot, zb, zf, 'matte', white);
     boxCm('coverRail_bottom', -X.innerX, X.innerX, X.kick, X.panelY0, zb, zf, 'matte', white);
@@ -517,10 +570,12 @@ function buildValves(THREE, group, L, add, mat, bodyHex, CHROME) {
       disp.position.set((end + dir * (stubLen + headLen + TRV_DISPLAY_OFFSET_CM)) * CM, y * CM, z * CM);
     }
 
-    // pipe dropping from the valve body to the envelope's bottom
-    if (y > 0.05) {
-      const pipe = add(new THREE.CylinderGeometry(PIPE_R_CM * CM, PIPE_R_CM * CM, y * CM, 8, 1, true), 'pipe', 'gloss', bodyHex, g);
-      pipe.position.set((end + dir * PIPE_OFFSET_CM) * CM, (y / 2) * CM, z * CM);
+    // pipe dropping from the valve body to the floor: the envelope's bottom,
+    // then pipeDrop further (the one part allowed below y=0)
+    const bottom = -L.pipeDrop, len = y - bottom;
+    if (len > 0.05) {
+      const pipe = add(new THREE.CylinderGeometry(PIPE_R_CM * CM, PIPE_R_CM * CM, len * CM, 8, 1, true), 'pipe', 'gloss', bodyHex, g);
+      pipe.position.set((end + dir * PIPE_OFFSET_CM) * CM, ((y + bottom) / 2) * CM, z * CM);
     }
     group.add(g);
     return g;

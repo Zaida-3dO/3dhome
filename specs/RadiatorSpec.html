@@ -103,7 +103,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "bodyDepth": 12,
   "bodyElevation": 0,
   "shelfExtendLeft": 0,
-  "shelfExtendRight": 0
+  "shelfExtendRight": 0,
+  "pipeDrop": 17
 }/*EDITMODE-END*/;
 
 const CM = 0.01;
@@ -143,13 +144,13 @@ function FrontElevation({ t }) {
     if (!svg || !window.FurnitureRadiator) return;
     svg.innerHTML = '';
     const ns = 'http://www.w3.org/2000/svg';
-    const W = 400, H = 300;
+    const W = 440, H = 330;
     svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
     const L = window.FurnitureRadiator.layout(t);
     const b = L.body;
-    const margin = 40;
+    const margin = 56;
     const SCALE = Math.min((W - 2 * margin) / L.W, (H - 2 * margin - 30) / (L.H + t.elevation));
-    const midX = W / 2, baseY = H - 40;
+    const midX = W / 2, baseY = H - 52;
     const px = x => midX + x * SCALE;
     const py = y => baseY - (t.elevation + y) * SCALE; // local y, lifted by the preview elevation
 
@@ -175,7 +176,7 @@ function FrontElevation({ t }) {
     const bodyFill = t.color || '#f4f4f1';
     if (L.cover !== 'box') {
       // pipes, then valves, then the body with its vertical ribs
-      const pipe = (x, y) => rect(x - 0.75, 0, x + 0.75, y, '#f7f7f5', '#999', 0.8);
+      const pipe = (x, y) => rect(x - 0.75, -L.pipeDrop, x + 0.75, y, '#f7f7f5', '#999', 0.8);
       const trvLeft = L.valveSide === 'left';
       const trvEnd = trvLeft ? b.x0 : b.x1, lsEnd = trvLeft ? b.x1 : b.x0, d1 = trvLeft ? -1 : 1;
       pipe(trvEnd + d1 * 1, L.trvY);
@@ -191,14 +192,21 @@ function FrontElevation({ t }) {
         line(px(x), py(b.y0 + 1), px(x), py(b.y1 - 1), '#c8c8c4', 1);
       }
       line(px(b.x0), py(b.y1 - 0.45), px(b.x1), py(b.y1 - 0.45), '#999', 1); // top grille edge
-      txt(px(trvEnd + d1 * 7), py(L.trvY + 4), 'smart valve', { anchor: 'middle', size: 8, color: '#8a6a1a' });
-      txt(px(lsEnd - d1 * 4), py(L.lockshieldY - 5) + 8, 'lockshield', { anchor: 'middle', size: 8, color: '#888' });
+      // labels sit beside the envelope, level with each valve, with a leader
+      const envEdge = side => px(side < 0 ? -L.W / 2 : L.W / 2);
+      const label = (side, y, text, color) => {
+        const ex = envEdge(side), tx = ex + side * 6;
+        line(ex, py(y), tx - side * 1, py(y), color, 0.8);
+        txt(tx, py(y) + 3, text, { anchor: side < 0 ? 'end' : 'start', size: 8, color });
+      };
+      label(d1, L.trvY, 'smart valve', '#8a6a1a');
+      label(-d1, L.lockshieldY, 'lockshield', '#888');
     }
     if (L.cover === 'shelf' && L.shelf) {
       const wood = t.coverColor || '#d9b27a';
       rect(L.shelf.x0, b.y1 + 0.3, L.shelf.x1, b.y1 + 2.1, wood, '#8a6a1a', 1);
       rect(L.shelf.x0, b.y1 + 2.1, L.shelf.x1, b.y1 + 3.6, wood, '#8a6a1a', 1);
-      txt(px(L.shelf.x1) + 4, py(b.y1 + 2), 'shelf + raised lip', { size: 8, color: '#8a6a1a' });
+      txt(midX, py(b.y1 + 3.6) - 5, 'clip-on shelf, raised front lip', { anchor: 'middle', size: 8, color: '#8a6a1a' });
     }
     if (L.cover === 'box' && L.box) {
       const X = L.box, white = (t.coverColor && t.coverColor !== '#d9b27a') ? t.coverColor : '#f6f6f3';
@@ -223,7 +231,7 @@ function FrontElevation({ t }) {
     line(px(-L.W / 2) - 16, baseY, px(-L.W / 2) - 16, py(0), '#999', 1);
     txt(px(-L.W / 2) - 20, (baseY + py(0)) / 2, `${t.elevation}`, { anchor: 'end', size: 9, color: '#666' });
     // envelope width
-    const dimY = baseY + 26;
+    const dimY = baseY + 20;
     line(px(-L.W / 2), dimY, px(L.W / 2), dimY, '#999', 1);
     line(px(-L.W / 2), dimY - 4, px(-L.W / 2), dimY + 4, '#999', 1);
     line(px(L.W / 2), dimY - 4, px(L.W / 2), dimY + 4, '#999', 1);
@@ -244,6 +252,7 @@ function buildRadiatorModel(t, group, THREE) {
     valveCorner: t.valveCorner, color: t.color, cover: t.cover, coverColor: t.coverColor,
     bodyWidth: t.bodyWidth, bodyHeight: t.bodyHeight, bodyDepth: t.bodyDepth,
     bodyElevation: t.bodyElevation, shelfExtendLeft: t.shelfExtendLeft, shelfExtendRight: t.shelfExtendRight,
+    pipeDrop: t.pipeDrop,
   }, { detail: 'full' });
   built.position.y = t.elevation * CM; // PLACER concern — module leaves y=0 at its own bottom
   group.add(built);
@@ -366,7 +375,7 @@ function App() {
   return (
     <>
       <h1>Radiator Spec</h1>
-      <div className="sub">One design for every house radiator — a modern white panel radiator with a smart TRV valve on a chosen corner and the lockshield diagonally opposite, with an optional shelf or full slatted cover. Width/height/depth are ALWAYS the item's outer envelope (including any cover); the radiator body itself can be independently smaller via bodyWidth/bodyHeight/bodyDepth. Configurable: envelope size, body size, thickness, elevation, valve corner, colour, cover. Defaults are the standard house radiator. Use the Tweaks panel or a preset below.</div>
+      <div className="sub">One design for every house radiator — a white compact panel radiator with vertical ribs, a smart valve on the END of the radiator at a chosen corner and the lockshield at the bottom of the other end, with an optional clip-on shelf or framed slatted box. Width/height/depth are ALWAYS the item's outer envelope (the body, the end-valve room and any cover); the body itself is bodyWidth/bodyHeight/bodyDepth. Pipes run down to the floor: pipeDrop, which equals the item's elevation. Defaults are the standard house radiator. Use the Tweaks panel or a preset below.</div>
 
       <div className="grid">
         <div className="card">
@@ -405,7 +414,7 @@ function App() {
             buildModel={buildRadiatorModel}
             heightOf={tt => (tt.elevation + tt.height) * CM}
           />
-          <div className="legend">The furniture module's own origin is the wall plane with y=0 at the item's bottom edge; this page (playing the placer role) offsets it up by the elevation. The body's back sits at the wall-gap distance from the (dark) reference wall, the wall brackets visibly bridge the gap, and — with a cover present — the enclosure fills the declared width/height/depth while the radiator body can be smaller inside it (see the "75x92 slatted cover, 50 wide radiator" preset).</div>
+          <div className="legend">The furniture module's own origin is the wall plane with y=0 at the item's bottom edge; this page (playing the placer role) offsets it up by the elevation. The body's back sits at the wall-gap distance from the (dark) reference wall, the wall brackets visibly bridge the gap, and — with a cover present — the enclosure fills the declared width/height/depth while the radiator body can be smaller inside it (see the Hallway preset, a 50-wide radiator hanging 17 cm up inside a 75x92 box). The pipes continue below the item's bottom by pipeDrop, down to the floor.</div>
         </div>
 
         <div className="card full">
@@ -416,7 +425,7 @@ function App() {
         <div className="card full">
           <h2>Presets</h2>
           <PresetButtons setTweak={setTweak} />
-          <div className="legend">Each preset sets width/height/depth (the envelope) and cover together; every other tweak (elevation, thickness, valve corner not overridden by the preset, colour) stays as you left it.</div>
+          <div className="legend">One preset per room. Each sets the envelope, body size, valve corner, cover, shelf overrun and body elevation, plus the elevation it is hung at (and pipeDrop to match); only the colours stay as you left them.</div>
         </div>
 
         <div className="card full">
@@ -430,7 +439,7 @@ function App() {
         <TweakSection label="Size — outer envelope (always includes any cover)" />
         <TweakSlider label="Width (outer envelope)" value={t.width} min={40} max={200} step={1} unit="cm"
           onChange={v => setTweak('width', v)} />
-        <TweakSlider label="Height (outer envelope)" value={t.height} min={30} max={160} step={1} unit="cm"
+        <TweakSlider label="Height (outer envelope)" value={t.height} min={30} max={160} step={0.1} unit="cm"
           onChange={v => setTweak('height', v)} />
         <TweakSlider label="Depth (outer envelope, wall to front)" value={t.depth} min={8} max={40} step={0.5} unit="cm"
           onChange={v => setTweak('depth', v)} />
@@ -452,7 +461,7 @@ function App() {
 
         <TweakSection label="Position (preview only — not an authorable param)" />
         <TweakSlider label="Elevation (floor to bottom edge)" value={t.elevation} min={0} max={60} step={1} unit="cm"
-          onChange={v => setTweak('elevation', v)} />
+          onChange={v => { setTweak('elevation', v); setTweak('pipeDrop', v); }} />
 
         <TweakSection label="Valve corner" />
         <TweakRadio label="Corner" value={t.valveCorner} options={CORNERS.map(c => ({ value: c, label: CORNER_LABEL[c] }))}

@@ -9,9 +9,13 @@
  *
  *   0. Contract surface: TYPE, frozen DEFAULTS, build + alias, no dead
  *      params.elevation (item 2bc314c9) in DEFAULTS or the schema.
- *   1. ENVELOPE: width/height/depth are EVERYTHING built. At 'full' with a
- *      snug body the bbox equals them (DEFAULTS, every preset, a width sweep
- *      over every cover and valve side); at 'low' it never exceeds them.
+ *   1. ENVELOPE: width/height/depth are everything built EXCEPT the pipes.
+ *      At 'full' with a snug body the bbox of every non-pipe part equals them
+ *      (DEFAULTS, every preset, a width sweep over every cover and valve
+ *      side); at 'low' it never exceeds them. The pipes -- the one documented
+ *      exception -- end at exactly -pipeDrop, stay inside the envelope's
+ *      width and depth, and pipeDrop never changes anything else.
+ *      params.elevation is ignored (the placer owns elevation).
  *   2. The body is VERTICALLY ribbed (the real radiators), with no horizontal
  *      fins; low detail is one plain slab.
  *   3. Valves sit on the body's ENDS: the smart valve beyond the valve-side
@@ -58,6 +62,19 @@ function boxOf(obj) {
   return { minX: b.min.x / CM, maxX: b.max.x / CM, minY: b.min.y / CM, maxY: b.max.y / CM, minZ: b.min.z / CM, maxZ: b.max.z / CM };
 }
 const size = b => ({ w: b.maxX - b.minX, h: b.maxY - b.minY, d: b.maxZ - b.minZ });
+/** Union bbox (cm) of every mesh whose name matches `keep`. */
+function unionOf(g, keep) {
+  let b = null;
+  g.updateWorldMatrix(true, true);
+  g.traverse(o => {
+    if (!o.isMesh || !keep(o.name)) return;
+    const x = boxOf(o);
+    b = b ? { minX: Math.min(b.minX, x.minX), maxX: Math.max(b.maxX, x.maxX), minY: Math.min(b.minY, x.minY),
+      maxY: Math.max(b.maxY, x.maxY), minZ: Math.min(b.minZ, x.minZ), maxZ: Math.max(b.maxZ, x.maxZ) } : x;
+  });
+  return b;
+}
+const nonPipe = g => unionOf(g, n => n !== 'pipe');
 function find(g, name) { let f = null; g.traverse(o => { if (!f && o.name === name) f = o; }); return f; }
 function findAll(g, re) { const out = []; g.traverse(o => { if (re.test(o.name)) out.push(o); }); return out; }
 function triangles(group) {
@@ -84,7 +101,7 @@ const merged = p => Object.assign({}, R.DEFAULTS, p);
   check('DEFAULTS body is 80 x 60 x 12', (() => { const b = R.bodyEnvelope(R.DEFAULTS); return Math.abs(b.width - 80) < 1e-9 && b.height === 60 && b.depth === 12; })(),
     R.bodyEnvelope(R.DEFAULTS));
   check('default valve corner is bottom-right', R.DEFAULTS.valveCorner === 'bottom-right');
-  check('new params default to 0', R.DEFAULTS.bodyElevation === 0 && R.DEFAULTS.shelfExtendLeft === 0 && R.DEFAULTS.shelfExtendRight === 0);
+  check('new params default to 0', R.DEFAULTS.bodyElevation === 0 && R.DEFAULTS.shelfExtendLeft === 0 && R.DEFAULTS.shelfExtendRight === 0 && R.DEFAULTS.pipeDrop === 0);
   check('wallGapOf(12, 10) === 2', R.wallGapOf(12, 10) === 2);
   check('buildRadiator alias === build', typeof R.build === 'function' && R.buildRadiator === R.build);
   check('DEFAULTS has no elevation key (dead param, use the item-level field)',
@@ -92,8 +109,8 @@ const merged = p => Object.assign({}, R.DEFAULTS, p);
   const rs = schema.$defs && schema.$defs.furnitureParams_radiator;
   check('schema furnitureParams_radiator has no elevation property',
     !!rs && !Object.prototype.hasOwnProperty.call(rs.properties || {}, 'elevation'));
-  check('schema carries bodyElevation / shelfExtendLeft / shelfExtendRight',
-    !!rs && ['bodyElevation', 'shelfExtendLeft', 'shelfExtendRight'].every(k => rs.properties[k]));
+  check('schema carries bodyElevation / shelfExtendLeft / shelfExtendRight / pipeDrop',
+    !!rs && ['bodyElevation', 'shelfExtendLeft', 'shelfExtendRight', 'pipeDrop'].every(k => rs.properties[k]));
 
   // Presets: one per real room, generic names, every one the SAME key set
   // (switching presets never leaves a stale value), each told apart by value.
@@ -130,8 +147,17 @@ const merged = p => Object.assign({}, R.DEFAULTS, p);
   }
   for (const { tag, p } of cases) {
     const m = merged(p);
-    const full = size(boxOf(R.build(THREE, p, { detail: 'full' })));
-    const fb = boxOf(R.build(THREE, p, { detail: 'full' }));
+    const gFull = R.build(THREE, p, { detail: 'full' });
+    const fb = nonPipe(gFull);
+    const full = size(fb);
+    const pipes = findAll(gFull, /^pipe$/);
+    check(`${tag}: two pipes at full detail`, pipes.length === 2, pipes.length);
+    for (const pp of pipes) {
+      const pb = boxOf(pp);
+      check(`${tag}: pipe ends at exactly -pipeDrop (${m.pipeDrop})`, Math.abs(pb.minY + m.pipeDrop) <= TOL, pb);
+      check(`${tag}: pipe stays inside the envelope's width and depth`,
+        pb.minX >= -m.width / 2 - EPS && pb.maxX <= m.width / 2 + EPS && pb.minZ >= -EPS && pb.maxZ <= m.depth + EPS, pb);
+    }
     check(`${tag}: full bbox == width`, Math.abs(full.w - m.width) <= TOL, { full, width: m.width });
     check(`${tag}: full bbox == height`, Math.abs(full.h - m.height) <= TOL, { full, height: m.height });
     check(`${tag}: full bbox == depth`, Math.abs(full.d - m.depth) <= TOL, { full, depth: m.depth });
@@ -153,6 +179,20 @@ const merged = p => Object.assign({}, R.DEFAULTS, p);
   const tight = R.build(THREE, { bodyDepth: 12, thickness: 12 }, {});
   check('brackets never reach past the body back, even at wallGap 0',
     boxOf(find(tight, 'radiatorBracket_L')).maxZ <= boxOf(find(tight, 'radiatorPanel')).minZ + 0.02);
+}
+
+// ---- 1b. params.elevation is ignored; pipeDrop moves only the pipes --------
+{
+  const a = JSON.stringify(boxOf(R.build(THREE, {}, {})));
+  check('params.elevation is ignored (the placer applies the item elevation)',
+    JSON.stringify(boxOf(R.build(THREE, { elevation: 17 }, {}))) === a);
+  const g0 = R.build(THREE, {}, {}), g17 = R.build(THREE, { pipeDrop: 17 }, {});
+  check('pipeDrop leaves every non-pipe part where it was', JSON.stringify(nonPipe(g0)) === JSON.stringify(nonPipe(g17)));
+  check('pipeDrop 17 takes both pipes to y = -17', findAll(g17, /^pipe$/).every(p => Math.abs(boxOf(p).minY + 17) < 0.01));
+  const hall = R.PRESETS.find(p => p.params.cover === 'box');
+  check('every preset: pipeDrop equals the item elevation it is placed at', R.PRESETS.every(p => p.params.pipeDrop === p.elevation),
+    R.PRESETS.map(p => [p.params.pipeDrop, p.elevation]));
+  check('hallway box pipes stop at the floor it stands on', hall.params.pipeDrop === 0);
 }
 
 // ---- 2. vertical ribs, no fins; low detail is one slab ----------------------
@@ -203,8 +243,12 @@ for (const corner of R.VALVE_CORNERS) {
   check(`${corner}: lockshield beyond the OTHER end`,
     left ? lsHead.minX >= bodyX1 - EPS : lsHead.maxX <= bodyX0 + EPS, { lsHead, bodyX0, bodyX1 });
   check(`${corner}: lockshield at the BOTTOM of the other end`, (lsHead.minY + lsHead.maxY) / 2 < midY, { lsHead, midY });
+  // the display faces OUT along the wall (a back-facing plane is culled)
+  const dispMesh = find(smart, 'display');
+  const n = new THREE.Vector3(0, 0, 1).applyQuaternion(dispMesh.getWorldQuaternion(new THREE.Quaternion()));
+  check(`${corner}: the display faces outward, away from the radiator`, left ? n.x < -0.99 : n.x > 0.99, n);
   // tiny decals must stand OFF the surface they sit on (no z-fight)
-  const disp = boxOf(find(smart, 'display'));
+  const disp = boxOf(dispMesh);
   check(`${corner}: the display stands >= 0.05 cm off the head's end face`,
     left ? head.minX - disp.minX >= 0.05 : disp.maxX - head.maxX >= 0.05, { disp, head });
   // nothing the valves draw collides with anything else but its own group
@@ -244,7 +288,12 @@ for (const corner of R.VALVE_CORNERS) {
       const board = find(g, 'coverShelf'), lip = find(g, 'coverShelfLip');
       check(`${tag} (${detail}): board and lip present`, !!board && !!lip);
       if (!board || !lip) continue;
-      const bb = boxOf(board), lb = boxOf(lip);
+      const bb = boxOf(board), lb = unionOf(g, n => /^coverShelfLip/.test(n));
+      if (detail === 'full') {
+        const round = find(g, 'coverShelfLipRound');
+        check(`${tag}: the lip has a rounded top`, !!round && Math.abs(boxOf(round).maxY - lb.maxY) < EPS &&
+          boxOf(round).minY > bb.maxY + 0.1, round && boxOf(round));
+      }
       let bodyTop = -Infinity, bodyFront = -Infinity, bodyX0 = Infinity, bodyX1 = -Infinity;
       g.traverse(o => {
         if (o.isMesh && /^radiator/.test(o.name) && !/Valve|pipe|head|valveBody|display/.test(o.name) && !/^radiatorBracket/.test(o.name)) {
@@ -363,7 +412,15 @@ function sweepSlatPanel(g, p) {
   const g0 = R.build(THREE, Object.assign({}, hall.params, { bodyElevation: 0 }), {});
   check('bodyElevation 0 puts the body on the envelope bottom', Math.abs(boxOf(find(g0, 'radiatorPanel')).minY) < EPS);
   check('hallway: pipes run to the floor through the kick-out', findAll(g, /^pipe$/).every(p => Math.abs(boxOf(p).minY) < 0.01) && findAll(g, /^pipe$/).length === 2);
-  const tb = boxOf(find(g, 'coverTop')), st = boxOf(find(g, 'coverStile_L'));
+  const tb = unionOf(g, n => /^coverTop/.test(n)), st = boxOf(find(g, 'coverStile_L'));
+  const nose = find(g, 'coverTopNosing');
+  check('hallway: the top board has a rounded front edge', !!nose && Math.abs(boxOf(nose).maxZ - 19) < EPS &&
+    Math.abs(size(boxOf(nose)).h - 2) < 0.05 && size(boxOf(nose)).d < 1.05, nose && boxOf(nose));
+  const grooves = findAll(g, /^coverStileGroove_/);
+  check('hallway: a routed groove down each stile', grooves.length === 2 && grooves.every(gr => {
+    const b = boxOf(gr), stl = boxOf(find(g, /_L$/.test(gr.name) ? 'coverStile_L' : 'coverStile_R'));
+    return b.minX > stl.minX && b.maxX < stl.maxX && b.minZ - stl.maxZ >= 0.04 && size(b).h > 50;
+  }), grooves.map(boxOf));
   check('hallway: top board overhangs the carcass at the front and side by ~1.5', Math.abs((tb.maxZ - st.maxZ) - 1.5) < 0.01 && Math.abs((st.minX - tb.minX) - 1.5) < 0.01, { tb, st });
   check('hallway: stiles run to the floor as legs', Math.abs(st.minY) < EPS, st);
   // no-cover body elevation too
