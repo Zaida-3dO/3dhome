@@ -18,6 +18,7 @@ import {
 import { collapseEmitters } from './light-merge.js';
 import { wallpaperFaceAxis, overlayFace, overlayUOffset } from './wallpaper-face.js';
 import { seedLightState } from './light-state.js';
+import { dolly, pushTarget, wheelFactor, wheelDeltaPx, createTwoFingerGesture } from './camera-gestures.js';
 import { HouseLoader } from './house-loader.js';
 import {
   insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, printYaw, WALK_DEFAULTS,
@@ -5336,15 +5337,39 @@ export const Home3DScene = (() => {
     on(document, "visibilitychange", () => { _hidden = document.hidden; applyPause(); });
 
     if (interactive) {
-      let pinchDist = null;
+      // Touch contacts currently down. With two or more, one-finger rotate is
+      // off: the second finger's pointerdown used to re-arm rotate with its own
+      // position as the last point, so the first finger's next pointermove
+      // rotated the camera by the whole gap between the fingers.
+      const touchIds = new Set();
+      const twoFinger = createTwoFingerGesture();
+
+      // One zoom step (src/camera-gestures.js): a factor below 1 moves the
+      // camera forward along its view ray -- shortening the orbit radius
+      // until PUSH_DISTANCE, then pushing the target itself forward, so
+      // zoom-in never stops and never flips. Above 1 zooms out.
+      function zoomBy(factor) {
+        const d = dolly(orb.r, factor);
+        orb.r = d.r;
+        if (d.push > 0) {
+          const sp = Math.sin(orb.ph);
+          const dir = { x: -sp * Math.cos(orb.th), y: -Math.cos(orb.ph), z: -sp * Math.sin(orb.th) };
+          const t = pushTarget(orb.tgt, dir, d.push);
+          orb.tgt.set(
+            Math.max(PAN_BOUNDS.minX, Math.min(PAN_BOUNDS.maxX, t.x)),
+            Math.min(PAN_BOUNDS.maxY, t.y),
+            Math.max(PAN_BOUNDS.minZ, Math.min(PAN_BOUNDS.maxZ, t.z)));
+        }
+      }
 
       on(container, "pointerdown", e => {
         container.setPointerCapture(e.pointerId);
+        if (e.pointerType === "touch") touchIds.add(e.pointerId);
         // button: 0=left (rotate, existing), 1=middle, 2=right (pan, new) —
         // industry convention (Three.js OrbitControls, Blender/Maya/SketchUp).
         // Touch contacts always report button 0, so touch keeps rotating here;
         // touch-pan is handled separately below via 2-finger touchmove.
-        if (e.button === 2) { orb.pan = true; } else { orb.drag = true; }
+        if (e.button === 2) { orb.pan = true; } else { orb.drag = touchIds.size < 2; }
         orb.px = e.clientX; orb.py = e.clientY;
         clickStart.x = e.clientX; clickStart.y = e.clientY;
       });
@@ -5352,7 +5377,7 @@ export const Home3DScene = (() => {
         const r = container.getBoundingClientRect();
         mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
         mouse.y = -((e.clientY - r.top) / r.height) * 2 + 1;
-        if (orb.drag) {
+        if (orb.drag && touchIds.size < 2) {
           orb.th += (e.clientX - orb.px) * 0.005;
           orb.ph = Math.max(0.05, Math.min(Math.PI - 0.05, orb.ph - (e.clientY - orb.py) * 0.005));
           orb.px = e.clientX; orb.py = e.clientY;
@@ -5364,12 +5389,14 @@ export const Home3DScene = (() => {
       });
       on(container, "pointerup", e => {
         container.releasePointerCapture(e.pointerId);
+        touchIds.delete(e.pointerId);
         orb.drag = false;
         orb.pan = false;
         wake(250); // brief tail so the release settles smoothly under on-demand
       });
       on(container, "pointercancel", e => {
         container.releasePointerCapture(e.pointerId);
+        touchIds.delete(e.pointerId);
         orb.drag = false;
         orb.pan = false;
         // Same tail as pointerup. REQUIRED for the adaptive pixel ratio: this
@@ -5392,46 +5419,36 @@ export const Home3DScene = (() => {
       });
       on(container, "wheel", e => {
         e.preventDefault();
-        // Min zoom distance lowered 4 -> 1 (2026-07-10, requested) so the
-        // camera can push right inside a room. cam.near is 0.1 (see camera
-        // create above), well under 1, so nothing clips at this range. Max 30.
-        // Floor further lowered 1 -> -30 (2026-07-17, requested): r crossing
-        // 0 carries the camera through orb.tgt and out the far side of the
-        // house ("zoom through to the other side"). Symmetric with the +30 max.
-        orb.r = Math.max(-30, Math.min(30, orb.r + e.deltaY * 0.012));
+        // See zoomBy above. The old additive step with a -30 floor let r
+        // cross zero, which flipped the camera to the far side of the target
+        // and turned further zoom-in into zoom-out.
+        zoomBy(wheelFactor(wheelDeltaPx(e.deltaY, e.deltaMode)));
         updCam();
         wake(250);
       }, { passive: false });
 
-      // Pinch to zoom + 2-finger-drag to pan (mobile convention: 1-finger =
-      // rotate via the pointer handlers above, 2-finger-drag = pan, pinch
-      // distance-change = zoom — both read off the same 2-touch stream so a
-      // user can pinch and drag at once, same as most mobile 3D apps).
-      let panCentroid = null;
+      // Two fingers: pan OR pinch, decided per gesture (src/camera-gestures.js).
+      // One finger still rotates through the pointer handlers above.
+      const pt = t => ({ x: t.clientX, y: t.clientY });
+      on(container, "touchstart", e => {
+        if (e.touches.length === 2) twoFinger.start(pt(e.touches[0]), pt(e.touches[1]));
+      }, { passive: true });
       on(container, "touchmove", e => {
         if (e.touches.length === 2) {
           e.preventDefault();
-          const dx = e.touches[0].clientX - e.touches[1].clientX;
-          const dy = e.touches[0].clientY - e.touches[1].clientY;
-          const dist = Math.sqrt(dx*dx + dy*dy);
-          const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-          const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-          if (pinchDist !== null) {
-            // Min zoom 4 -> 1 (2026-07-10, requested), same as wheel above.
-            // Floor further lowered 1 -> -30 (2026-07-17), same as wheel above.
-            orb.r = Math.max(-30, Math.min(30, orb.r - (dist - pinchDist) * 0.05));
-            panCam(cx - panCentroid.x, cy - panCentroid.y); // also updCam()s
-            wake(250);
-          }
-          pinchDist = dist;
-          panCentroid = { x: cx, y: cy };
           orb.drag = false;
+          const step = twoFinger.move(pt(e.touches[0]), pt(e.touches[1]));
+          if (step.zoom !== 1) zoomBy(step.zoom);
+          if (step.panDx || step.panDy) panCam(step.panDx, step.panDy); // also updCam()s
+          else if (step.zoom !== 1) updCam();
+          wake(250);
         } else {
-          pinchDist = null;
-          panCentroid = null;
+          twoFinger.end();
         }
       }, { passive: false });
-      on(container, "touchend", () => { pinchDist = null; panCentroid = null; });
+      const endTouches = e => { if (e.touches.length < 2) twoFinger.end(); };
+      on(container, "touchend", endTouches);
+      on(container, "touchcancel", endTouches);
     }
 
     on(window, "resize", () => {
