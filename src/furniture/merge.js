@@ -48,9 +48,13 @@
  * keeps the old per-room split (the room id is prepended to every key), for
  * measuring the two against each other. A fade bucket is per WALL either way.
  *
- * Glass NEVER fades with a wall (plan amendment A3): the fade loop drives
- * opacity back to 1.0, which would make glass opaque. A glass part's
- * fadeWallId is forced to null here, so no caller can register one.
+ * Glass and every other translucent part fades WITH its item (task f7324d3f:
+ * everything mounted on a wall goes when that wall goes, whatever bucket it
+ * lands in). Plan amendment A3 kept glass out of the fade because the loop
+ * drove opacity back to 1.0, turning a 0.25 pane solid; instead, a fade
+ * clone now keeps its builder's opacity and records it as
+ * `userData.baseOpacity` (createMaterialSet's forFade), and the loop scales
+ * its target by it -- so a pane returns to 0.25, never to 1.
  *
  * The finish and keep tags are read ONLY through partFinish()/partKeep() in
  * ./finishes.js -- the same two functions the contract test reads -- so what
@@ -287,15 +291,15 @@ export function tintSignature(mat) {
 }
 
 /**
- * The bucket a part goes into. The fade wall is always last, and glass (or
- * anything translucent) never carries one (A3).
+ * The bucket a part goes into. The fade wall is always last -- for EVERY
+ * class, glass and translucent parts included (see the header).
  *   opaque  `palette[|side]|fade`   (every opaque finish together)
  *   glow    `glow[|side]|fade`
  *   kept    `finish|<materialSignature>|fade`  (a texture's uuid is in it)
  * With `scope: 'room'`, `room|` is prepended to every key.
  */
 export function bucketKey(part, room, fadeWallId, scope) {
-  const fade = neverFades(part) || fadeWallId == null ? '-' : String(fadeWallId);
+  const fade = fadeWallId == null ? '-' : String(fadeWallId);
   const pre = scope === 'room' ? room + '|' : '';
   const side = part.side ? '|side' + part.side : '';
   const cls = bucketClass(part);
@@ -410,11 +414,11 @@ export function concatGeometries(THREE, parts, opts) {
 }
 
 /**
- * A part that must never join a wall fade: glass (plan A3) and anything else
- * translucent. The fade loop drives opacity back to 1.0, which would turn a
- * 0.16 beam cone or a 0.55 globe solid.
+ * A translucent part: glass and anything else drawn below opacity 1. It is
+ * never a shadow caster and never receives a shadow. It DOES fade with its
+ * item's wall, from its own opacity (see the header).
  */
-export function neverFades(part) {
+export function isTranslucent(part) {
   if (!part) return false;
   if (part.finish === 'glass') return true;
   const m = part.material;
@@ -479,11 +483,14 @@ export function createMaterialSet(THREE) {
     }
     return shared.get(key);
   }
+  // The clone keeps the builder's own opacity and depthWrite, and records
+  // them: the wall-fade loop fades FROM them and returns TO them (a 0.25
+  // glass pane comes back at 0.25, not 1). Palette and glow are 1 / true.
   function forFade(m) {
     const c = m.clone();
     c.transparent = true;
-    c.opacity = 1;
-    c.userData = Object.assign({}, m.userData, { fade: true });
+    c.userData = Object.assign({}, m.userData, { fade: true,
+      baseOpacity: typeof m.opacity === 'number' ? m.opacity : 1, baseDepthWrite: m.depthWrite !== false });
     return track(c);
   }
   return { opaque, kept, glow, forFade, all, textures };
@@ -515,7 +522,7 @@ export function groupBuckets(tagged, scope) {
       const cls = bucketClass(t.part);
       b = { key, room: scope === 'room' ? t.room : null, rooms: new Set(), cls,
         finish: cls === 'opaque' ? 'palette' : t.part.finish, keep: t.part.keep, side: t.part.side,
-        fadeWallId: neverFades(t.part) ? null : (t.fadeWallId == null ? null : t.fadeWallId),
+        fadeWallId: t.fadeWallId == null ? null : t.fadeWallId,
         first: t.part, parts: [] };
       buckets.set(key, b);
     }
@@ -558,7 +565,7 @@ export function buildBucketMesh(THREE, b, materials) {
   // Beauty meshes NEVER cast (plan A1): a caster draws in the sun pass and
   // in every room pass whose frustum it touches. The per-room proxy casts.
   mesh.castShadow = false;
-  const translucent = neverFades(b.first);
+  const translucent = isTranslucent(b.first);
   // A translucent part (a glass globe, a beam cone) would catch a shadow
   // as a dark smear across its own surface; it receives none. Nor does an
   // unlit glow, which has no lighting for a shadow to take away.

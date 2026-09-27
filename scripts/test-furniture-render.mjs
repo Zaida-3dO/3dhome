@@ -515,6 +515,8 @@ function lightScene() {
     { id: 'override', room: 'r', type: 'box', at: [300, 250], fade: { wall: 2 }, params: { height: 20 } },
     { id: 'freeTall', room: 'r', type: 'box', at: [470, 250], rotation: 90, params: { width: 100, depth: 50, height: 200 } },
     { id: 'freeMid', room: 'r', type: 'box', at: [300, 250], params: { height: 200 } },
+    // The same spot as freeTall, but low: a FREE item keeps the height rule.
+    { id: 'freeLow', room: 'r', type: 'box', at: [470, 250], rotation: 90, params: { width: 100, depth: 50, height: 80 } },
     // Corner unit: anchored to north wall 1 (its run), tucked into the corner
     // with EAST wall 4 (also exterior) -- it fades with its run's wall, 1.
     { id: 'corner', room: 'r', type: 'box', wall: 1, centre: 470, params: { width: 60, depth: 60, height: 150 } }
@@ -522,8 +524,10 @@ function lightScene() {
   const res = build(h);
   const fw = id => res.byId[id].fadeWallId;
   check('wall anchor, tall, exterior host -> host wall', fw('host') === 1, fw('host'));
-  check('top exactly 100 -> no fade', fw('hostShort') === null);
-  check('elevation counts toward the top', fw('hostHigh') === 1);
+  // f7324d3f: a wall-anchored item goes with its wall whatever its height.
+  check('wall anchor, top exactly 100 -> still fades with its host wall', fw('hostShort') === 1, fw('hostShort'));
+  check('wall anchor, raised -> host wall', fw('hostHigh') === 1);
+  check('free item, top 80 beside the shell -> no fade (height rule kept for free items)', fw('freeLow') === null, fw('freeLow'));
   check('interior host -> no fade', fw('interior') === null);
   check('fade never -> none', fw('never') === null);
   check('explicit override wins, whatever the height', fw('override') === 2);
@@ -534,35 +538,107 @@ function lightScene() {
   const fading = res.beauty.filter(m => m.userData.fadeWallId === 1);
   check('fade bucket per wall, own transparent material', fading.length === 1 && fading[0].material.transparent &&
     fading[0].material !== res.beauty.find(m => m.userData.fadeWallId == null && m.userData.cls === 'opaque').material);
-  // Glass never fades (A3), even tall on an exterior host wall.
+  // Glass fades WITH its item (f7324d3f, replacing A3), from and back to its
+  // own opacity -- never driven to 1.
   const hg = compile([
     { id: 'gcase', room: 'r', type: 'box', wall: 1, centre: 200, params: { height: 180, finish: 'glass' } },
     { id: 'body', room: 'r', type: 'box', wall: 1, centre: 300, params: { height: 180 } }
   ]);
   const rg = build(hg);
   const glass = rg.beauty.filter(m => m.userData.finish === 'glass');
-  check('A3: glass bucket carries no fade wall', glass.length === 1 && glass[0].userData.fadeWallId === null);
+  const glassOpacity = Fin.makeFinish(THREE, 'glass').opacity;
+  check('glass on a fading wall item carries the fade wall', glass.length === 1 && glass[0].userData.fadeWallId === 1,
+    glass.map(m => m.userData.fadeWallId));
+  check('the glass fade clone keeps its own opacity and depthWrite, and records them',
+    glass.length === 1 && glass[0].material.opacity === glassOpacity && glass[0].material.depthWrite === false &&
+    glass[0].material.userData.baseOpacity === glassOpacity && glass[0].material.userData.baseDepthWrite === false,
+    glass.map(m => [m.material.opacity, m.material.depthWrite, m.material.userData]));
   const regs = F.fadeRegistrations(rg);
-  check('A3: no glass mesh is ever registered for the fade', regs.length === 1 &&
-    regs.every(r => r.mesh.userData.finish !== 'glass' && r.mesh.material.userData.finish !== 'glass'));
-  // The second lock: even a glass mesh that somehow carries a fade wall is refused.
+  const greg = regs.find(r => r.mesh === glass[0]);
+  check('glass is registered with its base opacity (the fade returns it there, not to 1)',
+    regs.length === 2 && greg && greg.baseOpacity === glassOpacity && greg.baseDepthWrite === false,
+    regs.map(r => [r.mesh.userData.finish, r.baseOpacity, r.baseDepthWrite]));
+  check('an opaque fade bucket is registered at base 1, writing depth',
+    regs.some(r => r.mesh !== glass[0] && r.baseOpacity === 1 && r.baseDepthWrite === true));
+  // The lock: a glass mesh with NO recorded base opacity would be driven to 1
+  // -- it is refused.
   const forged = { beauty: [Object.assign(new THREE.Mesh(new THREE.BufferGeometry(), Fin.makeFinish(THREE, 'glass')),
     { userData: { fadeWallId: 1, finish: 'glass' } })] };
-  check('A3: fadeRegistrations refuses a forged glass fade', F.fadeRegistrations(forged).length === 0);
-  // Each lock on its own: the bucket tag, and the material's finish.
+  check('fadeRegistrations refuses a glass fade with no base opacity', F.fadeRegistrations(forged).length === 0);
   const byTag = { beauty: [Object.assign(new THREE.Mesh(new THREE.BufferGeometry(), Fin.makeFinish(THREE, 'matte')),
     { userData: { fadeWallId: 1, finish: 'glass' } })] };
   const byMat = { beauty: [Object.assign(new THREE.Mesh(new THREE.BufferGeometry(), Fin.makeFinish(THREE, 'glass')),
     { userData: { fadeWallId: 1, finish: 'matte' } })] };
-  check('A3: refused by the bucket tag alone', F.fadeRegistrations(byTag).length === 0);
-  check('A3: refused by the material finish alone', F.fadeRegistrations(byMat).length === 0);
+  const byTrans = { beauty: [Object.assign(new THREE.Mesh(new THREE.BufferGeometry(), Fin.makeFinish(THREE, 'matte')),
+    { userData: { fadeWallId: 1, finish: 'matte', translucent: true } })] };
+  check('...refused by the bucket tag alone', F.fadeRegistrations(byTag).length === 0);
+  check('...refused by the material finish alone', F.fadeRegistrations(byMat).length === 0);
+  check('...refused by the translucent flag alone', F.fadeRegistrations(byTrans).length === 0);
   const gp = { finish: 'glass', keep: true, color: 0xccddee, emissive: 0, textured: false };
-  check('A3: a glass bucket key never names a fade wall', /\|-$/.test(M.bucketKey(gp, 'r', 1)), M.bucketKey(gp, 'r', 1));
-  check('...while a matte one does', /\|1$/.test(M.bucketKey(Object.assign({}, gp, { finish: 'matte', keep: false }), 'r', 1)));
+  check('a glass bucket key names its fade wall', /\|1$/.test(M.bucketKey(gp, 'r', 1)), M.bucketKey(gp, 'r', 1));
+  check('...and "-" with none', /\|-$/.test(M.bucketKey(gp, 'r', null)));
+  // The loop's two decisions (the scene calls exactly these).
+  check('wallFadeTarget: facing the camera -> 0.05 x base', near(F.wallFadeTarget(-0.9, 1), 0.05) &&
+    near(F.wallFadeTarget(-0.9, 0.25), 0.0125) && near(F.wallFadeTarget(-0.9), 0.05));
+  check('wallFadeTarget: not facing -> its base (glass back to 0.25, not 1)', F.wallFadeTarget(0, 0.25) === 0.25 &&
+    F.wallFadeTarget(-0.2, 1) === 1 && F.wallFadeTarget(0.5) === 1);
+  check('wallFadeDepthWrite: opaque writes only while solid', F.wallFadeDepthWrite(0.99, 1, true) === true &&
+    F.wallFadeDepthWrite(0.5, 1, true) === false && F.wallFadeDepthWrite(0.99) === true);
+  check('wallFadeDepthWrite: glass keeps its own false at its base', F.wallFadeDepthWrite(0.25, 0.25, false) === false);
+  check('wallFadeDepthWrite: a translucent depth-writer writes at its base, not while fading',
+    F.wallFadeDepthWrite(0.5, 0.5, true) === true && F.wallFadeDepthWrite(0.1, 0.5, true) === false);
   // The scene registers exactly fadeRegistrations() and nothing else.
   const sceneSrc = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
   check('scene registers furniture fades through fadeRegistrations only',
     /fadeRegistrations\(result\)\.forEach/.test(sceneSrc) && !/furnitureResult\.beauty[^\n]*wallMeshes/.test(sceneSrc));
+  check('scene registers each fade with its base opacity and depthWrite',
+    /wallMeshes\.push\(\{ mesh, nx: host\.nx, nz: host\.nz, outer: true, base: baseOpacity, baseDepthWrite \}\)/.test(sceneSrc));
+  check('scene fade loop drives opacity and depthWrite through wallFadeTarget / wallFadeDepthWrite',
+    /const targetOpacity = wallFadeTarget\(dot, b\)/.test(sceneSrc) &&
+    /mesh\.material\.depthWrite = wallFadeDepthWrite\(mesh\.material\.opacity, b, baseDepthWrite\)/.test(sceneSrc));
+}
+
+// ---- 6b. everything mounted on a wall fades with that wall (f7324d3f) -------------
+// Real builders: three floating shelves stacked as in a store recess (84 /
+// 134 / 184 cm, 5 cm slabs -- the lowest tops out at 89, under FADE_MIN_TOP),
+// a kitchen base run, a wall run and a fridge-freezer, a glass box and an
+// up-down sconce (translucent globe and beam cones), ALL wall-anchored to
+// exterior wall 1. Every bucket they land in must fade with wall 1.
+{
+  const items = [
+    { id: 'shelf84', room: 'r', type: 'shelf', wall: 1, centre: 150, elevation: 84, params: { width: 90, depth: 26, height: 5, shelfThickness: 5 } },
+    { id: 'shelf134', room: 'r', type: 'shelf', wall: 1, centre: 150, elevation: 134, params: { width: 90, depth: 26, height: 5, shelfThickness: 5 } },
+    { id: 'shelf184', room: 'r', type: 'shelf', wall: 1, centre: 150, elevation: 184, params: { width: 90, depth: 26, height: 5, shelfThickness: 5 } },
+    { id: 'base', room: 'r', type: 'kitchen-base-run', wall: 1, centre: 330 },
+    { id: 'wallrun', room: 'r', type: 'kitchen-wall-run', wall: 1, centre: 330, elevation: 150 },
+    { id: 'fridge', room: 'r', type: 'fridge-freezer', wall: 1, centre: 460 },
+    { id: 'gfront', room: 'r', type: 'box', wall: 1, centre: 240, elevation: 20, params: { width: 30, depth: 20, height: 30, finish: 'glass' } },
+    { id: 'sconce', room: 'r', type: 'wall-sconce', wall: 1, centre: 240, elevation: 60, params: { kind: 'up-down' } }
+  ];
+  const h = compile(items);
+  const real = (await quietlyAsync(() => F.loadFurnitureModules(h.furniture))).value;
+  const types = ['shelf', 'kitchen-base-run', 'kitchen-wall-run', 'fridge-freezer', 'wall-sconce'];
+  check('6b: the real builders loaded', types.every(t => real.has(t)), types.filter(t => !real.has(t)));
+  const res = quietly(() => F.buildFurnitureSync(THREE, h.furniture, real, { tx, tz, quality: ULTRA, walls: h.walls })).value;
+  const fw = id => res.byId[id] && res.byId[id].fadeWallId;
+  check('6b: all three stacked shelves fade with their wall (84 / 134 / 184)',
+    fw('shelf84') === 1 && fw('shelf134') === 1 && fw('shelf184') === 1, items.slice(0, 3).map(i => fw(i.id)));
+  check('6b: the kitchen base run, wall run and fridge-freezer fade with their wall',
+    fw('base') === 1 && fw('wallrun') === 1 && fw('fridge') === 1, ['base', 'wallrun', 'fridge'].map(fw));
+  check('6b: every wall-anchored item on an exterior wall has that wall as its fade wall',
+    items.every(i => fw(i.id) === 1), items.map(i => [i.id, fw(i.id)]));
+  // Not one bucket of theirs is left standing: every beauty mesh fades with
+  // wall 1 and is registered for the fade -- glass and beam cones included.
+  const regs = F.fadeRegistrations(res);
+  const standing = res.beauty.filter(m => m.userData.fadeWallId !== 1 || !regs.some(r => r.mesh === m && r.wallId === 1));
+  check('6b: no wall-anchored part lands in a non-fading bucket', res.beauty.length > 0 && standing.length === 0,
+    standing.map(m => [m.userData.bucket.slice(0, 40), m.userData.fadeWallId]));
+  check('6b: the translucent buckets are among the fading ones, at their own base',
+    regs.some(r => r.mesh.userData.translucent && r.baseOpacity < 1 && r.baseOpacity === r.mesh.material.opacity),
+    regs.map(r => [r.mesh.userData.cls, r.mesh.userData.translucent, r.baseOpacity]));
+  check('6b: the kitchen runs are kitchen-run sized (real runs, not stubs)',
+    res.byId.base.triangles > 200 && res.byId.wallrun.triangles > 100, [res.byId.base.triangles, res.byId.wallrun.triangles]);
+  F.disposeFurniture(res);
 }
 
 // ---- 7. the attach sequence (A2) --------------------------------------------------
@@ -810,7 +886,8 @@ function sampleResult() {
       kept.filter(m => m.material.transparent).every(m => m.receiveShadow === false));
   }
   // The up-down beam cones specifically: faint, double-sided, no depth write,
-  // and never faded even on an exterior wall.
+  // and on an exterior wall they fade WITH it, from their own faint opacity
+  // (f7324d3f) -- never driven to 1.
   {
     const h = compile([{ id: 'u', room: 'r', type: 'sconce', wall: 1, centre: 200, elevation: 150, params: { kind: 'up-down' } }]);
     const res = build(h, ULTRA, { sconce });
@@ -818,8 +895,10 @@ function sampleResult() {
     check('up-down beam stays a faint translucent MeshBasicMaterial', beam && beam.material.transparent &&
       beam.material.opacity < 0.5 && beam.material.depthWrite === false && beam.material.side === THREE.DoubleSide,
       beam && [beam.material.opacity, beam.material.depthWrite, beam.material.side]);
-    check('translucent beam never joins the fade', beam && beam.userData.fadeWallId === null &&
-      F.fadeRegistrations(res).every(r => r.mesh !== beam));
+    const breg = beam && F.fadeRegistrations(res).find(r => r.mesh === beam);
+    check('translucent beam fades with its wall, returning to its own opacity', beam && beam.userData.fadeWallId === 1 &&
+      breg && breg.baseOpacity === beam.material.opacity && breg.baseOpacity < 0.5 && breg.baseDepthWrite === false,
+      breg && [breg.baseOpacity, breg.baseDepthWrite]);
     check('translucent parts are not in the shadow proxy', res.shadowProxies.length === 0);
   }
   // Glass and mirror parts from the palette (the cabinet/small-items shape).
