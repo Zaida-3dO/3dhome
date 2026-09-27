@@ -1540,6 +1540,18 @@ const buildFixture = (quality, opts) => quietly(() => F.buildFurnitureSync(THREE
   const dynReg = regs.find(reg => reg.mesh === pointer);
   check('dynamic: fadeRegistrations() includes the dynamic mesh with the item\'s own wall id',
     !!dynReg && dynReg.wallId === 1, dynReg);
+  // Round-3 review (item 059873ed): every dynamic part today is opaque (a
+  // clock's matte hands), so its fade registration must record the exact
+  // "safe, fully-opaque" base task f7324d3f's own glass/translucent lock
+  // exists to require -- baseOpacity: 1, baseDepthWrite: true -- not just
+  // "some truthy value" or `undefined` (which would coincidentally still
+  // fade correctly via wallFadeTarget's own `base == null -> 1` fallback,
+  // but is not what the code actually declares, and would silently stop
+  // being correct the moment a translucent dynamic part exists). Checked
+  // against the EXACT values, so an 0.25 mutation (a wrong-but-still-
+  // truthy base) cannot survive.
+  check('dynamic: the fade registration records the exact base values (opacity 1, depthWrite true), not just any truthy value',
+    dynReg.baseOpacity === 1 && dynReg.baseDepthWrite === true, dynReg);
 
   // A dynamic item with NO fade wall (free placement, short) must not be
   // marked transparent or registered -- this fix must not force every

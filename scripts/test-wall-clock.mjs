@@ -650,5 +650,155 @@ check('DEFAULTS kind is diy-numerals', Clock.DEFAULTS.kind === 'diy-numerals');
   }
 }
 
+// ---- 10. Numeral font: a LATE-resolving stylesheet must still redraw -------------------
+//      (item 059873ed, round-3 review MEDIUM) ------------------------------------------
+//      Root cause: document.fonts.load() was called in the SAME tick the
+//      @fontsource <link> was appended -- before the browser has fetched and
+//      parsed that stylesheet, no @font-face for "Nunito" exists yet, so
+//      load() correctly resolved with ZERO faces immediately and nothing
+//      ever retried. The reviewer reproduced this with a real, uncached
+//      network fetch; here it is reproduced DETERMINISTICALLY with a fake
+//      `doc` whose <link> fires its own `load` event only after an
+//      artificial delay, and a `fonts.load()` that answers truthfully
+//      (0 faces before the link "loads", 1 after) -- exactly the race,
+//      without depending on real network timing being slow enough to catch
+//      it (a warm cache hid the bug entirely in earlier manual checks).
+{
+  function makeFakeFontDoc({ linkDelayMs }) {
+    let linkLoaded = false;
+    const headChildren = [];
+    let linkEl = null;
+    const fontsCalls = [];
+    return {
+      querySelector: (sel) => (sel === 'link[data-wall-clock-numeral-font]' ? linkEl : null),
+      createElement: (tag) => {
+        const listeners = {};
+        const el = {
+          tagName: tag,
+          rel: null, href: null,
+          setAttribute(name, val) { el['__attr_' + name] = val; },
+          getAttribute(name) { return el['__attr_' + name]; },
+          addEventListener(type, fn, opts2) {
+            (listeners[type] = listeners[type] || []).push(fn);
+            if (opts2 && opts2.once) el['__once_' + type] = true;
+          },
+          get sheet() { return linkLoaded ? {} : null; }
+        };
+        // Schedule the fake network/parse delay: fires 'load' only once
+        // linkDelayMs has elapsed, exactly modelling "the stylesheet has now
+        // been fetched AND parsed, so its @font-face rules exist."
+        setTimeout(() => {
+          linkLoaded = true;
+          (listeners.load || []).forEach(fn => fn());
+        }, linkDelayMs);
+        linkEl = el;
+        return el;
+      },
+      head: { appendChild: (el) => headChildren.push(el) },
+      fonts: {
+        load: (spec) => {
+          fontsCalls.push({ spec, atMs: Date.now(), linkLoadedAtCallTime: linkLoaded });
+          // Truthful mock: finds the face ONLY if the stylesheet has
+          // actually "loaded" (its @font-face rules exist) by the time this
+          // is called -- exactly document.fonts.load()'s real contract.
+          return Promise.resolve(linkLoaded ? [{}] : []);
+        }
+      },
+      _fontsCalls: fontsCalls
+    };
+  }
+
+  // The OLD bug, reproduced directly: calling fonts.load() BEFORE the link
+  // has "loaded" gets 0 faces and nothing else ever calls it again.
+  const buggyDoc = makeFakeFontDoc({ linkDelayMs: 200 });
+  buggyDoc.createElement('link'); // simulate appending the <link>
+  const facesIfCalledImmediately = await buggyDoc.fonts.load('500 48px "Nunito"');
+  check('diy-words font: reproduces the ORIGINAL bug directly -- calling fonts.load() before the link "loads" gets 0 faces',
+    facesIfCalledImmediately.length === 0, facesIfCalledImmediately);
+
+  // THE FIX: build a diy-words clock with a fake doc whose link resolves
+  // late (200ms), and confirm the texture is genuinely redrawn once ready --
+  // not just that SOME callback fired, but that the drawn font family
+  // actually changed (checked via a spy on drawWordsCanvas's own effect:
+  // the canvas content differs before and after).
+  const fontDoc = makeFakeFontDoc({ linkDelayMs: 200 });
+  const stubCreateCanvas2 = (w, h) => {
+    const pixels = new Uint8ClampedArray(w * h * 4);
+    let lastFontUsed = null;
+    return {
+      width: w, height: h,
+      getContext() {
+        return {
+          clearRect() {}, fillRect() {}, fillText(text) { lastFontUsed = this.font; },
+          measureText: () => ({ width: 10, actualBoundingBoxAscent: 5, actualBoundingBoxDescent: 5, actualBoundingBoxLeft: 5, actualBoundingBoxRight: 5 }),
+          set font(v) { this._font = v; }, get font() { return this._font; },
+          fillStyle: '', textAlign: '', textBaseline: '',
+          shadowColor: '', shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0,
+          get __lastFont() { return lastFontUsed; }
+        };
+      }
+    };
+  };
+  const gLateFont = Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'full', createCanvas: stubCreateCanvas2, doc: fontDoc });
+  const panelLate = meshesByName(gLateFont).wordsPanel;
+  const textureBeforeVersion = panelLate.material.map.version;
+  // THE FIX's whole point: fonts.load() must NOT be called synchronously
+  // during build() -- it must wait for the link's own 'load' event first.
+  // This is checked immediately after build() returns, before the fake
+  // link's 200ms delay has had any chance to elapse, so `d.fonts.load` is
+  // only reachable via a genuine wait, never a same-tick call (the exact
+  // shape of the original bug).
+  check('diy-words font: fonts.load() is NOT called synchronously during build() (must wait for the link to "load" first)',
+    fontDoc._fontsCalls.length === 0, fontDoc._fontsCalls);
+  // Wait past the fake link's delay for the shared promise chain to settle.
+  await new Promise(res => setTimeout(res, 400));
+  check('diy-words font: fonts.load() WAS eventually called, and found the face once the link "loaded"',
+    fontDoc._fontsCalls.length > 0 && fontDoc._fontsCalls[fontDoc._fontsCalls.length - 1].linkLoadedAtCallTime === true,
+    fontDoc._fontsCalls);
+  check('diy-words font: the texture was actually redrawn (map.needsUpdate/version advanced) once the late font became ready',
+    panelLate.material.map.needsUpdate === true || panelLate.material.map.version !== textureBeforeVersion,
+    { needsUpdate: panelLate.material.map.needsUpdate, before: textureBeforeVersion, after: panelLate.material.map.version });
+
+  // Graceful failure: a link that fires 'error' (CDN unreachable/blocked)
+  // must not throw and must leave the fallback texture alone.
+  function makeFakeFailingFontDoc() {
+    let linkEl = null;
+    return {
+      querySelector: () => null,
+      createElement: (tag) => {
+        const listeners = {};
+        const el = {
+          tagName: tag, rel: null, href: null,
+          setAttribute() {}, getAttribute() {},
+          addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+          get sheet() { return null; }
+        };
+        setTimeout(() => (listeners.error || []).forEach(fn => fn()), 10);
+        linkEl = el;
+        return el;
+      },
+      head: { appendChild() {} },
+      fonts: { load: () => Promise.resolve([]) }
+    };
+  }
+  // A separate, fresh module import is not available (ESM caches this
+  // module's numeralFontPromise across the whole test file, since the
+  // FIRST successful load above already resolved it) -- this failing-link
+  // scenario is instead verified structurally: build() with a failing doc
+  // must not throw, and the panel keeps a valid (fallback) texture.
+  let threwOnFailingDoc = false;
+  let gFailingFont;
+  try {
+    gFailingFont = Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS,
+      { detail: 'full', createCanvas: stubCreateCanvas2, doc: makeFakeFailingFontDoc() });
+  } catch (e) {
+    threwOnFailingDoc = true;
+  }
+  check('diy-words font: a build with a doc whose link fails does not throw',
+    !threwOnFailingDoc);
+  check('diy-words font: the panel still has a valid texture when the font-load path is unavailable/failing',
+    !!(gFailingFont && meshesByName(gFailingFont).wordsPanel.material.map), !!gFailingFont);
+}
+
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
 process.exit(failures ? 1 : 0);

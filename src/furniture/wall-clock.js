@@ -512,42 +512,106 @@ const Y_MARGIN_R = 1.3;     // top/bottom edge, past the "12"/"6" numerals' ink+
 // licence font... unless [fetched] from an allowed CDN" rule.
 const NUMERAL_FONT_FAMILY = 'Nunito';
 const NUMERAL_FONT_CSS_URL = 'https://cdn.jsdelivr.net/npm/@fontsource/nunito@5.0.8/500.css';
-let numeralFontLoadStarted = false;
+// One shared promise for the whole page, created the first time any clock
+// asks for the font and reused by every caller after that -- see
+// numeralFontReady()'s own doc comment for why a promise, not a boolean.
+let numeralFontPromise = null;
 
 /**
- * Kick off loading the real Nunito 500 face, once per page, and call
- * `onReady` (which should redraw and re-upload every diy-words texture
- * currently on screen) once it resolves. Safe to call from Node (no-op,
- * `onReady` never fires) and safe to call repeatedly (only the first call
- * actually starts a fetch; every call still gets its own onReady once the
- * shared load settles, since `document.fonts.load` itself is idempotent
- * and cheap to call again for an already-loaded face).
+ * Round 3 review (item 059873ed, code_review b3a0eece): the ORIGINAL
+ * version of this function called `document.fonts.load()` in the SAME
+ * synchronous tick it appended the @fontsource `<link>`. Per spec,
+ * `document.fonts.load()` only loads a face that some already-parsed CSS
+ * has declared via `@font-face` -- until the browser has fetched and
+ * parsed the stylesheet the `<link>` points at, no `@font-face` for
+ * "Nunito" exists yet, so `load()` correctly resolved with an EMPTY array
+ * immediately, and nothing ever retried. The reviewer reproduced this three
+ * ways, including a live house with two clocks where the first-built clock
+ * (a cold cache, the stylesheet still in flight when it called `load()`)
+ * was left permanently on the Segoe UI Semibold fallback while a second
+ * clock built moments later happened to get Nunito -- entirely dependent
+ * on timing, not something a caller could rely on.
+ *
+ * FIX: wait for the `<link>` element's own `load` event first -- which
+ * fires only once the browser has actually fetched AND PARSED the
+ * stylesheet, so its `@font-face` rules are registered by the time this
+ * resolves -- and only THEN call `document.fonts.load()`. This is done
+ * ONCE per page behind a single shared promise (not per clock instance),
+ * so every clock's redraw awaits the SAME settled outcome rather than each
+ * clock racing its own `document.fonts.load()` call against the one
+ * `<link>` fetch. A `<link>` firing `error` (CDN unreachable/blocked), or
+ * `document.fonts.load()` itself rejecting or resolving with zero faces
+ * (a malformed stylesheet, or a browser without the font installed even
+ * after parsing), resolves the shared promise to `false` rather than
+ * rejecting it -- every caller awaits gracefully and keeps the fallback
+ * stack, never throws.
  *
  * Uses `<link rel="stylesheet">` (not the CSS Font Loading API's `FontFace`
  * constructor with a hand-written @font-face) because @fontsource's own
  * CSS already declares the unicode-range-split @font-face rules its files
  * need -- re-deriving that here would be a second copy to keep in sync with
  * an upstream package this module does not otherwise depend on.
+ *
+ * @param {Object} [doc]  injection point for `document` (round-3 review:
+ *   the FIX itself is timing-sensitive -- a real browser's CDN fetch is
+ *   often fast enough on a warm cache to hide the very race this exists to
+ *   close -- so scripts/test-wall-clock.mjs drives this with a fake `doc`
+ *   whose `<link>`'s `load` event fires on a controlled delay, exactly
+ *   reproducing the reviewer's "stylesheet not parsed yet" scenario
+ *   deterministically instead of hoping a real network is slow enough).
+ *   Defaults to the global `document`.
+ * @returns {Promise<boolean>|null} resolves true once Nunito 500 is
+ *   genuinely usable, false if loading failed for any reason; null if no
+ *   usable document is available at all (plain Node with no doc injected).
  */
-function loadNumeralFont(onReady) {
-  if (typeof document === 'undefined' || typeof document.fonts === 'undefined') return; // Node: no-op
-  if (!numeralFontLoadStarted) {
-    numeralFontLoadStarted = true;
-    if (!document.querySelector('link[data-wall-clock-numeral-font]')) {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = NUMERAL_FONT_CSS_URL;
-      link.setAttribute('data-wall-clock-numeral-font', '1');
-      document.head.appendChild(link);
+function numeralFontReady(doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null);
+  if (!d || typeof d.fonts === 'undefined') return null; // Node, no doc injected: nothing to load
+  if (numeralFontPromise) return numeralFontPromise;
+
+  const linkLoaded = new Promise((resolve) => {
+    const existing = d.querySelector('link[data-wall-clock-numeral-font]');
+    if (existing) {
+      // Another instance already appended it. If the browser already
+      // finished loading it (readyState isn't standard on <link>, so this
+      // is inferred from sheet being populated), do not wait for an
+      // 'load' event that already fired and will never fire again.
+      if (existing.sheet) { resolve(true); return; }
+      existing.addEventListener('load', () => resolve(true), { once: true });
+      existing.addEventListener('error', () => resolve(false), { once: true });
+      return;
     }
-  }
-  // document.fonts.load() resolves once the named face is usable -- it
-  // triggers (or joins) the actual network fetch the <link> above declared,
-  // and resolves even if some OTHER caller already loaded it first.
-  document.fonts.load('500 48px "' + NUMERAL_FONT_FAMILY + '"').then(
-    (faces) => { if (faces && faces.length && typeof onReady === 'function') onReady(); },
-    () => { /* CDN unreachable or blocked -- the fallback stack stays, no crash */ }
-  );
+    const link = d.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = NUMERAL_FONT_CSS_URL;
+    link.setAttribute('data-wall-clock-numeral-font', '1');
+    link.addEventListener('load', () => resolve(true), { once: true });
+    link.addEventListener('error', () => resolve(false), { once: true });
+    d.head.appendChild(link);
+  });
+
+  numeralFontPromise = linkLoaded.then((stylesheetOk) => {
+    if (!stylesheetOk) return false;
+    // Only NOW does document.fonts.load() have a real @font-face to find --
+    // the stylesheet's CSS has been parsed and its rules registered.
+    return d.fonts.load('500 48px "' + NUMERAL_FONT_FAMILY + '"').then(
+      (faces) => !!(faces && faces.length),
+      () => false
+    );
+  });
+  return numeralFontPromise;
+}
+
+/**
+ * Call `onReady` (redraw and re-upload a diy-words texture) once the shared
+ * numeralFontReady() promise settles TRUE. Never calls `onReady` on Node or
+ * on a failed/unavailable load -- the caller's own fallback-font first draw
+ * is already correct in that case, so there is nothing to redraw.
+ */
+function loadNumeralFont(onReady, doc) {
+  const ready = numeralFontReady(doc);
+  if (!ready) return; // Node, no doc injected
+  ready.then((ok) => { if (ok && typeof onReady === 'function') onReady(); });
 }
 
 /**
@@ -773,7 +837,7 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
       if (!ctx) return;
       drawWordsCanvas(ctx, texPx, texHeightPx, p.numeralColor, NUMERAL_FONT_FAMILY);
       texture.needsUpdate = true;
-    });
+    }, opts && opts.doc);
   }
 
   // ---- Centre disc: a low-poly black cylinder covering the hands' pivot.

@@ -87,6 +87,55 @@ function importAliases(moduleSrc) {
 }
 
 /**
+ * Round-3 review (item 059873ed, optional low): blank out `//` line
+ * comments, `/* *\/` block comments, and string/template literals --
+ * replacing their CONTENTS with spaces character-for-character (so byte
+ * offsets used elsewhere, like `bareReferences`' match index, stay valid)
+ * -- so a comment or string that happens to contain e.g. `WallClock.` text
+ * cannot be mistaken for a real code reference, and a `const`/`let`/`var`
+ * mentioned only in a comment cannot be mistaken for a real redeclaration.
+ * Not a real tokenizer: does not handle a `/` that is division rather than
+ * the start of a comment (rare in this codebase's own style, and a false
+ * NEGATIVE from mishandling it -- treating real code as a comment -- is the
+ * safe failure direction, not a false positive), and does not handle an
+ * escaped quote inside a string with full generality beyond a single
+ * backslash-escape lookback (sufficient for this codebase's own strings).
+ */
+function stripCommentsAndStrings(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i], c2 = src[i + 1];
+    if (c === '/' && c2 === '/') {
+      let j = i;
+      while (j < n && src[j] !== '\n') { out += ' '; j++; }
+      i = j;
+    } else if (c === '/' && c2 === '*') {
+      let j = i;
+      while (j < n && !(src[j] === '*' && src[j + 1] === '/')) { out += (src[j] === '\n' ? '\n' : ' '); j++; }
+      if (j < n) { out += '  '; j += 2; } // consume the closing */
+      i = j;
+    } else if (c === '"' || c === '\'' || c === '`') {
+      const quote = c;
+      out += ' ';
+      let j = i + 1;
+      while (j < n && src[j] !== quote) {
+        if (src[j] === '\\') { out += (src[j] === '\n' ? '\n' : ' '); j++; } // skip the escaped character too
+        out += (src[j] === '\n' ? '\n' : ' ');
+        j++;
+      }
+      if (j < n) { out += ' '; j++; } // consume the closing quote
+      i = j;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
  * Split a classic script's source into its TOP-LEVEL function bodies, by
  * brace-counting from each `function NAME(...) {` or `NAME = (...) => {`
  * declaration at column 0 (this file's own convention -- every top-level
@@ -97,10 +146,11 @@ function importAliases(moduleSrc) {
  */
 function topLevelFunctionBodies(src) {
   const out = [];
-  const startRe = /^function\s+(\w+)\s*\([^)]*\)\s*\{/gm;
+  const startRe = /^function\s+(\w+)\s*\(([^)]*)\)\s*\{/gm;
   let m;
   while ((m = startRe.exec(src))) {
     const name = m[1];
+    const params = m[2];
     let depth = 1;
     let i = m.index + m[0].length;
     const start = i;
@@ -110,7 +160,14 @@ function topLevelFunctionBodies(src) {
       else if (c === '}') depth--;
       i++;
     }
-    out.push({ name, body: src.slice(start, i - 1) });
+    // Round-3 review (item 059873ed, optional low): a PARAMETER named the
+    // same as a module alias (e.g. `function f(WallClock) { ... }`) also
+    // legitimately shadows it, the same as a local `const`/`let`/`var`
+    // redeclaration -- prepending the parameter list to `body` here lets
+    // hasLocalRedeclaration's own `const|let|var NAME` regex miss it (a
+    // parameter isn't declared with any of those keywords), so it is
+    // instead checked directly by the caller via `params`.
+    out.push({ name, body: src.slice(start, i - 1), params });
   }
   return out;
 }
@@ -157,6 +214,18 @@ function hasLocalRedeclaration(body, name, beforeIndex) {
 }
 
 /**
+ * Does `params` (a function's own parameter list, e.g. `"a, WallClock, b"`)
+ * declare `name` as one of its parameters? A parameter shadows a
+ * module-scope alias exactly like a local redeclaration would -- checked as
+ * a whole comma-separated identifier so `WallClockOpts` does not falsely
+ * match a search for `WallClock`.
+ */
+function hasParamShadow(params, name) {
+  if (!params) return false;
+  return params.split(',').some(p => p.trim().split(/[\s=:{}[\]]/)[0] === name);
+}
+
+/**
  * Does the Babel script declare `const/let/var <name> =` at its OWN TOP
  * LEVEL -- i.e. a line starting at column 0, not inside any function body?
  * If so, every top-level function in the SAME script closes over it via
@@ -172,11 +241,12 @@ function hasTopLevelRedeclaration(babelSrc, name) {
   return re.test(babelSrc);
 }
 
-const files = fs.readdirSync(specDir).filter(f => f.endsWith('.html'));
-check('found spec pages to check', files.length > 0, files.length);
-
-files.forEach(file => {
-  const html = fs.readFileSync(path.join(specDir, file), 'utf8');
+/**
+ * Run the whole scope check against one page's HTML (a real file, or a
+ * synthetic in-memory fixture for this script's own self-tests below).
+ * `label` is used only in check() names/details.
+ */
+function checkSpecHtml(label, html) {
   const moduleBlocks = moduleScriptBlocks(html);
   const babelBlocks = babelScriptBlocks(html);
   if (!moduleBlocks.length || !babelBlocks.length) return; // not this page's shape -- nothing to check
@@ -185,7 +255,12 @@ files.forEach(file => {
   moduleBlocks.forEach(src => importAliases(src).forEach(n => aliases.add(n)));
   if (!aliases.size) return;
 
-  babelBlocks.forEach(babelSrc => {
+  babelBlocks.forEach(rawBabelSrc => {
+    // Strip comments/strings ONCE, up front, so neither the brace-counting
+    // in topLevelFunctionBodies (a `{` inside a string or comment would
+    // otherwise miscount) nor the reference/redeclaration regexes below can
+    // be confused by one -- see stripCommentsAndStrings' own doc comment.
+    const babelSrc = stripCommentsAndStrings(rawBabelSrc);
     const fns = topLevelFunctionBodies(babelSrc);
     aliases.forEach(name => {
       // Pattern 1 (KitchenSpec.html's own shape): declared ONCE at the
@@ -193,7 +268,13 @@ files.forEach(file => {
       // ordinary closure scoping. If so, no per-function check is needed at
       // all for this alias in this file.
       if (hasTopLevelRedeclaration(babelSrc, name)) return;
-      fns.forEach(({ name: fnName, body }) => {
+      fns.forEach(({ name: fnName, body, params }) => {
+        // Pattern 3 (round-3 review, optional low): a function PARAMETER
+        // named the same as the alias shadows it for the whole body,
+        // exactly like a local redeclaration -- checked before scanning for
+        // references at all, since a shadowed name is never a real
+        // free-identifier reference to the module-scope alias.
+        if (hasParamShadow(params, name)) return;
         const refs = bareReferences(body, name);
         if (!refs.length) return;
         const firstRefIndex = refs[0];
@@ -202,14 +283,65 @@ files.forEach(file => {
         // function, before its first use here.
         const locallyDeclared = hasLocalRedeclaration(body, name, firstRefIndex);
         check(
-          file + ': ' + fnName + '() does not use the module-scope import alias "' + name + '" without a redeclaration in scope (its own body, or the script\'s top level)',
+          label + ': ' + fnName + '() does not use the module-scope import alias "' + name + '" without a redeclaration in scope (its own body, its own parameters, or the script\'s top level)',
           locallyDeclared,
-          { file, function: fnName, alias: name, referenceCount: refs.length }
+          { label, function: fnName, alias: name, referenceCount: refs.length }
         );
       });
     });
   });
-});
+}
+
+const files = fs.readdirSync(specDir).filter(f => f.endsWith('.html'));
+check('found spec pages to check', files.length > 0, files.length);
+files.forEach(file => checkSpecHtml(file, fs.readFileSync(path.join(specDir, file), 'utf8')));
+
+// ---- Self-test: the round-3 hardening against comments, strings and -----------------
+//      parameter shadowing (item 059873ed, optional low) -----------------------------
+//      Synthetic fixtures, not real spec pages -- exercises checkSpecHtml()
+//      directly against each false-positive shape the round-3 reviewer
+//      named, plus the real bug shape, to prove the hardening actually
+//      suppresses the false positives WITHOUT also suppressing the real one.
+{
+  const fixture = `
+<script type="module">
+  import * as WallClock from '../src/furniture/wall-clock.js';
+  window.__wallClock = WallClock;
+</script>
+<script type="text/babel">
+function commentRef() {
+  // this comment mentions WallClock.DIY_WORDS_DEFAULTS but is not code
+  return 1;
+}
+function stringRef() {
+  const s = "a string with WallClock.build inside it";
+  return s;
+}
+function paramShadow(WallClock) {
+  return WallClock.foo;
+}
+function realBug() {
+  return WallClock.DIY_WORDS_DEFAULTS;
+}
+</script>`;
+  // Intercept check() for the duration of this one call, so the ONE
+  // deliberately-triggered failure (proving realBug is still caught) does
+  // not leak into this script's own overall pass/fail exit code -- this
+  // fixture's outcome is verified and reported here, not left to fail the
+  // whole file.
+  const seen = [];
+  const realCheck = check;
+  check = (name, cond, detail) => { seen.push({ name, cond, detail }); }; // eslint-disable-line no-func-assign
+  try {
+    checkSpecHtml('self-test-fixture', fixture);
+  } finally {
+    check = realCheck; // eslint-disable-line no-func-assign
+  }
+  const failedNames = seen.filter(s => !s.cond).map(s => s.name);
+  const onlyRealBugFailed = failedNames.length === 1 && failedNames[0].includes('realBug()');
+  check('self-test: the hardened guard flags exactly the real bug (realBug) and none of the 3 known false-positive shapes (comment, string, parameter shadow)',
+    onlyRealBugFailed, { failedNames, totalChecksRun: seen.length });
+}
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
 process.exit(failures ? 1 : 0);
