@@ -2538,40 +2538,40 @@
 
     "furnitureParams_radiator": {
       "type": "object",
-      "description": "Params for `radiator` (src/furniture/radiator.js): a panel radiator with a smart TRV valve on a chosen corner and an optional shelf/full slatted cover. width/height/depth ALWAYS describe the OUTER ENVELOPE -- including any cover -- because scripts/validate-house.py's footprint/overlap/ceiling checks and src/furniture/place.js both read these three params with no idea a body/cover split exists; a smaller number here than what actually gets built would validate a placement that then collides with a wall or another item. The optional bodyWidth/bodyHeight/bodyDepth describe the RADIATOR BODY itself, defaulting to a snug fit against the envelope (== no cover) when omitted, and clamped STRICTLY INSIDE the cover's own interior when a cover is present -- below the shelf, inside the box's side panels, and clear of the box backing / shelf fascia lip by a real air gap -- not merely inside the outer envelope. There is no `elevation` param here: use the furniture ITEM's own top-level `elevation` field ($defs/furnitureItem.elevation) instead -- an earlier `params.elevation` was dead (nothing in the loader, placer or validator ever read it) and was removed rather than wired up, per item 2bc314c9. Each `default` equals radiator.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `radiator` (src/furniture/radiator.js): a white compact panel radiator with vertical ribs, a smart thermostatic valve on the END of the radiator at a chosen corner and a lockshield on the other end, pipes dropping from both, and an optional cover (a clip-on shelf with a raised front lip, or a framed slatted box). width/height/depth ALWAYS describe the WHOLE OUTER ENVELOPE -- body, end valves and cover; the pipes too, except that they continue `pipeDrop` cm below the bottom to reach the floor -- because scripts/validate-house.py's footprint/overlap/ceiling checks and src/furniture/place.js read these three params with no idea a body/valve/cover split exists. The end valves need room beside the body (12.1 cm on the smart-valve end, 5.9 cm on the other), so the default 98-wide envelope holds an 80-wide body. The optional bodyWidth/bodyHeight/bodyDepth describe the RADIATOR BODY itself, defaulting to a snug fit (the largest body the envelope leaves room for) and clamped strictly inside any cover. There is no `elevation` param here: a wall-hung radiator is placed by the furniture ITEM's own top-level `elevation` field ($defs/furnitureItem.elevation) -- an earlier `params.elevation` was dead and was removed, per item 2bc314c9. `bodyElevation` is different: it lifts the body INSIDE the envelope, for a floor-standing box cover. Each `default` equals radiator.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 80,
-          "description": "cm, the OUTER ENVELOPE's width (always -- includes any cover), along the wall / the item's local x."
+          "default": 98,
+          "description": "cm, the OUTER ENVELOPE's width along the wall / the item's local x: the body, the room for both end valves, any shelf overrun, or the box cover."
         },
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 60,
-          "description": "cm, the OUTER ENVELOPE's height (always -- includes any cover), from the item's own local floor (y=0) to its top. Use the furniture item's own top-level `elevation` field to raise it off the room floor -- there is no params.elevation here."
+          "description": "cm, the OUTER ENVELOPE's height (always -- includes any cover and any bodyElevation), from the item's own local floor (y=0) to its top. Use the furniture item's own top-level `elevation` field to raise it off the room floor -- there is no params.elevation here."
         },
         "depth": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 12,
-          "description": "cm, the OUTER ENVELOPE's wall-to-front distance (always -- includes any cover)."
+          "description": "cm, the OUTER ENVELOPE's wall-to-front distance (always -- includes any cover). A shelf's front edge sits at this depth, overhanging the radiator's face."
         },
         "bodyWidth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "cm, the RADIATOR BODY's own width. Optional: defaults to a snug fit == `width` when omitted (the no-cover case). Clamped DOWN to fit strictly inside the cover's own interior (inside the box's side panels, with a real air gap) whenever a cover is present, and to `width` regardless -- the body cannot exceed the envelope."
+          "description": "cm, the RADIATOR BODY's own width. Optional: defaults to a snug fit -- the envelope width minus the room both end valves (18 cm) or a longer shelf overrun need, and minus the box's side panels for a 'box' cover. A larger value is clamped down to that."
         },
         "bodyHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "cm, the RADIATOR BODY's own height. Optional: defaults to a snug fit == `height` when omitted. Clamped DOWN to fit strictly below the shelf (with a real air gap) whenever any cover is present, and to `height` regardless."
+          "description": "cm, the RADIATOR BODY's own height. Optional: defaults to a snug fit -- the envelope height minus bodyElevation and minus what sits on top (3.6 cm for a shelf, 3 cm for a box's top board and clearance). A larger value is clamped down to that."
         },
         "bodyDepth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "cm, the RADIATOR BODY's own wall-to-front distance. Optional: defaults to a snug fit == `depth` when omitted. Clamped DOWN to `depth`, and further clamped down whenever a cover is present so the body's own front face always clears the cover's interior by a real air gap: the box's backing panel for a 'box' cover, or the shelf's own fascia lip for a 'shelf' cover (never level with or ahead of either)."
+          "description": "cm, the RADIATOR BODY's own wall-to-front distance. Optional: defaults to a snug fit == `depth` with no cover, 1 cm less for a shelf (so the shelf overhangs the face), and 6.8 cm less for a box (so a real air gap stays in front of the body, behind the cover's backing)."
         },
         "thickness": {
           "type": "number",
@@ -2583,21 +2583,46 @@
           "type": "string",
           "enum": ["bottom-left", "bottom-right", "top-left", "top-right"],
           "default": "bottom-right",
-          "description": "Which corner of the radiator body carries the smart TRV valve head. The lockshield valve is always drawn on the diagonally opposite corner."
+          "description": "Which corner carries the smart valve. The valve sits on that corner's END of the radiator, pointing outward along the wall; the lockshield sits at the BOTTOM of the other end, where the return pipe comes up from the floor."
         },
         "color": {
           "$ref": "#/$defs/hexColor",
-          "default": "#f2f2ef"
+          "default": "#f4f4f1"
         },
         "cover": {
           "type": "string",
           "enum": ["none", "shelf", "box"],
           "default": "none",
-          "description": "`shelf` = a wooden shelf on top with a short downward fascia lip, sides open. `box` = a full slatted enclosure (top shelf plus front, side and backing panels with vertical slats -- the backing keeps the radiator body from showing through the slat gaps, with a guaranteed real air gap ahead of the body). The item's overall footprint is ALWAYS width/height/depth (the envelope), cover or not."
+          "description": "`shelf` = a clip-on wooden shelf resting on the radiator, with a raised lip along its front edge, overhanging the face; the sides stay open. `box` = a framed slatted cover standing on the floor: a top board overhanging the carcass, side panels, stiles that run to the floor as legs, a vent slot, vertical slats with a dark backing behind them, and an open kick-out under the bottom rail. The item's overall footprint is ALWAYS width/height/depth (the envelope), cover or not."
         },
         "coverColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#c8a878"
+          "default": "#d9b27a",
+          "description": "The shelf's wood colour. A 'box' cover is white unless this is set away from its default."
+        },
+        "bodyElevation": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "description": "cm, the body's bottom INSIDE the envelope. Not a placement elevation (that is the item's own top-level `elevation`): it is for a floor-standing box cover, whose envelope starts at the floor while the radiator inside hangs higher. The pipes always run down to the envelope's bottom."
+        },
+        "shelfExtendLeft": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "description": "cm, how far a 'shelf' cover runs past the body's left end (seen from the front). The envelope must leave room for it; ignored for other covers."
+        },
+        "shelfExtendRight": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "description": "cm, how far a 'shelf' cover runs past the body's right end. Ignored for other covers."
+        },
+        "pipeDrop": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "description": "cm the pipes continue BELOW the item's own bottom (y=0), so they reach the room floor. Set it equal to the item's top-level `elevation` (17 for a radiator hung 17 cm up; 0 for a floor-standing box cover). The pipes are the ONE part allowed outside width/height/depth, and only downward by exactly this much: they hug the wall beside the radiator's ends, inside the envelope's width and depth, so the footprint and ceiling checks are unaffected."
         }
       },
       "additionalProperties": false
