@@ -359,119 +359,114 @@ const lum = c => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
   check('bench low: still four legs and a seat', byName(low, 'bench:leg').length === 4 && byName(low, 'bench:seat').length === 1);
 }
 
-// ---- ottoman -------------------------------------------------------------------
+// ---- ottoman: a channel-tufted storage bench --------------------------------------
 {
   const { DEFAULTS: D, build } = DP.TYPES['ottoman'];
   const g = build(THREE, Object.assign({}, D), { detail: 'full' });
   g.updateMatrixWorld(true);
+  const box = wbox(g);
+  check('ottoman: bbox == width x height x depth (92 x 40 x 46)',
+    near((box.max.x - box.min.x) * 100, 92, 0.05) && near((box.max.y - box.min.y) * 100, 40, 0.05) &&
+    near((box.max.z - box.min.z) * 100, 46, 0.05) && D.width === 92 && D.depth === 46 && D.height === 40,
+    [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z]);
+  check('ottoman: back at z=0, bottom at y=0', near(box.min.z, 0, 1e-4) && near(box.min.y, 0, 1e-4), [box.min.z, box.min.y]);
 
-  // 4 legs in the leg colour.
-  const legs = meshesByColor(g, colorInt(D.legColor));
-  check('exactly 4 legs', legs.length === 4, legs.length);
-
-  // The lid ridges: found as the higher-triangle-count meshes in the body
-  // colour (the flat lid base and the body box are 12-triangle boxes; a
-  // ridge is a cylinder segment with far more).
-  const bodyColorInt = colorInt(D.color);
-  const bodyParts = meshesByColor(g, bodyColorInt);
-  const ridges = bodyParts.filter(m => {
-    const idx = m.geometry.index;
-    const tri = idx ? idx.count / 3 : m.geometry.attributes.position.count / 3;
-    return tri > 12;
-  });
-  check('channelCount ridges drawn', ridges.length === D.channelCount, ridges.length);
-
-  // Evenly spaced, flush with the lid edges. The lid itself is inset 2% from
-  // the full ottoman width (widthM * 0.98), and the ridge row is fit to that
-  // inset lid width, matching the builder's own layout maths exactly. Each
-  // ridge is built as an extruded semicircle centred on its own local x=0
-  // (see buildOttoman), so its bbox centre IS the anchor -- unlike the old
-  // rotated-half-cylinder version, no separate "anchor vs. bbox" distinction
-  // is needed here any more.
-  const xsCentre = ridges.map(m => {
-    const b = new THREE.Box3().setFromObject(m);
-    return (b.min.x + b.max.x) / 2;
-  }).sort((a, b) => a - b);
-  const rowWidthM = (D.width / 100) * 0.98;
-  const nominal = rowWidthM / D.channelCount;
-  check('first ridge centred half a pitch from the left edge of the inset lid',
-    near(xsCentre[0], -rowWidthM / 2 + nominal / 2, 0.002), xsCentre[0]);
-  check('last ridge centred half a pitch from the right edge of the inset lid',
-    near(xsCentre[xsCentre.length - 1], rowWidthM / 2 - nominal / 2, 0.002), xsCentre[xsCentre.length - 1]);
-
-  // Ridges STAND PROUD of the flat lid top, round face UP -- a reviewer
-  // found a real bug here: the previous version was rotated with the round
-  // face sideways and sat fully INSIDE the lid box (an earlier version of
-  // this test asserted "never stand proud", which locked that bug in). The
-  // flat lid slab is the other body-colour part that is NOT a ridge (12
-  // triangles); ridges must rise clearly above its top face, and their own
-  // cross-section must be a dome (wider at the base, in local width, than
-  // exactly the same all the way up would suggest a flat-sided box instead
-  // of a rounded profile -- checked via the geometry's own bounding sphere
-  // vs. bounding box ratio being consistent with a genuine curve).
-  // The flat lid slab is the non-ridge body-colour part whose OWN top face
-  // (max.y) sits closest to (just below) the ridges' own bottom -- i.e. the
-  // part the ridges are actually resting on, not just any part below them.
-  const nonRidgeParts = bodyParts.filter(m => !ridges.includes(m));
-  const ridgeMinYForLid = Math.min(...ridges.map(m => new THREE.Box3().setFromObject(m).min.y));
-  const lidBase = nonRidgeParts.reduce((best, m) => {
-    const top = new THREE.Box3().setFromObject(m).max.y;
-    if (top > ridgeMinYForLid + 0.005) return best; // above the ridges: not the lid
-    if (!best) return m;
-    const bestTop = new THREE.Box3().setFromObject(best).max.y;
-    return top > bestTop ? m : best;
-  }, null);
-  check('found the flat lid base for this check', !!lidBase);
-  const lidTopY = new THREE.Box3().setFromObject(lidBase).max.y;
-  const ridgeBoxes = ridges.map(m => new THREE.Box3().setFromObject(m));
-  const ridgeMinY = Math.min(...ridgeBoxes.map(b => b.min.y));
-  const ridgeMaxY = Math.max(...ridgeBoxes.map(b => b.max.y));
-  check('ridges sit flush with (not sunk below) the lid top',
-    near(ridgeMinY, lidTopY, 0.002), { ridgeMinY, lidTopY });
-  check('ridges STAND PROUD of the lid top (round face up, not sunk inside it)',
-    ridgeMaxY > lidTopY + 0.002, { ridgeMaxY, lidTopY });
-
-  // Ridges run the long way (front-to-back), not across the width: each
-  // ridge's own z-extent should span most of the ottoman's depth.
-  const depthM = D.depth / 100;
-  ridgeBoxes.forEach((b, i) => {
-    const zSpan = b.max.z - b.min.z;
-    check('ridge ' + i + ' runs the long way (z-extent close to the full depth)',
-      zSpan > depthM * 0.8, { zSpan, depthM });
-  });
-
-  // The overall envelope height still equals DEFAULTS.height even though
-  // the ridges now genuinely protrude above the flat lid (the protrusion is
-  // budgeted for, not additional to DEFAULTS.height) -- already covered by
-  // the generic contract test, re-asserted here for this specific geometry.
-  const overallBox = new THREE.Box3().setFromObject(g);
-  check('overall height still equals DEFAULTS.height with proud ridges',
-    near((overallBox.max.y - overallBox.min.y) * 100, D.height, 0.5),
-    (overallBox.max.y - overallBox.min.y) * 100);
-
-  // A custom channelCount still lays out correctly.
-  const g2 = build(THREE, Object.assign({}, D, { channelCount: 3 }), { detail: 'full' });
-  const ridges2 = meshesByColor(g2, bodyColorInt).filter(m => {
-    const idx = m.geometry.index;
-    const tri = idx ? idx.count / 3 : m.geometry.attributes.position.count / 3;
-    return tri > 12;
-  });
-  check('a custom channelCount is honoured', ridges2.length === 3, ridges2.length);
-
-  // Low-detail triangle budget: the extruded-ridge fix must not make the
-  // low-detail build expensive. Reviewer's target: under 200 triangles.
-  function totalTris(group) {
-    let n = 0;
-    group.traverse(o => {
-      if (!o.isMesh) return;
-      const idx = o.geometry.index;
-      n += idx ? idx.count / 3 : o.geometry.attributes.position.count / 3;
-    });
-    return n;
+  // The layout of the lid: sideChannels rolls, a wide centre panel, the same
+  // rolls mirrored -- narrowing toward each end, never widening.
+  const widths = DP.ottomanChannelWidths(D);
+  check('ottoman: 4 + 1 + 4 channels', widths.length === 2 * D.sideChannels + 1 && D.sideChannels === 4, widths);
+  const mid = (widths.length - 1) / 2;
+  check('ottoman: centre panel is the widest, by far', widths.every((w, i) => i === mid || widths[mid] > 2 * w), widths);
+  for (let k = 0; k < mid; k++) {
+    check('ottoman: rolls narrow toward the left end (' + k + ')', widths[k] < widths[k + 1], widths);
+    check('ottoman: symmetric (' + k + ')', near(widths[k], widths[widths.length - 1 - k], 1e-9), widths);
   }
+  check('ottoman: channels fill the lid inside a 1.5 cm rim', near(widths.reduce((a, b) => a + b, 0), D.width - 3, 1e-6));
+
+  const channels = byName(g, 'ottoman:channel');
+  const panel = byName(g, 'ottoman:panel');
+  const lid = byName(g, 'ottoman:lid')[0];
+  const base = byName(g, 'ottoman:base')[0];
+  const tab = byName(g, 'ottoman:tab')[0];
+  const feet = byName(g, 'ottoman:foot');
+  check('ottoman: 8 side rolls and one centre panel drawn', channels.length === 8 && panel.length === 1, [channels.length, panel.length]);
+  check('ottoman: has a lid, a box and a pull-tab', !!lid && !!base && !!tab);
+
+  // Rolls run front to back (their long axis is z), sit ON the lid top and
+  // rise above it; the tallest reaches the full height.
+  const lidTop = wbox(lid).max.y;
+  const rolls = channels.concat(panel).map(wbox);
+  rolls.forEach((b, i) => {
+    check('ottoman: roll ' + i + ' runs front to back', (b.max.z - b.min.z) > 3 * Math.min(b.max.x - b.min.x, 0.1) &&
+      (b.max.z - b.min.z) > D.depth / 100 * 0.8, [b.max.x - b.min.x, b.max.z - b.min.z]);
+    check('ottoman: roll ' + i + ' sits on the lid', near(b.min.y, lidTop, 1e-4), [b.min.y, lidTop]);
+    check('ottoman: roll ' + i + ' stands proud of the lid', b.max.y > lidTop + 0.01, [b.max.y, lidTop]);
+  });
+  check('ottoman: the centre panel crown is the top of the ottoman', near(wbox(panel[0]).max.y, D.height / 100, 1e-4));
+  // The rolls start behind a flat front band (the photo's), not at the lid edge.
+  check('ottoman: rolls stop short of the front, leaving a band', rolls.every(b => b.max.z < D.depth / 100 - 0.04));
+  // The centre panel is flat-topped (a wide padded panel), a roll a dome: a
+  // vertex more than a quarter width off its centre line is still at full
+  // crown height (on a dome only the centre line reaches it).
+  {
+    const pos = panel[0].geometry.attributes.position;
+    const half = (wbox(panel[0]).max.x - wbox(panel[0]).min.x) / 2;
+    let flat = false;
+    for (let i = 0; i < pos.count; i++) {
+      if (Math.abs(pos.getX(i)) > half * 0.5 && near(pos.getY(i), D.channelDepth / 100, 1e-4)) flat = true;
+    }
+    check('ottoman: the centre panel is flat-topped across its middle', flat);
+  }
+
+  // The lid overhangs the box on every side.
+  const bb = wbox(base), lb = wbox(lid);
+  check('ottoman: lid overhangs the box all round',
+    lb.min.x < bb.min.x - 0.005 && lb.max.x > bb.max.x + 0.005 && lb.min.z < bb.min.z - 0.005 && lb.max.z > bb.max.z + 0.005,
+    { lid: [lb.min.x, lb.max.x, lb.min.z, lb.max.z], base: [bb.min.x, bb.max.x, bb.min.z, bb.max.z] });
+  check('ottoman: box meets the lid', near(bb.max.y, lb.min.y, 1e-4), [bb.max.y, lb.min.y]);
+  // The pull-tab: front centre, hanging just proud of the box front, under the lid.
+  const tb = wbox(tab);
+  check('ottoman: pull-tab at the front centre, proud of the box', near((tb.min.x + tb.max.x) / 2, 0, 1e-4) &&
+    tb.min.z >= bb.max.z - 1e-4 && tb.max.y <= lb.min.y + 0.006 && tb.max.y > lb.min.y - 0.01, [tb.min.z, bb.max.z, tb.max.y, lb.min.y]);
+  // No legs: four tiny feet under the box, recessed, 1.5 cm.
+  check('ottoman: four tiny feet, no legs', feet.length === 4 && feet.every(f => near(wbox(f).max.y * 100, 1.5, 0.01)), feet.length);
+  check('ottoman: feet recessed inside the box footprint', feet.every(f => {
+    const b = wbox(f); return b.min.x > bb.min.x && b.max.x < bb.max.x && b.min.z > bb.min.z && b.max.z < bb.max.z;
+  }));
+
+  // Velvet: a satin sheen and vertex-colour shading -- darker in the creases,
+  // lighter on the crowns.
+  check('ottoman: velvet uses the satin finish, teal', D.finish === 'satin' && lid.material.userData.finish === 'satin' &&
+    lid.material.color.b > lid.material.color.r * 2 && lid.material.color.g > lid.material.color.r * 2, D.color);
+  check('ottoman: velvet material is vertex-coloured', lid.material.vertexColors === true);
+  g.traverse(o => {
+    if (o.isMesh && o.material.vertexColors) check('ottoman: ' + o.name + ' carries vertex colours', !!o.geometry.attributes.color);
+  });
+  {
+    const geo = panel[0].geometry, pos = geo.attributes.position, col = geo.attributes.color;
+    let crest = 0, crease = 1;
+    for (let i = 0; i < pos.count; i++) {
+      if (pos.getY(i) > D.channelDepth / 100 - 1e-5) crest = Math.max(crest, col.getX(i));
+      if (pos.getY(i) < 1e-5) crease = Math.min(crease, col.getX(i));
+    }
+    check('ottoman: crowns lighter than creases', crest > crease + 0.2, [crest, crease]);
+  }
+
+  // Budget, and low detail keeps the silhouette and the channel rhythm.
   const low = build(THREE, Object.assign({}, D), { detail: 'low' });
-  const lowTris = totalTris(low);
-  check('low-detail ottoman is under 200 triangles', lowTris < 200, lowTris);
+  const caps = DP.TRIANGLE_CAPS['ottoman'];
+  check('ottoman: full within its triangle cap', tris(g) <= caps.full, [tris(g), caps.full]);
+  check('ottoman: low within its triangle cap', tris(low) <= caps.low, [tris(low), caps.low]);
+  const lowBox = wbox(low);
+  check('ottoman: low detail keeps the bbox', near(lowBox.max.x - lowBox.min.x, box.max.x - box.min.x, 1e-4) &&
+    near(lowBox.max.y, box.max.y, 1e-4) && near(lowBox.max.z, box.max.z, 1e-4));
+  check('ottoman: low detail keeps all 9 channels', byName(low, 'ottoman:channel').length === 8 && byName(low, 'ottoman:panel').length === 1);
+
+  // sideChannels is honoured, and 0 gives one full-width panel.
+  const g3 = build(THREE, Object.assign({}, D, { sideChannels: 3 }), { detail: 'full' });
+  check('ottoman: sideChannels 3 -> 6 rolls', byName(g3, 'ottoman:channel').length === 6);
+  const g0 = build(THREE, Object.assign({}, D, { sideChannels: 0 }), { detail: 'full' });
+  check('ottoman: sideChannels 0 -> just the panel', byName(g0, 'ottoman:channel').length === 0 && byName(g0, 'ottoman:panel').length === 1);
 }
 
 // ---- registry wiring (this module's own entries) -----------------------------

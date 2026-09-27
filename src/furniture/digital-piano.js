@@ -17,7 +17,7 @@
  * a lit display, speaker grilles and a small music rest. `piano-bench`: a
  * classic adjustable piano bench -- a button-tufted faux-leather seat on an
  * apron with an adjustment knob at each end, on four square tapered legs.
- * `ottoman`: a simple channel-tufted-lid ottoman. All generic, no brands or
+ * `ottoman`: a channel-tufted storage bench in velvet. All generic, no brands or
  * models -- the repo is public.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
@@ -57,7 +57,8 @@ const PIANO_DEFAULTS = Object.freeze({
 /** Per-type triangle budgets (perf audit): asserted by scripts/test-digital-piano.mjs. */
 export const TRIANGLE_CAPS = Object.freeze({
   'digital-piano': Object.freeze({ full: 1500, low: 300 }),
-  'piano-bench': Object.freeze({ full: 1500, low: 300 })
+  'piano-bench': Object.freeze({ full: 1500, low: 300 }),
+  'ottoman': Object.freeze({ full: 1500, low: 300 })
 });
 
 function resolvePianoParams(params) {
@@ -380,46 +381,150 @@ function buildPianoBench(THREE, params, opts) {
 // ottoman
 // ---------------------------------------------------------------------------
 
+/**
+ * Defaults, in cm: a channel-tufted storage bench, 92 x 46 x 40 as measured.
+ * A plain upholstered box on four tiny recessed feet, with a lid that
+ * overhangs it slightly all round and carries soft rolls running front to
+ * back: one wide flat-topped panel in the middle and `sideChannels` rolls
+ * each side of it, narrowing toward the ends.
+ */
 const OTTOMAN_DEFAULTS = Object.freeze({
   width: 92,
   depth: 46,
   height: 40,
-  channelCount: 5,
-  channelDepth: 1.5,
-  color: '#2e6e6b',   // teal velvet
-  legColor: '#3a2f28',
-  finish: 'matte'
+  sideChannels: 4,     // rolls each side of the centre panel
+  centreWidth: 27,     // the wide flat panel in the middle
+  channelDepth: 3.5,   // how far the rolls rise above the lid
+  lidThickness: 4,     // the lid slab under the rolls (its rounded edge is the piping)
+  lidOverhang: 1,      // the lid overhangs the box by this much all round
+  color: '#1f6f6c',    // teal plush velvet
+  footColor: '#1c1c1c',
+  finish: 'satin'      // velvet's soft sheen, between matte fabric and gloss
 });
+
+const OTTOMAN_FOOT_H = 1.5;      // cm, tiny square feet recessed under the box
+const OTTOMAN_FRONT_BAND = 5;    // cm of flat lid in front of the rolls (the photo's front band)
+const OTTOMAN_RIM = 1.5;         // cm of flat lid round the rolls at the back and the ends
 
 function resolveOttomanParams(params) {
   return Object.assign({}, OTTOMAN_DEFAULTS, params || {});
 }
 
-/** Build a velvet ottoman with a channel-tufted lid, on four short legs. */
+/**
+ * The widths (cm) of the lid's channels, left to right: `sideChannels`
+ * rolls, the centre panel, the same rolls mirrored. Side rolls narrow
+ * toward the ends (weights 1 down to 0.45), as in the photo. Exported for
+ * the tests.
+ */
+export function ottomanChannelWidths(params) {
+  const p = resolveOttomanParams(params);
+  const n = Math.max(0, Math.min(8, Math.round(p.sideChannels)));
+  const innerW = Math.max(1, p.width - 2 * OTTOMAN_RIM);
+  const centre = n === 0 ? innerW : Math.max(1, Math.min(p.centreWidth, innerW * 0.7));
+  const side = [];
+  if (n > 0) {
+    const weights = [];
+    for (let k = 0; k < n; k++) weights.push(n === 1 ? 1 : 1 - 0.55 * Math.pow(k / (n - 1), 1.3));
+    const sum = weights.reduce((a, b) => a + b, 0);
+    const perSide = (innerW - centre) / 2;
+    for (let k = 0; k < n; k++) side.push(perSide * weights[k] / sum); // k = 0 is next to the centre
+  }
+  return side.slice().reverse().concat([centre], side);
+}
+
+/**
+ * One soft roll lying on the lid, centred on x and z with its (open) flat
+ * underside at y = 0 -- it sits on the lid, so it needs no bottom. Its
+ * cross-section is a rounded rectangle with elliptical edges (horizontal
+ * radius r, vertical h), so a narrow roll is a full dome and a wide one a
+ * flat-topped panel; the ends round off the same way. Vertex colours shade
+ * it darker into the creases and lighter on the crown, which is how velvet
+ * catches the light.
+ */
+function ottomanRoll(THREE, w, len, h, arcSeg) {
+  function samples(half, r) {
+    const out = [];
+    for (let i = 0; i <= arcSeg; i++) {
+      const th = i / arcSeg * Math.PI / 2;
+      out.push([-half + r * (1 - Math.cos(th)), Math.sin(th)]);
+    }
+    const mirror = out.slice().reverse().map(([x, f]) => [-x, f]);
+    if (Math.abs(out[out.length - 1][0] - mirror[0][0]) < 1e-9) mirror.shift();
+    return out.concat(mirror);
+  }
+  const xs = samples(w / 2, Math.min(w / 2, h * 1.6));
+  const zs = samples(len / 2, Math.min(len / 2, h * 1.6));
+  const pos = [], col = [], idx = [];
+  for (let j = 0; j < zs.length; j++) {
+    for (let i = 0; i < xs.length; i++) {
+      const f = Math.min(xs[i][1], zs[j][1]);
+      pos.push(xs[i][0], h * f, zs[j][0]);
+      const shade = 0.68 + 0.32 * Math.pow(f, 0.6);
+      col.push(shade, shade, shade);
+    }
+  }
+  const nu = xs.length;
+  for (let j = 0; j < zs.length - 1; j++) {
+    for (let i = 0; i < nu - 1; i++) {
+      const a = j * nu + i, b = a + 1, c = a + nu, e = c + 1;
+      idx.push(a, c, b, b, c, e);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+/** Paint a whole geometry by vertex colour: `side` shade, blending to `top` where it faces up. */
+function shadeGeometry(THREE, geo, side, top) {
+  const nor = geo.attributes.normal;
+  const n = geo.attributes.position.count;
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const up = nor ? Math.max(0, nor.getY(i)) : 0;
+    const s = side + (top - side) * up;
+    col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = s;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return geo;
+}
+
+/**
+ * Build a channel-tufted storage ottoman in plush velvet: a plain box, a
+ * lid with a rounded (piped) edge that overhangs it slightly, soft rolls
+ * running front to back across the lid (a wide centre panel, narrower rolls
+ * toward each end), a small pull-tab at the front centre, and four tiny
+ * recessed feet (full detail only; at low detail the box goes to the floor).
+ */
 function buildOttoman(THREE, params, opts) {
   const p = resolveOttomanParams(params);
   const o = opts || {};
   const full = o.detail !== 'low';
+  const m = v => v * CM;
 
-  const widthM = p.width * CM, depthM = p.depth * CM, heightM = p.height * CM;
-  const legHM = Math.min(0.08, heightM * 0.18);
-  // The ridge crown adds `radius` of height ON TOP of the flat lid (it
-  // stands PROUD, per the fix below) -- so that budget is reserved up front
-  // from the overall height, alongside the legs, leaving `caseHM` for the
-  // legs-to-flat-lid-top stack. Without this the ridges would push the
-  // built bbox `radius` cm above DEFAULTS.height.
-  const channelDepthMEstimate = p.channelDepth * CM;
-  const ridgeBudget = Math.min(channelDepthMEstimate, heightM * 0.15);
-  const caseHM = heightM - legHM - ridgeBudget;
+  const W = p.width, D = p.depth, H = p.height;
+  const crown = Math.max(0.2, Math.min(p.channelDepth, H * 0.2));
+  const lidT = Math.max(1, Math.min(p.lidThickness, H * 0.25));
+  const ov = Math.max(0, Math.min(p.lidOverhang, W / 4, D / 4));
+  const footH = full ? Math.min(OTTOMAN_FOOT_H, H * 0.1) : 0;
+  const lidBottom = H - crown - lidT;
+  const baseH = lidBottom - footH;
 
   const group = new THREE.Group();
   group.name = 'furniture:ottoman';
 
-  const bodyMat = makeFinish(THREE, p.finish, p.color);
-  const legMat = makeFinish(THREE, 'matte', p.legColor);
+  // One velvet material, vertex-coloured: the merge honours a palette part's
+  // own vertex colours, so the crease/crown shading costs no extra draw.
+  const velvet = makeFinish(THREE, p.finish, p.color);
+  velvet.vertexColors = true;
+  const footMat = makeFinish(THREE, 'matte', p.footColor);
 
-  function addMesh(geo, mat, x, y, z) {
+  function add(geo, mat, name, x, y, z) {
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = 'ottoman:' + name;
     mesh.position.set(x, y, z);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -428,64 +533,49 @@ function buildOttoman(THREE, params, opts) {
     return mesh;
   }
 
-  // ---- legs, four corners -----------------------------------------------------
-  const legInset = 0.05;
-  const legR = 0.018;
-  for (const sx of [-1, 1]) {
-    for (const sz of [0.06, 1]) {
-      const legGeo = new THREE.CylinderGeometry(legR, legR * 0.8, legHM, full ? 12 : 4);
-      addMesh(legGeo, legMat, sx * (widthM / 2 - legInset), legHM / 2, sz === 0.06 ? legInset : depthM - legInset);
+  // ---- the box: plain upholstered sides, inset by the lid overhang ----------
+  const bw = W - 2 * ov, bd = D - 2 * ov;
+  const baseGeo = full
+    ? roundedBox(THREE, m(bw), m(baseH), m(bd), m(1), { bevel: 1, omit: ['-y'] })
+    : new THREE.BoxGeometry(m(bw), m(baseH), m(bd));
+  add(shadeGeometry(THREE, baseGeo, 0.9, 0.9), velvet, 'base', 0, m(footH + baseH / 2), m(D / 2));
+
+  // ---- feet: four tiny dark squares, recessed under the box -----------------
+  if (full && footH > 0) {
+    const fs = 3, inset = 4;
+    const footGeo = new THREE.BoxGeometry(m(fs), m(footH), m(fs));
+    for (const sx of [-1, 1]) {
+      for (const zz of [ov + inset, D - ov - inset]) {
+        add(footGeo, footMat, 'foot', m(sx * (bw / 2 - inset)), m(footH / 2), m(zz));
+      }
     }
   }
 
-  // ---- body, back at z=0 -------------------------------------------------------
-  const bodyGeo = new THREE.BoxGeometry(widthM, caseHM * 0.82, depthM);
-  addMesh(bodyGeo, bodyMat, 0, legHM + caseHM * 0.82 / 2, depthM / 2);
+  // ---- the lid: full width x depth, its rounded edge reads as the piping ----
+  const lidGeo = full
+    ? roundedBox(THREE, m(W), m(lidT), m(D), m(Math.min(1.6, lidT / 2)), { bevel: 2 })
+    : new THREE.BoxGeometry(m(W), m(lidT), m(D));
+  add(shadeGeometry(THREE, lidGeo, 0.86, 1.0), velvet, 'lid', 0, m(lidBottom + lidT / 2), m(D / 2));
 
-  // ---- channel-tufted lid: parallel ridges across the top, front-to-back ----
-  // The flat lid slab occupies the rest of `caseHM`; the ridges (below) then
-  // stand proud of ITS top by `ridgeBudget`, and that budget is exactly what
-  // was reserved above, so the whole assembly's top lands on heightM.
-  const lidHM = caseHM * 0.18;
-  const lidY = legHM + caseHM * 0.82 + lidHM / 2;
-  const lidBase = new THREE.BoxGeometry(widthM * 0.98, lidHM, depthM * 0.98);
-  addMesh(lidBase, bodyMat, 0, lidY, depthM / 2);
+  // ---- the pull-tab, hanging from the lid's front edge at the centre --------
+  const tabH = Math.min(6, baseH * 0.3);
+  const tabGeo = shadeGeometry(THREE, new THREE.BoxGeometry(m(3.2), m(tabH), m(0.4)), 0.8, 0.8);
+  add(tabGeo, velvet, 'tab', 0, m(lidBottom + 0.5 - tabH / 2), m(D - ov + 0.25));
 
-  // Built as an extruded semicircle profile rather than a rotated
-  // CylinderGeometry, to avoid ambiguity about which axis lands where after
-  // rotation: a Shape drawn in XY with a flat base at y=0 and a dome up to
-  // y=radius, extruded along Z, gives EXACTLY the frame a proud ridge needs
-  // with no rotation at all -- X centred `[-radius, radius]` (width), Y
-  // one-sided `[0, radius]` (flat bottom, domed top = proud height), Z
-  // centred `[-runLen/2, runLen/2]` (the run, front-to-back).
-  const n = Math.max(1, Math.round(p.channelCount));
-  const seg = full ? 10 : 2;
-  const nominalW = (widthM * 0.98) / n;
-  const creaseM = Math.min(0.01, nominalW * 0.06);
-  // The dome's radius is its own proud height (a semicircle profile), so it
-  // is capped at `ridgeBudget` -- the exact height reserved for it above --
-  // as well as at half its own share of the lid width, whichever is smaller.
-  const radius = Math.min(ridgeBudget, (nominalW - creaseM) / 2);
-  const runLen = depthM * 0.98;
-  const ridgeShape = new THREE.Shape();
-  ridgeShape.moveTo(-radius, 0);
-  ridgeShape.absarc(0, 0, radius, Math.PI, 0, true); // dome over the top (y > 0)
-  ridgeShape.lineTo(radius, 0);
-  ridgeShape.closePath();
-  const ridgeGeo = new THREE.ExtrudeGeometry(ridgeShape, { depth: runLen, bevelEnabled: false, curveSegments: seg });
-  ridgeGeo.translate(0, 0, -runLen / 2); // centre the extrusion on Z
-  const startX = -widthM * 0.98 / 2 + nominalW / 2;
-  for (let i = 0; i < n; i++) {
-    const cx = startX + i * nominalW;
-    const mesh = new THREE.Mesh(ridgeGeo, bodyMat);
-    // Flat bottom face sits exactly on the lid's flat top, so the dome
-    // stands PROUD of it (never sunk inside, never floating above it).
-    mesh.position.set(cx, lidY + lidHM / 2, depthM / 2);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    if (isKeptFinish(bodyMat.userData.finish)) mesh.userData.keep = true;
-    group.add(mesh);
-  }
+  // ---- the rolls: centre panel + side rolls, running front to back ----------
+  const widths = ottomanChannelWidths(p);
+  const centreIdx = (widths.length - 1) / 2;
+  const runLen = Math.max(1, D - OTTOMAN_FRONT_BAND - OTTOMAN_RIM);
+  const runZ = OTTOMAN_RIM + runLen / 2;
+  const arcSeg = full ? 3 : 1;
+  let x = -W / 2 + OTTOMAN_RIM;
+  widths.forEach((w, i) => {
+    const isCentre = i === centreIdx;
+    const h = isCentre ? crown : Math.min(crown, w * 0.5);
+    add(ottomanRoll(THREE, m(w), m(runLen), m(h), arcSeg), velvet,
+      isCentre ? 'panel' : 'channel', m(x + w / 2), m(lidBottom + lidT), m(runZ));
+    x += w;
+  });
 
   group.userData = { type: 'ottoman', params: p, detail: full ? 'full' : 'low' };
   return group;
