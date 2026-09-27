@@ -95,6 +95,9 @@ const LIGHT_MIX = {
 
 // Furniture per room. Wall-anchored: [type, side, frac, extra]. Free:
 // [type, 'at', [fx, fy], extra] with fx/fy fractions of the room rect.
+// A cabinet that overrides width or height must carry matching `fronts`: the
+// default fronts row is 100 cm wide and 228 cm tall, and a mismatch makes the
+// builder throw and the item be skipped (the render test asserts none is).
 const E = (color) => ({ finish: 'emissive', color });
 const FURNITURE = {
   living: [
@@ -131,7 +134,8 @@ const FURNITURE = {
     ['dining-chair', 'at', [0.65, 0.3], {}],
     ['dining-chair', 'at', [0.35, 0.7], { rotation: 180 }],
     ['dining-chair', 'at', [0.65, 0.7], { rotation: 180 }],
-    ['cabinet', 'W', 0.5, { params: { width: 90, height: 190, depth: 40, shelfLights: true } }],
+    ['cabinet', 'W', 0.5, { params: { width: 90, height: 190, depth: 40, shelfLights: true,
+      fronts: [{ height: 182, cells: [{ kind: 'glass' }, { kind: 'glass' }] }] } }],
     ['mirror', 'E', 0.5, { elevation: 120, params: { shape: 'round' } }],
     ['photo-frame', 'S', 0.5, { elevation: 140 }],
     ['plant', 'at', [0.9, 0.12], { params: { kind: 'wall-planter' } , priority: 'minor' }]
@@ -151,8 +155,10 @@ const FURNITURE = {
   bedroom: [
     ['bed', 'at', [0.5, 0.5], { rotation: 180 }],
     ['cabinet', 'E', 0.5, {}],
-    ['cabinet', 'S', 0.25, { params: { width: 45, height: 50, depth: 40, shelfLights: true } }],
-    ['cabinet', 'S', 0.75, { params: { width: 45, height: 50, depth: 40, shelfLights: true } }],
+    ['cabinet', 'S', 0.25, { params: { width: 45, height: 50, depth: 40, shelfLights: true,
+      fronts: [{ height: 42, cells: [{ kind: 'glass' }] }] } }],
+    ['cabinet', 'S', 0.75, { params: { width: 45, height: 50, depth: 40, shelfLights: true,
+      fronts: [{ height: 42, cells: [{ kind: 'glass' }] }] } }],
     ['wall-sconce', 'S', 0.15, { elevation: 110 }],
     ['wall-sconce', 'S', 0.85, { elevation: 110 }],
     ['tv', 'W', 0.5, { elevation: 100 }],
@@ -183,7 +189,7 @@ const FURNITURE = {
   ],
   guest: [
     ['bed', 'at', [0.5, 0.55], { rotation: 0, params: { width: 141 } }],
-    ['cabinet', 'W', 0.5, { params: { width: 120 } }],
+    ['cabinet', 'W', 0.5, { params: { width: 120, fronts: [{ height: 228, cells: [{ kind: 'mirror' }, { kind: 'mirror' }] }] } }],
     ['box', 'N', 0.7, { params: { width: 100, depth: 50, height: 75, color: '#9a7b5b' }, label: 'desk' }],
     ['tube-floor-lamp', 'at', [0.9, 0.2], {}],
     ['photo-frame', 'E', 0.4, { elevation: 140 }],
@@ -197,7 +203,7 @@ const FURNITURE = {
     ['box', 'N', 0.55, { params: { width: 60, depth: 60, height: 85, color: '#f0f0f0' }, label: 'dryer' }],
     ['shelf', 'E', 0.3, { elevation: 100 }],
     ['shelf', 'E', 0.7, { elevation: 140 }],
-    ['cabinet', 'W', 0.5, { params: { width: 80, height: 200 } }],
+    ['cabinet', 'W', 0.5, { params: { width: 80, height: 200, fronts: [{ height: 192, cells: [{ kind: 'door' }, { kind: 'door' }] }] } }],
     ['box', 'at', [0.5, 0.8], { priority: 'minor', params: { width: 50, depth: 40, height: 35, color: '#9c8a6e' }, label: 'crate' }],
     ['box', 'at', [0.7, 0.8], { priority: 'minor', params: { width: 50, depth: 40, height: 35, color: '#9c8a6e' }, label: 'crate' }],
     ['subwoofer', 'S', 0.3, { priority: 'minor' }]

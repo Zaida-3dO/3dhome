@@ -760,9 +760,14 @@ check('DEFAULTS kind is diy-numerals', Clock.DEFAULTS.kind === 'diy-numerals');
     { needsUpdate: panelLate.material.map.needsUpdate, before: textureBeforeVersion, after: panelLate.material.map.version });
 
   // Graceful failure: a link that fires 'error' (CDN unreachable/blocked)
-  // must not throw and must leave the fallback texture alone.
+  // must not throw and must leave the fallback texture alone. The fake
+  // dispatches its listeners the way a browser does -- an exception in one
+  // is reported (collected here), never thrown into the caller -- so a
+  // broken error handler shows up as a promise that never settles, and the
+  // time-limited await below fails on its assertion rather than by crashing.
+  const listenerErrors = [];
+  const failingFontsCalls = [];
   function makeFakeFailingFontDoc() {
-    let linkEl = null;
     return {
       querySelector: () => null,
       createElement: (tag) => {
@@ -773,31 +778,57 @@ check('DEFAULTS kind is diy-numerals', Clock.DEFAULTS.kind === 'diy-numerals');
           addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
           get sheet() { return null; }
         };
-        setTimeout(() => (listeners.error || []).forEach(fn => fn()), 10);
-        linkEl = el;
+        setTimeout(() => (listeners.error || []).forEach(fn => {
+          try { fn(); } catch (e) { listenerErrors.push(e); }
+        }), 10);
         return el;
       },
       head: { appendChild() {} },
-      fonts: { load: () => Promise.resolve([]) }
+      fonts: { load: (spec) => { failingFontsCalls.push(spec); return Promise.resolve([]); } }
     };
   }
-  // A separate, fresh module import is not available (ESM caches this
-  // module's numeralFontPromise across the whole test file, since the
-  // FIRST successful load above already resolved it) -- this failing-link
-  // scenario is instead verified structurally: build() with a failing doc
-  // must not throw, and the panel keeps a valid (fallback) texture.
+  // Item 1c7f8a6d: the module caches ONE font promise per page, and the
+  // late-font scenario above already resolved it -- so clear it, and run the
+  // failing link for real.
+  Clock._resetNumeralFontForTest();
+  const unhandled = [];
+  const onUnhandled = (reason) => { unhandled.push(reason); };
+  process.on('unhandledRejection', onUnhandled);
+  const failDoc = makeFakeFailingFontDoc();
   let threwOnFailingDoc = false;
   let gFailingFont;
   try {
     gFailingFont = Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS,
-      { detail: 'full', createCanvas: stubCreateCanvas2, doc: makeFakeFailingFontDoc() });
+      { detail: 'full', createCanvas: stubCreateCanvas2, doc: failDoc });
   } catch (e) {
     threwOnFailingDoc = true;
   }
   check('diy-words font: a build with a doc whose link fails does not throw',
     !threwOnFailingDoc);
+  const failMap = gFailingFont && meshesByName(gFailingFont).wordsPanel.material.map;
   check('diy-words font: the panel still has a valid texture when the font-load path is unavailable/failing',
-    !!(gFailingFont && meshesByName(gFailingFont).wordsPanel.material.map), !!gFailingFont);
+    !!failMap, !!gFailingFont);
+  const failVersionBefore = failMap ? failMap.version : null;
+  // The SAME shared promise the build started (the reset left it empty, so
+  // this is the failing doc's, not the earlier successful one).
+  const failPromise = Clock._numeralFontReadyForTest(failDoc);
+  const settled = await Promise.race([
+    failPromise.then(v => ({ v }), e => ({ rejected: e })),
+    new Promise(res => setTimeout(() => res({ timedOut: true }), 1000))
+  ]);
+  check('diy-words font: a failing link settles the shared font promise to FALSE within 1 s (no rejection, no hang)',
+    settled.v === false && listenerErrors.length === 0,
+    { settled, listenerErrors: listenerErrors.map(e => String(e)) });
+  await new Promise(res => setTimeout(res, 50));
+  check('diy-words font: a failing link never redraws (onReady not fired, texture version unchanged)',
+    !!failMap && failMap.version === failVersionBefore && failMap.needsUpdate !== true,
+    { before: failVersionBefore, after: failMap && failMap.version });
+  check('diy-words font: a failing link never asks document.fonts for the face', failingFontsCalls.length === 0,
+    failingFontsCalls);
+  process.off('unhandledRejection', onUnhandled);
+  check('diy-words font: the failing path raises no unhandled rejection', unhandled.length === 0,
+    unhandled.map(String));
+  Clock._resetNumeralFontForTest();
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
