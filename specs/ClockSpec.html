@@ -58,52 +58,70 @@
 
 <script type="text/babel">
 /* =====================================================================
-   CLOCK SPEC — a working wall clock, two styles. Renders the REAL builder
+   CLOCK SPEC — a working wall clock, three styles. Renders the REAL builder
    in src/furniture/wall-clock.js, not a re-implementation, so this page can
    never drift from what a house profile actually gets.
 
-   Modelled from a DIY wall clock seen in the living room (numerals/dots
-   stuck straight on the wall around a plain hands unit — no face disc), plus
-   a conventional `framed` alternative (a round face + rim + hands).
+   `diy-numerals` -- a DIY wall clock seen in the living room (numerals/dots
+   stuck straight on the wall around a plain hands unit -- no face disc).
+   `framed` -- a conventional round face + rim + hands.
+   `diy-words` -- a frameless stick-on clock design (item 059873ed,
+   2026-09-27): big numerals at 12/9/6, dots at 7/8/10/11, the words
+   "One" to "Five" to the right of the 1-5 ring positions, a centre disc,
+   tapered black hour/minute hands and a thin red second hand with a tail.
+   This is the DEFAULT preset below, per the item's acceptance criteria.
 
    Split out of DiningSpec.html (item 89769f2b, 2026-09-26) -- the clock
    shared no geometry with the dining table/chairs, just a spec page by
    coincidence of both being kitchen photos.
 
-   THE CLOCK IS LIVE. wall-clock.js exports setClockTime(group, date), a pure
-   helper that rotates the hour/minute/second hand meshes for a given Date.
-   This page calls it every second (via requestAnimationFrame) so the second
-   hand is visibly moving while you tweak everything else. The live 3D scene
-   is expected to call the SAME helper about once a MINUTE instead — see the
-   helper's own doc comment in wall-clock.js for why once-a-minute is enough
-   there and not wasted the way a per-frame call would be.
+   THE CLOCK IS LIVE, ALWAYS. wall-clock.js exports startLiveClock(group,
+   opts), which ticks setClockTime(group, date) once a second and resyncs
+   immediately whenever this tab becomes visible again (see its own doc
+   comment for why: a backgrounded tab's timers are throttled/suspended by
+   the browser, so without an explicit resync the clock would sit frozen,
+   then jump, rather than reading correctly the instant you look at it).
+   This page's own render loop (spec-three.jsx's ThreeView) already runs
+   continuously for the orbit camera regardless of the clock, so calling
+   setClockTime once a second here costs nothing extra; the live HOUSE scene
+   (render-on-demand) is the case startLiveClock's onTick hook exists for --
+   see wall-clock.js's own KNOWN GAP note for why that integration is not
+   yet wired up in src/home3d-scene.js.
    ===================================================================== */
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "preset": "custom",
-  "clockKind": "diy-numerals",
+  "preset": "photo-match-words",
+  "clockKind": "diy-words",
   "clockDiameter": 30,
   "clockDepth": 4,
   "clockFaceColor": "#f5f2ea",
   "clockRimColor": "#1a1a1a",
   "clockNumeralColor": "#1a1a1a",
   "clockHandColor": "#1a1a1a",
+  "clockSecondHandColor": "#c62828",
   "clockLive": true
 }/*EDITMODE-END*/;
 
 const CM = 0.01;
 
 // Presets: named combinations a reviewer can jump straight to, instead of
-// hand-dialling every slider back to a known-good state. "photo-match" is
-// the numbers actually read off this house's living-room photo; "framed" is
-// the conventional alternative style.
+// hand-dialling every slider back to a known-good state. "photo-match-words"
+// (the DEFAULT) is the owner's actual kitchen clock; "photo-match" is the
+// living-room diy-numerals photo; "framed" is the conventional alternative.
 const PRESETS = {
+  'photo-match-words': {
+    clockKind: 'diy-words', clockDiameter: 30, clockDepth: 4,
+    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#1a1a1a',
+    clockHandColor: '#1a1a1a', clockSecondHandColor: '#c62828'
+  },
   'photo-match': {
     clockKind: 'diy-numerals', clockDiameter: 30, clockDepth: 4,
-    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#1a1a1a', clockHandColor: '#1a1a1a'
+    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#1a1a1a',
+    clockHandColor: '#1a1a1a', clockSecondHandColor: '#1a1a1a'
   },
   'framed-clock': {
     clockKind: 'framed', clockDiameter: 34, clockDepth: 5,
-    clockFaceColor: '#f5f2ea', clockRimColor: '#3a2f22', clockNumeralColor: '#1a1a1a', clockHandColor: '#1a1a1a'
+    clockFaceColor: '#f5f2ea', clockRimColor: '#3a2f22', clockNumeralColor: '#1a1a1a',
+    clockHandColor: '#1a1a1a', clockSecondHandColor: '#1a1a1a'
   }
 };
 
@@ -125,8 +143,10 @@ function buildClockScene(t, group, THREE, ctx) {
   if (!WallClock) return;
 
   // A small backing wall behind the scene so "on the wall" reads clearly
-  // rather than floating in space.
-  const wallSpan = 2, wallHeight = 2.2;
+  // rather than floating in space. Widened for diy-words, whose envelope
+  // extends well past the ring diameter (the words to the right of it).
+  const wallSpan = t.clockKind === 'diy-words' ? 3.2 : 2;
+  const wallHeight = 2.2;
   const wall = new THREE.Mesh(
     new THREE.BoxGeometry(wallSpan, wallHeight, 0.1),
     new THREE.MeshStandardMaterial({ color: 0xece8e0, roughness: 0.95 })
@@ -135,33 +155,76 @@ function buildClockScene(t, group, THREE, ctx) {
   wall.receiveShadow = true;
   group.add(wall);
 
-  const clock = WallClock.build(THREE, {
-    width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
-    kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
-    numeralColor: t.clockNumeralColor, handColor: t.clockHandColor, time: '10:10'
-  }, { detail: 'full' });
+  // diy-words' own width/height are the WIDER full envelope (including the
+  // words), not the ring diameter -- width/height are derived by the
+  // builder from `diameter` for diy-words too (DIY_WORDS_DEFAULTS), so pass
+  // the ring diameter through `diameter` only and let the builder compute
+  // its own envelope, rather than forcing width=height=diameter as the
+  // other two kinds do.
+  const buildParams = t.clockKind === 'diy-words'
+    ? {
+        diameter: t.clockDiameter, depth: t.clockDepth, kind: t.clockKind,
+        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor,
+        secondHandColor: t.clockSecondHandColor, time: '10:10'
+      }
+    : {
+        width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
+        kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
+        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor,
+        secondHandColor: t.clockSecondHandColor, time: '10:10'
+      };
+  const clock = WallClock.build(THREE, buildParams, { detail: 'full' });
   clock.position.set(0, 1.15, wall.position.z + 0.05 + 0.001);
   group.add(clock);
   ctx.clockGroup = clock;
   ctx.WallClock = WallClock;
-}
 
-function animateClockScene(t, ctx) {
-  if (!t.clockLive || !ctx.clockGroup || !ctx.WallClock) return;
-  ctx.WallClock.setClockTime(ctx.clockGroup, new Date());
+  // ALWAYS shows the viewer's current local time (item 059873ed) --
+  // startLiveClock ticks once a second and resyncs on a visibilitychange to
+  // a visible tab; this page's own render loop already runs continuously
+  // (the orbit camera), so onTick has nothing extra to request here.
+  //
+  // The running timer is tracked in the MODULE-scope currentStopLiveClock,
+  // not on `ctx`: ThreeView's own rebuild effect deletes every key on `ctx`
+  // BEFORE calling buildModel again (see spec-three.jsx, "reset per-build
+  // context stash"), so a value stashed on ctx here would already be gone
+  // by the time the NEXT rebuild tried to read it back to stop the old
+  // timer -- a stale interval would keep ticking a disposed, geometry-freed
+  // group forever every time a tweak changes. This page only ever mounts
+  // one ThreeView, so one module-scope slot is enough; a page with more than
+  // one live clock at once would need to key this per clock instance
+  // instead.
+  if (currentStopLiveClock) currentStopLiveClock();
+  currentStopLiveClock = t.clockLive ? WallClock.startLiveClock(clock) : null;
+}
+let currentStopLiveClock = null;
+
+function animateClockScene() {
+  // Intentionally empty: the clock's own live-time updates are driven by
+  // startLiveClock's 1-second interval (started in buildClockScene), not by
+  // this per-frame animate callback -- see the header note on why.
 }
 
 // ============== Copy-JSON: the furniture[] entry this preset implies ==============
 function furnitureJSON(t) {
+  // diy-words derives its own (wider) width/height from `diameter` --
+  // params should NOT force width=height=diameter the way the other two
+  // kinds' entries do, or a house profile would clip the words.
+  const params = t.clockKind === 'diy-words'
+    ? {
+        diameter: t.clockDiameter, depth: t.clockDepth, kind: t.clockKind,
+        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor, secondHandColor: t.clockSecondHandColor
+      }
+    : {
+        width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
+        kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
+        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor
+      };
   const items = [
     {
       id: 'kitchen_wall_clock', room: 'kitchen', type: 'wall-clock',
       wall: 0, centre: 0, offset: 0, elevation: 150,
-      params: {
-        width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
-        kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
-        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor
-      },
+      params,
       notes: 'wall/centre are placeholders -- set to the real wall id and position.'
     }
   ];
@@ -184,10 +247,31 @@ function CopyJSONButton({ t }) {
   );
 }
 
+// A plain, human-readable "what the clock should be showing right now"
+// readout, refreshed once a second from the SAME wall-clock time source
+// (the browser's own Date) -- so a reviewer's screenshot can show this text
+// next to the system clock and the 3D hands, satisfying the acceptance
+// criterion that the shown time is stated and comparable to the system
+// clock. This is independent of clockLive (it always reflects "now"),
+// deliberately: the acceptance check is "does live time work", not "is the
+// toggle currently on".
+function useNowLabel() {
+  const [now, setNow] = React.useState(() => new Date());
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+  return hh + ':' + mm + ':' + ss;
+}
+
 // ============== App ==============
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const clockReady = useWallClockModule();
+  const nowLabel = useNowLabel();
 
   const applyPreset = (name) => {
     const p = PRESETS[name];
@@ -198,7 +282,7 @@ function App() {
   return (
     <>
       <h1>Clock Spec</h1>
-      <div className="sub">A working wall clock, `framed` or `diy-numerals` -- the latter modelled from this house's living-room photo. Renders the REAL src/furniture/wall-clock.js builder. Use the Tweaks panel, or jump to a preset below.</div>
+      <div className="sub">A working wall clock: `diy-words` (the owner's actual kitchen clock), `diy-numerals` (a living-room photo) or `framed` (a conventional alternative). Renders the REAL src/furniture/wall-clock.js builder. Use the Tweaks panel, or jump to a preset below.</div>
 
       <div className="row" style={{ marginBottom: 16 }}>
         {Object.keys(PRESETS).map(name => (
@@ -214,9 +298,10 @@ function App() {
           <table>
             <tbody>
               <tr><th>Feature</th><th className="num">value</th><th>Variability</th></tr>
-              <tr><td>Clock kind</td><td className="num">{t.clockKind}</td><td><b>Variable</b> — framed or diy-numerals</td></tr>
+              <tr><td>Clock kind</td><td className="num">{t.clockKind}</td><td><b>Variable</b> — diy-words, diy-numerals or framed</td></tr>
               <tr><td>Clock diameter × depth</td><td className="num">{t.clockDiameter}×{t.clockDepth}</td><td>Wall-mounted</td></tr>
-              <tr><td>Clock live</td><td className="num">{t.clockLive ? 'running' : 'stopped'}</td><td>setClockTime(group, date) every second here; the live scene calls it once a minute</td></tr>
+              <tr><td><b>Current local time</b></td><td className="num"><b>{nowLabel}</b></td><td>The system clock -- compare against the 3D hands and the "Live" toggle below</td></tr>
+              <tr><td>Clock live</td><td className="num">{t.clockLive ? 'running' : 'stopped'}</td><td>startLiveClock() ticks once a second and resyncs on tab visibility (see wall-clock.js)</td></tr>
             </tbody>
           </table>
           <div className="legend">
@@ -235,7 +320,7 @@ function App() {
               animate={animateClockScene}
               heightOf={() => 1.15 + (t.clockDiameter / 100) / 2}
             />}
-          <div className="legend">Drag to orbit, scroll to zoom. The clock's second hand is live (real time) while "Clock live" is on.</div>
+          <div className="legend">Drag to orbit, scroll to zoom. The clock's second hand is live (real time) while "Clock live" is on -- compare it against "Current local time" above.</div>
         </div>
       </div>
 
@@ -247,19 +332,24 @@ function App() {
 
         <TweakSection label="Wall clock" />
         <TweakRadio label="Kind" value={t.clockKind}
-          options={['diy-numerals', 'framed']} onChange={v => setTweak('clockKind', v)} />
+          options={['diy-words', 'diy-numerals', 'framed']} onChange={v => setTweak('clockKind', v)} />
         <TweakSlider label="Diameter" value={t.clockDiameter} min={20} max={45} step={1} unit="cm"
           onChange={v => setTweak('clockDiameter', v)} />
         <TweakSlider label="Depth" value={t.clockDepth} min={2} max={8} step={0.5} unit="cm"
           onChange={v => setTweak('clockDepth', v)} />
-        <TweakColor label="Face colour" value={t.clockFaceColor}
-          onChange={v => setTweak('clockFaceColor', v)} />
-        <TweakColor label="Rim colour" value={t.clockRimColor}
-          onChange={v => setTweak('clockRimColor', v)} />
+        {t.clockKind !== 'diy-words' &&
+          <TweakColor label="Face colour" value={t.clockFaceColor}
+            onChange={v => setTweak('clockFaceColor', v)} />}
+        {t.clockKind !== 'diy-words' &&
+          <TweakColor label="Rim colour" value={t.clockRimColor}
+            onChange={v => setTweak('clockRimColor', v)} />}
         <TweakColor label="Numeral/dot colour" value={t.clockNumeralColor}
           onChange={v => setTweak('clockNumeralColor', v)} />
         <TweakColor label="Hand colour" value={t.clockHandColor}
           onChange={v => setTweak('clockHandColor', v)} />
+        {t.clockKind === 'diy-words' &&
+          <TweakColor label="Second hand colour" value={t.clockSecondHandColor}
+            onChange={v => setTweak('clockSecondHandColor', v)} />}
         <TweakToggle label="Live (real time)" value={t.clockLive}
           onChange={v => setTweak('clockLive', v)} />
       </TweaksPanel>
