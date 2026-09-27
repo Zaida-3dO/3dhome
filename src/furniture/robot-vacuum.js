@@ -13,7 +13,7 @@
  * See docs/house-profile.md, "Furniture".
  *
  * A round robot vacuum on a self-emptying dock: a rounded dock tower at the
- * BACK (z = 0 .. towerDepth) -- white lower part, a champagne metal band
+ * BACK (z = 0 .. towerDepth) -- white lower part, a light champagne band
  * round its middle and a white lid -- standing on a thin base plate that runs
  * the full depth and ends in a small ramp at the front. The robot sits at the
  * FRONT of the plate, its front at z = depth and its rear tucked into an
@@ -54,7 +54,7 @@ export const DEFAULTS = Object.freeze({
   towerWidth: 34,
   towerDepth: 24,
   bodyColor: '#f4f4f2',    // robot body, dock tower, lid and base plate
-  bandColor: '#b9a88a',    // champagne band round the tower (metal finish)
+  bandColor: '#c9b48a',    // light champagne band round the tower (gloss, not metal: see build)
   puckColor: '#8a8c8e',    // lidar puck
   ledColor: '#2fd0e0'      // status LED (emissive)
 });
@@ -175,7 +175,11 @@ export function build(THREE, params, opts) {
     bumper: makeFinish(THREE, 'matte', darken(p.bodyColor, 0.62)),
     puck: makeFinish(THREE, 'matte', p.puckColor),
     led: makeFinish(THREE, 'emissive', p.ledColor),
-    band: makeFinish(THREE, 'metal', p.bandColor),
+    // Gloss, NOT metal: a metalness-0.9 finish throws most of the base
+    // colour's lightness away under the spec page's environment (and more in
+    // the live house, which has none), so any champagne read as dark bronze.
+    // A glossy lacquer keeps the light champagne and still catches a sheen.
+    band: makeFinish(THREE, 'gloss', p.bandColor),
     plate: makeFinish(THREE, 'matte', p.bodyColor)
   };
 

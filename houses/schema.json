@@ -2878,8 +2878,8 @@
         },
         "bandColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#b9a88a",
-          "description": "The band round the tower (metal finish)."
+          "default": "#c9b48a",
+          "description": "The band round the tower: a light champagne in a gloss finish (not metal, which renders it dark bronze)."
         },
         "puckColor": {
           "$ref": "#/$defs/hexColor",

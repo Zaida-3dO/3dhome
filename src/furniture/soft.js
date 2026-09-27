@@ -48,11 +48,18 @@ function weld(THREE, positions, tris) {
  * Per-axis sample positions for a rounded box: `bevel` segments across each
  * corner band of width r, and `inner` segments across the flat middle.
  */
-function axisSamples(half, r, bevel, inner) {
+function axisSamples(half, r, bevel, inner, cuts) {
   const a = Math.max(0, half - r);
   const out = [];
   for (let i = 0; i <= bevel; i++) out.push(-half + (half - a) * i / bevel);
-  for (let i = 1; i < inner; i++) out.push(-a + 2 * a * i / inner);
+  if (Array.isArray(cuts)) {
+    // Exact positions across the flat middle, replacing the even `inner`
+    // split: sorted, de-duplicated, and kept only strictly inside it.
+    const inside = cuts.filter(c => Number.isFinite(c) && c > -a + 1e-9 && c < a - 1e-9).sort((x, y) => x - y);
+    for (const c of inside) if (Math.abs(c - out[out.length - 1]) > 1e-9) out.push(c);
+  } else {
+    for (let i = 1; i < inner; i++) out.push(-a + 2 * a * i / inner);
+  }
   for (let i = 0; i <= bevel; i++) out.push(a + (half - a) * i / bevel);
   return out;
 }
@@ -63,12 +70,18 @@ function axisSamples(half, r, bevel, inner) {
  *
  * @param {number} w, h, d  full sizes along x, y, z
  * @param {number} r        rounding radius
- * @param {{bevel?: number, inner?: number[], displace?: Function}} [opts]
+ * @param {{bevel?: number, inner?: number[], cuts?: Array, omit?: string[], displace?: Function}} [opts]
  *   bevel: segments per rounded band (default 2); inner: [nx, ny, nz]
- *   segments across each flat middle (default [1,1,1]); displace(p) may
- *   move a vertex {x,y,z} in place (crown, tuft dimples) -- it is called
- *   after rounding, with the vertex's pre-displacement position.
- * Triangles: 4 * (sx*sy + sy*sz + sx*sz), with s = 2*bevel + inner.
+ *   segments across each flat middle (default [1,1,1]); cuts: [xs, ys, zs],
+ *   each null or a list of EXACT sample positions across that axis's flat
+ *   middle, replacing its `inner` split (so a tuft dimple can land on a
+ *   vertex at any size); omit: faces to leave out, any of '+x' '-x' '+y'
+ *   '-y' '+z' '-z' (a face nobody can see, e.g. a mattress bottom inside its
+ *   rails); displace(p) may move a vertex {x,y,z} in place (crown, tuft
+ *   dimples) -- it is called after rounding, with the vertex's
+ *   pre-displacement position.
+ * Triangles: 4 * (sx*sy + sy*sz + sx*sz), with s = 2*bevel + inner (or
+ * 2*bevel + the kept cuts + 1), less 2 * the grid of each omitted face.
  */
 export function roundedBox(THREE, w, h, d, r, opts) {
   const o = opts || {};
@@ -76,9 +89,11 @@ export function roundedBox(THREE, w, h, d, r, opts) {
   const inner = o.inner || [1, 1, 1];
   const hx = w / 2, hy = h / 2, hz = d / 2;
   const rr = Math.max(1e-6, Math.min(r, hx, hy, hz));
-  const ax = axisSamples(hx, rr, bevel, Math.max(1, inner[0]));
-  const ay = axisSamples(hy, rr, bevel, Math.max(1, inner[1]));
-  const az = axisSamples(hz, rr, bevel, Math.max(1, inner[2]));
+  const cuts = o.cuts || [];
+  const omit = new Set(o.omit || []);
+  const ax = axisSamples(hx, rr, bevel, Math.max(1, inner[0]), cuts[0]);
+  const ay = axisSamples(hy, rr, bevel, Math.max(1, inner[1]), cuts[1]);
+  const az = axisSamples(hz, rr, bevel, Math.max(1, inner[2]), cuts[2]);
   const ix = hx - rr, iy = hy - rr, iz = hz - rr;
   const clamp = (v, m) => Math.max(-m, Math.min(m, v));
 
@@ -113,14 +128,14 @@ export function roundedBox(THREE, w, h, d, r, opts) {
     }
   }
   // +y / -y (U = x, V = z)
-  face(ax, az, (u, v) => round(u, hy, v), true);
-  face(ax, az, (u, v) => round(u, -hy, v), false);
+  if (!omit.has('+y')) face(ax, az, (u, v) => round(u, hy, v), true);
+  if (!omit.has('-y')) face(ax, az, (u, v) => round(u, -hy, v), false);
   // +x / -x (U = z, V = y)
-  face(az, ay, (u, v) => round(hx, v, u), true);
-  face(az, ay, (u, v) => round(-hx, v, u), false);
+  if (!omit.has('+x')) face(az, ay, (u, v) => round(hx, v, u), true);
+  if (!omit.has('-x')) face(az, ay, (u, v) => round(-hx, v, u), false);
   // +z / -z (U = x, V = y)
-  face(ax, ay, (u, v) => round(u, v, hz), false);
-  face(ax, ay, (u, v) => round(u, v, -hz), true);
+  if (!omit.has('+z')) face(ax, ay, (u, v) => round(u, v, hz), false);
+  if (!omit.has('-z')) face(ax, ay, (u, v) => round(u, v, -hz), true);
   return weld(THREE, positions, tris);
 }
 

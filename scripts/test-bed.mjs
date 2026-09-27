@@ -167,7 +167,12 @@ const L = Bed.layout(Object.assign({}, D));
     const edgeTop = Math.max(...vs.filter(v => v.x > mb.max.x - 0.045 && Math.abs(v.z - midZ) < 0.3).map(v => v.y));
     check('mattress: top at the edge at ~58-60 (level with a 60 cm bedside table)', cm(edgeTop) >= 58 && cm(edgeTop) <= 60.2, cm(edgeTop));
     check('mattress: crowned (the centre stands > 1 cm above the edge)', cm(mb.max.y - edgeTop) > 1, cm(mb.max.y - edgeTop));
-    check('mattress: its lower edge is hidden inside the rails (bottom below the rail top)', cm(mb.min.y) < D.baseHeight - 2, cm(mb.min.y));
+    // (Its bottom face is omitted -- it sits on the plinth, inside the rails --
+    // so the mesh's lowest point is the bottom bevel, ~1.2 cm above the
+    // layout's mattBottom = baseHeight - 3.) Mutation: mattBottom = railTop.
+    check('mattress: its lower edge is hidden inside the rails (bottom below the rail top)', cm(mb.min.y) < D.baseHeight - 1.5, cm(mb.min.y));
+    check('mattress: no bottom face (hidden on the plinth; its triangles go to the print)',
+      !verts(mat).some(v => cm(v.y) < cm(mb.min.y) + 0.01 && Math.abs(v.x) < 0.3 && Math.abs(v.z - (mb.min.z + mb.max.z) / 2) < 0.3));
     check('mattress: ~150 x 200', Math.abs(cm(mb.max.x - mb.min.x) - 150) < 3 && Math.abs(cm(mb.max.z - mb.min.z) - 200) < 5,
       [cm(mb.max.x - mb.min.x), cm(mb.max.z - mb.min.z)]);
     check('mattress: fits inside the rails', cm(mb.max.x) <= D.width / 2 - 6 + 1e-3);
@@ -237,14 +242,134 @@ const L = Bed.layout(Object.assign({}, D));
   const dvb = wbox(byName(g, 'bed:duvet')[0]);
   check('pillows rest above the mattress top', byName(g, 'bed:pillow').every(p => cm(wbox(p).min.y) > 55));
   check('sleeping pillows clear the duvet (no pillow reaches past the fold)', byName(g, 'bed:pillow').every(p => wbox(p).max.z <= dvb.min.z + 0.08));
+
+  // HEIGHT (items 75c0a5f6 #2, e90abf6d #1): the propped pillows are sized to
+  // the headboard. At the defaults the sage pillows stop ~32 cm above the
+  // mattress (they reached ~103 of 120 and hid the channels); at ANY height
+  // on the BedSpec slider (80-160) nothing pokes above the headboard, so the
+  // bbox height stays `height`. Mutations: drop the solve (fixed 42 cm at
+  // 58 degrees) -> the height-80/90/100 cases fail; target H + 5 -> the
+  // "<= H - 1" check fails; ACCENT_RISE 32 -> 45 -> the defaults check fails.
+  const L0 = Bed.layout(Object.assign({}, D));
+  const topOfAll = (gg, names) => Math.max(...names.flatMap(nm => byName(gg, nm).map(o => cm(wbox(o).max.y))));
+  {
+    const aTop = topOfAll(g, ['bed:accent-pillow']), cTop = topOfAll(g, ['bed:cushion']);
+    check('sage pillows are lower: top <= 92 cm at the default 120 headboard (was ~103)', aTop <= 92 && aTop <= Bed.pillowTops(D).accent + 0.05, aTop);
+    check('sage pillows still stand propped: top >= 20 cm above the mattress', aTop >= L0.mattTop + 20, [aTop, L0.mattTop]);
+    check('the cushion sits below the sage pillows', cTop <= aTop, [cTop, aTop]);
+    check('>= 25 cm of headboard shows above the sage pillows', D.height - aTop >= 25, D.height - aTop);
+  }
+  for (const H of [80, 90, 100, 120, 160]) {
+    const gh = build({ height: H });
+    const bh = wbox(gh);
+    check('height ' + H + ': bbox height == height (no pillow pokes above the headboard)', near(cm(bh.max.y - bh.min.y), H, 0.05), cm(bh.max.y - bh.min.y));
+    const top = topOfAll(gh, ['bed:accent-pillow', 'bed:cushion', 'bed:cushion-fur']);
+    check('height ' + H + ': every propped pillow, the cushion and its fur top out <= H - 1', top <= H - 1, top);
+    if (H >= 90) check('height ' + H + ': >= 12 cm of headboard shows above the sage pillows', H - topOfAll(gh, ['bed:accent-pillow']) >= 12 - 0.05, topOfAll(gh, ['bed:accent-pillow']));
+  }
+}
+
+// ---- 5b. faux-fur cushion (75c0a5f6 #3) ------------------------------------------------------------
+{
+  const cush = byName(g, 'bed:cushion')[0];
+  const fur = byName(g, 'bed:cushion-fur');
+  // Mutation: FUR_STRANDS 0 (or no addFur call) -> fails.
+  check('fur: two strand meshes (light-tipped and dark) on the cushion at full', fur.length === 2, fur.length);
+  check('fur: none at low detail', byName(build({}, 'low'), 'bed:cushion-fur').length === 0);
+  check('fur: two tones of the cushion olive, one lighter, one darker', fur.length === 2 &&
+    fur.some(f => lum('#' + f.material.color.getHexString()) > lum(D.cushionColor)) &&
+    fur.some(f => lum('#' + f.material.color.getHexString()) < lum(D.cushionColor)), fur.map(f => f.material.color.getHexString()));
+  const ctris = triangles(cush);
+  const tri3 = new THREE.Triangle(), q3 = new THREE.Vector3();
+  const distToCushion = v => {
+    let bd = Infinity;
+    for (const t of ctris) { tri3.set(t[0], t[1], t[2]); tri3.closestPointToPoint(v, q3); bd = Math.min(bd, q3.distanceTo(v)); }
+    return bd;
+  };
+  let strands = 0, rootsOff = 0, badLen = 0, notOut = 0, inward = 0;
+  for (const f of fur) {
+    const vs = verts(f);
+    for (let i = 0; i < vs.length; i += 3) {
+      strands++;
+      const root = vs[i].clone().add(vs[i + 1]).multiplyScalar(0.5), tip = vs[i + 2];
+      if (cm(distToCushion(root)) > 0.5) rootsOff++;
+      const len = cm(tip.distanceTo(root));
+      if (len < Bed.FUR_LENGTH.min - 0.01 || len > Bed.FUR_LENGTH.max + 0.01) badLen++;
+      if (cm(distToCushion(tip)) < 0.6) notOut++;
+      // faces out: its normal points away from the cushion's centre
+      const nrm = new THREE.Vector3().subVectors(vs[i + 1], vs[i]).cross(new THREE.Vector3().subVectors(tip, vs[i]));
+      if (nrm.dot(root.clone().sub(wbox(cush).getCenter(new THREE.Vector3()))) <= 0) inward++;
+    }
+  }
+  // Mutations: root offset along the normal -> "rooted" fails; tip at the
+  // root (len 0) -> "length" fails; tip along -normal (into the cushion) ->
+  // "lifted" fails; b0/b1 swapped -> "faces out" fails.
+  check('fur: >= 80 tufts', strands >= 80, strands);
+  check('fur: every tuft is rooted on the cushion surface (within 0.5 cm)', rootsOff === 0, rootsOff);
+  check('fur: every tuft is FUR_LENGTH long', badLen === 0, badLen);
+  check('fur: every tuft tip is lifted >= 0.6 cm off the cushion (a pile, not a print)', notOut === 0, notOut);
+  check('fur: every tuft faces out of the cushion', inward === 0, inward);
+  // The body is lumpy, not a smooth sewn case. Mutation: drop furCushion's
+  // displacement (k = 1, no x/z jitter) -> the deviation is 0 and fails.
+  {
+    const S = await imp('src/furniture/soft.js');
+    const cb = new THREE.Box3().setFromBufferAttribute(cush.geometry.attributes.position);
+    const plain = S.pillow(THREE, cb.max.x - cb.min.x, 0.14, cb.max.z - cb.min.z, 4).attributes.position;
+    const lumpy = cush.geometry.attributes.position;
+    let dev = 0;
+    for (let i = 0; i < Math.min(plain.count, lumpy.count); i++) dev = Math.max(dev, Math.abs(plain.getY(i) - lumpy.getY(i)));
+    check('fur: the cushion body is lumpy (a vertex >= 0.3 cm off a plain pillow of its size)', cm(dev) >= 0.3, cm(dev));
+  }
+  const again = byName(build(), 'bed:cushion-fur');
+  check('fur: deterministic', again.length === fur.length && fur.every((f, i) => {
+    const a = f.geometry.attributes.position.array, b = again[i].geometry.attributes.position.array;
+    return a.length === b.length && a.every((v, k) => v === b[k]);
+  }));
 }
 
 // ---- 6. print -------------------------------------------------------------------------------
 {
   const print = byPrefix(g, 'bed:print-');
-  check('print: 4 colour meshes (sage and olive leaves, blue and pink flowers)', print.length === 4, print.map(m => m.name));
-  const motifTris = print.reduce((n, m) => n + m.geometry.attributes.position.count / 3, 0);
-  check('print: >= 60 motifs (a leaf is 2 triangles, a flower 4)', motifTris / 3 >= 60, motifTris);
+  check('print: 6 colour meshes (sage and olive greens; pink, rose, yellow and blue flowers)', print.length === 6 &&
+    Object.keys(Bed.PRINT_COLORS).every(k => print.some(m => m.name === 'bed:print-' + k)), print.map(m => m.name));
+  // The print stays inside the duvet's own envelope clamp (W/2 - 0.3, D -
+  // 0.3) even where a lifted motif on a side drape leans outward. Mutation:
+  // drop the clamp in lifted() -> fails at some width.
+  for (const P of [{}, { width: 137, depth: 190 }, { width: 180 }, { width: 200, depth: 210 }]) {
+    const gp = build(P), W2 = (P.width || D.width) / 200, DD = (P.depth || D.depth) / 100;
+    const cx = (wbox(gp).min.x + wbox(gp).max.x) / 2, z0 = wbox(gp).min.z;
+    let worst = -Infinity;
+    for (const m of byPrefix(gp, 'bed:print-')) for (const v of verts(m)) worst = Math.max(worst, cm(Math.abs(v.x - cx) - W2), cm(v.z - z0 - DD));
+    check('print ' + JSON.stringify(P) + ': inside the duvet clamp (0.3 cm in from the rails and the foot)', worst <= -0.3 + 1e-3, worst);
+  }
+  // DENSE (75c0a5f6 #1): the old print was 30 four-point stars, 431 cm^2 of
+  // flower and 1,436 cm^2 of print in all. Mutations: PRINT_COUNTS back to
+  // ~15 sprigs / 15 florets, or the old ~2.5 cm stars -> fails.
+  const areaOf = ms => ms.reduce((sum, m) => {
+    const p = m.geometry.attributes.position;
+    for (let i = 0; i < p.count; i += 3) {
+      sum += new THREE.Triangle(new THREE.Vector3().fromBufferAttribute(p, i), new THREE.Vector3().fromBufferAttribute(p, i + 1),
+        new THREE.Vector3().fromBufferAttribute(p, i + 2)).getArea() * 1e4;
+    }
+    return sum;
+  }, 0);
+  const flowers = print.filter(m => /flower/.test(m.name)), greens = print.filter(m => /leaf/.test(m.name));
+  const flowerTris = flowers.reduce((n, m) => n + m.geometry.attributes.position.count / 3, 0);
+  check('print: >= 3x the old flower coverage (>= 1,300 cm^2 of flowers)', areaOf(flowers) >= 1300, areaOf(flowers));
+  check('print: >= 2x the old print coverage in all (>= 2,900 cm^2)', areaOf(flowers) + areaOf(greens) >= 2900, areaOf(flowers) + areaOf(greens));
+  check('print: >= 200 flower triangles (~90 heads: 3-triangle daisies and 2-triangle florets)', flowerTris >= 200, flowerTris);
+  check('print: >= 80 stems and leaf blades', greens.reduce((n, m) => n + m.geometry.attributes.position.count / 3, 0) >= 80);
+  // No two print colours (nor print and duvet) z-fight where motifs overlap:
+  // each colour is lifted on its own layer. Mutation: one PRINT_LIFT for
+  // every colour -> overlapping motifs of two colours fight and this fails.
+  {
+    const { findCoplanarFights } = await imp('scripts/lib-coplanar.mjs');
+    for (const [label, P] of [['defaults', {}], ['137 x 190, height 140', { width: 137, depth: 190, height: 140 }], ['12 channels', { channelCount: 12 }]]) {
+      const r = findCoplanarFights(THREE, build(P), { tol: 0.001 });
+      check('print (' + label + '): no coplanar fights (no two colours share a plane)', r.fights.length === 0,
+        r.fights.slice(0, 3).map(f => [f.a && f.a.name || f.a, f.b && f.b.name || f.b]));
+    }
+  }
   check('print: plain matte (merges into the matte bucket; no texture)', print.every(m => m.material.userData.finish === 'matte' && !m.material.map));
   // Every print vertex lies on (just above) the duvet surface.
   const duv = byName(g, 'bed:duvet')[0];
@@ -266,6 +391,22 @@ const L = Bed.layout(Object.assign({}, D));
     for (let i = 0; i < vs.length; i += 5) { sample++; worst = Math.max(worst, nearestTri(vs[i])[0]); }
   }
   check('print: every motif lies on the duvet surface (within 1.5 cm; the grid is coarser than the print)', sample > 50 && cm(worst) < 1.5, cm(worst));
+  // ...and never sinks BEHIND the drawn duvet (the coarse grid can run above
+  // the cloth map, as at the hem step under the fold-back band). Mutation:
+  // drop the hem-step exclusion in addPrint -> a motif sinks and this fails.
+  {
+    let sunk = 0, n2 = 0;
+    for (const m of print) {
+      for (const v of verts(m)) {
+        const [, t] = nearestTri(v);
+        tri.set(t[0], t[1], t[2]);
+        tri.closestPointToPoint(v, q);
+        n2++;
+        if (v.clone().sub(q).dot(t[3]) < 0.0005) sunk++;
+      }
+    }
+    check('print: no motif vertex sinks into the duvet (each >= 0.05 cm in front of it)', n2 > 100 && sunk === 0, { sunk, n2 });
+  }
   // Faces outward: a print triangle's normal agrees with the duvet's at that spot.
   let bad = 0, n = 0;
   for (const m of print) {
@@ -297,6 +438,8 @@ const L = Bed.layout(Object.assign({}, D));
   check('budget: the caps are the audited 2,500 / 800', caps.full === 2500 && caps.low === 800);
   const big = build({ channelCount: 12 });
   check('budget: 12 channels still within the cap', tris(big) <= caps.full, tris(big));
+  const wide = build({ width: 200, channelCount: 12 });
+  check('budget: 200 wide with 12 channels still within the cap', tris(wide) <= caps.full, tris(wide));
 }
 
 // ---- registry wiring ---------------------------------------------------------------------------

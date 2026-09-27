@@ -71,6 +71,7 @@ const colorInt = hex => parseInt(hex.slice(1), 16);
 const tris = g => { let n = 0; g.traverse(o => { if (o.isMesh) n += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; }); return n; };
 const byName = (g, name) => { const out = []; g.traverse(o => { if (o.isMesh && o.name === name) out.push(o); }); return out; };
 const wbox = o => new THREE.Box3().setFromObject(o);
+const lum = c => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 
 // ---- digital-piano -----------------------------------------------------------
 {
@@ -228,9 +229,70 @@ const wbox = o => new THREE.Box3().setFromObject(o);
     const btn = DP.benchButtons(D);
     check('bench: 2 x 4 tuft buttons', btn.length === 8, btn.length);
     const dips = btn.map(([x, z]) => flat - topAt(x, z));
-    check('bench: the seat top dips >= 0.8 cm at every button', dips.every(d => d >= 0.8), dips);
+    // Mutation: BENCH_TUFT_DIP 2.0 -> 1.3 (the old, invisible dimple) -> fails.
+    check('bench: the seat top dips >= 1.8 cm at every button', dips.every(d => d >= 1.8), dips);
   }
   check('bench: the buttons are drawn', byName(g, 'bench:buttons').length === 1);
+
+  // Every button lands EXACTLY on a seat vertex, at the defaults and at other
+  // widths/depths (the seat grid is cut through the buttons and a ring of
+  // lines round each). Mutation: drop
+  // `cuts` from the seat's roundedBox (the old even grid) -> fails.
+  for (const size of [{}, { width: 70, depth: 38 }, { width: 50, depth: 30 }]) {
+    const gs = build(THREE, Object.assign({}, D, size), { detail: 'full' });
+    gs.updateMatrixWorld(true);
+    const s = byName(gs, 'bench:seat')[0];
+    const P = Object.assign({}, D, size);
+    const pa = s.geometry.attributes.position;
+    const onVertex = DP.benchButtons(P).every(([bx, bz]) => {
+      for (let i = 0; i < pa.count; i++) {
+        if (pa.getY(i) > 0 && Math.abs(pa.getX(i) * 100 - bx) < 0.01 && Math.abs(pa.getZ(i) * 100 - bz) < 0.01) return true;
+      }
+      return false;
+    });
+    check('bench ' + JSON.stringify(size) + ': every tuft button sits on a seat-top vertex', onVertex);
+
+    // The buttons are domed caps standing proud of the dimple, their rims on
+    // the seat surface: visible, not buried specks. Mutation: rise 0 (the
+    // apex at rim height) -> "proud" fails; rim at the floor with no rimLift
+    // -> the rim sinks > 0.3 cm below the surface and "rim on the seat" fails.
+    const bm = byName(gs, 'bench:buttons')[0];
+    const ray = new THREE.Raycaster();
+    const seatY = (x, z) => {
+      ray.set(new THREE.Vector3(x, 5, z), new THREE.Vector3(0, -1, 0));
+      const hit = ray.intersectObject(s, false)[0];
+      return hit ? hit.point.y : null;
+    };
+    const bp = bm.geometry.attributes.position;
+    const wp = i => new THREE.Vector3().fromBufferAttribute(bp, i).applyMatrix4(bm.matrixWorld);
+    let proud = true, rimOk = true, worstRim = 0, n = 0;
+    const seen = new Set(), apexes = [], rims = [];
+    for (let i = 0; i < bp.count; i++) {
+      const v = wp(i);
+      const k = v.x.toFixed(5) + ',' + v.y.toFixed(5) + ',' + v.z.toFixed(5);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const sy = seatY(v.x, v.z);
+      if (sy === null) { rimOk = false; continue; }
+      const isApex = DP.benchButtons(P).some(([bx, bz]) => Math.abs(v.x * 100 - bx) < 0.01 && Math.abs((v.z - wbox(s).min.z) * 100 - (P.depth / 2 + bz)) < 0.01);
+      if (isApex) { n++; apexes.push(v); }
+      else { rims.push(v); worstRim = Math.max(worstRim, Math.abs(v.y - sy) * 100); }
+    }
+    // the crown stands >= 0.5 cm above its own rim (and so above the seat
+    // surface round it)
+    for (const a of apexes) {
+      const own = rims.filter(r => Math.hypot(r.x - a.x, r.z - a.z) < 0.015);
+      if (!own.length || (a.y - Math.max(...own.map(r => r.y))) * 100 < 0.5) proud = false;
+    }
+    rimOk = rimOk && worstRim <= 0.3;
+    check('bench ' + JSON.stringify(size) + ': every button crown stands >= 0.5 cm proud of the dimple', proud && n === 8, n);
+    check('bench ' + JSON.stringify(size) + ': every button rim sits on the seat surface (within 0.3 cm)', rimOk, worstRim);
+  }
+  {
+    const bm = byName(g, 'bench:buttons')[0];
+    const seatHex = seat.material.color.getHex();
+    check('bench: buttons are darker than the seat', !!bm && lum(bm.material.color) < lum(seat.material.color) - 0.15, [bm && bm.material.color.getHexString(), seatHex.toString(16)]);
+  }
 
   // The frame: an apron under the seat, a knob at each END, four legs.
   const apron = byName(g, 'bench:apron')[0];
@@ -252,7 +314,32 @@ const wbox = o => new THREE.Box3().setFromObject(o);
   if (leg) {
     check('bench: legs are square in section (4 sides)', leg.geometry.parameters.radialSegments === 4);
     check('bench: legs taper (foot narrower than the top)', leg.geometry.parameters.radiusBottom < leg.geometry.parameters.radiusTop);
-    check('bench: legs splay outward', Math.abs(leg.rotation.z) > 0.01 && Math.abs(leg.rotation.x) > 0.01);
+    check('bench: legs splay (tilted in both x and z)', Math.abs(leg.rotation.z) > 0.01 && Math.abs(leg.rotation.x) > 0.01);
+  }
+  // Splay DIRECTION: every foot is further from the bench centre than the top
+  // of its leg, in x AND in z. Mutation: `leg.rotation.z = -sx * splay` (or
+  // `rotation.x = sz * splay`) -- legs splaying inward -- fails.
+  {
+    const cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+    const ends = l => {
+      const pa = l.geometry.attributes.position, b = wbox(l), foot = [], top = [];
+      for (let i = 0; i < pa.count; i++) {
+        const v = new THREE.Vector3().fromBufferAttribute(pa, i).applyMatrix4(l.matrixWorld);
+        if (v.y < b.min.y + 0.01) foot.push(v);
+        if (v.y > b.max.y - 0.01) top.push(v);
+      }
+      const mean = a => a.reduce((s, v) => s.add(v), new THREE.Vector3()).multiplyScalar(1 / a.length);
+      return { foot: mean(foot), top: mean(top) };
+    };
+    const outward = legs.map(l => {
+      const e = ends(l);
+      return {
+        x: Math.abs(e.foot.x - cx) - Math.abs(e.top.x - cx),
+        z: Math.abs(e.foot.z - cz) - Math.abs(e.top.z - cz)
+      };
+    });
+    check('bench: every leg splays OUTWARD in x and z (foot further from the centre than its top)',
+      legs.length === 4 && outward.every(o => o.x > 0.002 && o.z > 0.002), outward);
   }
   let noX = true;
   g.traverse(o => { if (o.isMesh && /x-leg|column|crossbar|stretcher/i.test(o.name)) noX = false; });
