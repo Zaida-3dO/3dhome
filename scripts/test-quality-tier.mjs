@@ -144,11 +144,18 @@ check('pixel ratio unchanged otherwise', Q.capPixelRatio(2, false) === 2 && Q.ca
   check('scene: the tier line logs mobileGpu and the light counts',
     /Quality tier=\$\{tier\}/.test(src) && /mobileGpu=\$\{gpu\.mobileGpu\}/.test(src) && /lights: point=\$\{lc\.point\}/.test(src));
   check('scene: the ramp ceiling is the capped pixel ratio', /const basePixelRatio = scenePixelRatio;/.test(src));
-  check('scene: room-shadow lights need the TIER (not only the uniforms) to allow them under shadows=high',
-    /roomShadowLights = tier !== 'low' && !tierInfo\.capped;/.test(src) && /const tier = tierInfo\.tier;/.test(src));
-  check('scene: the pixel-ratio cap and minor skip follow mobileCaps (so ?tier= lifts them)',
-    /const mobileGpu = tierInfo\.mobileCaps;/.test(src) && /capPixelRatio\(pixelRatio, mobileGpu\)/.test(src));
-  check('scene: a mobile GPU drops minor furniture', /dropMinorFurniture: mobileGpu/.test(src) &&
+  // Since task 230713da the build comes from an adaptive-quality LEVEL
+  // (src/adaptive-quality.js); scripts/test-adaptive-quality.mjs proves each
+  // start level builds what the old formula built. Here: the wiring.
+  check('scene: room-shadow lights and the tier come from the level config (shadows=high: top level only)',
+    /roomShadowLights: startLevel\.roomShadowLights,/.test(src) && /const tier = startLevel\.tier;/.test(src));
+  check('scene: the pixel-ratio start and minor skip follow mobileCaps (so ?tier= lifts them)',
+    /const mobileGpu = tierInfo\.mobileCaps;/.test(src) &&
+    /const dprStart = mobileGpu \? Math\.min\(scenePixelRatio, MOBILE_START_RATIO\) : scenePixelRatio;/.test(src) &&
+    /mobile: mobileGpu === true/.test(src));
+  check('scene: with adaptation off a mobile GPU keeps the hard 1.5 cap',
+    /const scenePixelRatio = \(mobileGpu && adaptiveOff\) \? Math\.min\(pixelRatio, MOBILE_START_RATIO\) : pixelRatio;/.test(src));
+  check('scene: the level decides minor furniture', /dropMinorFurniture: startLevel\.dropMinorFurniture,/.test(src) &&
     /quality\.dropMinorFurniture && item\.priority === 'minor'/.test(src));
   const page = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   check('page: ?tier= is passed to create()', /tier: tierParam,/.test(page) && /params\.get\('tier'\)/.test(page));

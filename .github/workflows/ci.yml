@@ -476,6 +476,8 @@ jobs:
         run: node scripts/test-furniture-render.mjs
       - name: Quality tier - mobile-GPU axis, ?tier= override, pixel-ratio cap
         run: node scripts/test-quality-tier.mjs
+      - name: Adaptive quality - level ladder, simulated frame-time series, hysteresis, storage
+        run: node scripts/test-adaptive-quality.mjs
       - name: Room lights - per-channel collapse to one or two lights
         run: node scripts/test-light-collapse.mjs
       - name: Tap popovers -- target resolution, nearest-visible occlusion, placement

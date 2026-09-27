@@ -2172,6 +2172,23 @@
       // The old "All On / All Off" footer buttons were removed; the footer now
       // holds the single Settings button (shown only on the Controls page).
 
+      // The Settings "Quality" row's text, from home.getQualityStatus().
+      // `var`, not `let`: renderPanel() is hoisted and may run before this line.
+      var qualityReadoutSubscribed = false;
+      var qualityCleared = false;
+      function qualityReadout(s) {
+        if (!s) return '';
+        const bits = [s.levelName, 'DPR ' + s.dpr];
+        if (!s.adaptive) bits.push('fixed (' + s.reason + ')');
+        else {
+          if (s.p95 != null) bits.push('p95 ' + s.p95 + ' ms');
+          if (s.reason !== 'settled') bits.push(s.reason === 'measuring' ? 'measuring…' : s.reason);
+          bits.push('next load: ' + (s.nextLevelName || 'same'));
+        }
+        // Wrap between items, never inside one ("p95 16.7 / ms").
+        return bits.map(b => b.replace(/ /g, ' ')).join(' · ');
+      }
+
       function renderPanel() {
         panelReady = true; // reached here => all panel deps are declared; safe
                            // for an overlay onChange to re-render now.
@@ -2235,6 +2252,18 @@
             html += '<div class="panel-toggle-row">' +
               '<span class="panel-toggle-label">Show furniture</span>' +
               '<button class="toggle ' + (home.getFurnitureVisible() ? 'on' : '') + '" id="panel-furniture-toggle"><div class="toggle-knob"></div></button>' +
+              '</div>';
+          }
+
+          // Quality readout (task 230713da): where adaptive quality has put
+          // this device and what the next load will use. Filled by textContent
+          // below and kept live by the scene's onQualityChange.
+          if (typeof home.getQualityStatus === 'function') {
+            html += '<div class="panel-toggle-row" style="gap:8px;">' +
+              '<span class="panel-toggle-label">Quality</span>' +
+              '<span id="panel-quality-readout" style="flex:1;font-size:11px;opacity:0.7;text-align:right;line-height:1.35;"></span>' +
+              '<button class="spec-btn" id="panel-quality-reset" style="width:auto;padding:4px 8px;font-size:11px;" ' +
+              'title="Forget this device\'s frame-time measurements; the next load starts from the default">Re-measure</button>' +
               '</div>';
           }
 
@@ -2316,6 +2345,27 @@
             panelFurnitureToggle.addEventListener('click', () => {
               home.setFurnitureVisible(!home.getFurnitureVisible());
               renderPanel();
+            });
+          }
+          const panelQualityReadout = document.getElementById('panel-quality-readout');
+          if (panelQualityReadout) {
+            panelQualityReadout.textContent = qualityReadout(home.getQualityStatus());
+            if (!qualityReadoutSubscribed && typeof home.onQualityChange === 'function') {
+              qualityReadoutSubscribed = true;
+              home.onQualityChange(s => {
+                const el = document.getElementById('panel-quality-readout');
+                if (el && !qualityCleared) el.textContent = qualityReadout(s);
+              });
+            }
+          }
+          const panelQualityReset = document.getElementById('panel-quality-reset');
+          if (panelQualityReset) {
+            panelQualityReset.addEventListener('click', () => {
+              const ok = home.resetQuality();
+              qualityCleared = true;
+              const el = document.getElementById('panel-quality-readout');
+              if (el) el.textContent = ok ? 'Cleared: the next load measures again from the default.'
+                : 'Could not clear (storage unavailable).';
             });
           }
           // Wire the profile-contributed rows rendered above. Each row's id is
