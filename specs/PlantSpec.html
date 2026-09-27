@@ -82,6 +82,11 @@
      caller passes in. -->
 <script type="module">
   import * as M from '../src/furniture/plant.js';
+  // The status card below is the app's own tap card (src/tap-popovers.js),
+  // rendered from a SAMPLE reading: this page never talks to Home Assistant.
+  import { popoverHtml, STYLE } from '../src/tap-popovers.js';
+  import * as PS from '../src/plant-status.js';
+  window.PlantCard = { popoverHtml, STYLE, PS };
   window.FurniturePlant = M;
 </script>
 
@@ -225,6 +230,38 @@ const OBJECT_KIND = {
 };
 const KIND_OBJECT = Object.fromEntries(Object.entries(OBJECT_KIND).map(([o, k]) => [k, o]));
 
+// ============== Status card (sample reading) ==============
+// The plant's card, exactly as the house shows it when a bound plant is
+// tapped, driven by a sample reading. Read-only: it has no controls.
+const CARD_SAMPLES = [['ok', 'OK'], ['dry', 'Dry'], ['wet', 'Wet'], ['due', 'Water due'], ['offline', 'Offline']];
+function PlantCardPreview({ name }) {
+  const K = window.PlantCard;
+  const [sample, setSample] = React.useState('ok');
+  React.useEffect(() => {
+    if (!K || document.getElementById('tp-style')) return;
+    const el = document.createElement('style');
+    el.id = 'tp-style';
+    el.textContent = K.STYLE;
+    document.head.appendChild(el);
+  }, []);
+  if (!K) return null;
+  const m = K.PS.MOCK_PLANT_READINGS[sample];
+  const reading = Object.assign({}, m, { updated: Date.now() - m.updated });
+  const dot = () => '<span class="tp-status bad" title="Sample reading: not connected"><i></i></span>';
+  const html = K.popoverHtml.plant({ name, status: 'offlinePlant', haOff: false, reading, ago: K.PS.agoText(reading.updated) }, dot);
+  return (
+    <>
+      <div className="row">
+        {CARD_SAMPLES.map(([k, label]) =>
+          <button key={k} className={'btn' + (sample === k ? ' active' : '')} onClick={() => setSample(k)}>{label}</button>)}
+      </div>
+      <div style={{ background: '#1a1a1c', borderRadius: 4, padding: 16, marginTop: 8 }}>
+        <div className="tp-pop" data-kind="plant" style={{ position: 'static' }} dangerouslySetInnerHTML={{ __html: html }} />
+      </div>
+    </>
+  );
+}
+
 // ============== App ==============
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -317,6 +354,19 @@ function App() {
             heightOf={tt => tt.height * 0.01}
           />
           <div className="legend">Drag to orbit, scroll to zoom. Change the seed to reshuffle the leaf layout without changing any size.</div>
+        </div>
+
+        <div className="card">
+          <h2>Status card (sample reading)</h2>
+          <PlantCardPreview name={VARIANT_LABELS[t.preset] || 'Plant'} />
+          <div className="legend">
+            Tapping a plant in the house opens this card, bound through rooms.json
+            <code> sensors.plants</code> (keyed by this item's furniture id): the soil moisture %, a Dry / OK / Wet
+            status (from the dryBelow / wetAbove thresholds, or the bound needs-water helper), when the sensor last
+            reported, and its battery and temperature when bound. A sensor that drops off reads Offline, never 0%.
+            A plant with no probe can bind a watering countdown instead. The card is read-only; the sidebar's
+            Controls view lists the same readings. Nothing on this page talks to Home Assistant.
+          </div>
         </div>
 
         <div className="card full">

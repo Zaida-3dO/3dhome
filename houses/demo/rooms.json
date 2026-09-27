@@ -1,6 +1,6 @@
 {
   "kind": "rooms",
-  "schemaVersion": "1.4",
+  "schemaVersion": "1.5",
   "house": "demo",
   "homeAssistant": {
     "enabled": false,
@@ -68,6 +68,28 @@
         "entity": "vacuum.demo_robot",
         "battery": "sensor.demo_robot_battery_level",
         "segments": { "kitchen": 1, "lounge": 2, "hall": 3 }
+      }
+    },
+    "plants": {
+      "lounge_corn_plant": {
+        "moisture": "sensor.demo_corn_plant_soil_moisture",
+        "battery": "sensor.demo_corn_plant_battery",
+        "temperature": "sensor.demo_corn_plant_temperature"
+      },
+      "bedroom_snake_plant": {
+        "moisture": "sensor.demo_snake_plant_soil_moisture",
+        "status": "binary_sensor.demo_snake_plant_dry",
+        "dryBelow": 15
+      },
+      "kitchen_peace_lily": {
+        "moisture": "sensor.demo_peace_lily_soil_moisture",
+        "battery": "sensor.demo_peace_lily_battery_state"
+      },
+      "study_ficus": {
+        "moisture": "sensor.demo_ficus_soil_moisture"
+      },
+      "hall_jade": {
+        "watering": "sensor.demo_jade_watering_countdown"
       }
     }
   }

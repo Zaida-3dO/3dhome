@@ -1044,6 +1044,39 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
     check_curtain_binding(rooms_doc, geo, sensors, (major, minor), report)
     check_climate_binding(rooms_doc, sensors, geo_room_ids, (major, minor), report)
     check_vacuum_binding(rooms_doc, geo, sensors, geo_room_ids, (major, minor), report)
+    check_plant_binding(rooms_doc, geo, sensors, (major, minor), report)
+
+
+def check_plant_binding(rooms_doc, geo, sensors, version, report):
+    """`sensors.plants`: furniture item id -> a plant's read-only binding. The
+    item is what gets tapped, so an id with no furniture item behind it can
+    never be reached -- an error. The schema already enforces the shape, the
+    domains and that `moisture` or `watering` is bound; the dry/wet order is
+    checked here because a JSON Schema cannot compare two values.
+    """
+    plants = sensors.get("plants") or {}
+    if not plants:
+        return
+    if version < (1, 5):
+        report.warn(
+            "rooms.json/schemaVersion",
+            "`sensors.plants` needs schemaVersion 1.5 or newer, but this profile "
+            f"declares '{rooms_doc.get('schemaVersion')}' -- bump it; nothing else enforces this coupling",
+        )
+    furniture_ids = {f.get("id") for f in geo.get("furniture", [])}
+    for iid, binding in plants.items():
+        if iid not in furniture_ids:
+            report.error(
+                f"rooms.json/sensors/plants/{iid}",
+                f"plant bound to furniture item '{iid}', which has no matching item in geometry.json's furniture",
+            )
+        b = binding or {}
+        dry, wet = b.get("dryBelow", 20), b.get("wetAbove", 80)
+        if isinstance(dry, (int, float)) and isinstance(wet, (int, float)) and not dry < wet:
+            report.error(
+                f"rooms.json/sensors/plants/{iid}",
+                f"dryBelow ({dry}) must be below wetAbove ({wet}); the engine would ignore both and use 20 / 80",
+            )
 
 
 def check_vacuum_binding(rooms_doc, geo, sensors, geo_room_ids, version, report):

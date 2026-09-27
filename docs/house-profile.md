@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.4"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key and `1.4` its `vacuums` key. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.5"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key and `1.5` its `plants` key. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -1036,6 +1036,7 @@ renders exactly as it did before — both features simply stay dark.
 | `corniceLights` | **curtain id** | The curtain's cornice strip follows the light entity: on/off, brightness and colour |
 | `climate` | **room id** | ONE `climate.*` entity (a string, not a list) for the room panel's temperature row |
 | `vacuums` | **furniture item id**, from the geometry's `furniture[].id` | A robot vacuum: click the item for its control card; the sidebar's Controls view shows the same block |
+| `plants` | **furniture item id** | A plant: tap the item for its read-only moisture card; the sidebar's Controls view lists every plant |
 
 Several entities on one target are OR-ed: any one of them reading `on` means
 occupied, or open. `unavailable` and `unknown` count as `off`, so a sensor that
@@ -1291,6 +1292,46 @@ that the buttons move, and sends nothing. `vacuums` needs `schemaVersion`
 `"1.4"`; the validator errors on an item id or a segment room the geometry
 does not have.
 
+#### Plants
+
+```json
+"sensors": {
+  "plants": {
+    "lounge_fern": {
+      "moisture":    "sensor.example_fern_soil_moisture",
+      "battery":     "sensor.example_fern_battery",
+      "status":      "binary_sensor.example_fern_dry",
+      "temperature": "sensor.example_fern_temperature",
+      "name":        "Fern"
+    },
+    "hall_cactus": { "watering": "sensor.example_cactus_watering_countdown" }
+  }
+}
+```
+
+Keyed by the **furniture item** that draws the plant (a `plant` item in
+`geometry.json`), found by where a tap lands, exactly like a robot vacuum.
+The card is **read-only** -- nothing is ever sent -- and shows:
+
+- the moisture % from `moisture`, and a status: **Dry** below `dryBelow`
+  (default 20), **Wet** above `wetAbove` (default 80), else **OK**. A bound
+  `status` helper decides instead when it reports something usable: a
+  `binary_sensor` (on = dry) or a `sensor` warning (none / ok, dry / low /
+  alarm, wet / high);
+- when Home Assistant last heard from the sensor, the battery (a % or a
+  high / low gauge) and the temperature, each only when bound;
+- **Offline**, never 0%, when the moisture sensor is `unavailable` or
+  `unknown`. Battery soil sensors drop off a Zigbee mesh often, and a 0%
+  would say "water me" about a plant that may be fine.
+
+A plant with no probe can bind `watering` instead of `moisture`: a countdown
+helper (100 = watered today, 0 = due), shown as "Watering N%" with **Water
+due** at 0. `moisture` or `watering` is required. The sidebar's Controls view
+lists every bound plant with the same reading. A house with no Home Assistant
+(the demo) shows sample readings, labelled as such. `plants` needs
+`schemaVersion` `"1.5"`; the validator errors on an item id the geometry does
+not have and on `dryBelow` not below `wetAbove`.
+
 Leave `url` and `fallbackUrl` out of a committed profile. A hostname in a
 tracked file discloses infrastructure; supply them through runtime config
 instead. And, again: **the token is never in this file.**
@@ -1442,6 +1483,8 @@ that a JSON Schema cannot express:
 - `sensors.vacuums` item ids resolving against the geometry's furniture, their
   `segments` room ids against its rooms, and appearing only in a profile that
   declares `schemaVersion` 1.4+
+- `sensors.plants` item ids resolving against the geometry's furniture, `dryBelow`
+  below `wetAbove`, and appearing only in a profile that declares `schemaVersion` 1.5+
 - a `site.latitude` precise enough to locate a building rather than a city
 - which side of its wall each window, curtain and wall-anchored item faces,
   using the same probe the engine uses: **error** if the room is on neither
