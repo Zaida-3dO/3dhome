@@ -25,8 +25,10 @@
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   .play-wrap { position:relative; }
   #playground { width:100%; height:640px; display:block; background:#0f0f1a; border-radius:4px; touch-action:none; }
-  .hud { position:absolute; top:8px; left:8px; background:rgba(10,10,14,0.78); color:#e8e6e0; font-size:10.5px;
-    line-height:1.5; padding:8px 10px; border-radius:4px; pointer-events:none; white-space:pre; min-width:300px; }
+  .hud { position:absolute; top:8px; left:8px; max-width:calc(100% - 16px); background:rgba(10,10,14,0.78); color:#e8e6e0;
+    font-size:10.5px; line-height:1.5; padding:8px 10px; border-radius:4px; pointer-events:none;
+    white-space:pre-wrap; overflow-wrap:anywhere; }
+  .hud.collapsed { display:none; }
   .hud .warn { color:#ffb070; }
   .bench-out { font-size:10.5px; white-space:pre; background:#fbfaf7; border:1px solid #ece8e0; border-radius:4px;
     padding:8px 10px; margin-top:10px; max-height:260px; overflow:auto; }
@@ -76,12 +78,14 @@
   import * as PlantMod from '../src/furniture/plant.js';
   import * as FinishMod from '../src/furniture/finishes.js';
   import * as SunMod from '../src/sun-position.js';
+  import * as PlaygroundMod from './strip-light-playground.js';
   // Once per THREE instance: the LTC lookup tables RectAreaLight shades with.
   RectAreaLightUniformsLib.init();
   window.THREE = T3;
   window.StripLight = StripMod;
   window.StripFurniture = { kitchen: KitchenMod, desk: DeskMod, cabinet: CabinetMod, sofa: SofaMod, plant: PlantMod, finishes: FinishMod };
   window.StripSun = SunMod;
+  window.StripPlayground = PlaygroundMod;
 </script>
 
 <!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
@@ -115,7 +119,11 @@
      spec pages' rig (ambient + key + fill + an env cube).
    * TIER emulates the house's quality tiers: pixel ratio, shadows, and the
      strip caps (low: no strip lights at all, as the house drops ambient
-     strips on low today; mid: B capped at MID_MAX_N lights per strip).
+     strips on low today; mid: B capped at MID_MAX_N lights per strip --
+     1, the recommended mid setup: today's single light behind the mount).
+   * The room and the strip mountings live in specs/strip-light-playground.js
+     so scripts/test-strip-light.mjs can prove no strip is buried inside
+     furniture.
    * HUD: frame time, draw calls, programs, lights by type, fragment uniform
      vectors (an upper-bound count, see uniformRows) vs the GPU's limit, and
      the first-show time of the last rebuild (shader compile + link + draw).
@@ -147,7 +155,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 /** The ceiling main light: a merged room light standing for ~6 downlights at the house's 0.6 each. */
 const MAIN_I = 3.6;
 /** Mid tier: B builds at most this many lights per strip. */
-const MID_MAX_N = 3;
+const MID_MAX_N = 1;
 /** The house's #3d popup (~92vw x 88vh on a 1280 x 800 CSS tablet screen). */
 const BENCH_CSS = [1178, 704];
 
@@ -166,87 +174,9 @@ function stripColour(t) {
 // ====================================================================
 // Room + furniture
 // ====================================================================
-const ROOM = { w: 6, d: 4.5, h: 2.6 };
-const WIN = { z0: -0.6, z1: 0.6, y0: 0.9, y1: 2.1 };
-
-/** Every strip mounting, in the order "Strips" adds them. Metres; rotY turns the strip's local X. */
-function stripSlots() {
-  const N = -ROOM.d / 2, E = ROOM.w / 2, Wx = -ROOM.w / 2;
-  const slots = [
-    { name: 'under kitchen wall cabinets', length: 170, facing: 'down', pos: [-1.7, 1.40, N + 0.26], rotY: 0, wash: 51.5, spread: 12, back: 26 },
-    { name: 'desk, under the front edge', length: 110, facing: 'down', pos: [1.3, 0.715, N + 0.67], rotY: 0, wash: 71.5, spread: 25 },
-    { name: 'cove over the window wall', length: 340, facing: 'up', pos: [Wx + 0.14, 2.43, 0], rotY: Math.PI / 2, wash: 15, spread: 20, back: 14 },
-    { name: 'behind the TV', length: 120, facing: 'back', pos: [E - 0.09, 1.52, 0], rotY: -Math.PI / 2, wash: 9, spread: 15 },
-    { name: 'on top of the wall cabinets', length: 170, facing: 'up', pos: [-1.7, 2.10, N + 0.12], rotY: 0, wash: 50, spread: 20, back: 12 },
-    { name: 'kitchen plinth', length: 170, facing: 'down', pos: [-1.7, 0.13, N + 0.50], rotY: 0, wash: 13, spread: 8 },
-    { name: 'shelf over the desk', length: 60, facing: 'down', pos: [1.3, 1.55, N + 0.16], rotY: 0, wash: 78, spread: 20, back: 16 },
-    { name: 'TV console open shelf (10 cm)', length: 10, facing: 'down', pos: [E - 0.36, 0.33, 0], rotY: -Math.PI / 2, wash: 13, spread: 5 },
-  ];
-  // Stress slots: linear ceiling strips on a grid.
-  const xs = [-2.2, -0.75, 0.75, 2.2], zs = [-1.75, -1.25, -0.75, -0.25, 0.25, 0.75, 1.25, 1.75];
-  const lens = [60, 120, 240, 120];
-  for (const z of zs) for (let i = 0; i < xs.length; i++) {
-    slots.push({ name: 'ceiling strip', length: lens[i], facing: 'down', pos: [xs[i], ROOM.h - 0.005, z], rotY: 0, wash: 259.5, spread: 40, stress: true });
-  }
-  return slots;
-}
-const MAX_STRIPS = stripSlots().length;
-
-function buildRoom(THREE, root) {
-  const F = window.StripFurniture;
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0xe9e5dc, roughness: 0.9 });
-  const floorMat = new THREE.MeshStandardMaterial({ color: 0xa88560, roughness: 0.75 });
-  const ceilMat = new THREE.MeshStandardMaterial({ color: 0xf2f0ea, roughness: 0.95 });
-  const box = (w, h, d, x, y, z, m, name) => {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
-    b.position.set(x, y, z); b.name = name || 'room';
-    b.castShadow = true; b.receiveShadow = true;
-    root.add(b); return b;
-  };
-  const T = 0.1, { w, d, h } = ROOM;
-  box(w + 2 * T, T, d + 2 * T, 0, -T / 2, 0, floorMat, 'floor');
-  const ceiling = box(w + 2 * T, T, d + 2 * T, 0, h + T / 2, 0, ceilMat, 'ceiling');
-  box(w + 2 * T, h, T, 0, h / 2, -d / 2 - T / 2, wallMat, 'wall-N');
-  box(T, h, d, w / 2 + T / 2, h / 2, 0, wallMat, 'wall-E');
-  // West wall with a window opening.
-  const wx = -w / 2 - T / 2;
-  box(T, h, WIN.z0 + d / 2, wx, h / 2, (-d / 2 + WIN.z0) / 2, wallMat, 'wall-W');
-  box(T, h, d / 2 - WIN.z1, wx, h / 2, (WIN.z1 + d / 2) / 2, wallMat, 'wall-W');
-  box(T, WIN.y0, WIN.z1 - WIN.z0, wx, WIN.y0 / 2, 0, wallMat, 'wall-W');
-  box(T, h - WIN.y1, WIN.z1 - WIN.z0, wx, (h + WIN.y1) / 2, 0, wallMat, 'wall-W');
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0xbfd8e8, roughness: 0.05, transparent: true, opacity: 0.18, depthWrite: false });
-  const glass = new THREE.Mesh(new THREE.PlaneGeometry(WIN.z1 - WIN.z0, WIN.y1 - WIN.y0), glassMat);
-  glass.position.set(wx, (WIN.y0 + WIN.y1) / 2, 0); glass.rotation.y = Math.PI / 2; root.add(glass);
-  // The cove ledge the window-wall strip sits on.
-  box(0.18, 0.03, 3.5, -w / 2 + 0.09, 2.415, 0, ceilMat, 'cove-ledge');
-  // Floating shelf over the desk.
-  box(1.0, 0.03, 0.22, 1.3, 1.565, -d / 2 + 0.11, new THREE.MeshStandardMaterial({ color: 0x7a5a3a, roughness: 0.7 }), 'shelf');
-
-  const place = (g, x, y, z, rotY) => {
-    g.position.set(x, y, z); g.rotation.y = rotY || 0;
-    g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-    root.add(g); return g;
-  };
-  const K = F.kitchen.TYPES;
-  place(K['kitchen-base-run'].build(THREE, Object.assign({}, K['kitchen-base-run'].DEFAULTS, { width: 180 })), -1.7, 0, -d / 2);
-  place(K['kitchen-wall-run'].build(THREE, Object.assign({}, K['kitchen-wall-run'].DEFAULTS, { width: 180,
-    // plain cabinets: a chimney hood would hang below the strip's line
-    modules: [{ kind: 'cabinet', width: 60, hinge: 'left' }, { kind: 'cabinet', width: 60, hinge: 'right' }, { kind: 'cabinet', width: 60, hinge: 'right' }] })), -1.7, 1.40, -d / 2);
-  place(F.desk.build(THREE, { width: 120, depth: 70, topHeight: 74 }), 1.3, 0, -d / 2);
-  place(F.cabinet.build(THREE, {
-    width: 180, height: 34, depth: 40,
-    fronts: [{ height: 34, cells: [{ kind: 'door', width: 50 },
-      { kind: 'stack', width: 80, cells: [{ kind: 'open', height: 14 }, { kind: 'drawer', height: 20 }] },
-      { kind: 'door', width: 50 }] }],
-    plinth: { type: 'plinth', height: 0 }, gloss: true, color: '#ffffff', topColor: '#2a2a2a'
-  }), w / 2, 0, 0, -Math.PI / 2);
-  // The TV: a 55" panel, 6 cm off the wall.
-  const tvMat = new THREE.MeshStandardMaterial({ color: 0x111114, roughness: 0.3, metalness: 0.2 });
-  box(0.03, 0.71, 1.23, w / 2 - 0.075, 1.22, 0, tvMat, 'tv');
-  place(F.sofa.build(THREE, Object.assign({}, F.sofa.DEFAULTS, { chaise: 'none', width: 220, depth: 95 })), -w / 2 + 0.12, 0, 1.0, Math.PI / 2);
-  place(F.plant.build(THREE, F.plant.DEFAULTS), w / 2 - 0.45, 0, -d / 2 + 0.45);
-  return { ceiling };
-}
+const PG = window.StripPlayground;
+const ROOM = PG.ROOM;
+const MAX_STRIPS = PG.stripSlots().length;
 
 // ====================================================================
 // Measurement helpers
@@ -323,7 +253,7 @@ function PlaygroundView({ t }) {
     canvas.addEventListener('wheel', e => { e.preventDefault(); orb.r = Math.max(0.5, Math.min(12, orb.r + e.deltaY * 0.003)); syncCam(); }, { passive: false });
 
     const room = new THREE.Group(); scene.add(room);
-    const built = buildRoom(THREE, room);
+    const built = PG.buildRoom(THREE, room, window.StripFurniture);
     // Remember each furniture material's palette params, for the live-finish swap.
     room.traverse(o => { if (o.isMesh && o.material && o.material.userData && o.material.userData.finish) {
       o.material.userData._spec = { roughness: o.material.roughness, metalness: o.material.metalness };
@@ -441,13 +371,12 @@ function PlaygroundView({ t }) {
     // strips
     while (strips.children.length) {
       const c = strips.children[0]; strips.remove(c);
-      c.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) { if (o.material.map) o.material.map.dispose(); if (o.material.emissiveMap) o.material.emissiveMap.dispose(); o.material.dispose(); } });
+      SL.dispose(c);
     }
-    const slots = stripSlots().slice(0, Math.max(0, Math.min(MAX_STRIPS, t.strips)));
+    const slots = PG.stripSlots().slice(0, Math.max(0, Math.min(MAX_STRIPS, t.strips)));
     const n = Math.max(1, Math.min(t.n, tier.maxN === Infinity ? t.n : tier.maxN));
     slots.forEach(s => {
-      const g = SL.build(THREE, { technique: t.technique, n, length: s.length, facing: s.facing, diameter: t.diameter,
-        washDistance: s.wash, washSpread: s.spread, backWash: s.back || 0 });
+      const g = SL.build(THREE, PG.slotParams(s, t.technique, n, t.diameter));
       if (!tier.stripLights) {
         // low tier: the house builds no strip lights at all; keep the glowing part only.
         const d = g.userData.stripLight;
@@ -486,14 +415,16 @@ function PlaygroundView({ t }) {
   };
   S.setView = setView;
 
+  const [hudOpen, setHudOpen] = React.useState(() => !(window.matchMedia && window.matchMedia('(max-width: 760px)').matches));
   return (
     <div className="play-wrap">
       <canvas id="playground" ref={canvasRef}></canvas>
-      <div className="hud" ref={hudRef}>measuring…</div>
+      <div className={hudOpen ? 'hud' : 'hud collapsed'} ref={hudRef}>measuring…</div>
       <div className="row">
         {['room', 'kitchen', 'desk', 'tv', 'cove', 'top'].map(id => (
           <button key={id} className="btn" onClick={() => setView(id)}>{id}</button>
         ))}
+        <button className={hudOpen ? 'btn active' : 'btn'} onClick={() => setHudOpen(o => !o)}>{hudOpen ? 'hide HUD' : 'show HUD'}</button>
       </div>
     </div>
   );
@@ -558,10 +489,26 @@ function maxUniformRows(S, census) {
     if (!ok) continue;
     max = Math.max(max, uniformRows(gl, prog.program));
   }
-  // A program that failed to compile/link (e.g. "FRAGMENT shader uniforms
-  // count exceeds MAX_FRAGMENT_UNIFORM_VECTORS") renders NOTHING.
-  const failed = S.renderer.info.programs.some(pr => pr.diagnostics && pr.diagnostics.runnable === false);
-  return { rows: max, failed };
+  return { rows: max, failed: currentProgramFailed(S) };
+}
+
+/**
+ * Did a program the scene is drawing with RIGHT NOW fail to compile/link
+ * (e.g. "FRAGMENT shader uniforms count exceeds MAX_FRAGMENT_UNIFORM_VECTORS")?
+ * Such a material draws nothing. Asked of each visible mesh's current
+ * program, not of every program three has ever cached, so the warning clears
+ * as soon as a configuration that compiles is shown.
+ */
+function currentProgramFailed(S) {
+  let failed = false;
+  S.scene.traverse(o => {
+    if (failed || !o.isMesh || !o.visible || !o.material) return;
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+      const prog = S.renderer.properties.get(m).currentProgram;
+      if (prog && prog.diagnostics && prog.diagnostics.runnable === false) { failed = true; return; }
+    }
+  });
+  return failed;
 }
 
 function updateHud(S, el) {
@@ -579,8 +526,8 @@ function updateHud(S, el) {
     'GPU frame  ' + (S.timerExt ? (gpu.length ? 'p50 ' + p(gpu, 0.5).toFixed(2) + '  p95 ' + p(gpu, 0.95).toFixed(2) + ' ms' : 'waiting…') : 'n/a (no timer query) — use Bench'),
     'draw calls ' + S.lastCalls + '   tris ' + (S.lastTris || 0).toLocaleString() + '   programs ' + S.renderer.info.programs.length,
     'lights  point ' + L.point + '  spot ' + L.spot + '  rectArea ' + L.rectArea + '  dir ' + L.directional + '  hemi ' + L.hemisphere + '  amb ' + L.ambient + '  (shadowed ' + L.shadowed + ')',
-    'frag uniforms ' + u.rows + ' / ' + S.maxFragU + '  (upper bound, heaviest program)' + (u.rows > 256 ? '  > 256 phone!' : ''),
-    ...(u.failed ? ['!! A SHADER FAILED TO COMPILE (too many uniforms?) — lit surfaces are NOT drawn (sticky until reload: three caches the failed program)'] : []),
+    'frag uniforms ' + (u.failed ? 'over the limit (the lit program failed, so it reports none)' : u.rows) + ' / ' + S.maxFragU + '  (upper bound, heaviest program)' + (!u.failed && u.rows > 256 ? '  > 256 phone!' : ''),
+    ...(u.failed ? ['!! A SHADER FAILED TO COMPILE (too many uniforms?) — lit surfaces are NOT drawn'] : []),
     'first show ' + (S.firstShow ? S.firstShow.ms.toFixed(0) + ' ms (compile + link + draw; ' + S.firstShow.programs + ' programs live)' : '—'),
   ];
   el.textContent = lines.join('\n');
@@ -622,24 +569,35 @@ const nextFrame = () => new Promise(r => setTimeout(r, 0));
 // ====================================================================
 // Close-up (spec-three.jsx ThreeView): A B C D side by side
 // ====================================================================
+/** What the previous close-up build owns, freed on the next rebuild (ThreeView disposes geometry only). */
+let closeupOwned = [];
+/** Close-up bays: 1 m wide, 1.65 m apart. With the close-up's point-light reach cut to CLOSEUP_REACH_CM
+ *  no A/B light reaches a neighbouring bay (0.22 + 0.5 + 0.9 < 1.65); C has no cut-off, its spill onto
+ *  the next bay is a few per cent (a one-sided rectangle 1.2 m away, near grazing). */
+const CLOSEUP_BAY = 1.65, CLOSEUP_REACH_CM = 90;
 function buildCloseup(t, group, THREE) {
   const SL = window.StripLight;
+  for (const o of closeupOwned) SL.dispose(o);
+  closeupOwned = [];
+  const C = PG.COLOURS;
   const shelf = new THREE.MeshStandardMaterial({ color: 0xf2f0ea, roughness: 0.6 });
-  const top = new THREE.MeshStandardMaterial({ color: 0x8e8c88, roughness: 0.7 });
-  const back = new THREE.MeshStandardMaterial({ color: 0xe9e5dc, roughness: 0.9 });
-  const wall = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.0, 0.02), back);
-  wall.position.set(0, 0.5, -0.16); group.add(wall);
-  const counter = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.03, 0.34), top);
-  counter.position.set(0, 0.015, 0); group.add(counter);
+  const top = new THREE.MeshStandardMaterial({ color: C.worktop, roughness: 0.7 });
+  const back = new THREE.MeshStandardMaterial({ color: C.wall, roughness: 0.9 });
+  const own = m => { closeupOwned.push(m); group.add(m); return m; };
   SL.TECHNIQUES.forEach((tech, i) => {
-    const x = -0.9 + i * 0.6;
-    const s = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.3), shelf);
-    s.position.set(x, 0.65 + 0.15, -0.0); group.add(s);
-    const g = SL.build(THREE, { technique: tech, n: t.n, length: 45, facing: 'down', diameter: t.diameter, washDistance: 62, washSpread: 14, backWash: 26 });
+    const x = (i - 1.5) * CLOSEUP_BAY;
+    // Each bay its own backboard (1 m), counter (60 cm deep) and shelf: A B C D left to right.
+    own(new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.02), back)).position.set(x, 0.5, -0.17);
+    own(new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.03, 0.6), top)).position.set(x, 0.015, 0.14);
+    own(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.3), shelf)).position.set(x, 0.8, -0.01);
+    // Strip under the shelf, 4 cm in from its front; the counter 62 cm below, the backboard face 25 cm behind.
+    // D's cards stay inside the bay: 45 + 2 x 27 = 99 cm wide, and the counter card ends 8 cm short of the counter's front.
+    const g = SL.build(THREE, { technique: tech, n: t.n, length: 45, facing: 'down', diameter: t.diameter,
+      reach: CLOSEUP_REACH_CM, washDistance: 62, washSpread: 27, washAlbedo: C.worktop, backWash: 25, backAlbedo: C.wall });
     g.userData.stripLight.intensity = SL.DEFAULTS.intensity * t.power;
     SL.applyStripState(g, { on: t.bri > 0, bri: t.bri, color: stripColour(t) });
-    g.position.set(x, 0.65, 0.1);
-    group.add(g);
+    g.position.set(x, 0.65, 0.09);
+    own(g);
   });
 }
 
@@ -719,16 +677,21 @@ function App() {
             (a white by colour temperature, or any colour) drive every strip on the page.
           </div>
           <div className="legend">
-            Close-up below: four shelves, techniques <b>A B C D</b> left to right, under the spec pages' own lighting (with
-            its environment map). The playground further down is the one to judge colour by: its "house" lighting mode is
-            the live scene's rig.
+            Close-up below: four separate bays, techniques <b>A B C D</b> left to right, seen from just below shelf height
+            so the tubes show. Both views follow the Lighting control: "house" is the live scene's night rig (no
+            environment map), "spec" the spec pages' own. In the close-up the point lights' reach is cut to 0.9 m so no bay
+            lights its neighbour. D's glow cards take the colour of the surface they lie on (a grey worktop glows dimmer
+            than a white wall); a different surface inside a card's area (a black hob) is painted as if it were the worktop,
+            which is the limit of a decal.
           </div>
         </div>
 
         {t.closeup && (
           <div className="card full">
-            <h2>Close-up — A B C D left to right (spec lighting, env map)</h2>
-            <ThreeView t={t} buildModel={buildCloseup} heightOf={() => 1.0} />
+            <h2>Close-up — A B C D left to right (follows the Lighting control)</h2>
+            <ThreeView t={t} buildModel={buildCloseup} heightOf={() => 1.1}
+              initialView={{ th: 0, ph: 1.585, r: 4.6, target: [0, 0.55, 0.1] }}
+              rigOf={tt => tt.lighting} />
           </div>
         )}
 

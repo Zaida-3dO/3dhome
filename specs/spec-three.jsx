@@ -41,6 +41,20 @@
        2): the default dark background made the dark-green felt (#1e3228,
        rgb ~22,32,27) nearly invisible against it (rgb 26,26,28).
 
+   initialView  [optional]
+       { th, ph, r, target: [x, y, z] } -- the orbit camera's starting
+       pose and its fixed look target (kept across rebuilds instead of the
+       default (0, heightOf/2, 0)). Added for StripLightSpec's close-up,
+       which has to look UP at tubes mounted under shelves. Pages that do
+       not pass it are unaffected.
+
+   rigOf(t)  [optional]
+       'spec' (default) or 'house'. 'house' swaps this view's lighting for
+       the live scene's night rig: no ambient/key/fill, a 0.12 hemisphere
+       fill, NO environment map, ACES tone mapping at 0.85 -- so colours read
+       as they will in the house. Added for StripLightSpec; pages that do not
+       pass it never get the extra hemisphere light (no shader change).
+
    -------------------------------------------------------------------
    OPT-IN ROOM FEATURES (added for the bathroom specs — 2026-07-18)
    -------------------------------------------------------------------
@@ -102,12 +116,12 @@
        userData.isMirror = true (optional but recommended); no other work.
    ===================================================================== */
 
-function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeight }) {
+function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeight, initialView, rigOf }) {
   const canvasRef = React.useRef(null);
   const stateRef = React.useRef({});
   // keep latest callbacks without re-running the init effect
   const cbRef = React.useRef({});
-  cbRef.current = { buildModel, animate, heightOf, backgroundOf };
+  cbRef.current = { buildModel, animate, heightOf, backgroundOf, initialView, rigOf };
 
   // ---- initialise scene once ----------------------------------------
   React.useEffect(() => {
@@ -123,7 +137,8 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
     scene.background = new THREE.Color(cbRef.current.backgroundOf ? cbRef.current.backgroundOf(t) : 0x1a1a1c);
     const cam = new THREE.PerspectiveCamera(35, W / H, 0.01, 50);
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+    const ambient = new THREE.AmbientLight(0xffffff, 0.45);
+    scene.add(ambient);
     const key = new THREE.DirectionalLight(0xffffff, 1.1);
     key.position.set(2, 4, 3);
     key.castShadow = true; key.shadow.mapSize.set(1024, 1024);
@@ -154,6 +169,31 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
 
     const target = new THREE.Vector3(0, 1, 0);
     let orb = { th: 0.6, ph: 1.15, r: 3.8, drag: false, px: 0, py: 0 };
+    const iv = cbRef.current.initialView;
+    if (iv) {
+      orb.th = iv.th; orb.ph = iv.ph; orb.r = iv.r;
+      if (iv.target) target.set(iv.target[0], iv.target[1], iv.target[2]);
+    }
+    // Opt-in house rig (rigOf): only built when the page asks for it.
+    let houseFill = null;
+    if (cbRef.current.rigOf) {
+      houseFill = new THREE.HemisphereLight(0xd9d9e6, 0xd9d9e6, 0);
+      scene.add(houseFill);
+    }
+    let rig = 'spec';
+    const applyRig = (want) => {
+      if (!houseFill || want === rig) return;
+      rig = want;
+      const house = want === 'house';
+      ambient.intensity = house ? 0 : 0.45;
+      key.intensity = house ? 0 : 1.1;
+      fill.intensity = house ? 0 : 0.3;
+      houseFill.intensity = house ? 0.12 : 0;
+      scene.environment = house ? null : cubeRT.texture;
+      renderer.toneMapping = house ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+      renderer.toneMappingExposure = house ? 0.85 : 1;
+      scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { m.needsUpdate = true; }); });
+    };
     function syncCam() {
       cam.position.set(
         target.x + orb.r * Math.sin(orb.ph) * Math.sin(orb.th),
@@ -264,7 +304,7 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
 
       // (C) env cube capture (mirror reflections). Only when scheduled, and
       // with mirror meshes hidden so they don't reflect themselves.
-      if (envCaptureFrames > 0) {
+      if (envCaptureFrames > 0 && rig !== 'house') {
         envCaptureFrames--;
         const mirrors = stateRef.current._mirrors || [];
         const hidden = [];
@@ -298,7 +338,7 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
 
     stateRef.current = {
       scene, sceneRoot, cam, target, orb, syncCam, renderer, ctx, _h: 1.0,
-      cubeRT, cubeCam, collectRoomMeshes,
+      cubeRT, cubeCam, collectRoomMeshes, applyRig,
       // called by the [t] rebuild effect to re-capture the env cube (mirror
       // reflections) after new geometry lands.
       scheduleEnvCapture: () => { envCaptureFrames = 3; },
@@ -356,8 +396,11 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
     // focus height for camera + presets
     const h = (cbRef.current.heightOf ? cbRef.current.heightOf(t) : 1.0);
     s._h = h;
-    s.target.set(0, h / 2, 0);
+    const ivt = cbRef.current.initialView && cbRef.current.initialView.target;
+    if (ivt) s.target.set(ivt[0], ivt[1], ivt[2]);
+    else s.target.set(0, h / 2, 0);
     s.syncCam();
+    if (cbRef.current.rigOf && s.applyRig) s.applyRig(cbRef.current.rigOf(t) === 'house' ? 'house' : 'spec');
 
     const group = new THREE.Group();
     group.name = 'itemRoot';

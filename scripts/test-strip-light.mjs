@@ -70,6 +70,14 @@ function facingWorld(g, facing) {
   return new THREE.Vector3(f[0], f[1], f[2]).transformDirection(g.matrixWorld);
 }
 
+/** A mesh's vertices in the STRIP's own frame (world, then undone by the strip's world matrix). */
+function localBox(g, mesh) {
+  const inv = new THREE.Matrix4().copy(g.matrixWorld).invert();
+  const pos = mesh.geometry.attributes.position, b = new THREE.Box3();
+  for (let i = 0; i < pos.count; i++) b.expandByPoint(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld).applyMatrix4(inv));
+  return b;
+}
+
 // ---- 1. A: today's strip ------------------------------------------------------
 {
   const { g } = placed({ technique: 'A', length: 120 });
@@ -83,6 +91,17 @@ function facingWorld(g, facing) {
   check('A: today\'s intensity 0.3, reach 2.5 m, decay 2', near(ls[0].intensity, 0.3) && near(ls[0].distance, 2.5) && ls[0].decay === 2,
     [ls[0].intensity, ls[0].distance, ls[0].decay]);
   check('A: today\'s 85% opaque emissive box', tube.material.transparent && near(tube.material.opacity, 0.85) && near(tube.material.emissiveIntensity, 1.5));
+  const lb = localBox(g, tube);
+  const ls2 = lb.getSize(new THREE.Vector3());
+  check('A: today\'s default 2.5 x 2.5 cm cross-section (not the tube diameter)', near(ls2.y, 0.025, 1e-6) && near(ls2.z, 0.025, 1e-6), [ls2.y, ls2.z]);
+  check('A: box back face on the mounting point (down: top at y=0)', near(lb.max.y, 0, 1e-6), lb.max.y);
+}
+{
+  const { g } = placed({ technique: 'A', boxSize: [1.2, 3.0], facing: 'back' });
+  const lb = localBox(g, tubeOf(g));
+  const ls2 = lb.getSize(new THREE.Vector3());
+  check('A: boxSize [h, d] is honoured', near(ls2.y, 0.012, 1e-6) && near(ls2.z, 0.03, 1e-6), [ls2.y, ls2.z]);
+  check('A facing back: box back face on the mounting point (z max 0)', near(lb.max.z, 0, 1e-6), lb.max.z);
 }
 
 // ---- 2. B: N lights along the line --------------------------------------------
@@ -113,7 +132,8 @@ for (const facing of Object.keys(S.FACINGS)) {
 }
 {
   const { g } = placed({ technique: 'B', n: 99 });
-  check('B: N is capped at MAX_N', lightsOf(g).length === S.MAX_N, lightsOf(g).length);
+  check('B: N is capped at 24 lights per strip', lightsOf(g).length === 24, lightsOf(g).length);
+  check('B: MAX_N is 24 (uniform cost of one capped strip: 96 vectors)', S.MAX_N === 24 && S.uniformVectors({ technique: 'B', n: 99 }) === 96);
 }
 
 // ---- 3. C: one area light --------------------------------------------------------
@@ -170,12 +190,14 @@ for (const facing of ['down', 'up']) {
     for (let i = 0; i < bp.count; i++) ds.push(new THREE.Vector3().fromBufferAttribute(bp, i).applyMatrix4(back.matrixWorld).sub(o).dot(fw));
     const ends = [Math.min(...ds), Math.max(...ds)];
     check(tag + ': spans from the strip plane to the lit surface', near(ends[0], 0, 1e-3) && near(ends[1], 0.5, 1e-3), ends);
-    // brightest texel row sits next to the strip: v=1 is the plane's +Y, which must point back at the mounting plane
+    // v=1 (texture top row) is the plane's +Y, which must point back at the strip's own plane
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(back.getWorldQuaternion(new THREE.Quaternion()));
-    check(tag + ': bright edge by the strip', up.dot(fw) < -0.9999, up);
+    check(tag + ': texture top row lies in the strip plane', up.dot(fw) < -0.9999, up);
     const img = back.material.map.image, W = img.width, H = img.height;
     const col = i => img.data[(i * W + W / 2) * 4 + 3];
-    check(tag + ': texture brightest at v=1 (top row), dark at v=0', col(H - 1) > 200 && col(0) < 20, [col(H - 1), col(0)]);
+    let best = 0; for (let i = 1; i < H; i++) if (col(i) > col(best)) best = i;
+    check(tag + ': brightest band in the half nearer the strip (a wall is lit most just below it)', best >= H / 2, [best, H]);
+    check(tag + ': dark at the far end (by the lit surface)', col(0) < 10, col(0));
   }
 }
 for (const facing of ['front', 'back']) {
@@ -190,8 +212,116 @@ for (const facing of ['front', 'back']) {
   const pos = wash.geometry.attributes.position, ts = [];
   for (let i = 0; i < pos.count; i++) ts.push(along(ends, new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(wash.matrixWorld)));
   const span = [Math.min(...ts), Math.max(...ts)];
-  check('D wash fades past the ends over END_FADE x spread, not the full spread',
-    near(span[0], -S.END_FADE * 0.2, 1e-3) && near(span[1], 1 + S.END_FADE * 0.2, 1e-3), span);
+  check('D wash reaches washSpread past each end', near(span[0], -0.2, 1e-3) && near(span[1], 1.2, 1e-3), span);
+}
+
+// ---- 4b. D cards: soft everywhere, physically scaled, albedo-aware -----------------
+/** Every card's alpha along ALL FOUR borders is ~0, and it falls smoothly from its peak. */
+for (const facing of ['down', 'up', 'back']) {
+  const { g } = placed({ technique: 'D', washDistance: facing === 'back' ? 8 : 50, backWash: 26, facing, length: 120 });
+  const cards = []; g.traverse(o => { if (o.userData.stripRole && o.userData.stripRole.indexOf('wash') === 0) cards.push(o); });
+  check('D facing ' + facing + ': cards built', cards.length === (facing === 'back' ? 1 : 2), cards.length);
+  for (const c of cards) {
+    const tag = 'D facing ' + facing + ' ' + c.userData.stripRole;
+    const img = c.material.map.image, W = img.width, H = img.height;
+    const a = (i, j) => img.data[(j * W + i) * 4 + 3];
+    let border = 0, peak = 0;
+    for (let i = 0; i < W; i++) { border = Math.max(border, a(i, 0), a(i, H - 1)); }
+    for (let j = 0; j < H; j++) { border = Math.max(border, a(0, j), a(W - 1, j)); }
+    for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) peak = Math.max(peak, a(i, j));
+    check(tag + ': no hard edge -- every border texel near 0', border <= 6, border);
+    check(tag + ': a real peak inside', peak >= 200, peak);
+    // along the length: from the middle column outward, never rises, and no step > 12% of peak between texels
+    let jm = 0; for (let j = 0; j < H; j++) if (a(W / 2, j) > a(W / 2, jm)) jm = j;
+    let mono = true, maxStep = 0;
+    for (let i = W / 2; i < W - 1; i++) {
+      if (a(i + 1, jm) > a(i, jm) + 1) mono = false;
+      maxStep = Math.max(maxStep, Math.abs(a(i + 1, jm) - a(i, jm)));
+    }
+    check(tag + ': falls smoothly past the end (monotone, no step)', mono && maxStep <= 0.12 * peak, [mono, maxStep]);
+    // across: from the peak row, the same
+    let mono2 = true, maxStep2 = 0;
+    for (let j = jm; j > 0; j--) {
+      if (a(W / 2, j - 1) > a(W / 2, j) + 1) mono2 = false;
+      maxStep2 = Math.max(maxStep2, Math.abs(a(W / 2, j - 1) - a(W / 2, j)));
+    }
+    check(tag + ': falls smoothly across (monotone, no step)', mono2 && maxStep2 <= 0.12 * peak, [mono2, maxStep2]);
+  }
+}
+{
+  // Brightness is physical: the card adds albedo/pi x the irradiance of a Lambertian
+  // line with the same half-space flux as B/C (radiant intensity 2I/L per metre).
+  // Checked against a NUMERIC integral here (Simpson), not the builder's closed form.
+  const L = 1.0, h = 0.5, I = 0.3;
+  const { g } = placed({ technique: 'D', length: 100, washDistance: 50, washSpread: 40, washAlbedo: '#ffffff', color: '#ffffff' });
+  let wash = null; g.traverse(o => { if (o.userData.stripRole === 'wash') wash = o; });
+  const n = 2000; let sum = 0;
+  for (let i = 0; i <= n; i++) {
+    const sPos = -L / 2 + L * i / n, w = i === 0 || i === n ? 1 : (i % 2 ? 4 : 2);
+    sum += w * (h * h) / Math.pow(sPos * sPos + h * h, 2);
+  }
+  const E0 = (2 * I / L) * sum * (L / n) / 3;          // irradiance under the centre
+  const expect = E0 / Math.PI;                           // x albedo 1 / pi
+  const img = wash.material.map.image, W = img.width, H = img.height;
+  const centreAlpha = img.data[((H / 2) * W + W / 2) * 4 + 3] / 255;
+  const got = wash.material.color.r * centreAlpha;
+  check('D: the card adds albedo/pi x the line-source irradiance under the strip (numeric check)',
+    Math.abs(got - expect) / expect < 0.03, [got, expect]);
+  // the albedo multiplies it: a dark worktop glows dimly
+  const { g: g2 } = placed({ technique: 'D', length: 100, washDistance: 50, washSpread: 40, washAlbedo: '#404040', color: '#ffffff' });
+  let w2 = null; g2.traverse(o => { if (o.userData.stripRole === 'wash') w2 = o; });
+  const lin = new THREE.Color('#404040').r;
+  check('D: card brightness scales with the surface albedo', near(w2.material.color.r, wash.material.color.r * lin, 1e-9), [w2.material.color.r, wash.material.color.r * lin]);
+  // a surface twice as far gets less (not a fixed decal strength)
+  const { g: g3 } = placed({ technique: 'D', length: 100, washDistance: 100, washSpread: 40, color: '#ffffff' });
+  let w3 = null; g3.traverse(o => { if (o.userData.stripRole === 'wash') w3 = o; });
+  check('D: a surface further away gets a dimmer peak', w3.material.color.r < 0.6 * wash.material.color.r, [w3.material.color.r, wash.material.color.r]);
+}
+{
+  // washSpread 0 = auto: AUTO_SPREAD x distance, clamped
+  const { g } = placed({ technique: 'D', washDistance: 10, length: 50 });
+  check('D: washSpread auto = 2.5 x distance', near(g.userData.stripLight.washSpread, 25, 1e-9), g.userData.stripLight.washSpread);
+  const { g: g2 } = placed({ technique: 'D', washDistance: 200, length: 50 });
+  check('D: auto spread clamped to 80 cm', near(g2.userData.stripLight.washSpread, 80, 1e-9), g2.userData.stripLight.washSpread);
+}
+
+// ---- 4c. aim: SpotLights along facing ---------------------------------------------
+for (const tech of ['A', 'B']) {
+  for (const facing of ['up', 'down']) {
+    const tag = tech + ' aimed facing ' + facing;
+    const { g } = placed({ technique: tech, n: 4, aim: true, facing });
+    const ls = lightsOf(g);
+    check(tag + ': all SpotLights', ls.length === (tech === 'A' ? 1 : 4) && ls.every(l => l.isSpotLight), ls.map(l => l.type));
+    check(tag + ': unshadowed', ls.every(l => !l.castShadow));
+    const fw = facingWorld(g, facing);
+    const dirs = ls.map(l => l.target.getWorldPosition(new THREE.Vector3()).sub(worldPos(l)).normalize());
+    check(tag + ': each aimed along facing', dirs.every(d => d.dot(fw) > 0.9999), dirs);
+    check(tag + ': cone stops short of the mounting plane (angle < 90 deg)', ls.every(l => l.angle < Math.PI / 2 - 0.05), ls.map(l => l.angle));
+    const sum = ls.reduce((s, l) => s + l.intensity, 0);
+    check(tag + ': total intensity still 0.3', near(sum, 0.3), sum);
+    const c = S.lightCounts({ technique: tech, n: 4, aim: true });
+    check(tag + ': lightCounts reports spots', c.spot === ls.length && c.point === 0, c);
+    check(tag + ': uniformVectors counts 7 per spot', S.uniformVectors({ technique: tech, n: 4, aim: true }) === 7 * ls.length);
+  }
+}
+{
+  const { g } = placed({ technique: 'C', aim: true, facing: 'up' });
+  check('C ignores aim (already one-sided)', lightsOf(g).length === 1 && lightsOf(g)[0].isRectAreaLight);
+}
+
+// ---- 4d. dispose ---------------------------------------------------------------------
+for (const tech of S.TECHNIQUES) {
+  const g = S.build(THREE, { technique: tech, n: 3, washDistance: 40, backWash: 20 });
+  const owned = new Set();
+  g.traverse(o => {
+    if (o.geometry) owned.add(o.geometry);
+    if (o.material) { owned.add(o.material); if (o.material.map) owned.add(o.material.map); if (o.material.emissiveMap) owned.add(o.material.emissiveMap); }
+  });
+  const called = new Set();
+  for (const r of owned) { const orig = r.dispose.bind(r); r.dispose = () => { called.add(r); orig(); }; }
+  S.dispose(g);
+  const missed = [...owned].filter(r => !called.has(r)).map(r => r.type || r.constructor.name);
+  check(tech + ': dispose() frees every geometry, material and texture the strip owns', missed.length === 0 && owned.size > 0, missed);
 }
 {
   const { g } = placed({ technique: 'D' });
@@ -281,6 +411,57 @@ for (const tech of S.TECHNIQUES) {
 }
 check('kelvinToHex matches the house ramp at 2700 K', S.kelvinToHex(2700) === 0xffd7a0, S.kelvinToHex(2700).toString(16));
 check('kelvinToHex matches the house ramp at 6500 K', S.kelvinToHex(6500) === 0xe1f5fa, S.kelvinToHex(6500).toString(16));
+
+// ---- 9. the playground: no strip buried in furniture ------------------------------
+// specs/strip-light-playground.js is the room StripLightSpec draws. Every
+// mounting's tube + channel (and A's box) must sit ON a surface, never INSIDE
+// a piece of furniture or a wall: a strip inside the TV drew its dots on the
+// screen. Touching (the surface it is stuck to) is allowed; overlapping by
+// more than OVERLAP_TOL in all three axes is not. World AABBs of every room
+// mesh, built by the real furniture builders.
+{
+  const PG = await imp('specs/strip-light-playground.js');
+  const F = {
+    kitchen: await imp('src/furniture/kitchen.js'), desk: await imp('src/furniture/standing-desk.js'),
+    cabinet: await imp('src/furniture/cabinet.js'), sofa: await imp('src/furniture/sofa.js'), plant: await imp('src/furniture/plant.js')
+  };
+  const room = new THREE.Group();
+  PG.buildRoom(THREE, room, F);
+  room.updateMatrixWorld(true);
+  const solids = [];
+  room.traverse(o => { if (o.isMesh && o.name !== 'window-glass') solids.push({ name: o.name || o.parent.name, box: new THREE.Box3().setFromObject(o) }); });
+  check('playground: room built with furniture', solids.length > 40, solids.length);
+  const OVERLAP_TOL = 0.001;
+  const overlap = (a, b) => Math.min(a.max.x, b.max.x) - Math.max(a.min.x, b.min.x) > OVERLAP_TOL &&
+    Math.min(a.max.y, b.max.y) - Math.max(a.min.y, b.min.y) > OVERLAP_TOL &&
+    Math.min(a.max.z, b.max.z) - Math.max(a.min.z, b.min.z) > OVERLAP_TOL;
+  const slots = PG.stripSlots();
+  check('playground: 8 furniture mountings + 32 stress slots', slots.length === 40, slots.length);
+  for (const tech of ['A', 'B']) {
+    for (const slot of slots) {
+      const g = S.build(THREE, PG.slotParams(slot, tech, 3, 1.6));
+      g.position.set(slot.pos[0], slot.pos[1], slot.pos[2]); g.rotation.y = slot.rotY;
+      g.updateMatrixWorld(true);
+      const parts = [];
+      g.traverse(o => { if (o.isMesh && (o.userData.stripRole === 'tube' || o.userData.stripRole === 'channel')) parts.push(new THREE.Box3().setFromObject(o)); });
+      const hits = [];
+      for (const pb of parts) for (const sb of solids) if (overlap(pb, sb.box)) hits.push(sb.name);
+      check('playground ' + tech + ' "' + slot.name + '" @' + slot.pos.map(v => v.toFixed(2)).join(',') + ': not inside any furniture/wall',
+        hits.length === 0, [...new Set(hits)]);
+      // ...and it faces open space: a point 1 cm out along facing from the tube is inside nothing
+      const fw = new THREE.Vector3(...S.FACINGS[slot.facing]).transformDirection(g.matrixWorld);
+      const probe = g.getWorldPosition(new THREE.Vector3()).addScaledVector(fw, 0.03);
+      const inside = solids.filter(sb => sb.box.containsPoint(probe)).map(sb => sb.name);
+      check('playground ' + tech + ' "' + slot.name + '": faces open space', inside.length === 0, inside);
+    }
+  }
+  // The mutation this guards: the pre-fix TV mounting (x 2.91, the TV's front face) IS caught.
+  const bad = S.build(THREE, { technique: 'B', length: 120, facing: 'back' });
+  bad.position.set(2.91, 1.52, 0); bad.rotation.y = -Math.PI / 2; bad.updateMatrixWorld(true);
+  let caught = false;
+  bad.traverse(o => { if (o.isMesh && o.userData.stripRole === 'tube') { const b = new THREE.Box3().setFromObject(o); caught = solids.some(sb => overlap(b, sb.box)); } });
+  check('playground: the check catches a strip buried in the TV (round-1 mounting)', caught);
+}
 
 console.log((failures ? 'FAILED' : 'OK') + ' strip-light: ' + passes + ' passed, ' + failures + ' failed');
 process.exit(failures ? 1 : 0);

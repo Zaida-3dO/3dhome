@@ -7,8 +7,9 @@
  * they can be compared side by side (specs/StripLightSpec.html) before any of
  * them goes into the house:
  *
- *   'A' baseline    exactly today's look: an emissive, 85%-opaque box and one
- *                   PointLight at its centre (reach 2.5 m, decay 2).
+ *   'A' baseline    exactly today's look: an emissive, 85%-opaque box
+ *                   (default 2.5 x 2.5 cm) and one PointLight at its centre
+ *                   (reach 2.5 m, decay 2).
  *   'B' multi-point N dim PointLights spread evenly along the line, the total
  *                   intensity conserved (each is intensity / N), inside a
  *                   frosted diffuser tube.
@@ -19,9 +20,21 @@
  *                   Limits: no shadows, lights MeshStandardMaterial /
  *                   MeshPhysicalMaterial only (Lambert/Phong ignore it), no
  *                   distance cut-off.
- *   'D' zero-light  NO light objects: the diffuser tube plus an additive glow
- *                   card ("wash") on the surface the strip faces. Costs no
- *                   fragment uniforms at all -- the low-tier / phone option.
+ *   'D' zero-light  NO light objects: the diffuser tube plus additive glow
+ *                   cards ("washes") on the surface the strip faces and,
+ *                   optionally, on the wall behind it. Each card carries the
+ *                   irradiance a Lambertian line source with the same flux as
+ *                   B/C would put there (closed form, so it is soft along the
+ *                   length AND across, with no hard edge anywhere), times the
+ *                   albedo of the surface it lies on. Costs no fragment
+ *                   uniforms at all -- the low-tier / phone option.
+ *
+ * AIMED STRIPS (`aim: true`): A's and B's lights become unshadowed
+ * SpotLights pointing along `facing` (AIM_ANGLE_DEG), so an up-facing cove
+ * lights the ceiling but not the wall BELOW its ledge -- lights are
+ * unshadowed here, so a ledge or lip cannot block them. C is one-sided by
+ * nature and D paints nothing behind the strip, so the option means the same
+ * for all four. A SpotLight costs 7 uniform vectors against a PointLight's 4.
  *
  * THE DIFFUSER (B, C, D): a round frosted tube in an aluminium channel. Its
  * glow is an emissive gradient AROUND the tube (brightest on the side that
@@ -50,9 +63,10 @@
  * The caller positions and rotates the group like any furniture part.
  *
  * STATE: applyStripState(group, { on, bri 0-100, color '#rrggbb' }) poses a
- * built strip (every light, the tube, the wash) without a rebuild -- the same
- * channel state light-parts.js takes, so the house's syncLights() can drive
- * one shared brightness and colour for every strip.
+ * built strip (every light, the tube, the washes) without a rebuild -- the
+ * same channel state light-parts.js takes, so the house's syncLights() can
+ * drive one shared brightness and colour for every strip. dispose(group)
+ * frees everything a strip owns on the GPU.
  *
  * Pure ESM, THREE injected, no DOM: scripts/test-strip-light.mjs builds it
  * with the vendored module in Node.
@@ -79,8 +93,9 @@ export const FACINGS = Object.freeze({
 /** Frozen defaults, cm (illustrative, not a survey of any fitting). */
 export const DEFAULTS = Object.freeze({
   technique: 'B',
-  length: 100,          // cm; the real house ranges 10..340
-  diameter: 1.6,        // cm; the diffuser tube (A: the box's height and depth)
+  length: 100,          // cm; typical strips range 10..340
+  diameter: 1.6,        // cm; the diffuser tube (B/C/D)
+  boxSize: Object.freeze([2.5, 2.5]), // cm; A: the box's [height, depth] -- today's addStrip default
   channel: true,        // aluminium U-channel behind the tube (B/C/D)
   facing: 'down',
   n: 6,                 // B: lights along the strip (clamped to 1..MAX_N)
@@ -89,9 +104,12 @@ export const DEFAULTS = Object.freeze({
   color: '#ffb45a',
   bri: 100,
   on: true,
+  aim: false,           // A/B: SpotLights along `facing` instead of PointLights
   washDistance: 0,      // cm; D: distance to the surface the strip faces (0 = no card)
-  washSpread: 25,       // cm; D: how far the glow reaches either side of the line
-  backWash: 0           // cm; D, facing down/up: distance to a wall BEHIND the strip (0 = none)
+  washSpread: 0,        // cm; D: how far the cards reach across the line and past its ends (0 = auto)
+  washAlbedo: '#ffffff',// D: colour of the surface the wash card lies on
+  backWash: 0,          // cm; D, facing down/up: distance to a wall BEHIND the strip (0 = none)
+  backAlbedo: '#ffffff' // D: colour of that wall
 });
 
 /** B never builds more lights than this per strip. */
@@ -107,12 +125,22 @@ export const TUBE_GLOW = 1.6;
 /** A's emissive intensity at bri 100 and its opacity -- today's applyAccent(). */
 export const BASELINE_GLOW = 1.5;
 export const BASELINE_OPACITY = 0.85;
-/** C: radiance x area = AREA_FLUX x the point light's intensity (flux match onto the lit side). */
+/**
+ * C: radiance x area = AREA_FLUX x the point light's intensity. The analytic
+ * half-space flux match: a point light of intensity I sends 2*pi*I into the
+ * half-space in front of the strip; a one-sided Lambertian rectangle of
+ * radiance Le and area A sends pi*Le*A. (Checked against r160's
+ * RE_Direct_RectArea_Physical. On the axis, far away, C therefore reads 2x A
+ * -- A spends half its light behind the strip.)
+ */
 export const AREA_FLUX = 2;
-/** D: the glow fades past the strip's ends over this share of washSpread. */
-export const END_FADE = 0.4;
-/** D: the wash card's peak strength at bri 100 and total intensity 0.3. */
-export const WASH_GAIN = 0.55;
+/** D: an overall trim on the physically derived card brightness (1 = as computed). */
+export const WASH_GAIN = 1;
+/** D: washSpread 0 means this many times the distance to the lit surface, clamped to 5..80 cm. */
+export const AUTO_SPREAD = 2.5;
+/** A/B with aim: the SpotLights' half-angle (degrees) and penumbra. */
+export const AIM_ANGLE_DEG = 80;
+export const AIM_PENUMBRA = 0.5;
 
 /**
  * Fragment uniform vectors each light type adds to EVERY lit shader, counted
@@ -150,14 +178,22 @@ export function resolveParams(params) {
   p.n = clamp(Math.round(Number(p.n) || 1), 1, MAX_N);
   p.intensity = Math.max(0, Number(p.intensity) || 0);
   p.reach = Math.max(1, Number(p.reach) || DEFAULTS.reach);
+  p.aim = p.aim === true;
+  const bs = Array.isArray(p.boxSize) && p.boxSize.length === 2 ? p.boxSize : DEFAULTS.boxSize;
+  p.boxSize = [Math.max(0.3, Number(bs[0]) || 2.5), Math.max(0.3, Number(bs[1]) || 2.5)];
+  p.washDistance = Math.max(0, Number(p.washDistance) || 0);
+  p.backWash = Math.max(0, Number(p.backWash) || 0);
+  p.washSpread = Number(p.washSpread) > 0 ? Number(p.washSpread) : clamp(AUTO_SPREAD * p.washDistance, 5, 80);
   return p;
 }
 
 /** How many light objects of each type a strip with these params builds. */
 export function lightCounts(params) {
   const p = resolveParams(params);
+  const punctual = p.technique === 'A' ? 1 : p.technique === 'B' ? p.n : 0;
   return {
-    point: p.technique === 'A' ? 1 : p.technique === 'B' ? p.n : 0,
+    point: p.aim ? 0 : punctual,
+    spot: p.aim ? punctual : 0,
     rectArea: p.technique === 'C' ? 1 : 0
   };
 }
@@ -165,7 +201,7 @@ export function lightCounts(params) {
 /** Fragment uniform vectors (upper bound, see UNIFORM_VECTORS) these params add. */
 export function uniformVectors(params) {
   const c = lightCounts(params);
-  return c.point * UNIFORM_VECTORS.point + c.rectArea * UNIFORM_VECTORS.rectArea;
+  return c.point * UNIFORM_VECTORS.point + c.spot * UNIFORM_VECTORS.spot + c.rectArea * UNIFORM_VECTORS.rectArea;
 }
 
 // ---- geometry helpers --------------------------------------------------------
@@ -200,34 +236,68 @@ function tubeGlowTexture(THREE, faceU) {
 }
 
 /**
- * The wash card's alpha: a "stadium" falloff round a line segment -- full
- * along the strip's length, fading smoothly to nothing `spread` either side
- * of it and past its ends. Size in texels; `lineFrac` is the share of the
- * card's long side the strip itself covers.
+ * The integral over s in [-half, half] of 1 / ((x - s)^2 + a)^2, in closed
+ * form (a > 0: the squared distance from the line, perpendicular).
  */
-function washTexture(THREE, lineFrac, vertical) {
-  const W = 128, H = 32;
-  const data = new Uint8Array(W * H * 4);
-  const half = lineFrac / 2;
+export function lineIntegral(x, half, a) {
+  const q = Math.sqrt(a);
+  const F = u => u / (2 * a * (u * u + a)) + Math.atan(u / q) / (2 * a * q);
+  return F(x + half) - F(x - half);
+}
+
+/**
+ * Irradiance per unit radiant intensity per metre that a Lambertian line
+ * source (length L, emitting along `facing`) puts on
+ *   'face'  the plane it faces, h away, at (x along, y across);
+ *   'back'  a wall b behind it, at (x along, y = depth past the strip's plane),
+ * i.e. the line integral of cos(emit) x cos(receive) / r^2.
+ */
+export function lineIrradiance(kind, L, x, y, h, b) {
+  if (kind === 'face') return h * h * lineIntegral(x, L / 2, y * y + h * h);
+  return y * b * lineIntegral(x, L / 2, y * y + b * b);
+}
+
+/** A smooth window: 1 at t = 0, exactly 0 (with zero slope) at t = 1. */
+export function fadeWindow(t) {
+  const u = clamp(t, 0, 1);
+  return (1 - u * u) * (1 - u * u);
+}
+
+/**
+ * A glow card's texture: lineIrradiance over the card divided by its peak (so
+ * the texture is 0..1 and the absolute peak goes into the material colour),
+ * times fadeWindow so it reaches exactly 0 at EVERY card edge.
+ *   face: the card spans x in [-L/2 - S, L/2 + S] and y in [-S, S], h away.
+ *   back: the same x, and depth y in [0, h] down a wall b behind; texture
+ *         row H-1 (v = 1) is the strip's own plane.
+ * Returns { tex, peak } -- peak is the unnormalised maximum.
+ */
+function cardTexture(THREE, kind, L, S, h, b) {
+  const W = 128, H = 64;
+  const halfW = L / 2 + S;
+  const vals = new Float32Array(W * H);
+  let peak = 0;
   for (let j = 0; j < H; j++) {
     for (let i = 0; i < W; i++) {
-      const x = (i + 0.5) / W - 0.5, y = (j + 0.5) / H;
-      // distance (in "fade" units) past the segment's ends...
-      const dxN = Math.max(0, Math.abs(x) - half) / Math.max(1e-6, 0.5 - half);
-      // ...and across it: centred on the line, or (vertical) falling away
-      // from the top edge (v = 1, next to the strip) to the bottom.
-      const dyN = vertical ? 1 - y : Math.abs(y - 0.5) / 0.5;
-      const d = Math.min(1, Math.hypot(dxN, dyN));
-      const a = Math.pow(1 - d, 2);  // soft, like 1/r^2 flattened by the diffuser
-      const o = (j * W + i) * 4;
-      data[o] = 255; data[o + 1] = 255; data[o + 2] = 255; data[o + 3] = Math.round(255 * a);
+      const x = (i / (W - 1) * 2 - 1) * halfW;       // edge texels sample the edges exactly
+      const y = kind === 'face' ? (j / (H - 1) * 2 - 1) * S : (1 - j / (H - 1)) * h;
+      const e = lineIrradiance(kind, L, x, y, h, b);
+      if (e > peak) peak = e;
+      const wx = fadeWindow(Math.max(0, Math.abs(x) - L / 2) / S);
+      const wy = kind === 'face' ? fadeWindow(Math.abs(y) / S) : fadeWindow(y / h);
+      vals[j * W + i] = e * wx * wy;
     }
+  }
+  const data = new Uint8Array(W * H * 4);
+  for (let k = 0; k < W * H; k++) {
+    data[k * 4] = 255; data[k * 4 + 1] = 255; data[k * 4 + 2] = 255;
+    data[k * 4 + 3] = Math.round(255 * (peak > 0 ? vals[k] / peak : 0));
   }
   const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearFilter;
   tex.needsUpdate = true;
-  return tex;
+  return { tex, peak };
 }
 
 // ---- build -----------------------------------------------------------------------
@@ -238,7 +308,7 @@ function washTexture(THREE, lineFrac, vertical) {
  * @param {Object} THREE   the three.js namespace
  * @param {Object} params  see DEFAULTS
  * @returns {THREE.Group}  userData.stripLight = the resolved params plus
- *   { lights: [...light objects], tube, wash }. Every light carries
+ *   { lights: [...light objects], tube, wash, washes }. Every light carries
  *   userData.stripShare (its share of the strip's total intensity).
  */
 export function build(THREE, params) {
@@ -261,22 +331,41 @@ export function build(THREE, params) {
   const back = p.channel && p.technique !== 'A' ? CHANNEL_T : 0;
   const centre = fv.clone().multiplyScalar(back + R);
 
+  // A's and B's lights: a PointLight, or (aim) an unshadowed SpotLight along
+  // `facing`. Intensity is set by applyStripState below.
+  const punctual = (pos, share) => {
+    let l;
+    if (p.aim) {
+      l = new THREE.SpotLight(color, 0, p.reach * CM, AIM_ANGLE_DEG * Math.PI / 180, AIM_PENUMBRA, 2);
+      l.castShadow = false;
+      // The target rides with the light, one metre along `facing`.
+      l.target.position.copy(fv);
+      l.add(l.target);
+      l.name = 'strip-light-spot';
+    } else {
+      l = new THREE.PointLight(color, 0, p.reach * CM, 2);
+      l.name = 'strip-light-point';
+    }
+    l.position.copy(pos);
+    l.userData.stripShare = share;
+    return l;
+  };
+
   if (p.technique === 'A') {
-    // Exactly today's addStrip(): a box [length, d, d] and one PointLight at
-    // its centre, reach `reach`, decay 2.
+    // Exactly today's addStrip(): a box [length, height, depth] (default
+    // 2.5 x 2.5 cm) and one PointLight at its centre, reach `reach`, decay 2.
+    const BH = p.boxSize[0] * CM, BD = p.boxSize[1] * CM;
     const m = new THREE.Mesh(
-      new THREE.BoxGeometry(L, D, D),
+      new THREE.BoxGeometry(L, BH, BD),
       new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8, transparent: true, opacity: BASELINE_OPACITY })
     );
-    m.position.copy(centre);
+    // Its back face on the mounting point, like every other technique.
+    m.position.copy(fv).multiplyScalar(f[1] !== 0 ? BH / 2 : BD / 2);
     m.name = 'strip-box';
     m.userData.stripRole = 'tube';
     tube = m;
     g.add(m);
-    const pl = new THREE.PointLight(color, 0, p.reach * CM, 2); // intensity: applyStripState below
-    pl.position.copy(centre);
-    pl.name = 'strip-light-point';
-    pl.userData.stripShare = 1;
+    const pl = punctual(m.position, 1);
     lights.push(pl);
     g.add(pl);
   } else {
@@ -335,21 +424,14 @@ export function build(THREE, params) {
     if (p.technique === 'B') {
       const n = p.n;
       for (let i = 0; i < n; i++) {
-        const pl = new THREE.PointLight(color, 0, p.reach * CM, 2); // intensity / n: applyStripState below
-        pl.position.set(-L / 2 + (i + 0.5) * L / n, 0, 0).addScaledVector(fv, -SETBACK_M);
-        pl.name = 'strip-light-point';
-        pl.userData.stripShare = 1 / n;
+        const pl = punctual(new THREE.Vector3(-L / 2 + (i + 0.5) * L / n, 0, 0).addScaledVector(fv, -SETBACK_M), 1 / n);
         lights.push(pl);
         g.add(pl);
       }
     } else if (p.technique === 'C') {
-      // Same light onto the lit side as A: a point light of intensity I sends
-      // 2*pi*I into the half-space in front; a one-sided Lambertian rectangle
-      // of radiance Le and area A sends pi*Le*A. Le = AREA_FLUX * I / A with
-      // AREA_FLUX = 2 matches them (the mean-irradiance rule light-merge.js
-      // uses for merged lights).
+      // Same flux onto the lit side as A: Le = AREA_FLUX * I / area.
       const area = L * D;
-      const ra = new THREE.RectAreaLight(color, 0, L, D); // intensity / area: applyStripState below
+      const ra = new THREE.RectAreaLight(color, 0, L, D); // intensity: applyStripState below
       ra.position.copy(fv).multiplyScalar(back + D + 0.0005); // the tube's outer face
       ra.quaternion.copy(q);
       ra.name = 'strip-light-area';
@@ -358,46 +440,48 @@ export function build(THREE, params) {
       lights.push(ra);
       g.add(ra);
     } else if (p.technique === 'D' && p.washDistance > 0) {
-      // The glow cards. Additive and unlit, so they brighten whatever they
-      // lie on at no lighting cost; a few mm proud of the surface so they
-      // never z-fight. Past the strip's ends the glow fades over END_FADE of
-      // the spread (a strip throws little light beyond its own ends).
-      const spread = Math.max(1, p.washSpread) * CM;
-      const endFade = END_FADE * spread;
-      const mk = (w, h, tex, role) => {
+      // The glow cards: unlit, additive, a few mm proud of their surface so
+      // they never z-fight. A card's texture is the line source's irradiance
+      // over it (cardTexture); its colour, set in applyStripState, is light
+      // colour x surface albedo / pi x the absolute irradiance -- what a lit
+      // Standard material of that albedo would gain under B or C. So a dark
+      // worktop glows dimly and a white wall brightly. What a card cannot
+      // know is a DIFFERENT surface inside its area (a black hob set in a grey
+      // worktop): that is painted with the card's albedo. The limit of a decal.
+      const S = p.washSpread * CM, h = p.washDistance * CM;
+      const mk = (w, hh, card, role, albedo) => {
         const wm = new THREE.MeshBasicMaterial({
-          color, map: tex, transparent: true, opacity: 1,
+          color, map: card.tex, transparent: true, opacity: 1,
           blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
         });
         wm.userData.finish = 'emissive';
         wm.userData.dynamic = true;
-        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wm);
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(w, hh), wm);
         m.name = 'strip-' + role;
         m.userData.stripRole = role;
+        m.userData.peak = card.peak;
+        m.userData.albedo = new THREE.Color(albedo);
         m.renderOrder = 1;
         washes.push(m);
         g.add(m);
         return m;
       };
-      // 1. The surface the strip faces (a worktop, the floor, the ceiling).
-      const cw = L + 2 * endFade;
-      wash = mk(cw, 2 * spread + D, washTexture(THREE, L / cw, false), 'wash');
+      // 1. The surface the strip faces (a worktop, the floor, the ceiling, a wall).
+      wash = mk(L + 2 * S, 2 * S, cardTexture(THREE, 'face', L, S, h, 0), 'wash', p.washAlbedo);
       // PlaneGeometry faces +Z; turn it to face back toward the strip (-facing).
       wash.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), fv.clone().negate());
-      wash.position.copy(fv).multiplyScalar(p.washDistance * CM - 0.003);
+      wash.position.copy(fv).multiplyScalar(h - 0.003);
       // 2. Optional: the wall BEHIND a down/up-facing strip (the backsplash
       //    under a wall cabinet, the wall above a cove), from the strip's
-      //    plane to the lit surface, brightest next to the strip.
+      //    plane to the lit surface.
       if (p.backWash > 0 && (p.facing === 'down' || p.facing === 'up')) {
-        const bh = p.washDistance * CM;
-        // On a wall the light spreads sideways about as far as it travels
-        // down it, so the back card fades past the ends over half its height.
-        const bwW = L + 2 * Math.max(endFade, bh / 2);
-        const bw = mk(bwW, bh, washTexture(THREE, L / bwW, true), 'wash-back');
-        // plane +Y -> back toward the mounting plane, so v=1 (bright) is by the strip
+        const b = p.backWash * CM;
+        const bw = mk(L + 2 * S, h, cardTexture(THREE, 'back', L, S, h, b), 'wash-back', p.backAlbedo);
+        // plane +Y -> back toward the mounting plane, so the texture's top
+        // row (v = 1) lies in the strip's own plane
         const yAxis = fv.clone().negate(), xAxis = new THREE.Vector3(1, 0, 0);
         bw.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, xAxis.clone().cross(yAxis)));
-        bw.position.copy(fv).multiplyScalar(bh / 2).add(new THREE.Vector3(0, 0, -p.backWash * CM + 0.003));
+        bw.position.copy(fv).multiplyScalar(h / 2).add(new THREE.Vector3(0, 0, -b + 0.003));
       }
     }
   }
@@ -439,8 +523,13 @@ export function applyStripState(group, state) {
       m.emissiveIntensity = on && k > 0 ? TUBE_GLOW * Math.max(TUBE_MIN, k) : 0;
     }
   }
+  // D: a Lambertian line with the same half-space flux as B/C (2*pi*I) has
+  // radiant intensity 2*I/L per metre on its axis; a card adds albedo/pi x
+  // the irradiance that gives -- a lit Standard material's diffuse term.
+  const perMetre = 2 * total / (s.length * CM);
   for (const w of s.washes || []) {
-    w.material.color.set(col).multiplyScalar(WASH_GAIN * k * (total / DEFAULTS.intensity));
+    w.material.color.set(col).multiply(w.userData.albedo)
+      .multiplyScalar(WASH_GAIN * k * perMetre * w.userData.peak / Math.PI);
     w.visible = k > 0;
   }
   s.state = { on, bri: k * 100, color: col };
@@ -452,4 +541,25 @@ export function stripLights(root) {
   const out = [];
   root.traverse(o => { if (o.isLight && o.parent && o.name.indexOf('strip-light') === 0) out.push(o); });
   return out;
+}
+
+/**
+ * Free everything a strip owns on the GPU: geometries, materials and their
+ * textures (the tube's glow map, the D cards' maps) and the lights' shadow
+ * resources. Call it when a strip is removed -- a teardown that disposes
+ * geometry only leaks the rest. Safe on a tree of strips.
+ */
+export function dispose(root) {
+  if (!root) return;
+  const mats = new Set();
+  root.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    const m = o.material;
+    if (m) (Array.isArray(m) ? m : [m]).forEach(x => mats.add(x));
+    if (o.isLight && typeof o.dispose === 'function') o.dispose();
+  });
+  for (const m of mats) {
+    for (const key of ['map', 'emissiveMap']) if (m[key]) m[key].dispose();
+    m.dispose();
+  }
 }
