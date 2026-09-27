@@ -305,6 +305,29 @@ jobs:
           # the lower sleeve and its overlap stay fixed).
           set -euo pipefail
           node scripts/test-standing-desk.mjs
+      - name: Robot vacuum builder envelope, dock toggle and caps
+        run: |
+          # Asserts src/furniture/robot-vacuum.js beyond the generic contract:
+          # the envelope holds at DEFAULTS, with the dock off (35 x 35 x 10)
+          # and with oversized parts (clamped), the robot's front is at
+          # z = depth with its rear tucked under the tower, the status LED is
+          # emissive and kept, dock:false has no dock meshes, no lights, the
+          # triangle caps (600 full / 200 low, low <= 0.6 x full) and that
+          # toFurnitureJSON emits only non-default keys.
+          set -euo pipefail
+          node scripts/test-robot-vacuum.mjs
+      - name: Balcony builder envelope, bar gap, side modes and caps
+        run: |
+          # Asserts src/furniture/balcony.js beyond the generic contract: the
+          # envelope at several sizes and every side mode, the largest clear
+          # gap between the front railing's bars (measured on the built
+          # geometry) is <= 10 cm even when barSpacing asks for more, the
+          # front rail sits at z = depth, leftSide/rightSide 'none' and
+          # 'solid' remove or replace that side (+x is right), glass panes
+          # are glass and kept, and the caps (1500 full / 450 low, low <=
+          # 0.6 x full).
+          set -euo pipefail
+          node scripts/test-balcony.mjs
       - name: Desk strip as a room light channel; Ambient row comes from rooms.json
         run: |
           # Asserts a named light channel (a desk LED strip bound in rooms.json

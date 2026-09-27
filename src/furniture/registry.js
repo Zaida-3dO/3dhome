@@ -27,6 +27,8 @@
 
 export const REGISTRY = Object.freeze({
 
+  'balcony': { path: 'balcony.js', key: null, spec: 'BalconySpec' },
+
   'bathtub': { path: 'bathroom.js', key: 'bathtub', spec: 'BathroomFittingsSpec' },
 
   'bed': { path: 'bed.js', key: null, spec: 'BedSpec' },
@@ -70,6 +72,8 @@ export const REGISTRY = Object.freeze({
   'plant': { path: 'plant.js', key: null, spec: 'PlantSpec' },
 
   'radiator': { path: 'radiator.js', key: null, spec: 'RadiatorSpec' },
+
+  'robot-vacuum': { path: 'robot-vacuum.js', key: null, spec: 'RobotVacuumSpec' },
 
   'shelf': { path: 'small-items.js', key: 'shelf', spec: 'SmallItemsSpec' },
 
