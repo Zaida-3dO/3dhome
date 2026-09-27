@@ -123,6 +123,18 @@ const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
   const html = fs.readFileSync(path.join(root, 'specs/SmallItemsSpec.html'), 'utf8');
   const code = html.replace(/<!--[\s\S]*?-->/g, '');
   check('the preview control is offered for the photo-frame TYPE (every preset)', /\{type === 'photo-frame' && \(\s*<div id="photoPreview">/.test(code));
+  // ...and the preview reaches every build of the TYPE, whatever the preset.
+  // Mutations: `photo: type === 'photo-frame' && activePreset === ... ?` ->
+  // fails; drop the spanPhoto call in buildItem -> fails.
+  check('every photo-frame build gets the preview (t.photo keyed on the type alone)',
+    /photo: type === 'photo-frame' \? photo : null/.test(code), null);
+  check('buildItem spans the preview over the panels after building', /if \(t\.photo\) spanPhoto\(THREE, built, t\.photo\);/.test(code) &&
+    /function spanPhoto\(THREE, built, photo\) \{\s*photoSlices = window\.PhotoSpan\.applyPhotoSpan\(THREE, built, photo\.tex, photo\.aspect\)\.disposables;/.test(code));
+  // The per-panel clones are freed on the next rebuild -- from a page-level
+  // list, since ThreeView empties ctx before each rebuild (a list on ctx was
+  // never freed). Mutation: keep them on ctx again -> fails.
+  check('the per-panel slices live in a page-level list freed before each rebuild',
+    /let photoSlices = \[\];/.test(code) && /disposePhotoSlices\(\);\s*if \(t\.photo\)/.test(code) && !/ctx\.photoSlices/.test(code));
   check('a file input for images', /<input id="photoFile" type="file" accept="image\/\*"/.test(code));
   check('the file is read in the browser (URL.createObjectURL) and its URL revoked on replace/clear',
     /URL\.createObjectURL\(file\)/.test(code) && /URL\.revokeObjectURL\(prev\.url\)/.test(code));

@@ -236,8 +236,8 @@ function buildItem(t, group, THREE, ctx) {
   if (t.photo) params = Object.assign({}, params, { image: 'page-preview', textureLoader: () => t.photo.tex });
   const built = impl.build(THREE, params, { detail: t.detail || 'full' });
   group.add(built);
-  disposePhotoSlices(ctx);
-  if (t.photo) spanPhoto(THREE, built, t.photo, ctx);
+  disposePhotoSlices();
+  if (t.photo) spanPhoto(THREE, built, t.photo);
   if (t.lamp) addLampPreview(THREE, group, t.params, t.lamp);
   ctx.builtType = t.type;
 }
@@ -251,16 +251,16 @@ function buildItem(t, group, THREE, ctx) {
 // their pictures from the house's files.
 
 // The rebuild before this one gave each picture panel its own material and
-// texture clone (its slice of the image); free them.
-function disposePhotoSlices(ctx) {
-  (ctx.photoSlices || []).forEach(x => x.dispose());
-  ctx.photoSlices = [];
+// texture clone (its slice of the image); free them. Kept here, not on the
+// view's ctx: ThreeView empties ctx before every rebuild.
+let photoSlices = [];
+function disposePhotoSlices() {
+  photoSlices.forEach(x => x.dispose());
+  photoSlices = [];
 }
 
-function spanPhoto(THREE, built, photo, ctx) {
-  const r = window.PhotoSpan.applyPhotoSpan(THREE, built, photo.tex, photo.aspect);
-  ctx.photoSlices = r.disposables;
-  ctx.photoPanels = r.panels;
+function spanPhoto(THREE, built, photo) {
+  photoSlices = window.PhotoSpan.applyPhotoSpan(THREE, built, photo.tex, photo.aspect).disposables;
 }
 
 /** A page-drawn test pattern: a numbered grid over a colour sweep, a circle
