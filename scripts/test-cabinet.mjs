@@ -937,6 +937,41 @@ Object.keys(CABINET_PRESETS).forEach(k => {
   check(k + ': no strip boxes for a cabinet with no channels', C.channelStripBoxes(CABINET_PRESETS.chestOfDrawers.params).length === 0);
 });
 
+// 15n. `channel.light` makes a level FOLLOW a room light channel: its strip
+// meshes and the glow band on the drawer below become dynamic light parts
+// (light-parts.js) on that channel, each with its own material; a level
+// without `light` stays static (nothing dynamic).
+['bedsideTableLedNarrow', 'bedsideTableLedWide'].forEach(k => {
+  const p = JSON.parse(JSON.stringify(CABINET_PRESETS[k].params));
+  const chans = p.fronts.filter(r => r.channel);
+  const still = C.build(THREE, p, { detail: 'full' });
+  let dyn0 = 0;
+  still.traverse(o => { if (o.isMesh && o.userData.dynamic) dyn0++; });
+  check(k + ' no `light`: nothing dynamic', dyn0 === 0, dyn0);
+  chans[0].channel.light = 'demo_top';
+  chans[1].channel.light = 'demo_bottom';
+  const g = C.build(THREE, p, { detail: 'full' });
+  const parts = [];
+  g.traverse(o => { if (o.isMesh && o.userData.dynamic) parts.push(o); });
+  const of = (ch, role) => parts.filter(o => o.userData.lightChannel === ch && o.userData.lightRole === role);
+  ['demo_top', 'demo_bottom'].forEach(ch => {
+    check(k + ' ' + ch + ': its three strip meshes follow it', of(ch, 'strip').length === 3 &&
+      of(ch, 'strip').every(o => /^channelStrip/.test(o.name)), of(ch, 'strip').map(o => o.name));
+    check(k + ' ' + ch + ': the glow band below follows it, carrying the front colour', of(ch, 'glow').length === 1 &&
+      of(ch, 'glow')[0].name === 'channelGlow' && of(ch, 'glow')[0].userData.baseColor === p.color);
+  });
+  check(k + ': only the strips and bands are dynamic', parts.length === 8, parts.map(o => o.name));
+  const mats = new Set(parts.map(o => o.material));
+  const statics = [];
+  g.traverse(o => { if (o.isMesh && !o.userData.dynamic) statics.push(o.material); });
+  check(k + ': no light part shares a material with a static part', statics.every(m => !mats.has(m)));
+  check(k + ': the two levels never share a material', of('demo_top', 'strip').every(o => of('demo_bottom', 'strip').every(b => b.material !== o.material)));
+  const boxes = C.channelStripBoxes(p);
+  check(k + ': lightAt is the strip front, at the level centre, in the recess (behind the fronts)',
+    boxes.every(b => b.lightAt[0] === 0 && b.lightAt[1] === b.centre[1] &&
+      Math.abs(b.lightAt[2] - (b.centre[2] + b.size[2] / 2)) <= 0.1 && b.lightAt[2] < p.depth), boxes.map(b => b.lightAt));
+});
+
 // 15l. The mobile pedestal is pink: the pink gaming chair's pink.
 {
   const p = CABINET_PRESETS.mobilePedestal.params;

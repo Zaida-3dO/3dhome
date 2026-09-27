@@ -1388,7 +1388,8 @@
                 "description": "Makes this row a recessed light channel (the LED bedside tables): no front, set back 1.5 cm, wrapping the front and both sides (not the back), with an emissive strip in `color`. The front directly below gets a glow band along its top edge. Each channel has its own colour, so a later placement can bind each to its own light.",
                 "properties": {
                   "color": { "$ref": "#/$defs/hexColor" },
-                  "led": { "type": "boolean", "default": true, "description": "false: the recess only, with no emissive strip and no glow band. Use it when the level is drawn as a room light strip fixture on its own channel that follows a Home Assistant light (docs/house-profile.md, \"Bedside table LED strips\"); left on, the static strip draws the line a second time in a colour that follows nothing." }
+                  "led": { "type": "boolean", "default": true, "description": "false: the recess only, with no emissive strip and no glow band." },
+                  "light": { "type": "string", "minLength": 1, "description": "The room light channel this level follows (e.g. \"bedside_north_top\"): its strip and the glow band on the drawer below become live parts posed from that channel's state -- the strip in the light's colour when on and hidden when off, the band washing the drawer front by brightness. Draw the level's real light as a room light strip fixture on the same channel with `drawn: false` (docs/house-profile.md, \"Bedside table LED strips\")." }
                 },
                 "additionalProperties": false
               },
@@ -3922,7 +3923,9 @@
                 "minItems": 3,
                 "maxItems": 3,
                 "description": "For fixtureType 'strip': the emitter's [length, height, depth] in centimetres, so a 2 m cornice run reads as a line rather than a point."
-              }
+              },
+            "drawn": { "type": "boolean", "default": true, "description": "For fixtureType 'strip': false draws no emitter mesh, only the light. Use it when a furniture item draws the strip itself and follows the same channel (a bedside table channel with `light`, cabinet.js), so the line is not drawn twice." },
+            "reachCm": { "type": "number", "exclusiveMinimum": 0, "description": "For fixtureType 'strip': how far the light reaches, in centimetres (its cut-off distance; default 250). A small light tucked into furniture wants a short reach." }
             },
             "required": [
               "at"

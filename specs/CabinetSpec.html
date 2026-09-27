@@ -69,7 +69,10 @@
      window.cabinetModuleReady. -->
 <script type="module">
   window.CabinetFurniture = null;
-  window.cabinetModuleReady = import('../src/furniture/cabinet.js').then(m => {
+  window.cabinetModuleReady = Promise.all([
+    import('../src/furniture/cabinet.js'), import('../src/furniture/light-parts.js')
+  ]).then(([m, lp]) => {
+    window.LightParts = lp;
     window.CabinetFurniture = m;
   });
 </script>
@@ -344,10 +347,21 @@ function buildCabinet(params, levels) {
   return (t, group, THREE, ctx) => {
     if (!window.CabinetFurniture) return; // not loaded yet; App doesn't render until it is
     const channels = channelRows(params);
-    // A level switched OFF is built with `led: false` (recess only, no glow):
-    // what the table looks like with that light off.
+    // Each level is built FOLLOWING a light (`channel.light`) and posed from
+    // its preview state with the same light-parts.js the house uses: on, its
+    // strip in its colour and the drawer below washed by brightness; off,
+    // just the recess.
     const built = window.CabinetFurniture.build(THREE,
-      channels.length ? withLevelsOff(params, levels) : params, { detail: 'full' });
+      channels.length ? withLevelLights(params) : params, { detail: 'full' });
+    if (channels.length) {
+      built.traverse(o => {
+        if (!o.isMesh || !window.LightParts.isLightPart(o)) return;
+        const i = Number(o.userData.lightChannel.replace('level', ''));
+        const st = levelState(levels, i);
+        window.LightParts.applyLightPart(o, { on: st.on, bri: st.brightness,
+          color: params.fronts[channels[i]].channel.color || '#dbe8ff' });
+      });
+    }
     group.add(built);
     ctx.built = built;
     if (channels.length) addLevelPreview(THREE, group, params, levels);
@@ -359,11 +373,12 @@ function buildCabinet(params, levels) {
 // In a house each level is a REAL light: a room light `strip` fixture on its
 // own channel, bound to its own Home Assistant entity (docs/house-profile.md,
 // "Bedside table LED strips"). This preview shows the same thing here: a real
-// point light per level at the level's centre (where the house's strip
-// fixture puts its light), in the level's colour, with a floor and a wall
-// behind the table to see what it lights. Nothing here is part of the builder
-// or the house, and brightness is scaled for this page, not the house.
-const PREVIEW_MAX_INTENSITY = 0.3;
+// point light per level on its strip's front (channelStripBoxes().lightAt,
+// where the house fixture puts it), in the level's colour, with the house's
+// intensity and reach, and a floor and a wall behind the table to see what
+// it lights.
+const PREVIEW_MAX_INTENSITY = 0.3;   // the house's accent intensity at 100%
+const PREVIEW_REACH_M = 0.9;         // the reach the house fixture is given (reachCm 90)
 const levelName = (i, n) => (n === 2 ? ['top', 'bottom'][i] : 'level ' + (i + 1));
 
 /** Indices (into params.fronts, top first) of the light channel rows. */
@@ -376,27 +391,13 @@ function levelState(levels, i) {
   return Object.assign({ on: true, brightness: 70 }, levels[i] || {});
 }
 
-/** params with every OFF level's channel built as `led: false`. */
-function withLevelsOff(params, levels) {
+/** params with level i's channel following light 'level<i>'. */
+function withLevelLights(params) {
   const out = JSON.parse(JSON.stringify(params));
-  channelRows(out).forEach((ri, i) => {
-    if (!levelState(levels, i).on) out.fronts[ri].channel.led = false;
-  });
+  channelRows(out).forEach((ri, i) => { out.fronts[ri].channel.light = 'level' + i; });
   return out;
 }
 
-/** Centre height (m) of each channel row, from the rows below it and the plinth. */
-function channelCentres(params) {
-  const rows = params.fronts || [];
-  let y = (params.plinth && params.plinth.height) || 0;
-  const centre = {};
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const h = rows[i].height || 0;
-    if (rows[i].channel) centre[i] = (y + h / 2) / 100;
-    y += h;
-  }
-  return centre;
-}
 
 function addLevelPreview(THREE, group, params, levels) {
   const room = new THREE.MeshStandardMaterial({ color: 0xcfc9bf, roughness: 0.9 });
@@ -408,15 +409,16 @@ function addLevelPreview(THREE, group, params, levels) {
   wall.position.set(0, 1.2, -0.01);
   wall.receiveShadow = true;
   group.add(floor, wall);
-  const centres = channelCentres(params);
+  const boxes = window.CabinetFurniture.channelStripBoxes(params);
   const rows = channelRows(params);
   rows.forEach((ri, i) => {
     const st = levelState(levels, i);
     if (!st.on) return;
     const colour = params.fronts[ri].channel.color || '#dbe8ff';
     const light = new THREE.PointLight(new THREE.Color(colour),
-      (st.brightness / 100) * PREVIEW_MAX_INTENSITY, 2.5, 2);
-    light.position.set(0, centres[ri], (params.depth || 0) / 200);
+      (st.brightness / 100) * PREVIEW_MAX_INTENSITY, PREVIEW_REACH_M, 2);
+    const at = boxes[i].lightAt;
+    light.position.set(at[0] / 100, at[1] / 100, at[2] / 100);
     light.name = 'levelPreviewLight:' + levelName(i, rows.length);
     group.add(light);
   });
@@ -576,11 +578,12 @@ function App() {
               );
             })}
             <div className="legend">
-              Each drawer level's strip is a real light: here, a point light at the level's centre in its colour.
-              In a house each level is a room light <code>strip</code> fixture on its own channel, bound to its
-              own Home Assistant light, and the table is placed with <code>led: false</code> on each channel so
-              the fixture draws the line (docs/house-profile.md, "Bedside table LED strips"). Brightness is
-              scaled for this page. The levels get no sidebar row: the room's one Ambient row switches them.
+              Each drawer level's strip is a real light: a point light on the strip's front in its colour, and
+              the drawer below is washed in that colour by brightness; off leaves just the recess. In a house
+              each level is a room light <code>strip</code> fixture on its own channel, bound to its own Home
+              Assistant light, and the table's channel names that channel with <code>light</code> so its strip
+              and wash follow the same state (docs/house-profile.md, "Bedside table LED strips"). The levels
+              get no sidebar row: the room's one Ambient row switches them.
             </div>
           </div>
         )}

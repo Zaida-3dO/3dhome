@@ -1161,42 +1161,58 @@ Like every accent channel, the strips are dropped on the low GPU tier.
 #### Bedside table LED strips
 
 The LED bedside tables (the `cabinet` presets with light-channel rows) have
-one strip per drawer level. Make each level a `strip` fixture on its **own
-channel**, bound to that level's own entity, exactly like the kitchen: two
-tables with a top and a bottom level are four channels. The room's `ambient`
-binding stays the group that switches them all, and there is no `ambient`
-fixture:
+one strip per drawer level. Each level is a real light on its **own channel**,
+bound to that level's own entity, as for the kitchen. Two tables with a top
+and a bottom level make four channels. The room's `ambient` binding stays the
+group that switches them all, and there is no `ambient` fixture. Two pieces
+make one level:
+
+- **The table draws the strip and the wash.** Name the channel on the
+  table's channel row with `light`. The level's strip and the glow band on the
+  drawer below become live parts driven by that channel's state. When the
+  level is on, the strip shows in the light's colour and the drawer front is
+  washed in it, more strongly the brighter it is. When it is off, the strip is
+  hidden and the front is plain: just the recess.
+- **A room light fixture gives the light.** Add a `strip` fixture on the same
+  channel with `"drawn": false` (the light only, no line of its own, since the
+  table draws it) and a short `reachCm`, so it lights the floor, the wall
+  behind and the bed beside it, not the room.
 
 ```json
-// geometry.json, lights[] for the bedroom -- one position per level
+// geometry.json furniture[] -- the table, each channel naming its light
+{ "id": "bedside_north", "room": "bedroom", "type": "cabinet", "wall": 7, "centre": 120, "offset": 0,
+  "params": { "...": "the preset", "fronts": [
+    { "height": 21, "cells": [{ "kind": "drawer", "width": 50 }] },
+    { "height": 2, "channel": { "color": "#dbe8ff", "light": "bedside_north_top" } },
+    { "height": 18, "cells": [{ "kind": "drawer", "width": 50 }] },
+    { "height": 2, "channel": { "color": "#ffb347", "light": "bedside_north_bottom" } },
+    { "height": 15, "cells": [{ "kind": "drawer", "width": 50 }] } ] } }
+// geometry.json, lights[] for the bedroom -- one light per level
 { "channel": "bedside_north_top",    "fixtureType": "strip", "positions": [
-    { "at": [479.3, 120], "heightCm": 38, "size": [36.1, 0.6, 47.4], "label": "north bedside, top" } ] },
+    { "at": [461.3, 120], "heightCm": 38, "drawn": false, "reachCm": 90 } ] },
 { "channel": "bedside_north_bottom", "fixtureType": "strip", "positions": [
-    { "at": [479.3, 120], "heightCm": 18, "size": [36.1, 0.6, 47.4], "label": "north bedside, bottom" } ] }
+    { "at": [461.3, 120], "heightCm": 18, "drawn": false, "reachCm": 90 } ] }
 // rooms.json
 "bedroom": { "main": ["light.example_bedroom"], "ambient": ["light.example_bedroom_ambience"],
              "bedside_north_top": ["light.example_north_top"],
              "bedside_north_bottom": ["light.example_north_bottom"] }
 ```
 
-Take each box from `channelStripBoxes(params)` in `src/furniture/cabinet.js`
-rather than measuring it: it returns, per channel row (top first), the box the
-table's own strip fills -- the front run and both side runs, 2 mm proud of the
-recess -- in the table's frame (cm, x across the width, y up from its bottom,
-z from its back). Map it to the plan the way the table is placed. The example
-above is the wide table standing against an east wall at x = 500, facing
-west: `at` is `[500 - centre.z, tableCentre + centre.x]`, `heightCm` is
-`elevation + centre.y`, and `size` is `[size.z, size.y, size.x]` because the
-table's depth runs along the plan's x. Then place the table with
-`"led": false` on each channel row: the recess stays, and the static strip and
-the glow band on the drawer below go, since they would draw the line a second
-time in a colour that follows nothing.
+Take each fixture from `channelStripBoxes(params)` in `src/furniture/cabinet.js`
+rather than measuring it. Per channel row, top first, it returns the box the
+table's own strip fills and `lightAt`, the strip's front face at the level's
+height. That is where the light goes: in the recess, just behind the drawer
+fronts. There it lights what is round the table and not the other level's
+recess from inside it. All values are in the table's frame, in cm: x across
+the width, y up from its bottom, z from its back. Map `lightAt` to the plan the
+way the table is placed. The example is the wide table standing against an
+east wall at x = 500, facing west, so `at` is
+`[500 - lightAt.z, tableCentre + lightAt.x]` and `heightCm` is
+`elevation + lightAt.y`.
 
-One position per level is one light per level: the box's middle, inside the
-table, is where it sits, so it lights the wall behind, the floor round the
-table and the bed beside it. Bind each level's own entity; a per-table group
-in Home Assistant needs no binding of its own. The levels get no
-sidebar row. Like every accent channel, they are dropped on the low GPU tier.
+One position per level is one light per level. A per-table group in Home
+Assistant needs no binding of its own. The levels get no sidebar row. Like
+every accent channel, the lights are dropped on the low GPU tier.
 
 #### Climate
 

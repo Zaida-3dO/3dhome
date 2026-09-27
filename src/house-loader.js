@@ -1253,7 +1253,8 @@ export const HouseLoader = (() => {
         }
         const explicit = !!(f.positions && f.positions.length);
         const positions = explicit
-          ? f.positions.map(p => ({ at: p.at, heightCm: p.heightCm, label: p.label, size: p.size }))
+          ? f.positions.map(p => Object.assign({ at: p.at, heightCm: p.heightCm, label: p.label, size: p.size },
+            p.drawn === false ? { drawn: false } : {}, p.reachCm > 0 ? { reachCm: p.reachCm } : {}))
           : autoPlace(rooms[rid], f.count || 1);
         groups[f.channel] = {
           channel: f.channel,

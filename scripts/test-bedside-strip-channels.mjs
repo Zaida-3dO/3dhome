@@ -20,10 +20,15 @@
  *      "Bedroom Ambience".
  *   3. roomAccentSummary(): four level emitters plus the cornice, each on its
  *      OWN entity (never the group); the placeholder bars were the group.
- *   4. The fixture box for a level, drawn from cabinet.channelStripBoxes()
+ *   4. The fixture for a level, drawn from cabinet.channelStripBoxes()
  *      for a table standing against a wall, sits inside the table's
  *      footprint at the level's height -- one position (so one light) per
- *      level.
+ *      level -- on the strip's front, with no mesh of its own and a short
+ *      reach, and the house loader keeps both of those.
+ *   5. light-parts.applyLightPart(): a lit level shows its strip in the
+ *      light's colour and washes the drawer front below by brightness; an
+ *      OFF level hides its strip and leaves the front plain (just the
+ *      recess), whatever the other level does.
  */
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -34,6 +39,9 @@ const { HAClient } = await imp('src/ha-client.js');
 const RP = await imp('src/room-panel.js');
 const C = await imp('src/furniture/cabinet.js');
 const { CABINET_PRESETS } = await imp('scripts/lib-cabinet-presets.mjs');
+const LP = await imp('src/furniture/light-parts.js');
+const { HouseLoader } = await imp('src/house-loader.js');
+const THREE = await imp('vendor/three-r160/three.module.min.js');
 
 let failures = 0, passes = 0;
 function check(name, cond, detail) {
@@ -106,8 +114,9 @@ function levelFixtures(preset, centreY, side) {
   const names = ['bedside_' + side + '_top', 'bedside_' + side + '_bottom'];
   return C.channelStripBoxes(p).map((b, i) => ({
     channel: names[i], fixtureType: 'strip', positions: [{
-      at: [+(WALL_X - b.centre[2]).toFixed(1), +(centreY + b.centre[0]).toFixed(1)],
-      heightCm: b.centre[1], size: [b.size[2], b.size[1], b.size[0]], label: side + ' bedside, ' + ['top', 'bottom'][i],
+      at: [+(WALL_X - b.lightAt[2]).toFixed(1), +(centreY + b.lightAt[0]).toFixed(1)],
+      heightCm: b.lightAt[1], size: [b.size[2], b.size[1], b.size[0]], drawn: false, reachCm: 90,
+      label: side + ' bedside, ' + ['top', 'bottom'][i],
     }],
   }));
 }
@@ -149,14 +158,73 @@ function levelFixtures(preset, centreY, side) {
       const pos = f.positions[0];
       const x0 = pos.at[0] - pos.size[0] / 2, x1 = pos.at[0] + pos.size[0] / 2;
       const y0 = pos.at[1] - pos.size[2] / 2, y1 = pos.at[1] + pos.size[2] / 2;
-      check(f.channel + ': inside the footprint along the wall (width)', y0 >= cy - p.width / 2 && y1 <= cy + p.width / 2, [y0, y1]);
-      check(f.channel + ': inside the footprint off the wall (depth), clear of the wall',
-        x1 < WALL_X && x0 >= WALL_X - p.depth, [x0, x1]);
-      check(f.channel + ': reaches to within 2 cm of the front, where the strip shows',
-        x0 <= WALL_X - p.depth + 2, x0);
+      check(f.channel + ': on the table, along the wall (width)', pos.at[1] >= cy - p.width / 2 && pos.at[1] <= cy + p.width / 2, pos.at);
+      check(f.channel + ': at the strip front: within 2 cm behind the drawer fronts, in the recess',
+        pos.at[0] > WALL_X - p.depth && pos.at[0] <= WALL_X - p.depth + 2, pos.at[0]);
+      check(f.channel + ': no mesh of its own (the table draws the strip), a short reach',
+        pos.drawn === false && pos.reachCm > 0 && pos.reachCm < 250, pos);
       check(f.channel + ': in a channel row, between the drawers', pos.heightCm > (p.plinth.height || 0) && pos.heightCm < p.height, pos.heightCm);
     });
   });
+}
+
+// ---- 4b. the house loader keeps `drawn` and `reachCm` ---------------------
+{
+  const doc = {
+    kind: 'geometry', schemaVersion: '1.0', id: 'demo_bed', name: 'Demo', units: 'cm',
+    coordinateTransform: { originX: 0, originY: 0, scale: 0.01, planAxes: 'x_east_y_south' },
+    defaults: { wallHeight: 245, wallThickness: 10 },
+    walls: [{ id: 'w1', start: [0, 0], end: [500, 0] }],
+    rooms: [{ id: 'bedroom', name: 'Bedroom', polygon: [[0, 0], [500, 0], [500, 400], [0, 400]] }],
+    lights: [{ room: 'bedroom', fixtures: [
+      { channel: 'bedside_north_top', fixtureType: 'strip', positions: [
+        { at: [479, 120], heightCm: 38, size: [36, 0.6, 47], drawn: false, reachCm: 90 }] },
+      { channel: 'strip_plain', fixtureType: 'strip', positions: [{ at: [100, 20], heightCm: 200, size: [100, 1, 1] }] }] }],
+  };
+  const house = HouseLoader.compile(doc, 'houses/demo_bed/');
+  const pos = house.lights.bedroom.bedside_north_top.positions[0];
+  check('loader keeps drawn:false and reachCm', pos.drawn === false && pos.reachCm === 90, pos);
+  const plain = house.lights.bedroom.strip_plain.positions[0];
+  check('...and adds neither to a plain strip', !('drawn' in plain) && !('reachCm' in plain), plain);
+}
+
+// ---- 5. light parts follow their channel ------------------------------------
+{
+  const p = JSON.parse(JSON.stringify(CABINET_PRESETS.bedsideTableLedWide.params));
+  const chans = p.fronts.filter(r => r.channel);
+  chans[0].channel.light = 'bedside_north_top';
+  chans[1].channel.light = 'bedside_north_bottom';
+  const g = C.build(THREE, p, { detail: 'full' });
+  const parts = [];
+  g.traverse(o => { if (o.isMesh && LP.isLightPart(o)) parts.push(o); });
+  const of = (ch, role) => parts.filter(o => o.userData.lightChannel === ch && o.userData.lightRole === role);
+  const hex = m => '#' + m.getHexString();
+  const pose = (top, bottom) => parts.forEach(o =>
+    LP.applyLightPart(o, o.userData.lightChannel === 'bedside_north_top' ? top : bottom));
+
+  pose({ on: true, bri: 100, color: '#ff0000' }, { on: false, bri: 100, color: '#00ff00' });
+  check('top ON: its strips show, in its colour, lit', of('bedside_north_top', 'strip').every(o =>
+    o.visible && hex(o.material.color) === '#ff0000' && hex(o.material.emissive) === '#ff0000' && o.material.emissiveIntensity >= 0.99));
+  const band = of('bedside_north_top', 'glow')[0];
+  check('top ON: the drawer below is washed in its colour (red over white)', band &&
+    band.material.color.r > band.material.color.g + 0.3 && band.material.emissiveIntensity > 0.9 &&
+    hex(band.material.emissive) === hex(band.material.color), hex(band.material.color));
+  check('bottom OFF: its strips are hidden (just the recess)', of('bedside_north_bottom', 'strip').every(o => !o.visible));
+  const bandOff = of('bedside_north_bottom', 'glow')[0];
+  check('bottom OFF: its drawer is the plain front, not lit by the other level', bandOff &&
+    hex(bandOff.material.color) === p.color && hex(bandOff.material.emissive) === '#000000' && bandOff.material.emissiveIntensity === 0,
+    [hex(bandOff.material.color), hex(bandOff.material.emissive)]);
+
+  const fullG = band.material.color.g, fullK = band.material.emissiveIntensity;
+  pose({ on: true, bri: 10, color: '#ff0000' }, { on: true, bri: 100, color: '#0000ff' });
+  const dim = of('bedside_north_top', 'glow')[0].material;
+  check('top at 10%: the wash is weaker than at 100% (less red over the white, dimmer)',
+    dim.color.g > fullG + 0.1 && dim.emissiveIntensity < fullK - 0.3, [hex(dim.color), dim.emissiveIntensity, fullG, fullK]);
+  check('bottom back ON: its strips show again, in the new colour', of('bedside_north_bottom', 'strip').every(o =>
+    o.visible && hex(o.material.color) === '#0000ff'));
+  check('a dimmed strip still reads lit', of('bedside_north_top', 'strip').every(o => o.material.emissiveIntensity >= LP.STRIP_MIN_INTENSITY));
+  check('a non-light mesh or a missing state is left alone',
+    LP.applyLightPart({ userData: {} }, { on: true }) === false && LP.applyLightPart(parts[0], undefined) === false);
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

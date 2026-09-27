@@ -85,12 +85,16 @@
  *   band along its top edge, part of its own front. Each channel has its own
  *   colour, so two strips on one table can differ (and be bound to two lights
  *   at placement).
+ *   `channel.light: '<channel>'` makes the level FOLLOW a room light
+ *   channel: its strip and the glow band below it become dynamic parts
+ *   (userData.dynamic, lightChannel, lightRole -- see light-parts.js) that
+ *   the scene poses from that channel's state -- the strip shows in the
+ *   light's colour when on and is hidden when off (just the recess); the
+ *   band washes the drawer front in the light's colour, by brightness. The
+ *   channel's real light is a room light fixture on the same channel
+ *   (docs/house-profile.md, "Bedside table LED strips").
  *   `channel.led: false` builds the recess ONLY: no emissive strip and no
- *   glow band. That is how a table is placed in a house whose strips follow
- *   Home Assistant lights: the static strip here glows in a colour that
- *   follows nothing, so the house draws each level as a room light `strip`
- *   fixture on its own channel instead (docs/house-profile.md, "Bedside
- *   table LED strips"), and the table leaves the line to it.
+ *   glow band (a level with no LED, or one drawn entirely elsewhere).
  *
  * OVERLAY FRONTS
  *   `overlayFronts: true` makes the fronts cover the carcass edges, as real
@@ -254,6 +258,18 @@ const STRIP_BACK_T = 0.006;    // the carcass back's thickness (full detail): si
 /** Is the fronts row a light channel? */
 function isChannel(row) { return !!(row && row.channel); }
 
+/**
+ * Mark a mesh as a part that follows room light channel `channel` (see
+ * light-parts.js): dynamic (never merged, posed live by the scene), with
+ * its OWN material so posing it never recolours another part.
+ */
+function tagLightPart(mesh, channel, role) {
+  mesh.material = mesh.material.clone();
+  mesh.userData.dynamic = true;
+  mesh.userData.lightChannel = String(channel);
+  mesh.userData.lightRole = role;
+}
+
 /** Does a light channel row draw its own (static) LED strip? `led: false` = recess only. */
 function channelLed(row) { return isChannel(row) && row.channel.led !== false; }
 
@@ -386,7 +402,7 @@ function leafRect(x0, x1, yBot, yTop, revealY, edges) {
 }
 
 /** A leaf, optionally with a glow band along its top edge (below a light channel). */
-function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor) {
+function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor, glowLight) {
   if (glowColor) {
     // The glow band is part of the leaf -- the top slice of the same front,
     // in the same plane -- not a plate stuck on in front of it.
@@ -394,6 +410,10 @@ function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor) {
     const band = slab(THREE, group, finish(THREE, 'emissive', glowTint(glowColor, baseColor)),
       r.lx0, r.lx1, r.ly1 - bandH, r.ly1, faceZ - T, faceZ, 'channelGlow');
     band.castShadow = false;
+    if (glowLight) {
+      tagLightPart(band, glowLight, 'glow');
+      band.userData.baseColor = /^#[0-9a-fA-F]{6}$/.test(baseColor) ? baseColor : '#ffffff';
+    }
     return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1 - bandH, faceZ - T, faceZ, name);
   }
   return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1, faceZ - T, faceZ, name);
@@ -414,7 +434,7 @@ function buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, color
   const T = frontThickness(depth);
   const mat = finish(THREE, fin, color);
   const r = leafRect(x0, x1, yBot, yTop, 0.01, ctx && ctx.edges);
-  addLeaf(THREE, group, r, faceZ, T, mat, 'cabinetDoor', ctx && ctx.glow, color);
+  addLeaf(THREE, group, r, faceZ, T, mat, 'cabinetDoor', ctx && ctx.glow, color, ctx && ctx.glowLight);
   if (handles !== false && cell.handle !== false) {
     addHandle(THREE, group, x1 - Math.min(0.04, (x1 - x0) * 0.08), (yBot + yTop) / 2, faceZ);
   }
@@ -429,7 +449,7 @@ function buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, col
   const T = frontThickness(depth);
   const mat = finish(THREE, fin, color);
   const r = leafRect(x0, x1, yBot, yTop, 0.03, ctx && ctx.edges);
-  addLeaf(THREE, group, r, faceZ, T, mat, 'drawerFront', ctx && ctx.glow, color);
+  addLeaf(THREE, group, r, faceZ, T, mat, 'drawerFront', ctx && ctx.glow, color, ctx && ctx.glowLight);
   const showHandle = handles !== false && cell.handle !== false;
   if (showHandle) {
     const maxY = ctx && ctx.handleMaxY != null ? ctx.handleMaxY : Infinity;
@@ -627,7 +647,8 @@ function buildStackCell(THREE, group, cell, x0, x1, rowYBottomCm, rowYTopCm, dep
     const e = (ctx && ctx.edges) || {};
     const subCtx = Object.assign({}, ctx, {
       edges: { l: e.l, r: e.r, t: e.t && i === 0, b: e.b && i === subCells.length - 1 },
-      glow: i === 0 ? ctx && ctx.glow : null
+      glow: i === 0 ? ctx && ctx.glow : null,
+      glowLight: i === 0 ? ctx && ctx.glowLight : null
     });
     buildFrontCell(THREE, group, sub, x0, x1, yBotCm * CM, yTopCm * CM, depth, fin, color, p, low, subCtx);
     yTopCm = yBotCm;
@@ -838,6 +859,8 @@ function buildChannel(THREE, group, row, W, faceZ, backZ, y0, y1, fin, color, lo
   const front = slab(THREE, group, ledMat, -xs - STRIP_PROUD, xs + STRIP_PROUD, cy - sh / 2, cy + sh / 2,
     fillFront - 0.003, fillFront + STRIP_PROUD, 'channelStripFront');
   front.castShadow = false;
+  const follow = row.channel && row.channel.light;
+  if (follow) tagLightPart(front, follow, 'strip');
   [-1, 1].forEach(sx => {
     // Each side strip ends INSIDE the front strip, so no end face lies in
     // the front strip's plane; it runs back to 2 cm off the wall.
@@ -845,6 +868,7 @@ function buildChannel(THREE, group, row, W, faceZ, backZ, y0, y1, fin, color, lo
     const b = sx < 0 ? -xs + 0.001 : xs + STRIP_PROUD;
     const side = slab(THREE, group, ledMat, a, b, cy - sh / 2, cy + sh / 2, backZ + 0.02, fillFront - 0.0015, 'channelStripSide');
     side.castShadow = false;
+    if (follow) tagLightPart(side, follow, 'strip');
   });
 }
 
@@ -853,7 +877,7 @@ function buildChannel(THREE, group, row, W, faceZ, backZ, y0, y1, fin, color, lo
  * CENTIMETRES: x centred on the width, y up from the cabinet's bottom, z from
  * the back (0) to the front (+z). One entry per channel row, top row first:
  *
- *   { row, color, centre: [x, y, z], size: [x, y, z] }
+ *   { row, color, centre: [x, y, z], size: [x, y, z], lightAt: [x, y, z] }
  *
  * The box is the one the static strip fills (the front run and both side
  * runs, 2 mm proud of the recess, never the back), so a house can draw each
@@ -881,6 +905,11 @@ export function channelStripBoxes(params) {
       color: row.channel.color || '#dbe8ff',
       centre: [0, r((y0 + y1) / 2), r((z0 + z1) / 2)],
       size: [r(2 * (xs + STRIP_PROUD)), r(sh), r(z1 - z0)],
+      // Where the level's real light belongs: on the strip's FRONT face, in
+      // the recess (behind the drawer fronts, so it lights the floor, the
+      // wall and the drawer edges round the channel rather than washing
+      // the other level's recess from inside the table).
+      lightAt: [0, r((y0 + y1) / 2), r(z1)],
     };
   });
 }
@@ -1175,7 +1204,7 @@ export function build(THREE, params, opts) {
         const edges = overlay
           ? { l: x0 <= -W / 2 + 1e-6, r: x1 >= W / 2 - 1e-6, t: ri === 0, b: ri === rows.length - 1 }
           : null;
-        const ctx = { edges, glow, interior: interiorCtx, handleMaxY };
+        const ctx = { edges, glow, glowLight: glow ? above.channel.light || null : null, interior: interiorCtx, handleMaxY };
         if (cell.kind === 'stack') {
           buildStackCell(THREE, frontsGroup, cell, x0, x1, row.yBottom, row.yTop, D, fin, color, p, low, ctx);
         } else {
