@@ -8,8 +8,10 @@
  *   - Local frame in METRES: y = 0 is the item's bottom, x is centred along
  *     the width, the BACK face is at z = 0, and the front faces +z.
  *   - Every material comes from makeFinish() (./finishes.js). No lights.
- *     ONE exception to "no textures": the decking boards' groove map (see
- *     makeGrooveMap below), a small procedural canvas, null under Node.
+ *     TWO exceptions to "no textures", both small procedural maps on a
+ *     `keep` mesh: the decking boards' groove map (makeGrooveMap, a canvas,
+ *     null under Node) and the grating's alpha-cutout map (makeGratingMap, a
+ *     DataTexture, so it exists under Node too and is unit-tested).
  *   - bbox == params.width/depth/height within 0.5 cm for ANY params.
  * See docs/house-profile.md, "Furniture".
  *
@@ -17,7 +19,19 @@
  * is the building face; `width` runs along the facade and the front railing
  * runs along z = depth. `height` is slab bottom to rail top.
  *
- *   floor     'decking' (default) = a dark structural slab under dark
+ *   floor     'grating' (default) = black open metal bar grating: load bars
+ *             running from the building out (along z) tied by cross bars
+ *             parallel to the facade, with open gaps you see through to
+ *             whatever is below. It is ONE mesh of two textured planes (the
+ *             top and the bottom of the bars, GRATE_T apart, so the bars
+ *             read as having depth) with an alpha-cutout map, in a
+ *             matte-satin near-black (gratingColor, finish 'satin': the live
+ *             scene has no env map, so a metalness-1 black would read as a
+ *             dead hole). Round it: a dark metal perimeter frame (railColor)
+ *             on all four edges, slab bottom to deck top, plus one support
+ *             beam along x at mid-depth under the bars. The deck top is
+ *             y = slabThickness. Low detail is one gratingColor slab box.
+ *             'decking' = a dark structural slab under dark
  *             charcoal composite boards running ALONG x (parallel to the
  *             facade) with real gaps between them, a fine longitudinal
  *             groove map on the boards, and a dark metal edge trim
@@ -53,7 +67,9 @@ export const DEFAULTS = Object.freeze({
   depth: 155,              // building face to the front of the railing
   height: 125,             // slab bottom to rail top (a 15 slab + a ~110 guard)
   slabThickness: 15,
-  floor: 'decking',        // 'decking' | 'slab'
+  floor: 'grating',        // 'grating' | 'decking' | 'slab'
+  gratingColor: '#161618', // near-black grating (satin, not metal)
+  gratingPitch: 3,         // cm, load-bar centre spacing (typical 30 mm bar grating; not measured)
   deckColor: '#2e2e30',    // charcoal composite boards
   boardWidth: 14.5,        // cm, one board's face (typical composite; not measured)
   boardGap: 0.6,           // cm, the gap between boards (typical; not measured)
@@ -80,6 +96,115 @@ const BOARD_T = 2.5;       // cm, decking board thickness (typical composite)
 const TRIM_T = 1;          // cm, the metal edge trim's thickness
 const DECK_UNDER = '#141416'; // the structure under the boards: dark, so the gaps read dark
 const GROOVES = 9;         // fine grooves across one board's face
+const GRATE_T = 3;         // cm, the grating's bar depth (typical; not measured)
+const CROSS_PITCH = 10;    // cm, cross-bar centre spacing (typical 30 x 100 grating; not measured)
+const FRAME_W = 4;         // cm, the perimeter frame's section
+// The grating tile: one load-bar pitch across (u, along x) by one cross-bar
+// pitch along (v, along z). Power-of-two so it can repeat and mip.
+const TILE_U = 16, TILE_V = 32;
+const LOAD_BAR_PX = 3;     // ~0.56 cm of a 3 cm pitch
+const CROSS_BAR_PX = 2;    // ~0.63 cm of a 10 cm pitch
+export const GRATING_ALPHA_TEST = 0.5;
+
+/**
+ * The grating's alpha-cutout tile as RGBA bytes, TILE_U x TILE_V, plus its
+ * mip chain. RGB is white everywhere (the colour comes from gratingColor);
+ * alpha is 255 on a bar and 0 in a hole. Columns 0 .. LOAD_BAR_PX-1 are the
+ * load bar (running along v = z), rows 0 .. CROSS_BAR_PX-1 the cross bar.
+ *
+ * THE MIPS ARE MAX-ALPHA, not averaged: an averaged mip of a ~75 % open
+ * grating drops below the alpha test within a level or two, and the floor
+ * would VANISH at a distance. Max-alpha instead closes the holes as the
+ * grating shrinks on screen, so from far away it reads as a dark plate --
+ * which is what a real grating looks like from across the street.
+ *
+ * @returns {{levels: Array<{data: Uint8Array, width: number, height: number}>}}
+ */
+export function gratingTile() {
+  const level0 = new Uint8Array(TILE_U * TILE_V * 4);
+  for (let v = 0; v < TILE_V; v++) {
+    for (let u = 0; u < TILE_U; u++) {
+      const i = (v * TILE_U + u) * 4;
+      const bar = u < LOAD_BAR_PX || v < CROSS_BAR_PX;
+      level0[i] = level0[i + 1] = level0[i + 2] = 255;
+      level0[i + 3] = bar ? 255 : 0;
+    }
+  }
+  const levels = [{ data: level0, width: TILE_U, height: TILE_V }];
+  let prev = levels[0];
+  while (prev.width > 1 || prev.height > 1) {
+    const w = Math.max(1, prev.width >> 1), h = Math.max(1, prev.height >> 1);
+    const d = new Uint8Array(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let a = 0;
+        for (let dy = 0; dy < 2; dy++) {
+          for (let dx = 0; dx < 2; dx++) {
+            const sx = Math.min(prev.width - 1, x * 2 + dx), sy = Math.min(prev.height - 1, y * 2 + dy);
+            a = Math.max(a, prev.data[(sy * prev.width + sx) * 4 + 3]);
+          }
+        }
+        const i = (y * w + x) * 4;
+        d[i] = d[i + 1] = d[i + 2] = 255;
+        d[i + 3] = a;
+      }
+    }
+    prev = { data: d, width: w, height: h };
+    levels.push(prev);
+  }
+  return { levels };
+}
+
+/**
+ * The grating's alpha-cutout map: a DataTexture of gratingTile(), repeating,
+ * with the max-alpha mips supplied by hand (generateMipmaps off). No DOM, so
+ * it exists under Node too.
+ * @param {Object} THREE
+ * @returns {THREE.DataTexture}
+ */
+function makeGratingMap(THREE) {
+  const { levels } = gratingTile();
+  const tex = new THREE.DataTexture(levels[0].data, levels[0].width, levels[0].height, THREE.RGBAFormat);
+  tex.mipmaps = levels;
+  tex.generateMipmaps = false;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * The grating's two horizontal planes (top at yTop, bottom at yBot) over
+ * x0..x1, z0..z1 (metres), in ONE indexed geometry (4 triangles). uv is in
+ * TILES: u = x / pitch, v = z / CROSS_PITCH, so the repeating map puts a
+ * load bar every `pitchCm` along x (each running along z) and a cross bar
+ * every CROSS_PITCH cm along z. Both planes share the uvs, so looking
+ * straight down the holes line up and you see through.
+ */
+function gratingGeometry(THREE, x0, x1, z0, z1, yTop, yBot, pitchCm) {
+  const u0 = x0 / (pitchCm * CM), u1 = x1 / (pitchCm * CM);
+  const v0 = z0 / (CROSS_PITCH * CM), v1 = z1 / (CROSS_PITCH * CM);
+  const pos = [], nor = [], uv = [], idx = [];
+  const quad = (y, ny) => {
+    const base = pos.length / 3;
+    for (const [x, z, u, v] of [[x0, z0, u0, v0], [x0, z1, u0, v1], [x1, z1, u1, v1], [x1, z0, u1, v0]]) {
+      pos.push(x, y, z); nor.push(0, ny, 0); uv.push(u, v);
+    }
+    // CCW seen from +y for the top plane, from -y for the bottom one
+    if (ny > 0) idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    else idx.push(base, base + 2, base + 1, base, base + 3, base + 2);
+  };
+  quad(yTop, 1);
+  quad(yBot, -1);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
+}
 
 /**
  * The decking boards' groove map: a tiny canvas, near-white with GROOVES
@@ -209,13 +334,16 @@ export function build(THREE, params, opts) {
   const gap = clamp(num(p.barSpacing, DEFAULTS.barSpacing) - bar, 1, MAX_GAP);
   const glass = p.railing === 'glass';
   const left = sideMode(p.leftSide), right = sideMode(p.rightSide);
-  const decking = p.floor !== 'slab';
+  const floor = p.floor === 'slab' || p.floor === 'decking' ? p.floor : 'grating';
+  const decking = floor === 'decking';
+  const grating = floor === 'grating';
 
   const group = new THREE.Group();
   group.name = 'furniture:balcony';
 
   const mats = {
-    slab: makeFinish(THREE, 'matte', decking ? (full ? DECK_UNDER : p.deckColor) : p.slabColor),
+    slab: grating ? makeFinish(THREE, 'satin', p.gratingColor)
+      : makeFinish(THREE, 'matte', decking ? (full ? DECK_UNDER : p.deckColor) : p.slabColor),
     rail: makeFinish(THREE, 'metal', p.railColor),
     solid: makeFinish(THREE, 'matte', p.solidColor),
     glass: makeFinish(THREE, 'glass', p.glassColor)
@@ -239,7 +367,30 @@ export function build(THREE, params, opts) {
   };
 
   // ---- slab / deck ---------------------------------------------------------
-  if (decking && full) {
+  if (grating && full) {
+    // perimeter frame round all four edges, slab bottom to deck top; the
+    // grating fills the inside, its top flush with the frame top (they meet
+    // edge to edge, never overlap, so no two top faces coincide)
+    const fw = Math.min(FRAME_W, rt, D / 4, W / 4);
+    const gt = Math.min(GRATE_T, slabT * 0.5);
+    addBoxes([
+      box(-W / 2, W / 2, 0, slabT, D - fw, D),            // front
+      box(-W / 2, W / 2, 0, slabT, 0, fw),                // back, at the building face
+      box(-W / 2, -W / 2 + fw, 0, slabT, fw, D - fw),     // left end
+      box(W / 2 - fw, W / 2, 0, slabT, fw, D - fw),       // right end
+      // one support beam along x at mid-depth, just under the bars
+      box(-W / 2 + fw, W / 2 - fw, 0, slabT - gt - 0.5, D / 2 - fw / 2, D / 2 + fw / 2)
+    ], mats.rail, 'grating-frame', { part: 'frame' });
+    const pitch = clamp(num(p.gratingPitch, DEFAULTS.gratingPitch), 1, 10);
+    const gm = makeFinish(THREE, 'satin', p.gratingColor);
+    gm.map = makeGratingMap(THREE);
+    gm.alphaTest = GRATING_ALPHA_TEST;
+    gm.side = THREE.DoubleSide;
+    const geo = gratingGeometry(THREE, (-W / 2 + fw) * CM, (W / 2 - fw) * CM, fw * CM, (D - fw) * CM,
+      slabT * CM, (slabT - gt) * CM, pitch);
+    const gr = add(geo, gm, 'grating', { part: 'grating', pitch, crossPitch: CROSS_PITCH });
+    gr.userData.keep = true; // the cutout map must survive any finish-bucket merge
+  } else if (decking && full) {
     // structure under the boards, full footprint; the boards sit on it, inset
     // from the front and the ends by the trim so no two top faces coincide
     const bt = Math.min(BOARD_T, slabT * 0.5);
