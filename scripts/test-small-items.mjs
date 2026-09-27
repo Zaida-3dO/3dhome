@@ -177,6 +177,7 @@ const CASES = [
   ['shelf: single, LED edge', 'shelf', paramsFor('shelf', { led: true })],
   ['shelf: stacked set of 3', 'shelf', paramsFor('shelf', { levels: [30, 30], height: 5 + 30 + 5 + 30 + 5 })],
   ['shelf: floating shelf with back panel', 'shelf', paramsFor('shelf', { width: 180, depth: 22, height: 20, backPanel: true })],
+  ['shelf: TV-wall floating shelf (LED)', 'shelf', paramsFor('shelf', { width: 180, depth: 21, height: 19, backPanel: true, backPanelHeight: 19, shelfThickness: 3, shelfColor: '#6f6f6c', backPanelColor: '#f4f4f2', led: true })],
 
   // ---- monitor: envelope = stand/riser height, riser depth ----
   ['monitor: flat', 'monitor', paramsFor('monitor')],

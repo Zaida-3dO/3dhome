@@ -2980,8 +2980,25 @@
 
     "furnitureParams_sofa": {
       "type": "object",
-      "x-placeholder": true,
-      "description": "PLACEHOLDER for `sofa`, pre-seeded so the PR that builds this type edits only this block. It accepts any params until then. Replace it with the builder's params and their `default`s (equal to the module's DEFAULTS) in the same PR that adds the module: scripts/test-furniture-defaults.mjs fails while a module exists at this type's registry path and this block is still a placeholder."
+      "description": "Params for `sofa` (src/furniture/sofa.js): a corner (L-shaped) sofa -- fabric seat and back cushions on a plinth base, a low padded arm at the non-chaise end, and a chaise running forward to the full `depth` (no arm or back on its outer end). `chaise: 'none'` is a straight sofa with an arm at both ends whose depth is the whole `depth` (set depth = seatDepth for one). Every part is clamped so any params build to exactly width x depth x height. Each `default` equals sofa.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 275, "description": "cm, overall width including the arm(s) and the chaise." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 197, "description": "cm, back to the front of the chaise (or of the seat, for a straight sofa)." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 88, "description": "cm, floor to the top of the back cushions." },
+        "chaise": { "enum": ["right", "left", "none"], "default": "right", "description": "Which end the chaise is at, seen from the FRONT (+x is the viewer's right). 'none' is a straight sofa." },
+        "seatDepth": { "type": "number", "exclusiveMinimum": 0, "default": 97, "description": "cm, depth of the main (non-chaise) leg." },
+        "chaiseWidth": { "type": "number", "exclusiveMinimum": 0, "default": 105, "description": "cm, width of the chaise leg." },
+        "seatHeight": { "type": "number", "exclusiveMinimum": 0, "default": 44, "description": "cm, floor to the top of the seat cushions." },
+        "baseHeight": { "type": "number", "exclusiveMinimum": 0, "default": 24, "description": "cm, floor to the top of the plinth base." },
+        "backDepth": { "type": "number", "exclusiveMinimum": 0, "default": 22, "description": "cm, back cushion thickness." },
+        "armWidth": { "type": "number", "exclusiveMinimum": 0, "default": 20, "description": "cm." },
+        "armHeight": { "type": "number", "exclusiveMinimum": 0, "default": 64, "description": "cm, floor to the top of the arm pad." },
+        "cushions": { "type": "integer", "minimum": 1, "maximum": 4, "default": 3, "description": "Seat cushions across the main leg." },
+        "upholsteryColor": { "$ref": "#/$defs/hexColor", "default": "#1e1e20", "description": "Fabric cushions and arm pads (matte)." },
+        "baseColor": { "$ref": "#/$defs/hexColor", "default": "#ecebe7", "description": "Plinth base and arm body." },
+        "baseFinish": { "$ref": "#/$defs/furnitureFinish", "default": "satin", "description": "Finish of the plinth base and arm body (satin reads as faux leather)." }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_speaker": {

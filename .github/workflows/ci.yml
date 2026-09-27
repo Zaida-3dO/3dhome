@@ -406,6 +406,33 @@ jobs:
           # OUTWARD, since a flipped face vanishes under back-face culling.
           set -euo pipefail
           node scripts/test-soft.mjs
+      - name: Sofa builder (L corner / straight)
+        run: |
+          # Asserts src/furniture/sofa.js beyond the generic furniture
+          # contract (already covered for every registered type by
+          # test-furniture-core.mjs below): the default L is 275 x 197 x 88
+          # and every layout, including params that fight each other, builds
+          # to its own bbox within 0.5 cm; chaise 'right' puts the chaise
+          # cushion at +x and 'left' at -x; an L has one arm at the
+          # non-chaise end and 'none' has two; seat top = seatHeight, back
+          # top = height, arm top = armHeight; fabric is matte and the
+          # plinth takes baseFinish; no lights; full <= 2500 / low <= 800
+          # triangles with low <= 0.6 x full; toFurnitureJSON emits only
+          # non-default keys.
+          set -euo pipefail
+          node scripts/test-sofa.mjs
+      - name: Rug pattern (procedural chevron shag)
+        run: |
+          # Asserts src/rug-pattern.js (a pure pixel filler, not a furniture
+          # type): the same seed gives identical bytes and a different seed
+          # different bytes; with pileNoise 0 every pixel is exactly a
+          # palette colour and each colour covers 1/3 +-5 %; along a row the
+          # colour changes at least twice per colour cycle and the band order
+          # runs both ways (a zig-zag, not flat or plain diagonal stripes);
+          # 'solid' is one colour; the module names no DOM global or
+          # Math.random.
+          set -euo pipefail
+          node scripts/test-rug-pattern.mjs
       - name: Digital piano builder (piano, bench, ottoman)
         run: |
           # Asserts src/furniture/digital-piano.js (multi-type: digital-piano,

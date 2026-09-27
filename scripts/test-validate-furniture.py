@@ -77,16 +77,25 @@ def house(furniture=None, **extra):
     return doc
 
 
-def schema_errors(doc):
+def schema_errors(doc, schema=None):
     r = vh.Report("t")
-    vh.schema_validate(doc, SCHEMA, r, "geometry.json")
+    vh.schema_validate(doc, schema or SCHEMA, r, "geometry.json")
     return [f"{w}: {m}" for w, m in r.errors]
 
 
-def run_checks(doc):
+def run_checks(doc, schema=None):
     r = vh.Report("t")
-    vh.check_geometry(doc, r, SCHEMA)
+    vh.check_geometry(doc, r, schema or SCHEMA)
     return [f"{w}: {m}" for w, m in r.errors], [f"{w}: {m}" for w, m in r.warnings]
+
+
+# A registered type whose params block is still a PLACEHOLDER. Once every
+# registered type is built, the real schema has none left, so the placeholder
+# path is exercised on a copy of the schema with one type's block reset to the
+# pre-seeded placeholder shape ("x-placeholder": true, no properties).
+PLACEHOLDER_TYPE = "sofa"
+PLACEHOLDER_SCHEMA = copy.deepcopy(SCHEMA)
+PLACEHOLDER_SCHEMA["$defs"][f"furnitureParams_{PLACEHOLDER_TYPE}"] = {"type": "object", "x-placeholder": True}
 
 
 def has(msgs, *needles):
@@ -122,10 +131,12 @@ for label, item in [
     ("fade auto", dict(BOX_FREE, fade="auto")),
     ("fade never", dict(BOX_FREE, fade="never")),
     ("priority normal", dict(BOX_FREE, priority="normal")),
-    ("a placeholder type accepts any params", dict(BOX_FREE, type="sofa", params={"anything": [1, 2]})),
     ("an unknown type is not a schema error", dict(BOX_FREE, type="spaceship")),
 ]:
     check(f"schema accepts: {label}", schema_errors(house([item])) == [], schema_errors(house([item])))
+_ph_item = dict(BOX_FREE, type=PLACEHOLDER_TYPE, params={"anything": [1, 2]})
+check("schema accepts: a placeholder type accepts any params",
+      schema_errors(house([_ph_item]), PLACEHOLDER_SCHEMA) == [], schema_errors(house([_ph_item]), PLACEHOLDER_SCHEMA))
 
 # ---- 2. validator: the clean house is clean ------------------------------------
 errs, warns = run_checks(house([BOX_WALL, BOX_FREE]))
@@ -195,15 +206,15 @@ _, warns = run_checks(house([dict(BOX_FREE, elevation=230)]))
 check("warn: top above the ceiling", has(warns, "furniture/stool", "above the ceiling"), warns)
 _, warns = run_checks(house([dict(BOX_FREE, type="spaceship", params={"width": 10, "depth": 10, "height": 10})]))
 check("warn: unregistered type", has(warns, "furniture/stool", "not registered"), warns)
-sofa = dict(BOX_FREE, type="sofa")
-_, warns = run_checks(house([sofa]))
-if (ROOT / "src" / "furniture" / "sofa.js").exists():
-    print("note: sofa.js exists now -- the 'unbuilt type' case needs another unbuilt type")
+sofa = dict(BOX_FREE, type=PLACEHOLDER_TYPE)
+_, warns = run_checks(house([sofa]), PLACEHOLDER_SCHEMA)
+if (ROOT / "src" / "furniture" / (PLACEHOLDER_TYPE + ".js")).exists():
+    print(f"note: {PLACEHOLDER_TYPE}.js exists now -- the 'unbuilt type' case needs another unbuilt type")
 else:
     check("warn: registered but unbuilt type", has(warns, "furniture/stool", "no builder yet"), warns)
 check("warn: type with no schema defaults (footprint checks skipped)",
       has(warns, "furniture/stool", "no schema defaults"), warns)
-_, warns = run_checks(house([dict(sofa, params={"width": 100, "depth": 50, "height": 80})]))
+_, warns = run_checks(house([dict(sofa, params={"width": 100, "depth": 50, "height": 80})]), PLACEHOLDER_SCHEMA)
 check("no 'no schema defaults' warning when params give the dimensions", not has(warns, "no schema defaults"), warns)
 run = {"room": "room", "type": "kitchen-base-run", "params": {"width": 200, "depth": 60, "height": 90}}
 _, warns = run_checks(house([
