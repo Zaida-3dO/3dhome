@@ -25,7 +25,7 @@
  *      reset, NaN sends nothing, a button cancels a pending slider send, the
  *      drag lock releases, and a refused build (thermostat off) sends
  *      nothing even on release. Run against the REAL
- *      HAClient.callServiceDebounced with a mocked fetch.
+ *      HAClient.callServiceDebounced over a fake HA WebSocket.
  *   7. index.html actually wires it that way (pointerup ends the drag, no
  *      door slider left, both senders cleared on a full re-render).
  */
@@ -35,6 +35,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const imp = rel => import(pathToFileURL(path.join(root, rel)).href);
+const { installFakeHA } = await import(pathToFileURL(path.join(root, 'scripts/fake-ha-websocket.mjs')).href);
 const { HAClient } = await imp('src/ha-client.js');
 const RP = await imp('src/room-panel.js');
 
@@ -260,14 +261,14 @@ const onReading = (over = {}) => HAClient.parseClimate({
 // 6. createDragSender against the real callServiceDebounced
 // ---------------------------------------------------------------------------
 {
-  const calls = [];
-  const realFetch = global.fetch;
-  global.fetch = async (url, opts) => {
-    calls.push({ service: url.split('/api/services/')[1], body: JSON.parse(opts.body) });
-    return { ok: true, json: async () => ({}) };
-  };
+  // Commands go over a fake WebSocket (scripts/fake-ha-websocket.mjs):
+  // ha-client has no REST path any more, so there is no fetch to mock.
+  const fake = installFakeHA();
+  const calls = fake.calls;
   try {
     const ha = HAClient.create({ url: 'http://ha.invalid', token: 'x', rooms: {}, sensors: {} });
+    ha.connect();
+    await fake.whenConnected(ha);
     const motors = ['cover.demo_bedroom_curtain'];
     const sender = RP.createDragSender({
       build: (id, pct) => HAClient.coverPositionCommand(pct, motors),
@@ -347,7 +348,7 @@ const onReading = (over = {}) => HAClient.parseClimate({
     check('climate on: one send, step-rounded',
       calls.length === 1 && calls[0].service === 'climate/set_temperature' && calls[0].body.temperature === 21.5, calls);
   } finally {
-    global.fetch = realFetch;
+    fake.restore();
   }
 }
 
@@ -394,14 +395,14 @@ const onReading = (over = {}) => HAClient.parseClimate({
 //    repainted when the lock releases.
 // ---------------------------------------------------------------------------
 {
-  const calls = [];
-  const realFetch = global.fetch;
-  global.fetch = async (url, opts) => {
-    calls.push({ service: url.split('/api/services/')[1], body: JSON.parse(opts.body) });
-    return { ok: true, json: async () => ({}) };
-  };
+  // Commands go over a fake WebSocket (scripts/fake-ha-websocket.mjs):
+  // ha-client has no REST path any more, so there is no fetch to mock.
+  const fake = installFakeHA();
+  const calls = fake.calls;
   try {
     const ha = HAClient.create({ url: 'http://ha.invalid', token: 'x', rooms: {}, sensors: {} });
+    ha.connect();
+    await fake.whenConnected(ha);
     const hasApi = typeof ha.cancelDebounced === 'function';
     check('HAClient exposes cancelDebounced', hasApi);
 
@@ -481,7 +482,7 @@ const onReading = (over = {}) => HAClient.parseClimate({
       typeof RP.curtainSliderCommand === 'function' &&
       RP.curtainSliderCommand(HAClient.coverPositionCommand, 50, motors, true).data.position === 50);
   } finally {
-    global.fetch = realFetch;
+    fake.restore();
   }
 
   // (f) a reading held back by the lock is repainted on release.

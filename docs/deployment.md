@@ -74,7 +74,7 @@ starts with none of them set.
 | `HOME3D_HA_ENABLED` | *inferred* | Forces HA on or off. Cannot force *on* without both a URL and a token. |
 | `HOME3D_HOUSE` | `demo` | Which profile under `houses/` to render. |
 | `HOME3D_WS_RECONNECT_MS` | `5000` | Delay before retrying a dropped websocket. |
-| `HOME3D_POLL_INTERVAL_MS` | `5000` | REST poll interval when the websocket is unavailable. |
+| `HOME3D_POLL_INTERVAL_MS` | `5000` | Ignored. The app reads and controls Home Assistant over its WebSocket only; there is no REST polling (a REST call from the browser needs HA's CORS allow-list). Still accepted so existing configs keep working. |
 | `HOME3D_FRAME_ANCESTORS` | `'self'` | CSP allow-list of origins permitted to embed the app. See §2. |
 | `HOME3D_CORS_ORIGINS` | *(empty)* | Space-separated allow-list of origins permitted to **fetch** the house JSON cross-origin. Needed *in addition to* `HOME3D_FRAME_ANCESTORS` for any cross-origin embed. See §2. |
 | `APP_VERSION` | `dev` | Stamped into the version badge and every `?v=` cache-buster. See §4. |

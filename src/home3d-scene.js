@@ -1179,6 +1179,21 @@ export const Home3DScene = (() => {
       WALL_FACE_TEXTURES[wid] = { faceAxis: faceAxis, url: ft.url };
     });
 
+    // One shared 1x1 opaque-white texture: the stand-in map every wallpapered
+    // face starts with (see buildFaceTexturedMaterials). Created on first use
+    // so a house with no wallpaper allocates nothing. sRGB like the real
+    // photo, so the placeholder and the photo share one program variant.
+    let _wallpaperPlaceholder = null;
+    function wallpaperPlaceholderTex() {
+      if (_wallpaperPlaceholder) return _wallpaperPlaceholder;
+      const t = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+      if ('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace; // r152+
+      else t.encoding = THREE.sRGBEncoding;
+      t.needsUpdate = true;
+      _wallpaperPlaceholder = t;
+      return t;
+    }
+
     function buildFaceTexturedMaterials(faceAxis, url, plainMatFactory, lm, h, isOuter) {
       // Start as the ordinary wall paint. If the image loads it is applied on
       // top; if it does NOT (a profile referencing a texture that was not
@@ -1187,8 +1202,18 @@ export const Home3DScene = (() => {
       // a hole in the building rather than a missing decoration -- and a missing
       // texture is exactly what happens when a house profile is shared without
       // its images, so it has to degrade gracefully.
+      // Built WITH a map from the start -- a 1x1 white placeholder, so it
+      // still reads as plain paint (WALL_COLOR x white). A material that GAINS
+      // a map later changes its shader program, and that new program was
+      // compiled synchronously on the first frame after the image arrived:
+      // the other half of the multi-second cold-start stall ("rAF handler
+      // took 1038ms"), since the precompile had only ever seen the map-less
+      // variant. With the placeholder, the precompile builds the mapped
+      // program and swapping in the real photo is a texture bind, not a
+      // compile.
       const wallpaperMat = new THREE.MeshStandardMaterial({
         color: WALL_COLOR,
+        map: wallpaperPlaceholderTex(),
         roughness: 0.85, side: THREE.DoubleSide,
         transparent: !!isOuter, opacity: 1
       });
@@ -3761,6 +3786,51 @@ export const Home3DScene = (() => {
       }
     }
 
+    // See the precompile below. One stand-in per distinct shadow SIDE the
+    // scene's casters need: three draws a caster's shadow with
+    // material.shadowSide, or else its side flipped (Front -> Back, Back ->
+    // Front, Double stays Double), and the side is part of the program key.
+    // The real house's casters are all DoubleSide, so guessing BackSide (the
+    // furniture's choice, right for ITS materials) compiled a program the
+    // shadow pass never used -- derive it instead. Resolves once every
+    // stand-in's program is ready; always frees what it made.
+    const SHADOW_SIDE = { [THREE.FrontSide]: THREE.BackSide, [THREE.BackSide]: THREE.FrontSide, [THREE.DoubleSide]: THREE.DoubleSide };
+    function shadowDepthSides(root) {
+      const sides = new Set();
+      root.traverseVisible(o => {
+        if (!o.isMesh || !o.castShadow || !o.material) return;
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+          sides.add(m.shadowSide != null ? m.shadowSide : SHADOW_SIDE[m.side]);
+        });
+      });
+      return [...sides].filter(v => v !== undefined);
+    }
+    // The stand-in materials are KEPT until dispose(). Freeing one releases
+    // its program (three deletes a program the moment nothing uses it), so
+    // disposing them as soon as the precompile resolved threw the compiled
+    // program away before the shadow pass could reuse it -- measured: the
+    // first frame rebuilt it anyway. They cost a few bytes each.
+    const shadowDepthProbeMats = [];
+    function precompileShadowDepth() {
+      const geo = new THREE.BoxGeometry(0.01, 0.01, 0.01);
+      const mats = shadowDepthSides(scene).map(side =>
+        new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side }));
+      shadowDepthProbeMats.push(...mats);
+      const rt = new THREE.WebGLRenderTarget(1, 1);
+      const prev = ren.getRenderTarget();
+      const pending = [];
+      try {
+        ren.setRenderTarget(rt);
+        mats.forEach(mat => pending.push(ren.compileAsync(new THREE.Mesh(geo, mat), cam, scene)));
+      } finally {
+        ren.setRenderTarget(prev);
+      }
+      // The geometry and render target were only the vehicle; the programs
+      // live on the materials, so these two can go now.
+      const free = () => { rt.dispose(); geo.dispose(); };
+      return Promise.all(pending).then(free, e => { free(); throw e; });
+    }
+
     if (typeof ren.compileAsync === 'function') {
       // Shadow programs are a separate set from the beauty-pass ones, so make
       // sure the precompile covers them too when this scene uses shadows.
@@ -3772,7 +3842,18 @@ export const Home3DScene = (() => {
       if (typeof onCompileStart === 'function') {
         try { onCompileStart(); } catch (e) { /* advisory only */ }
       }
-      precompileDone = Promise.resolve(ren.compileAsync(scene, cam))
+      const jobs = [Promise.resolve().then(() => ren.compileAsync(scene, cam))];
+      // The shadow pass's DEPTH program too. compileAsync() builds only the
+      // beauty-pass programs; the shadow pass draws every caster with three's
+      // internal depth material (RGBA packing, side flipped FrontSide ->
+      // BackSide) into a render target, and that program was otherwise built
+      // synchronously on the first real frame (~100 ms cold on the real
+      // house). A stand-in mesh with the same material settings, compiled
+      // while a render target is bound (so the output colour space matches
+      // the shadow map's), has the same program key -- the same trick the
+      // furniture uses for its own casters (furniture.js, depthPrecompile).
+      if (wantShadows) jobs.push(Promise.resolve().then(() => precompileShadowDepth()));
+      precompileDone = Promise.all(jobs)
         .catch((e) => console.warn('[Home3DScene] shader precompile failed; ' +
           'falling back to compiling on first render.', e))
         .then(() => {
@@ -4268,6 +4349,17 @@ export const Home3DScene = (() => {
     (function loop() {
       animId = requestAnimationFrame(loop);
       if (paused) return;
+      // First-frame gate: draw NOTHING until the shader precompile above has
+      // settled (readyFired is set on every path: success, failure, and no
+      // compileAsync at all). Drawing earlier defeats the precompile outright:
+      // the frame asks three for programs whose link is still in flight, and
+      // three blocks on the driver until it finishes -- one rAF handler that
+      // measured 3.0 s cold on the real house (Chrome's "[Violation]
+      // 'requestAnimationFrame' handler took 1950ms"), while compileAsync was
+      // doing the same work off the main thread in parallel. The loading
+      // overlay covers the canvas until onReady, so the frames skipped here
+      // were never visible anyway; they only froze the page.
+      if (!readyFired) return;
       const frameNow = performance.now();
       if (minFrameMs && (frameNow - lastRender) < minFrameMs) return;
 
@@ -4907,6 +4999,8 @@ export const Home3DScene = (() => {
         // precompile material). A still-pending attach sees _disposed and
         // frees its own build instead of attaching it.
         if (furnitureResult) { disposeFurniture(furnitureResult); furnitureResult = null; }
+        shadowDepthProbeMats.forEach(m => m.dispose());
+        shadowDepthProbeMats.length = 0;
 
         cancelAnimationFrame(animId);
         handlers.forEach(([el, ev, fn, o]) => el.removeEventListener(ev, fn, o));

@@ -175,8 +175,9 @@ export const HAClient = (() => {
       token,
       rooms,
       sensors = null,
-      wsReconnectMs = 5000,
-      pollIntervalMs = 5000
+      wsReconnectMs = 5000
+      // pollIntervalMs is still accepted (config files carry it) and ignored:
+      // there is no REST polling any more. See "Transport" below.
     } = opts;
     // Support url array or single string + optional fallbackUrl
     const urls = Array.isArray(opts.url)
@@ -185,11 +186,30 @@ export const HAClient = (() => {
     let urlIndex = 0;
     let url = urls[urlIndex];
 
+    // ---- Transport: the WebSocket API, and nothing else ----
+    // Every read and every command goes over /api/websocket. The first
+    // snapshot is the socket's own `get_states` (sent on auth_ok, below);
+    // live changes are its `state_changed` subscription; commands are
+    // `call_service` on the same socket.
+    //
+    // There is deliberately NO REST (fetch) path. This app is served from its
+    // own origin, so any fetch to Home Assistant is cross-origin, and HA's REST
+    // API carries a Bearer header that forces a CORS preflight. Unless HA's
+    // `http: cors_allowed_origins` names this app's origin, that preflight
+    // fails -- which is exactly what the console showed on every load: a
+    // redundant REST `GET /api/states` snapshot, blocked by CORS, while the
+    // WebSocket (which has no preflight) authenticated fine and delivered the
+    // same states moments later. The REST polling and REST service-call
+    // fallbacks could only ever have worked with that same CORS change, and
+    // the snapshot also held up the house load while it waited.
+    // scripts/test-ha-client-transport.mjs pins this: no fetch, ever.
     let ws = null;
+    // True between auth_ok and the socket closing. An open socket is not
+    // enough: HA rejects anything sent before auth_ok.
+    let authed = false;
     let wsId = 1;
     let status = 'disconnected';
     let reconnectTimer = null;
-    let pollTimer = null;
 
     const stateCallbacks = [];
     const statusCallbacks = [];
@@ -642,8 +662,8 @@ export const HAClient = (() => {
           ws.send(JSON.stringify({ type: 'auth', access_token: token }));
         } else if (msg.type === 'auth_ok') {
           console.log('HAClient: Authenticated via', activeUrl);
+          authed = true;
           setStatus('syncing');
-          stopPolling();
           const id = wsId++;
           getStatesId = id;
           wsSend({ id, type: 'get_states' });
@@ -682,6 +702,7 @@ export const HAClient = (() => {
       };
       ws.onclose = () => {
         ws = null;
+        authed = false;
         if (status !== 'auth_failed') { setStatus('disconnected'); scheduleReconnect(); }
       };
       ws.onerror = () => {};
@@ -708,71 +729,33 @@ export const HAClient = (() => {
 
     function disconnect() {
       clearTimeout(reconnectTimer);
-      stopPolling();
       if (ws) { ws.onclose = null; ws.close(); ws = null; }
+      authed = false;
       setStatus('disconnected');
-    }
-
-    // ---- REST polling fallback ----
-
-    function startPolling() {
-      if (pollTimer) return;
-      setStatus('polling');
-      pollOnce();
-      pollTimer = setInterval(pollOnce, pollIntervalMs);
-    }
-
-    function stopPolling() {
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-    }
-
-    async function pollOnce() {
-      try {
-        const resp = await fetch(url + '/api/states', {
-          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(5000)
-        });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        const states = await resp.json();
-        states.forEach(state => {
-          noteRaw(state);
-          if (entityIndex.has(state.entity_id)) {
-            processStateUpdate(state.entity_id, state, false);
-          } else if (sensorIndex.has(state.entity_id)) {
-            // Safe to run on every poll tick: processSensorUpdate dispatches
-            // only on an actual change, so a 5s poll against an unchanging
-            // sensor costs a Map lookup and nothing else -- no render request.
-            processSensorUpdate(state.entity_id, state);
-          }
-          if (fittingIndex.has(state.entity_id)) processFittingUpdate(state.entity_id, state);
-          if (climateIndex.has(state.entity_id)) processClimateUpdate(state.entity_id, state);
-        });
-      } catch (e) {
-        console.warn('HAClient: Poll failed:', e.message);
-      }
     }
 
     // ---- Service calls ----
 
     const debounceTimers = {};
 
+    // Returns true if the command went out, false if it was dropped because
+    // the WebSocket is not up. Dropped, NOT queued or sent another way: a
+    // queued command replayed after a reconnect would move a curtain or a
+    // thermostat to a value the user set seconds or minutes ago, and there is
+    // no other way to send it (see "Transport" at the top of create()).
     function callService(domain, service, data, target) {
+      if (!authed || !ws || ws.readyState !== WebSocket.OPEN) {
+        console.warn('HAClient: not connected; dropped ' + domain + '.' + service + '.');
+        return false;
+      }
       const entities = target.entity_id;
       const now = Date.now();
       (Array.isArray(entities) ? entities : [entities]).forEach(eid => {
         pendingCommands.set(eid, now);
         setTimeout(() => pendingCommands.delete(eid), 3000);
       });
-
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        wsSend({ id: wsId++, type: 'call_service', domain, service, service_data: data, target });
-      } else {
-        fetch(url + '/api/services/' + domain + '/' + service, {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...data, ...target })
-        }).catch(e => console.warn('HAClient: Service call failed:', e.message));
-      }
+      wsSend({ id: wsId++, type: 'call_service', domain, service, service_data: data, target });
+      return true;
     }
 
     /**
@@ -812,7 +795,6 @@ export const HAClient = (() => {
     return {
       connect,
       disconnect,
-      startPolling,
       onStateChange(cb) { stateCallbacks.push(cb); },
       // cb(roomId, occupied) / cb(doorId, open). Fired ONLY when the OR-ed
       // boolean for that target actually changes, never on an attribute-only
@@ -885,68 +867,9 @@ export const HAClient = (() => {
     };
   }
 
-  /**
-   * One-shot REST fetch of current light states, normalized for Home3DScene.
-   * Returns { roomId: { group: { on, bri, temp?, color? } } } or null on failure.
-   */
-  async function fetchInitialState(url, token, rooms, fallbackUrl) {
-    // Try primary URL, then fallback if provided
-    const candidates = [url, fallbackUrl].filter(Boolean);
-    let resp = null;
-    for (const candidate of candidates) {
-      try {
-        const r = await fetch(candidate + '/api/states', {
-          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(4000)
-        });
-        if (r.ok) { resp = r; break; }
-      } catch (e) { /* try next */ }
-    }
-    try {
-      if (!resp) return null;
-      const states = await resp.json();
-
-      // Build entity lookup
-      const entityMap = new Map();
-      states.forEach(s => entityMap.set(s.entity_id, s));
-
-      const result = {};
-      Object.entries(rooms).forEach(([roomId, groups]) => {
-        result[roomId] = {};
-        Object.entries(groups).forEach(([group, entities]) => {
-          const haState = entityMap.get(entities[0]);
-          if (!haState) return;
-          const on = haState.state === 'on';
-          const attrs = haState.attributes || {};
-          const s = { on };
-
-          if (group === 'main') {
-            s.bri = (attrs.brightness != null) ? Math.round(attrs.brightness / 2.55) : (on ? 100 : 0);
-            s.temp = (attrs.color_temp_kelvin != null) ? attrs.color_temp_kelvin : 4000;
-          } else if (group === 'ambient') {
-            s.bri = (attrs.brightness != null) ? Math.round(attrs.brightness / 2.55) : (on ? 80 : 0);
-            if (attrs.rgb_color && Array.isArray(attrs.rgb_color)) {
-              const [r, g, b] = attrs.rgb_color;
-              s.color = '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
-            } else {
-              s.color = '#ff3300';
-            }
-          } else if (group === 'galaxy') {
-            s.bri = (attrs.brightness != null) ? Math.round(attrs.brightness / 2.55) : (on ? 50 : 0);
-          }
-
-          result[roomId][group] = s;
-        });
-      });
-      return result;
-    } catch (e) {
-      return null;
-    }
-  }  // end fetchInitialState
 
   return {
     create,
-    fetchInitialState,
     coverPositionCommand,
     coverOpenCloseCommand,
     parseClimate,

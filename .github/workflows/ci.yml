@@ -236,6 +236,28 @@ jobs:
           # against the real callServiceDebounced.
           set -euo pipefail
           node scripts/test-room-panel.mjs
+      - name: Home Assistant transport is the WebSocket only (no REST, no CORS)
+        run: |
+          # Asserts ha-client never calls fetch(): a whole session (connect,
+          # get_states snapshot, live event, call_service) runs over a fake
+          # HA WebSocket with ZERO fetches; a command with no socket, or on a
+          # socket not yet authenticated, is dropped rather than sent over
+          # REST; and no module that talks to HA contains a fetch( at all.
+          # A browser REST call to HA is cross-origin with a Bearer header, so
+          # it is CORS-preflighted and fails unless HA allow-lists this app --
+          # the console error every load used to show. See the script's header.
+          set -euo pipefail
+          node scripts/test-ha-client-transport.mjs
+      - name: Cold start compiles no shader inside a frame
+        run: |
+          # Source-level guard on the three fixes for the 1-3 s
+          # requestAnimationFrame stalls on a cold load: the loop draws
+          # nothing until the shader precompile settles, wallpaper materials
+          # are built with a placeholder map so gaining the photo is not a
+          # new program, and the shadow pass's depth program is precompiled
+          # with the casters' real side and kept alive. See the header.
+          set -euo pipefail
+          node scripts/test-first-frame-gate.mjs
       - name: Gaming chair builder
         run: |
           # Asserts src/furniture/gaming-chair.js: the furniture frame (floor at
