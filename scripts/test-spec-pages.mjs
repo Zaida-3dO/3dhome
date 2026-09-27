@@ -319,9 +319,10 @@ tableCheck('gaming chair', Object.keys(GC.PRESETS).map(id => ({ id, params: { pr
   v => Object.assign({}, GC.DEFAULTS, v.params));
 // Plant presets (full sets per kind).
 const PL = await imp('src/furniture/plant.js');
-for (const kind of ['corn-plant', 'wall-planter']) {
+for (const kind of PL.KINDS) {
+  // the page passes FULLY resolved params (DEFAULTS + preset)
   tableCheck('plant ' + kind, Object.keys(PL.PRESETS).filter(n => PL.PRESETS[n].kind === kind)
-    .map(n => ({ id: n, params: PL.PRESETS[n] })), v => Object.assign({}, PL.DEFAULTS, v.params));
+    .map(n => ({ id: n, params: Object.assign({}, PL.DEFAULTS, PL.PRESETS[n]) })), v => Object.assign({}, v.params));
 }
 // Cabinet presets: nested fronts grids -- deep equality matters here.
 // (the cabinet page adds its mirror-cabinet presets after the literal, so run

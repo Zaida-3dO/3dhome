@@ -900,7 +900,7 @@ function buildFicus(ctx) {
   const R = (p.potTopDiameter * CM) / 2;
   if (p.potStyle === 'bowl') {                                   // saucer (both details: it sets the footprint)
     const sc = low
-      ? lathe(THREE, [[R * 1.28, 0.012], [R * 1.22, 0]], 8, 0, 0)
+      ? lathe(THREE, [[R * 1.22, 0], [R * 1.28, 0.012], [R * 1.1, 0.012]], 8, 0, 0)   // bottom-to-top: faces point outward, plus a top ledge
       : new THREE.CylinderGeometry(R * 1.28, R * 1.22, 0.012, 12, 1, false);
     if (!low) sc.translate(0, 0.006, 0);
     add(sc, 'gloss', p.potColor, 'saucer');
