@@ -2358,8 +2358,8 @@ export const Home3DScene = (() => {
         if (rug.pattern) {
           // A pattern supersedes `color`: the palette IS the rug's colour.
           // The texture is laid out in plan orientation by rugPatternForBox
-          // (its long axis follows the rug's long side, whichever plan axis
-          // that is), so the UVs here are simply each vertex's position
+          // (the zig-zag spans the rug's long side, or its short side with
+          // `across: 'short'`, whichever plan axis that is), so the UVs here are simply each vertex's position
           // within the rug's bounding box -- replacing ShapeGeometry's
           // per-metre UVs, which suit a tiling pile but not a whole-rug picture.
           // The inverse of the shape transform is taken from tx/tz at the box

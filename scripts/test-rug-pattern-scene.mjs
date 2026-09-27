@@ -8,6 +8,8 @@
  *   1. rugPatternForBox lays the pattern out in PLAN orientation: a rug whose
  *      long side runs along plan y gets the pattern TRANSPOSED (its zig-zag
  *      runs down the long side), one whose long side runs along x does not.
+ *      With `across: 'short'` the zig-zag spans the SHORT side instead, for
+ *      both an x-long and a y-long rug.
  *   2. The rug's size comes from the box, never from params.widthCm/depthCm.
  *   3. house-loader passes only the overrides through, drops widthCm/depthCm
  *      and unknown keys with a warning, rejects an unknown pattern name, and
@@ -82,6 +84,41 @@ const direct = R.fillRugPattern(new Uint8ClampedArray(LONG * SHORT * 4), LONG, S
   check('a plan column of a y-long rug zig-zags (bands step both ways)', fwd > 0 && back > 0, { fwd, back });
 }
 
+// ---- 1b. across: 'short' -- the zig-zag spans the SHORT side ------------------------------
+// Pattern drawn with the SHORT side as its width: 150 wide, 210 deep, at the
+// same px/cm (the long side still gets LONG px).
+const shortFirst = R.fillRugPattern(new Uint8ClampedArray(SHORT * LONG * 4), SHORT, LONG,
+  { pileNoise: 0.25, widthCm: 150, depthCm: 210 });
+{
+  // y-long rug + across short -> the zig-zag spans x, so NO transpose: the
+  // plan buffer is the short-first pattern as drawn.
+  // Mutation: ignore params.across (always 'long') -> transposed, bytes differ.
+  const t = R.rugPatternForBox(150, 210, { pileNoise: 0.25, across: 'short' }, LONG);
+  check("y-long + across 'short' -> zig-zag along x (alongY false)", t.alongY === false, t.alongY);
+  check("y-long + across 'short' -> still tall (width = short, height = long)",
+    t.width === SHORT && t.height === LONG, [t.width, t.height]);
+  check("y-long + across 'short' -> bytes are the short-first pattern as drawn", same(t.data, shortFirst));
+  const l = R.rugPatternForBox(150, 210, { pileNoise: 0.25, across: 'long' }, LONG);
+  check("across 'long' is the default", same(l.data, R.rugPatternForBox(150, 210, { pileNoise: 0.25 }, LONG).data));
+  check("across 'short' and 'long' differ on the same rug", !same(l.data, t.data));
+}
+{
+  // x-long rug + across short -> the zig-zag spans y, so it IS transposed.
+  // Mutation: compute alongY as `sy > sx` regardless of across -> not transposed.
+  const t = R.rugPatternForBox(210, 150, { pileNoise: 0.25, across: 'short' }, LONG);
+  check("x-long + across 'short' -> zig-zag along y (alongY true)", t.alongY === true, t.alongY);
+  check("x-long + across 'short' -> wide (width = long, height = short)",
+    t.width === LONG && t.height === SHORT, [t.width, t.height]);
+  let ok = t.data.length === shortFirst.length;
+  for (let row = 0; ok && row < SHORT; row++) {
+    for (let col = 0; col < LONG; col++) {
+      const o = (row * LONG + col) * 4, i = (col * SHORT + row) * 4;
+      if (t.data[o] !== shortFirst[i] || t.data[o + 1] !== shortFirst[i + 1] || t.data[o + 2] !== shortFirst[i + 2]) { ok = false; break; }
+    }
+  }
+  check("x-long + across 'short' -> plan(x, y) is short-first pattern(width = y, depth = x)", ok);
+}
+
 // ---- 2. size comes from the box ----------------------------------------------------------
 // Mutation: Object.assign({widthCm..}, params) (params win) -> the override leaks in.
 {
@@ -134,6 +171,15 @@ const compile = rug => quiet(() => HouseLoader.compile(houseDoc(rug), 'houses/t/
   check('texture alone still loads', h2.rooms.lounge.rug.textureUrl === 'houses/t/textures/rug.jpg', h2.rooms.lounge.rug.textureUrl);
 }
 
+{
+  // Mutation: drop the RUG_PATTERN_ACROSS check -> 'diagonal' reaches the scene.
+  const h = compile({ inset: 20, pattern: { across: 'short' } });
+  check("across 'short' passes through", JSON.stringify(h.rooms.lounge.rug.pattern) === '{"across":"short"}', h.rooms.lounge.rug.pattern);
+  const h2 = compile({ inset: 20, pattern: { across: 'diagonal', seed: 3 } });
+  check('unknown across is dropped with a warning', JSON.stringify(h2.rooms.lounge.rug.pattern) === '{"seed":3}' &&
+    h2.warnings.some(w => /across/.test(w)), h2.rooms.lounge.rug.pattern);
+}
+
 // ---- 4. schema drift -----------------------------------------------------------------------
 {
   // Mutation: add a key to RUG_PATTERN_DEFAULTS without the schema (or vice versa) -> fails.
@@ -151,6 +197,7 @@ const compile = rug => quiet(() => HouseLoader.compile(houseDoc(rug), 'houses/t/
     check('schema pattern keys == RUG_PATTERN_HOUSE_KEYS', JSON.stringify(keys) === JSON.stringify([...R.RUG_PATTERN_HOUSE_KEYS].sort()),
       { schema: keys, module: R.RUG_PATTERN_HOUSE_KEYS });
     check('schema pattern enum == RUG_PATTERNS', JSON.stringify(ps.properties.pattern.enum) === JSON.stringify(R.RUG_PATTERNS));
+    check('schema across enum == RUG_PATTERN_ACROSS', JSON.stringify(ps.properties.across.enum) === JSON.stringify(R.RUG_PATTERN_ACROSS));
     check('schema pattern block is closed', ps.additionalProperties === false);
   }
 }

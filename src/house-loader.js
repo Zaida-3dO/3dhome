@@ -28,7 +28,7 @@
  */
 
 import { insidePoly } from './footstep-walk.js';
-import { RUG_PATTERN_DEFAULTS, RUG_PATTERNS, RUG_PATTERN_HOUSE_KEYS } from './rug-pattern.js';
+import { RUG_PATTERN_DEFAULTS, RUG_PATTERNS, RUG_PATTERN_HOUSE_KEYS, RUG_PATTERN_ACROSS } from './rug-pattern.js';
 import { FINISHES, FINISH_TYPES, resolveTileLook, outsideVector, faceNormalToward, compassVector } from './wall-finish.js';
 
 export const HouseLoader = (() => {
@@ -1089,6 +1089,10 @@ export const HouseLoader = (() => {
           if (pattern.pattern != null && !RUG_PATTERNS.includes(pattern.pattern)) {
             warn('room "' + r.id + '" rug pattern "' + pattern.pattern + '" is unknown -- using "' + RUG_PATTERN_DEFAULTS.pattern + '"');
             delete pattern.pattern;
+          }
+          if (pattern.across != null && !RUG_PATTERN_ACROSS.includes(pattern.across)) {
+            warn('room "' + r.id + '" rug pattern across "' + pattern.across + '" is not "long" or "short" -- using "long"');
+            delete pattern.across;
           }
           rug.pattern = pattern;
           if (rug.textureUrl) {

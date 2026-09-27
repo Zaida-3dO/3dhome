@@ -176,7 +176,7 @@
             },
             "pattern": {
               "type": "object",
-              "description": "A procedural rug look (src/rug-pattern.js, signed off on the Rug spec page): bold zig-zag bands in a palette plus shaggy pile noise, drawn once over the whole rug. Store only what differs from the defaults -- every key is optional and falls back to RUG_PATTERN_DEFAULTS, so `{}` is the default grey/cream/teal chevron shag. The rug's size is NOT a pattern key: it comes from the outline's bounding box, and the pattern's width (the axis the zig-zag spans) always follows the rug's LONG side, whichever plan axis that is. Supersedes `color`, and takes precedence over `texture` if both are given.",
+              "description": "A procedural rug look (src/rug-pattern.js, signed off on the Rug spec page): bold zig-zag bands in a palette plus shaggy pile noise, drawn once over the whole rug. Store only what differs from the defaults -- every key is optional and falls back to RUG_PATTERN_DEFAULTS, so `{}` is the default grey/cream/teal chevron shag. The rug's size is NOT a pattern key: it comes from the outline's bounding box, and the pattern's width (the axis the zig-zag spans) follows the rug's long side -- or its short side with `across: \"short\"` -- whichever plan axis that is. Supersedes `color`, and takes precedence over `texture` if both are given.",
               "properties": {
                 "pattern": {
                   "enum": ["chevron", "solid"],
@@ -213,6 +213,10 @@
                 "seed": {
                   "type": "integer",
                   "description": "Seed for the pile noise, so the same rug always looks the same. Default 1."
+                },
+                "across": {
+                  "enum": ["long", "short"],
+                  "description": "Which side of the rug the zig-zag spans: 'long' (default, as on the Rug spec page) or 'short'. With 'short' the bands stack down the rug's length, so the chevrons march along the long side. Measure it off the real rug: on a 'long' rug one V is as wide as the rug is long."
                 }
               },
               "additionalProperties": false
