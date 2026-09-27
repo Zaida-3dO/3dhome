@@ -273,6 +273,47 @@ try {
       res.beauty.map(m => m.userData.bucket));
   }
 
+  // ---- gain: brightens (a tint only darkens), and survives the merge ------------
+  {
+    M.clearModelCache();
+    const loadGltf = async () => {
+      const scene = new THREE.Group();
+      const g = new THREE.BoxGeometry(1, 1, 1);
+      const cols = new Float32Array(g.attributes.position.count * 3).fill(0.05);
+      g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+      scene.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true })));
+      return { scene };
+    };
+    await M.prepare([item('dark', { src: 'models/dark.glb' })], { loadGltf });
+    const colourOf = extra => {
+      const grp = M.build(THREE, Object.assign({}, M.DEFAULTS, { src: 'models/dark.glb' }, extra), { assetBase: BASE });
+      let m = null;
+      grp.traverse(o => { if (o.isMesh) m = o.material; });
+      return m.color;
+    };
+    check('gain defaults to 1 (white material over the vertex colours)', near(colourOf({}).r, 1) && near(colourOf({}).b, 1), colourOf({}));
+    const g4 = colourOf({ gain: 4 });
+    check('gain 4 multiplies the material colour past 1 (brightens)', near(g4.r, 4) && near(g4.g, 4) && near(g4.b, 4), g4);
+    // With a colour override the gain multiplies the override (linear).
+    const tint = colourOf({ color: '#808080' }), both = colourOf({ color: '#808080', gain: 3 });
+    check('gain multiplies a color override', near(both.r, tint.r * 3) && near(both.g, tint.g * 3), { tint, both });
+    for (const bad of [0, -2, NaN, '4']) {
+      const c = colourOf({ gain: bad });
+      check('an invalid gain (' + String(bad) + ') is ignored', near(c.r, 1), c);
+    }
+    // Through the real merge: the palette bucket's float vertex colours carry it.
+    const items = [item('dark', { src: 'models/dark.glb', gain: 6 })];
+    const res = (await quietlyAsync(async () => {
+      const builders = await F.loadFurnitureModules(items, { prepareCtx: { loadGltf } });
+      return F.buildFurnitureSync(THREE, items, builders, { tx: x => x / 100, tz: y => y / 100, quality: { tier: 'ultra' } });
+    })).value;
+    const pal = res.beauty.find(m => m.userData.cls === 'opaque');
+    const ca = pal && pal.geometry.attributes.color;
+    check('gain reaches the merged palette bucket (0.05 x 6 = 0.3)', !!ca && near(ca.getX(0), 0.3, 1e-5) && near(ca.getZ(0), 0.3, 1e-5),
+      ca && [ca.getX(0), ca.getY(0), ca.getZ(0)]);
+    check('gain adds no draw (still one palette bucket)', res.beauty.length === 1, res.beauty.map(m => m.userData.bucket));
+  }
+
   // ---- slow file: the per-file timeout ------------------------------------------
   {
     M.clearModelCache();

@@ -2509,6 +2509,7 @@
         "yaw": { "type": "number", "default": 0, "description": "Degrees, anticlockwise seen from above, applied before fitting: turns the file's front to face glTF +z (the item's front)." },
         "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
         "color": { "anyOf": [{ "$ref": "#/$defs/hexColor" }, { "type": "null" }], "default": null, "description": "Override every primitive's colour (tints vertex colours). null keeps the file's colours." },
+        "gain": { "type": "number", "exclusiveMinimum": 0, "maximum": 50, "default": 1, "description": "Multiply every part's colour (the file's, or `color`) by this. A tint can only darken; gain > 1 brightens a file whose baked colours are too dark (e.g. vendor textures with lighting baked in). The per-instance twin of scripts/model-lod --gain." },
         "maxTriangles": { "type": "integer", "exclusiveMinimum": 0, "default": 5000, "description": "Refuse (skip, with a warning) a file with more triangles than this per LOD." }
       },
       "additionalProperties": false

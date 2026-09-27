@@ -43,6 +43,14 @@
  *     every item using the file);
  *   - otherwise the file's base colour (or params.color, which overrides
  *     every primitive's colour and tints vertex colours).
+ * params.gain then multiplies whichever colour that is. A tint can only
+ * darken; gain is the one way to BRIGHTEN a file whose colours are too dark
+ * -- typically a vendor model whose textures had studio lighting and
+ * ambient occlusion baked in, so its "albedo" is near-black and the lit
+ * scene darkens it a second time. It is the per-instance twin of
+ * scripts/model-lod's --gain: same file, no re-export. It rides on the
+ * material colour (linear, so > 1 is fine), which merge.js writes into the
+ * bucket's float vertex colours, so it costs no draw and no program.
  *
  * LEVELS OF DETAIL. A root node named `low` is used for detail 'low'; every
  * other root node is the full model. A file with no `low` node serves both.
@@ -63,6 +71,7 @@ export const DEFAULTS = Object.freeze({
   yaw: 0,             // degrees, anticlockwise from above, applied before fitting
   finish: 'matte',
   color: null,        // '#rrggbb' to override the file's colours
+  gain: 1,            // multiply the (file's or overridden) colours; > 1 brightens
   maxTriangles: 5000  // refuse a file heavier than this (per LOD)
 });
 
@@ -409,6 +418,7 @@ export function build(THREE, params, opts) {
   root.add(fitted);
 
   const override = typeof p.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.color) ? p.color : null;
+  const gain = typeof p.gain === 'number' && Number.isFinite(p.gain) && p.gain > 0 ? p.gain : 1;
   prims.forEach(q => {
     const g = new THREE.BufferGeometry();
     // The cached arrays are SHARED, never copied: flattenGroup (merge.js)
@@ -429,6 +439,7 @@ export function build(THREE, params, opts) {
     } else {
       mat = makeFinish(THREE, p.finish, override || hexFromLinear(THREE, q.baseColor));
     }
+    if (gain !== 1) mat.color.multiplyScalar(gain);
     if (!q.normal) g.computeVertexNormals();
     yawed.add(new THREE.Mesh(g, mat));
   });
