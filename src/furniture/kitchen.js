@@ -1121,20 +1121,21 @@ export const EXAMPLE_L = deepFreeze({
 
 /**
  * A full L kitchen as measured: the preset KitchenSpec opens on.
- * Dimensions only. Run A (65 deep) owns the corner; run B (60 deep, 214
- * long: 60/60/60/34) starts at A's front face, so the leg along B's wall is
- * 65 + 214 = 279. A's `cornerDepth` is B's 60 -- the square B hides -- which
+ * Dimensions only. Run A (65 deep, 275 long) owns the corner and, with the
+ * 65 cm fridge-freezer, fills its 340 cm wall; run B (60 deep, 214 long:
+ * 60/60/60/34) starts at A's front face, so the leg along B's wall is
+ * 65 + 214 = 279. Wall-unit tops meet the fridge top at 219.2. A's `cornerDepth` is B's 60 -- the square B hides -- which
  * is exactly its 60 cm corner module. Every run's modules fill its width,
  * so it builds with no warnings at all.
  */
 export const FULL_RUN_L = deepFreeze({
   a: {
-    width: 290,
+    width: 275,
     depth: 65,
     height: 118.5,
     modules: [
       {kind: 'corner', width: 60, plinthLed: true},
-      {kind: 'cabinet', width: 50, plinthLed: true},
+      {kind: 'cabinet', width: 35, plinthLed: true},
       {kind: 'cabinet', width: 60, plinthLed: true},
       {kind: 'dishwasher', width: 60, plinthLed: true},
       {kind: 'cabinet', width: 60, hinge: 'bottom', plinthLed: true},
@@ -1154,11 +1155,11 @@ export const FULL_RUN_L = deepFreeze({
     ],
   },
   wall: {
-    width: 290,
+    width: 275,
     height: 121.5,
     modules: [
       {kind: 'cabinet', width: 65, underLed: true, topLed: true, height: 70, hinge: 'left'},
-      {kind: 'cabinet', width: 45, height: 70, underLed: true, topLed: true, hinge: 'left'},
+      {kind: 'cabinet', width: 30, height: 70, underLed: true, topLed: true, hinge: 'left'},
       {kind: 'cabinet', width: 60, height: 55, hinge: 'right', underLed: true, topLed: true},
       {kind: 'cabinet', width: 60, underLed: true, topLed: true, height: 55},
       {kind: 'cabinet', width: 60, height: 70, hinge: 'right', underLed: true, topLed: true},
@@ -1166,18 +1167,21 @@ export const FULL_RUN_L = deepFreeze({
   },
   wallB: {
     width: 160,
-    height: 121.5,
+    // Worktop (88.5) to the 219.2 top line: the splashback fills below the hood.
+    height: 130.7,
     modules: [
       // Centred over the oven (base run B, module 1) as drawn: see resolveAlignment().
-      {kind: 'hood', width: 60, style: 'chimney', visor: 'smoked', splashback: 61.5, height: 60, alignTo: {run: 'b', module: 1}},
+      {kind: 'hood', width: 60, style: 'chimney', visor: 'smoked', splashback: 70.7, height: 60, alignTo: {run: 'b', module: 1}},
     ],
   },
   fridge: {
     width: 65,
+    height: 219.2,
     plinthLed: true,
     topLed: true,
   },
-  wallTop: 210,
+  // Wall-unit tops meet the fridge-freezer's top.
+  wallTop: 219.2,
 });
 
 /** The presets KitchenSpec offers, the first being the one it opens on. */
