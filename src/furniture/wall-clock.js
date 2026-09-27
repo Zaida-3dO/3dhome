@@ -109,7 +109,9 @@ export const DIY_WORDS_DEFAULTS = Object.freeze(Object.assign({}, DEFAULTS, {
   // from WORD_LEFT_R/WORD_RIGHT_R/Y_MARGIN_R below: width =
   // radius*(WORD_LEFT_R+WORD_RIGHT_R), height = radius*2*Y_MARGIN_R, at
   // diameter=30 (radius=15cm). Verified exactly by test-wall-clock.mjs.
-  width: 43.5,
+  // width recomputed after WORD_RIGHT_R widened 1.85 -> 2.1 (item 059873ed,
+  // visual-compare round): 15 * (1.05 + 2.1) = 47.25.
+  width: 47.25,
   height: 35.4,
   faceColor: '#f5f2ea', // unused by diy-words (no face disc) -- kept for shape parity
   numeralColor: '#1a1a1a',
@@ -474,8 +476,24 @@ function resolveCreateCanvas(opts) {
 // are laid out in this space and only converted to canvas pixels at draw
 // time. Widened right (WORD_RIGHT_R) to fit "One".."Five" past the ring, and
 // a little tall (Y_MARGIN_R) for "12"/"6" to clear the panel edge.
+//
+// WORD_RIGHT_R was widened from 1.85 to 2.1 (item 059873ed, visual-compare
+// round against wall-clock-reference.png / wallclock.jpg): measured with
+// ctx.measureText() in a real browser, "Three" at its own scale=1.0 and the
+// ORIGINAL baseWordSize factor (0.42, see buildWordsTexture) overflowed the
+// 1.85-wide canvas by ~178px out of 1024 -- a real clip, not a framing
+// artifact (confirmed the panel geometry itself, and every other mesh's own
+// world-space bbox, were already correct and symmetric; only the CANVAS
+// TEXTURE's own drawn content ran past its own right edge). Fixed by both
+// widening the envelope a little AND shrinking baseWordSize's factor from
+// 0.42 to 0.3, rather than only one or the other -- doing it by width alone
+// would have needed 2.36 (a much bigger footprint for a WORD_RIGHT_R that
+// otherwise change nothing about layout); doing it by size alone would have
+// shrunk every word to ~58% of its previous size, smaller than the
+// reference photos show. The chosen pair leaves "Three" ~30px of margin at
+// a 1024px texture width.
 const WORD_LEFT_R = 1.05;   // left edge of the panel, just past the ring's own left extent
-const WORD_RIGHT_R = 1.85;  // right edge -- covers the words' own reach (see DIY_WORDS_DEFAULTS.width)
+const WORD_RIGHT_R = 2.1;   // right edge -- covers the words' own reach (see DIY_WORDS_DEFAULTS.width)
 const Y_MARGIN_R = 1.18;    // top/bottom edge
 
 /**
@@ -505,26 +523,52 @@ function buildWordsTexture(THREE, wPx, hPx, numeralColor, createCanvas) {
 
   // Numerals: 12, 9, 6 -- big, bold, rounded sans. Arial Rounded MT Bold is
   // a common web-safe rounded face; sans-serif is the universal fallback.
+  //
+  // Both owner reference photos show a slight drop shadow on the numerals --
+  // a real physical effect of the acrylic pieces standing a few mm off the
+  // wall in the actual clock. The item's own perf guidance is explicit that
+  // numerals are ONE flat canvas-texture plane, not individual 3D pieces
+  // (cheaper than real per-numeral depth+lighting), so the shadow is drawn
+  // into that same texture with the canvas 2D shadow properties -- a soft,
+  // small offset blur behind the glyph -- rather than built as geometry.
   const numeralSize = Math.round(pxPerR * 0.62);
   ctx.font = `900 ${numeralSize}px "Arial Rounded MT Bold", "Segoe UI", sans-serif`;
+  ctx.shadowColor = 'rgba(0,0,0,0.35)';
+  ctx.shadowBlur = pxPerR * 0.05;
+  ctx.shadowOffsetX = pxPerR * 0.025;
+  ctx.shadowOffsetY = pxPerR * 0.03;
   [[12, 0, 1], [9, -1, 0], [6, 0, -1]].forEach(([label, xR, yR]) => {
     const [x, y] = toPx(xR, yR);
     ctx.fillText(String(label), x, y);
   });
+  // The shadow is numerals-only (matching the reference: the words and dots
+  // read flat, only the big block numerals show the raised-off-the-wall
+  // look) -- cleared before anything else is drawn onto this canvas.
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
 
   // Words: "One".."Five", thin quirky script, LEFT-aligned, placed to the
   // RIGHT of the 1-5 ring positions -- "Three" (position 3, straight right
   // of centre) reads largest, tapering slightly for the others, matching
   // the reference photo.
+  // Both owner reference photos (wall-clock-reference.png, wallclock.jpg)
+  // show a much steeper size gradient than a first pass here used: "Three"
+  // reads clearly largest, "One" and "Five" clearly smallest -- not just
+  // slightly smaller. Widened from a near-flat 0.85..1.0 range to 0.62..1.0.
   const words = [
-    { label: 'One', hour: 1, scale: 0.85 },
-    { label: 'Two', hour: 2, scale: 0.92 },
+    { label: 'One', hour: 1, scale: 0.62 },
+    { label: 'Two', hour: 2, scale: 0.8 },
     { label: 'Three', hour: 3, scale: 1.0 },
-    { label: 'Four', hour: 4, scale: 0.9 },
-    { label: 'Five', hour: 5, scale: 0.85 }
+    { label: 'Four', hour: 4, scale: 0.78 },
+    { label: 'Five', hour: 5, scale: 0.6 }
   ];
   ctx.textAlign = 'left';
-  const baseWordSize = pxPerR * 0.42;
+  // 0.3, not the numerals' own 0.62 -- see the WORD_RIGHT_R note above for
+  // why this and the envelope width were tuned together against a real
+  // ctx.measureText() overflow, not chosen independently.
+  const baseWordSize = pxPerR * 0.3;
   words.forEach(({ label, hour, scale }) => {
     const angle = (hour / 12) * Math.PI * 2;
     const ringX = Math.sin(angle), ringY = Math.cos(angle);
@@ -622,8 +666,12 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
   panel.userData.keep = true;
   group.add(panel);
 
-  // ---- Centre disc: a low-poly black cylinder covering the hands' pivot. ----
-  const discR = r * 0.16;
+  // ---- Centre disc: a low-poly black cylinder covering the hands' pivot.
+  // Both owner reference photos show a LARGE disc, roughly a fifth of the
+  // dial's own diameter (2r) -- i.e. a radius of about 0.2r -- not the small
+  // hub-sized circle a first pass here used (0.16r radius read as visibly
+  // too small next to the reference once compared side by side). ----
+  const discR = r * 0.2;
   const discGeo = new THREE.CylinderGeometry(discR, discR, STANDOFF * 1.5, detail ? 6 : 14);
   discGeo.rotateX(Math.PI / 2);
   discGeo.translate(0, 0, STANDOFF * 1.5 / 2);

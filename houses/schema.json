@@ -3133,7 +3133,7 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 30,
-          "description": "cm, kept equal to `diameter` for `framed`/`diy-numerals`. For `diy-words` this is the WHOLE envelope including the words that extend right of the ring (43.5cm at the DIY_WORDS_DEFAULTS diameter of 30cm), not the ring diameter alone."
+          "description": "cm, kept equal to `diameter` for `framed`/`diy-numerals`. For `diy-words` this is the WHOLE envelope including the words that extend right of the ring (47.25cm at the DIY_WORDS_DEFAULTS diameter of 30cm), not the ring diameter alone."
         },
         "depth": {
           "type": "number",

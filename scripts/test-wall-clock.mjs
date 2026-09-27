@@ -53,6 +53,7 @@
  * added for item 059873ed (2026-09-27), matching the owner's actual kitchen
  * clock photo (private, never committed).
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -485,6 +486,63 @@ check('DEFAULTS kind is diy-numerals', Clock.DEFAULTS.kind === 'diy-numerals');
   const stop2 = Clock.startLiveClock(g2, { doc: null, now: () => new Date(2026, 0, 1, 2, 0, 0, 0), onTick: () => { tickCount2++; } });
   check('startLiveClock: works with doc:null (no visibility resync wired up)', tickCount2 === 1, tickCount2);
   stop2();
+}
+
+// ---- 8. diy-words word-envelope overflow guard (item 059873ed, visual --------------------
+//      compare round) -----------------------------------------------------------------
+{
+  // Found via a REAL browser ctx.measureText() against the actual cursive
+  // font stack: at the ORIGINAL WORD_RIGHT_R=1.85 and baseWordSize factor
+  // 0.42, "Three" (scale 1.0, the largest word) overflowed the canvas by
+  // ~178px out of 1024 -- a genuine clip invisible to this whole suite,
+  // since Node has no real canvas font metrics (the stubbed getContext()
+  // above returns a no-op fillText/measureText, by design, so it cannot
+  // catch this). Node cannot measure real font metrics, so this is a
+  // CONSERVATIVE, deterministic estimate instead of an exact measurement:
+  // it assumes an average character advance of 0.62em (generous for a
+  // condensed script font, tighter than a typical serif/sans -- chosen so
+  // this fails loudly on a real regression rather than only on paper) and
+  // checks every word's estimated width still lands inside WORD_RIGHT_R's
+  // margin. This cannot promise a real font never overflows -- only a
+  // browser can -- but it DOES fail if either constant (baseWordSize's
+  // factor or WORD_RIGHT_R) drifts back toward the values that produced the
+  // real, measured overflow above, which is the regression this guards.
+  const src = fs.readFileSync(path.join(root, 'src/furniture/wall-clock.js'), 'utf8');
+  const wordLeftM = src.match(/const WORD_LEFT_R = ([\d.]+)/);
+  const wordRightM = src.match(/const WORD_RIGHT_R = ([\d.]+)/);
+  const baseSizeM = src.match(/const baseWordSize = pxPerR \* ([\d.]+)/);
+  check('diy-words: WORD_LEFT_R/WORD_RIGHT_R/baseWordSize constants are all still present and parseable',
+    !!wordLeftM && !!wordRightM && !!baseSizeM, { wordLeftM: !!wordLeftM, wordRightM: !!wordRightM, baseSizeM: !!baseSizeM });
+  if (wordLeftM && wordRightM && baseSizeM) {
+    const WORD_LEFT_R = parseFloat(wordLeftM[1]);
+    const WORD_RIGHT_R = parseFloat(wordRightM[1]);
+    const sizeFactor = parseFloat(baseSizeM[1]);
+    const AVG_CHAR_ADVANCE_EM = 0.62; // conservative -- see note above
+    const words = [
+      { label: 'One', hour: 1, scale: 0.62 },
+      { label: 'Two', hour: 2, scale: 0.8 },
+      { label: 'Three', hour: 3, scale: 1.0 },
+      { label: 'Four', hour: 4, scale: 0.78 },
+      { label: 'Five', hour: 5, scale: 0.6 }
+    ];
+    const spanX = WORD_LEFT_R + WORD_RIGHT_R;
+    const wPx = 1024; // representative texture width, matches buildWordsTexture's own 'full' detail size
+    const pxPerR = wPx / spanX;
+    const baseWordSize = pxPerR * sizeFactor;
+    let worstOverflow = -Infinity, worstLabel = null;
+    words.forEach(({ label, hour, scale }) => {
+      const angle = (hour / 12) * Math.PI * 2;
+      const ringX = Math.sin(angle);
+      const fontSizePx = baseWordSize * scale;
+      const estWidthPx = label.length * fontSizePx * AVG_CHAR_ADVANCE_EM;
+      const startPx = (ringX + 0.12 + WORD_LEFT_R) * pxPerR;
+      const endPx = startPx + estWidthPx;
+      const overflow = endPx - wPx;
+      if (overflow > worstOverflow) { worstOverflow = overflow; worstLabel = label; }
+    });
+    check('diy-words: every word\'s ESTIMATED width stays inside the canvas at a conservative 0.62em/char advance',
+      worstOverflow <= 0, { worstLabel, worstOverflow: Math.round(worstOverflow) });
+  }
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
