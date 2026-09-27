@@ -1071,6 +1071,10 @@ export const HouseLoader = (() => {
         return;
       }
       furnitureIds.add(compiled.id);
+      // The profile directory, for a type that loads a file from the profile
+      // (src/furniture/model.js). Builders get it as build()'s opts.assetBase;
+      // the type itself guards the path it resolves under it.
+      compiled.assetBase = dir;
       furniture.push(compiled);
     });
 

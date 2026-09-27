@@ -796,6 +796,8 @@
 
         { "if": { "properties": { "type": { "const": "mirror" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_mirror" } } } },
 
+        { "if": { "properties": { "type": { "const": "model" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_model" } } } },
+
         { "if": { "properties": { "type": { "const": "monitor" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_monitor" } } } },
 
         { "if": { "properties": { "type": { "const": "ottoman" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_ottoman" } } } },
@@ -2130,6 +2132,23 @@
         "frameColor": { "$ref": "#/$defs/hexColor", "default": "#3a3a3a" },
         "frameWidth": { "type": "number", "exclusiveMinimum": 0, "default": 2.5, "description": "cm." },
         "frameFinish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_model": {
+      "type": "object",
+      "description": "Params for `model` (src/furniture/model.js): a piece drawn from a .glb file that lives in the house profile, fitted into width x depth x height. Use it for a real product model the repo may not redistribute; decimate it first (scripts/model-lod). Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "src": { "type": ["string", "null"], "pattern": "^(?![/])(?!.*\\.\\.)(?![a-zA-Z][a-zA-Z0-9+.-]*:)[^\\\\]+\\.[gG][lL][bB]$", "default": null, "description": "Profile-relative path to a .glb, e.g. \"assets/models/chair/lod.glb\". No leading slash, no '..', no URL scheme; .glb only. A missing or unloadable file skips the item with a warning." },
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 60, "description": "cm, along the wall / the item's local x." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 60, "description": "cm, back to front." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 60, "description": "cm." },
+        "fit": { "type": "string", "enum": ["stretch", "contain"], "default": "stretch", "description": "stretch: each axis scaled to its own dimension (the bbox is the envelope). contain: one uniform scale, the largest that fits." },
+        "yaw": { "type": "number", "default": 0, "description": "Degrees, anticlockwise seen from above, applied before fitting: turns the file's front to face glTF +z (the item's front)." },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
+        "color": { "anyOf": [{ "$ref": "#/$defs/hexColor" }, { "type": "null" }], "default": null, "description": "Override every primitive's colour (tints vertex colours). null keeps the file's colours." },
+        "maxTriangles": { "type": "integer", "exclusiveMinimum": 0, "default": 5000, "description": "Refuse (skip, with a warning) a file with more triangles than this per LOD." }
       },
       "additionalProperties": false
     },

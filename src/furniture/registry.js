@@ -55,6 +55,8 @@ export const REGISTRY = Object.freeze({
 
   'mirror': { path: 'small-items.js', key: 'mirror', spec: 'SmallItemsSpec' },
 
+  'model': { path: 'model.js', key: null, spec: 'ModelSpec' },
+
   'monitor': { path: 'small-items.js', key: 'monitor', spec: 'SmallItemsSpec' },
 
   'ottoman': { path: 'digital-piano.js', key: 'ottoman', spec: 'DigitalPianoSpec' },
@@ -162,7 +164,7 @@ export function moduleUrl(type, opts) {
 /**
  * Load the builder for one type.
  *
- * Resolves to { type, DEFAULTS, build } or to null (with a warning pushed to
+ * Resolves to { type, DEFAULTS, build[, prepare] } or to null (with a warning pushed to
  * `opts.warnings` and the console) when the type is unregistered, its module
  * does not exist yet, or the module does not export what the contract says.
  * Never rejects: one missing builder must not cost the house its furniture.
@@ -197,7 +199,11 @@ export async function loadBuilder(type, opts) {
       ' does not export DEFAULTS and build() -- its items are skipped');
     return null;
   }
-  return { type: type, DEFAULTS: impl.DEFAULTS, build: impl.build };
+  const out = { type: type, DEFAULTS: impl.DEFAULTS, build: impl.build };
+  // Optional: a type that needs async assets before its synchronous build()
+  // (model.js) exports prepare(items, ctx). furniture.js awaits it.
+  if (typeof impl.prepare === 'function') out.prepare = impl.prepare;
+  return out;
 }
 
 /**

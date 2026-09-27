@@ -461,6 +461,8 @@ jobs:
           node scripts/test-webgl-reason.mjs
       - name: Furniture placement, finishes, box builder and registry
         run: node scripts/test-furniture-core.mjs
+      - name: Model furniture type (vendored GLTFLoader, prepare(), fit, merge, demo file)
+        run: node scripts/test-model.mjs
       - name: Wall side is probed at the item, not from the room's bbox
         run: node scripts/test-wall-side.mjs
       - name: Furniture drift (registry, schema params blocks, builder DEFAULTS)

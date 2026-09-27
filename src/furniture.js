@@ -91,10 +91,40 @@ export function placeGroup(group, placement, tx, tz) {
   return group;
 }
 
-/** Start loading every builder the items need. Never rejects. */
-export function loadFurnitureModules(items, opts) {
-  const types = (items || []).map(i => i.type);
-  return loadBuilders(types, opts || {});
+/** How long one builder's prepare() may take before the build goes ahead without it (ms). */
+export const PREPARE_TIMEOUT_MS = 15000;
+
+/**
+ * Start loading every builder the items need, then let any builder that
+ * exports prepare(items, ctx) fetch its assets (model.js loads its .glb
+ * files here). All of it happens BEFORE the first build slice and in
+ * parallel with the scene's precompile, so build() stays synchronous and
+ * the network never lands inside a slice. Never rejects: a prepare() that
+ * throws or hangs is a warning, and its items fail (and are skipped) at
+ * build time.
+ */
+export async function loadFurnitureModules(items, opts) {
+  const o = opts || {};
+  const list = items || [];
+  const builders = await loadBuilders(list.map(i => i.type), o);
+  const timeout = o.prepareTimeoutMs != null ? o.prepareTimeoutMs : PREPARE_TIMEOUT_MS;
+  const jobs = [];
+  builders.forEach((b, type) => {
+    if (typeof b.prepare !== 'function') return;
+    const mine = list.filter(i => i.type === type);
+    let t;
+    const timer = new Promise(resolve => { t = setTimeout(() => resolve('timeout'), timeout); });
+    jobs.push(Promise.race([
+      Promise.resolve().then(() => b.prepare(mine, o.prepareCtx || {})),
+      timer
+    ]).then(r => {
+      if (r === 'timeout') console.warn('[furniture] type "' + type + '": prepare() took longer than ' + timeout + ' ms -- building without it');
+    }, e => {
+      console.warn('[furniture] type "' + type + '": prepare() failed: ' + (e && e.message ? e.message : e));
+    }).finally(() => clearTimeout(t)));
+  });
+  await Promise.all(jobs);
+  return builders;
 }
 
 function disposeBuilt(group) {
@@ -221,7 +251,8 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
   let skipped = 0;
 
   function buildPlaced(item, builder, params, placement, det) {
-    const group = builder.build(THREE, params, { detail: det });
+    // assetBase: the profile directory, for a type that loads a file from it.
+    const group = builder.build(THREE, params, { detail: det, assetBase: item.assetBase });
     if (!group || !group.isObject3D) throw new Error('build() did not return a THREE.Object3D');
     placeGroup(group, placement, o.tx, o.tz);
     const flat = flattenGroup(THREE, group, { label: 'furniture "' + item.id + '" (' + item.type + ')' });
@@ -587,6 +618,16 @@ export function disposeFurniture(result) {
     if (result.root.parent) result.root.parent.remove(result.root);
   }
   geos.forEach(g => g.dispose());
-  if (result.materials) result.materials.forEach(m => m.dispose());
+  // Textures the bucket materials carry (a model's map, a sign's canvas):
+  // dispose() only frees the GPU copy, and three re-uploads a texture that
+  // is used again, so a texture shared with a later scene stays valid.
+  const texs = new Set();
+  if (result.materials) {
+    result.materials.forEach(m => {
+      for (const k in m) { const v = m[k]; if (v && v.isTexture) texs.add(v); }
+      m.dispose();
+    });
+  }
   (result.extraDisposables || []).forEach(m => m.dispose());
+  texs.forEach(t => t.dispose());
 }

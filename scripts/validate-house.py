@@ -789,6 +789,17 @@ def check_furniture(geo, wall_ids, rooms_by_id, report, schema):
                     where, f"type '{ftype}' has no builder yet (src/furniture/{registry[ftype]}) -- the engine skips it"
                 )
 
+        if ftype == "model":
+            # The path's shape is the schema's job (furnitureParams_model.src);
+            # whether the file is there is this one's. A warning, not an error:
+            # the engine skips a model whose file is missing and draws the rest.
+            src = (item.get("params") or {}).get("src")
+            profile_dir = geo.get("__dir__")
+            if not src:
+                report.warn(where, "a `model` item needs params.src -- the engine skips it")
+            elif profile_dir and not (Path(profile_dir) / src).is_file():
+                report.warn(where, f"model file '{src}' not found (looked for {Path(profile_dir) / src}) -- the engine skips it")
+
         placement = _furniture_placement(item, wall_ids, room, geo, where, report)
         if placement is None:
             continue

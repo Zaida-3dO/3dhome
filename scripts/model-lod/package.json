@@ -1,0 +1,13 @@
+{
+  "name": "model-lod",
+  "private": true,
+  "description": "Offline tool: turn a heavy glTF/GLB into a small two-LOD GLB for the `model` furniture type. Not part of the served app.",
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "@gltf-transform/core": "4.5.0",
+    "@gltf-transform/extensions": "4.5.0",
+    "jpeg-js": "0.4.4",
+    "meshoptimizer": "1.3.0"
+  }
+}

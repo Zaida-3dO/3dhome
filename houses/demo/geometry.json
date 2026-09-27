@@ -639,7 +639,10 @@
       "label": "Wardrobe", "notes": "A FREE item beside the east shell: fade auto picks wall 2." },
     { "id": "store_crate", "room": "store", "type": "box", "at": [100, 640], "priority": "minor",
       "params": { "width": 50, "depth": 40, "height": 35, "color": "#9c8a6e" },
-      "label": "Crate", "notes": "priority minor: dropped on the low GPU tier." }
+      "label": "Crate", "notes": "priority minor: dropped on the low GPU tier." },
+    { "id": "lounge_armchair", "room": "lounge", "type": "model", "at": [215, 190], "rotation": 90,
+      "params": { "src": "models/test-armchair.glb", "width": 80, "depth": 78, "height": 82 },
+      "label": "Armchair", "notes": "A `model` item: drawn from a .glb in this profile (models/, CC0), fitted to width x depth x height. Its vertex-coloured frame joins the palette bucket; its textured cushion is one kept draw." }
   ],
   "lights": [
     {
