@@ -30,11 +30,14 @@
  *                  with the roots visible through the glass.
  *   'snake-plant'  a few stiff near-upright sword leaves with a pale margin.
  *   'pothos'       heart-shaped leaves. habit 'upright': on arching stems
- *                  above the pot. habit 'trailing': vines spill over the rim
- *                  and hang `trail` cm BELOW the pot base (see TRAIL below).
+ *                  above the pot. habit 'trailing': a mound of leaves on
+ *                  stalks spilling over the rim, and vines that hang `trail`
+ *                  cm BELOW the pot base (see TRAIL below).
  *   'ficus'        a small tree: a short thick trunk splitting into a few
- *                  branches, each carrying clusters of small oval leaves.
- *   'jade'         a succulent: fleshy oval pads on short branching stems.
+ *                  branches, with a dense mass of small oval leaves round
+ *                  the top of the trunk and along the outer branches.
+ *   'jade'         a succulent: a compact clump of plump pads on short
+ *                  stems, from the rim up.
  *
  * POTS (params.potStyle) for every free-standing kind: 'egg' (tall, finely
  * ribbed), 'tapered', 'ribbed-footed' (fluted, on a foot), 'bowl' (squat,
@@ -47,8 +50,11 @@
  *
  * TRAIL. A trailing pothos's vines hang below its own pot, but the contract
  * puts the item's bottom at y = 0. So the pot stands at y = trail and the
- * vine tips reach y = 0; a placement puts `elevation` at the surface height
- * minus `trail` (e.g. a 90 cm speaker and trail 50 -> elevation 40).
+ * vines hang toward y = 0; a placement puts `elevation` at the surface height
+ * minus `trail` (e.g. a 90 cm speaker and trail 50 -> elevation 40). The pot
+ * base lands at EXACTLY `trail` (see pinTrail()), trail 0 included -- then
+ * nothing hangs below the pot. `trail` is capped at 0.95 x height: a larger
+ * trail puts the pot base at 0.95 x height.
  *
  * FITTING THE ENVELOPE EXACTLY: each kind is built once in a natural frame,
  * its raw bbox is measured, and one per-axis scale + translate lands the
@@ -57,11 +63,21 @@
  * built with its transform BAKED into its geometry (no rotated children),
  * so that per-axis scale is exact.
  *
+ * LOW DETAIL REUSES THE FULL BUILD'S FIT, so nothing moves or resizes when
+ * the detail switches: the canes, trunk, stems and pot are identical at
+ * both details. Its foliage is a subset of the full build's, so it lies
+ * INSIDE width x depth x height rather than exactly on it (the same rule as
+ * the radiator's 'low'). A low build that would poke outside the envelope
+ * (some custom seed or size) falls back to fitting itself exactly.
+ * userData.fitFrom says which: 'full' or 'own'.
+ *
  * PROCEDURAL LAYOUT is driven by `seed` via mulberry32 -- the same seed
  * always lays out the same plant; no Math.random anywhere.
  *
  * Triangle caps (perf audit): corn-plant 800 / 300, wall-planter 400 / 150,
  * every other kind 600 / 200; 'low' <= 0.6 x 'full' whenever full > 300.
+ * leafCount is capped per kind where a preset runs near its cap (trailing
+ * pothos 64, ficus 80, jade 24).
  */
 import { makeFinish } from './finishes.js';
 
@@ -131,7 +147,7 @@ function mulberry32(seed) {
  * here bakes its transform into its geometry), so scaling a child's
  * position + scale is the same as scaling its world geometry.
  */
-function fitToEnvelope(THREE, group, widthM, depthM, heightM) {
+function fitToEnvelope(THREE, group, widthM, depthM, heightM, ref) {
   group.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(group);
   const rawW = box.max.x - box.min.x;
@@ -149,6 +165,12 @@ function fitToEnvelope(THREE, group, widthM, depthM, heightM) {
   wrapper.name = group.name;
   wrapper.userData = group.userData;
   wrapper.userData.fitScale = { x: sx, y: sy, z: sz };
+  if (ref) {
+    // `ref` is another build's fit (the full detail's): try placing with
+    // it first; place() below reads these through `f`.
+    wrapper.userData.fitScale = { x: ref.sx, y: ref.sy, z: ref.sz };
+    wrapper.userData.fit = ref;
+  }
   const children = group.children.slice();
   children.forEach(c => wrapper.add(c));
   const orig = children.map(c => ({ p: c.position.clone(), s: c.scale.clone() }));
@@ -156,16 +178,18 @@ function fitToEnvelope(THREE, group, widthM, depthM, heightM) {
   // sits in it) instead take ONE horizontal scale `sr` (when given), so a
   // pot stays round whatever the foliage does to the fit -- e.g. at low
   // detail, where fewer leaves change the raw footprint.
-  const place = sr => {
+  const own = { sx, sy, sz, ax, ay, az };
+  const place = (sr, f) => {
+    const t = f || own;
     children.forEach((child, i) => {
       const o = orig[i];
-      child.position.set((o.p.x - ax) * sx, (o.p.y - ay) * sy, (o.p.z - az) * sz);
+      child.position.set((o.p.x - t.ax) * t.sx, (o.p.y - t.ay) * t.sy, (o.p.z - t.az) * t.sz);
       // A rigid part's raw position is 0 and its shape is baked about the
       // raw origin (the plant's axis; for the wall planter's soil, a point
       // on the wall), so scaling it by sr is about where the fit maps that
       // origin.
-      const rigid = sr !== undefined && RIGID_PARTS.has(child.name);
-      child.scale.set(o.s.x * (rigid ? sr : sx), o.s.y * sy, o.s.z * (rigid ? sr : sz));
+      const rigid = sr !== undefined && sr !== null && RIGID_PARTS.has(child.name);
+      child.scale.set(o.s.x * (rigid ? sr : t.sx), o.s.y * t.sy, o.s.z * (rigid ? sr : t.sz));
     });
     wrapper.updateMatrixWorld(true);
   };
@@ -185,13 +209,49 @@ function fitToEnvelope(THREE, group, widthM, depthM, heightM) {
   };
   const hasRigid = children.some(c => RIGID_PARTS.has(c.name));
   const cands = hasRigid ? [sy, Math.min(sx, sz), Math.max(sx, sz)] : [];
+  if (ref) {
+    // Borrowed from the FULL build (see build()): the same transform, so
+    // every part the two details share lands in exactly the same place.
+    // Accepted only if the result stays inside the envelope.
+    place(ref.sr, ref);
+    const b = new THREE.Box3().setFromObject(wrapper);
+    const IN = 0.005;                                   // 0.5 cm, the contract's tolerance
+    if (b.min.x >= -widthM / 2 - IN && b.max.x <= widthM / 2 + IN && b.min.y >= -IN &&
+        b.max.y <= heightM + IN && b.min.z >= -IN && b.max.z <= depthM + IN) {
+      wrapper.userData.rigidScale = ref.sr;
+      wrapper.userData.fitFrom = 'full';
+      return wrapper;
+    }
+  }
+  let rigid = null;
   for (const sr of cands) {
     place(sr);
-    if (exact()) { wrapper.userData.rigidScale = sr; return wrapper; }
+    if (exact()) { rigid = sr; break; }
   }
-  place(undefined);
-  wrapper.userData.rigidScale = null;
+  if (rigid === null) place(undefined);
+  wrapper.userData.fitScale = { x: sx, y: sy, z: sz };
+  wrapper.userData.rigidScale = rigid;
+  wrapper.userData.fit = Object.assign({}, own, { sr: rigid });
+  wrapper.userData.fitFrom = 'own';
   return wrapper;
+}
+
+/** Build one kind's parts, unfitted, in its natural (raw) frame. */
+function buildRaw(THREE, p, kind, detail) {
+  const raw = new THREE.Group();
+  raw.name = 'furniture:plant';
+  raw.userData.type = TYPE;
+  raw.userData.kind = kind;
+  BUILDERS[kind](makeCtx(THREE, raw, p, detail));
+  return raw;
+}
+
+function disposeGroup(group) {
+  group.traverse(o => {
+    if (!o.isMesh) return;
+    o.geometry.dispose();
+    (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+  });
 }
 
 export function build(THREE, params, opts) {
@@ -199,14 +259,23 @@ export function build(THREE, params, opts) {
   const o = opts || {};
   const detail = o.detail === 'low' ? 'low' : 'full';
   const kind = KINDS.indexOf(p.kind) !== -1 ? p.kind : 'corn-plant';
-  const raw = new THREE.Group();
-  raw.name = 'furniture:plant';
-  raw.userData.type = TYPE;
-  raw.userData.kind = kind;
-  const ctx = makeCtx(THREE, raw, p, detail);
-  BUILDERS[kind](ctx);
-  const fitted = fitToEnvelope(THREE, raw, p.width * CM, p.depth * CM, p.height * CM);
-  if (kind === 'pothos' && p.habit === 'trailing' && p.trail > 0) pinTrail(THREE, fitted, p);
+  const W = p.width * CM, D = p.depth * CM, H = p.height * CM;
+  // LOW DETAIL IN THE FULL BUILD'S FRAME. Fitting the low build to its own
+  // bbox gave it its own per-axis scale -- fewer leaves, a different raw
+  // bbox -- so its canes, trunk and pot moved and resized when the detail
+  // switched (corn canes ~9 cm; an oval jade pot). Instead the full build
+  // is measured (built and thrown away) and its fit is reused, so every
+  // part the two details share is identical; the low build then lies INSIDE
+  // the envelope rather than exactly on it. If it would poke out (a custom
+  // seed or size), the low build falls back to fitting itself.
+  let ref = null;
+  if (detail === 'low') {
+    const full = fitToEnvelope(THREE, buildRaw(THREE, p, kind, 'full'), W, D, H);
+    ref = full.userData.fit;
+    disposeGroup(full);
+  }
+  const fitted = fitToEnvelope(THREE, buildRaw(THREE, p, kind, detail), W, D, H, ref);
+  if (kind === 'pothos' && p.habit === 'trailing') pinTrail(THREE, fitted, p);
   return fitted;
 }
 
@@ -217,11 +286,13 @@ export function build(THREE, params, opts) {
  * centimetres. Bake every part's transform into its geometry, then remap y
  * piecewise-linearly so the pot base goes to exactly `trail` while y = 0
  * (the vine tips) and y = height (the crown) stay put. Both pieces are
- * monotone, so nothing folds or crosses.
+ * monotone, so nothing folds or crosses. Runs for every trailing pothos,
+ * trail 0 included (it is then a no-op: the builder hangs nothing below the
+ * pot, so the pot base is already the bottom).
  */
 function pinTrail(THREE, group, p) {
   const H = p.height * CM;
-  const T = Math.min(p.trail * CM, H * 0.95);
+  const T = Math.min(Math.max(0, p.trail) * CM, H * 0.95);
   group.updateMatrixWorld(true);
   const pot = group.children.find(o => o.name === 'pot');
   if (!pot) return;
@@ -231,18 +302,39 @@ function pinTrail(THREE, group, p) {
   for (const o of group.children) {
     if (!o.isMesh) continue;
     const m = new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld);
-    o.geometry.applyMatrix4(m);
+    o.geometry.applyMatrix4(m);               // (transforms the normals too)
     o.position.set(0, 0, 0); o.rotation.set(0, 0, 0); o.scale.set(1, 1, 1);
-    const a = o.geometry.attributes.position;
-    for (let i = 0; i < a.count; i++) {
-      const y = a.getY(i);
-      a.setY(i, y <= pb ? y * (T / pb) : T + (y - pb) * ((H - T) / (H - pb)));
-    }
-    a.needsUpdate = true;
-    o.geometry.computeVertexNormals();
-    o.geometry.computeBoundingBox(); o.geometry.computeBoundingSphere();
+    remapY(o.geometry, pb, T, H);
   }
   group.userData.trailPinned = T;
+}
+
+/**
+ * Remap a geometry's y piecewise-linearly: [0, from] -> [0, to] and
+ * [from, top] -> [to, top]. Each NORMAL is transformed by its piece's
+ * inverse-transpose -- n' = normalize(nx, ny / s, nz), s that piece's
+ * y-slope -- rather than recomputed: computeVertexNormals() would average
+ * across the lathe pot's split seam and draw a shading line down it.
+ * Exported for the tests.
+ */
+export function remapY(geometry, from, to, top) {
+  const a = geometry.attributes.position;
+  const nrm = geometry.attributes.normal;
+  const kLo = to / from, kHi = (top - to) / (top - from);        // the two pieces' y-slopes
+  for (let i = 0; i < a.count; i++) {
+    const y = a.getY(i);
+    const lo = y <= from;
+    a.setY(i, lo ? y * kLo : to + (y - from) * kHi);
+    if (nrm) {
+      const k = lo ? kLo : kHi;
+      const nx = nrm.getX(i), ny = k > 1e-9 ? nrm.getY(i) / k : nrm.getY(i), nz = nrm.getZ(i);
+      const len = Math.hypot(nx, ny, nz) || 1;
+      nrm.setXYZ(i, nx / len, ny / len, nz / len);
+    }
+  }
+  a.needsUpdate = true;
+  if (nrm) nrm.needsUpdate = true;
+  geometry.computeBoundingBox(); geometry.computeBoundingSphere();
 }
 
 // Convenience alias matching the sibling builders' naming.
@@ -319,7 +411,14 @@ function lathe(THREE, profile, radial, cx, cz) {
 // row (edge, raised midrib, edge) gives a shallow V-fold; the tip is a
 // single point. Faces are emitted twice (front, then reversed on their own
 // duplicated vertices) so the leaf reads from both sides.
-// Triangles per leaf: 2 x ((segs - 1) x 4 + 2).
+// `flat: true` drops the raised midrib: each row is just its two edges, for
+// half the triangles (dense foliage, low detail).
+// `segFrac` (optional, one fraction per segment) makes the spine segments
+// unequal -- e.g. a short steep rise and a long drooping outer part.
+// Triangles per leaf (both sides):
+//   folded: segs >= 2 -> 2 x ((segs - 1) x 4 + 2); one segment (a diamond) -> 8
+//   flat:   segs >= 2 -> 2 x ((segs - 1) x 2 + 1); one segment (a diamond) -> 4
+// (a one-segment leaf with `rowT` is not a diamond: 4 folded, 2 flat).
 // ---------------------------------------------------------------------
 export const LEAF_SHAPES = {
   // corn / peace-lily: narrow stalk-ish base, widest just past mid, pointed
@@ -341,6 +440,7 @@ export const LEAF_SHAPES = {
 export function leafGeometry(THREE, spec) {
   const {
     base, ang, len, width, pitch0, pitch1, segs, shape, fold = 0.18, bendPow = 1.4, pitches, roll = 0, rowT,
+    flat = false, segFrac,
   } = spec;
   // `pitches` (optional) gives each segment's pitch explicitly; otherwise
   // the pitch eases from pitch0 to pitch1.
@@ -348,16 +448,19 @@ export function leafGeometry(THREE, spec) {
     : pitch0 + (pitch1 - pitch0) * Math.pow((i + 0.5) / n, bendPow));
   const rowPitch = (i, n) => (pitches ? (i === 0 ? pitches[0] : (pitches[i - 1] + pitches[Math.min(i, pitches.length - 1)]) / 2)
     : pitch0 + (pitch1 - pitch0) * Math.pow(i / n, bendPow));
-  const prof = LEAF_SHAPES[shape] || LEAF_SHAPES.lance;
+  const prof = typeof shape === 'function' ? shape : (LEAF_SHAPES[shape] || LEAF_SHAPES.lance);
   const dh = [Math.sin(ang), Math.cos(ang)];          // horizontal heading (x, z)
   const side = [Math.cos(ang), -Math.sin(ang)];       // horizontal perpendicular
   const n = Math.max(1, segs);
+  // segment lengths as fractions of `len`: equal, or `segFrac` normalised
+  const fr = segFrac && segFrac.length === n
+    ? segFrac.map(f => f / segFrac.reduce((s, x) => s + x, 0)) : null;
   // spine by integration so the leaf keeps its length as it bends
   const spine = [base.clone()];
-  const step = len / n;
   let p = base.clone();
   for (let i = 1; i <= n; i++) {
     const pitch = segPitch(i - 1, n);
+    const step = fr ? len * fr[i - 1] : len / n;
     p = p.clone().add(new THREE.Vector3(dh[0] * Math.cos(pitch) * step, Math.sin(pitch) * step, dh[1] * Math.cos(pitch) * step));
     spine.push(p);
   }
@@ -370,7 +473,13 @@ export function leafGeometry(THREE, spec) {
   // the spine instead of at t = i/n -- e.g. a strap leaf puts its two rows
   // just past the base and ~2/3 along, so it is wide for most of its length.
   const diamond = n === 1 && !rowT;
+  // a point `t` of the way along the spine by length (segments may differ)
   const spineAt = t => {
+    if (fr) {
+      let k = 0, c = 0;
+      while (k < n - 1 && t > c + fr[k]) { c += fr[k]; k++; }
+      return spine[k].clone().lerp(spine[k + 1], Math.min(1, Math.max(0, (t - c) / fr[k])));
+    }
     const f = Math.min(n - 1e-9, Math.max(0, t * n)), k = Math.floor(f);
     return spine[k].clone().lerp(spine[k + 1], f - k);
   };
@@ -394,30 +503,34 @@ export function leafGeometry(THREE, spec) {
     const wv = [side[0] * cr + up[0] * sr, up[1] * sr, side[1] * cr + up[2] * sr];
     const nv = [up[0] * cr - side[0] * sr, up[1] * cr, up[2] * cr - side[1] * sr];
     pos.push(c.x - wv[0] * hw, c.y - wv[1] * hw, c.z - wv[2] * hw);
-    pos.push(c.x + nv[0] * lift, c.y + nv[1] * lift, c.z + nv[2] * lift);
+    if (!flat) pos.push(c.x + nv[0] * lift, c.y + nv[1] * lift, c.z + nv[2] * lift);
     pos.push(c.x + wv[0] * hw, c.y + wv[1] * hw, c.z + wv[2] * hw);
   }
   const tip = spine[n];
   pos.push(tip.x, tip.y, tip.z);
   const o = diamond ? 1 : 0;                           // offset past the base point
+  const rs = flat ? 2 : 3;                             // vertices per row
   // the two edge polylines (base to tip), for margin strips
   const left = [], right = [];
   if (diamond) { left.push(base.clone()); right.push(base.clone()); }
   for (let i = 0; i < n; i++) {
-    const r = o * 3 + i * 9;
+    const r = (o + i * rs) * 3, q = r + (rs - 1) * 3;
     left.push(new THREE.Vector3(pos[r], pos[r + 1], pos[r + 2]));
-    right.push(new THREE.Vector3(pos[r + 6], pos[r + 7], pos[r + 8]));
+    right.push(new THREE.Vector3(pos[q], pos[q + 1], pos[q + 2]));
   }
   left.push(tip.clone()); right.push(tip.clone());
-  const tipIdx = o + n * 3;
+  const tipIdx = o + n * rs;
   const idx = [];
-  if (diamond) idx.push(0, 1, 2, 0, 2, 3);             // base point -> the widest row
+  // base point -> the widest row (every triangle winds left edge -> right edge)
+  if (diamond) idx.push(...(flat ? [0, 1, 2] : [0, 1, 2, 0, 2, 3]));
   for (let i = 0; i < n - 1; i++) {
-    const a = i * 3, b = (i + 1) * 3;
-    idx.push(a, b, a + 1, a + 1, b, b + 1, a + 1, b + 1, a + 2, a + 2, b + 1, b + 2);
+    const a = i * rs, b = (i + 1) * rs;
+    if (flat) idx.push(a, b, a + 1, a + 1, b, b + 1);
+    else idx.push(a, b, a + 1, a + 1, b, b + 1, a + 1, b + 1, a + 2, a + 2, b + 1, b + 2);
   }
-  const l = o + (n - 1) * 3;
-  idx.push(l, tipIdx, l + 1, l + 1, tipIdx, l + 2);
+  const l = o + (n - 1) * rs;
+  if (flat) idx.push(l, tipIdx, l + 1);
+  else idx.push(l, tipIdx, l + 1, l + 1, tipIdx, l + 2);
   // back side: duplicate the vertices, reverse the winding
   const vcount = pos.length / 3;
   const all = pos.concat(pos);
@@ -605,7 +718,8 @@ function buildCornPlant(ctx) {
   // the reference: ~105 / ~45 / ~20 of 110), jittered by seed. Extra canes
   // beyond three fill in between.
   const FR = [0.72, 0.30, 0.12];
-  const LEAVES = low ? [8, 6, 4] : [22, 18, 8];
+  const LEAVES = [26, 20, 10];                       // full detail, per cane
+  const LOW_LEAVES = [8, 6, 4];                    // low detail keeps this many of them
   const spreadR = (p.spread * CM) / 2;
   const caneR = 0.016;
   for (let s = 0; s < stems; s++) {
@@ -633,48 +747,66 @@ function buildCornPlant(ctx) {
     }
     // TUFT: leaves spiral up the top ~35 cm of the cane (less on short canes)
     const n = LEAVES[s] !== undefined ? LEAVES[s] : LEAVES[LEAVES.length - 1];
+    // low detail keeps an evenly spread SUBSET of the full tuft's leaves --
+    // the same leaves, drawn flat -- so it droops the same way and never
+    // reaches past the full build (whose fit it reuses: see build())
+    const nLow = LOW_LEAVES[s] !== undefined ? LOW_LEAVES[s] : LOW_LEAVES[LOW_LEAVES.length - 1];
+    const keep = new Set();
+    for (let k = 0; k < Math.min(n, nLow); k++) keep.add(nLow <= 1 ? n - 1 : Math.round(k * (n - 1) / (nLow - 1)));
     const tuftH = Math.min(0.35, plantH * fr * 0.8);
     const lenScale = s === 0 ? 1 : (s === 1 ? 0.95 : 0.85);
     // the crown radius this cane's leaves aim for: the top tuft spreads to
-    // about twice the rim (~60 cm, as photographed; the 1.3 makes up for
-    // the arch reaching less far than its aim), the mid/short tufts less
-    const reach = s === 0 ? spreadR * 1.3 : spreadR * 0.75;
+    // about twice the rim (~60 cm, as photographed), the mid/short tufts less
+    const reach = s === 0 ? spreadR * 1.33 : spreadR * 0.75;
     for (let i = 0; i < n; i++) {
       const t = n === 1 ? 1 : i / (n - 1);             // 0 = lowest, 1 = crown
       const y = topY - tuftH * (1 - t);
       const a = i * 2.39996 + leafRand() * 0.5;             // golden-angle spiral
-      const up = t > 0.6;                               // upper leaves stand up
+      const up = t > 0.75;                              // the few crown leaves stand up
       const len = leafLen * lenScale * (0.9 + 0.2 * leafRand());
-      // Every leaf ARCHES in two segments: it rises at pitch `a`, then its
-      // outer half droops at a - bend. Its horizontal reach is then
-      // len/2 * (cos a + cos(a - bend)) = len cos(bend/2) cos(a - bend/2),
-      // so `a` is solved in closed form for a target reach inside the crown:
-      // the leaf keeps its full photographed length and only its angle
-      // changes. Upper leaves: short reach, gentle bend (they stand up);
-      // lower leaves: long reach, strong bend (they splay out and droop).
+      // Every leaf ARCHES: a short steep rise (the first JF of its length,
+      // pitch p0), then a long outer part pitched DOWN -- p1, curling to
+      // p1 - CURL near the tip -- the photographed fountain, tips hanging
+      // below where the leaf leaves the cane. The droop p1 is picked; the
+      // rise p0 is then solved in closed form so the tip lands at the target
+      // reach:  reach = len (JF cos p0 + F1 cos p1 + F2 cos(p1 - CURL)).
+      // The leaf keeps its full photographed length; only its angles change.
       const at = onCane(y);
       const baseOff = Math.hypot(at.x, at.z);
-      const want = Math.max(0.02, (reach - baseOff - leafW / 2) * (up ? 0.75 + 0.25 * leafRand() : 0.85 + 0.15 * leafRand()));
-      // lower/middle leaves bend hard enough that their tips droop BELOW
-      // horizontal (the photographed fountain); crown leaves arch gently
-      const bend = up ? 0.8 + 0.5 * leafRand() : 1.7 + 0.5 * leafRand();
-      const maxReach = len * Math.cos(bend / 2);
-      const aRise = bend / 2 + Math.acos(Math.min(1, want / maxReach));
-      const pitches = [Math.min(1.55, aRise), Math.min(1.55, aRise) - bend];
-      // low detail is one straight segment: aim it so it reaches as far out
-      // as the arched full-detail leaf does (same footprint at both details)
-      const m = (pitches[0] + pitches[1]) / 2;
-      const lowPitch = Math.sign(m || 1) * Math.acos(Math.min(1, Math.cos((pitches[0] - pitches[1]) / 2) * Math.cos(m)));
-      const segs = low ? 1 : 2;
+      const want = Math.max(0.02, (reach - baseOff - leafW / 2) * (up ? 0.55 + 0.25 * leafRand() : 0.85 + 0.15 * leafRand()));
+      // Lower leaves: the droop p1 is picked (well below horizontal) and the
+      // rise p0 solved in closed form. Crown leaves: the rise is picked
+      // (near vertical) and the outer pitch solved instead, so a short
+      // reach makes them stand UP rather than flatten into a hat.
+      const reachOf = (q0, q1) => JF * Math.cos(q0) + F1 * Math.cos(q1) + F2 * Math.cos(q1 - CURL);
+      let p0, p1;
+      if (up) {
+        const r = leafRand();
+        p0 = 1.3 + 0.15 * r;
+        let lo = -0.2, hi = 1.5;                        // reachOf falls as p1 rises here
+        for (let k = 0; k < 24; k++) { const m = (lo + hi) / 2; if (reachOf(p0, m) > want / len) lo = m; else hi = m; }
+        p1 = (lo + hi) / 2;
+      } else {
+        p1 = -0.6 - 0.4 * leafRand();
+        const c0 = (want / len - F1 * Math.cos(p1) - F2 * Math.cos(p1 - CURL)) / JF;
+        p0 = Math.acos(Math.max(Math.cos(1.45), Math.min(Math.cos(0.2), c0)));
+      }
+      const p2 = p1 - CURL;
+      if (low && !keep.has(i)) { leafRand(); continue; }   // (the roll draw: keep the stream in step)
+      // FLAT (no midrib) so three segments fit the budget: rows at the base,
+      // the bend and 3/4 along keep the strap wide until its last quarter
       add(leafGeometry(THREE, {
-        base: at, ang: a, len, width: leafW,
-        pitch0: pitches[0], pitch1: pitches[1], pitches: low ? [lowPitch] : pitches, segs, shape: 'strap', fold: 0.2,
-        rowT: low ? undefined : [0, 0.66],   // row 0 AT the base: attached to the cane
+        base: at, ang: a, len, width: leafW, flat: true,
+        pitch0: p0, pitch1: p2, pitches: [p0, p1, p2], segs: 3, segFrac: [JF, F1, F2], shape: 'strap',
+        rowT: [0, JF, JF + F1],   // row 0 AT the base (attached to the cane)
         roll: (leafRand() - 0.5) * 1.6,
       }), 'satin', p.leafColor, 'leaf');
     }
   }
 }
+// corn leaf: the fractions of its length that rise (JF), droop (F1) and
+// curl further down to the tip (F2, by CURL radians)
+const JF = 0.34, F1 = 0.41, F2 = 0.25, CURL = 0.5;
 
 // =====================================================================
 // WALL PLANTER
@@ -853,39 +985,62 @@ function buildPothos(ctx) {
     }
     return;
   }
-  // TRAILING: a crown of leaves on the pot plus vines hanging to y = 0
-  const vines = low ? 3 : Math.max(2, Math.round(p.stemCount));
-  // a full crown on the pot: ~40 % of the leaves; the rest along the vines
-  const perVine = Math.max(2, Math.round(nLeaves * 0.4));
-  let placed = 0;
-  for (let i = 0; i < perVine; i++, placed++) {                 // crown
+  // TRAILING: a MOUND of leaves on stalks over the pot, spilling over the
+  // rim, plus vines that arch over the rim and hang toward y = 0. Low
+  // detail keeps a SUBSET of the full build's leaves and vines, drawn
+  // identically (vines through fewer of the same points), so it never
+  // reaches past the full build whose fit it reuses (see build()).
+  const nFull = Math.min(64, Math.max(6, Math.round(p.leafCount)));   // (capped: triangle budget)
+  const nCrown = Math.round(nFull * 0.5);
+  const plantH = p.plantHeight * CM;
+  const heart = LEAF_SHAPES.heart;
+  for (let i = 0; i < nCrown; i++) {                            // crown
+    const ring = i / nCrown;                                    // 0 = centre/top, 1 = the rim
+    const ang = i * 2.39996 + leafRand() * 0.5;
+    const rr = R * 0.75 * Math.sqrt(ring) * (0.7 + 0.3 * leafRand());
+    const blade = leafL * (0.85 + 0.25 * leafRand());
+    // stalks: long and steep in the middle, short and splayed at the rim
+    const stalk = plantH * (0.95 - 0.6 * ring) * (0.8 + 0.3 * leafRand());
+    const len = stalk + blade, sf = stalk / len;
+    const pRise = 1.35 - 0.75 * ring, pBlade = 0.35 - 1.35 * ring - 0.3 * leafRand();
+    const roll = (leafRand() - 0.5) * 1.0;
+    if (low && i % 3 !== 0) continue;                           // low: every third crown leaf
     add(leafGeometry(THREE, {
-      base: V(THREE, (leafRand() - 0.5) * R * 1.4, pot.rimY, (leafRand() - 0.5) * R * 1.4), ang: (i / perVine) * Math.PI * 2 + leafRand() * 0.6,
-      len: leafL, width: leafW, pitch0: 0.9 + 0.4 * leafRand(), pitch1: -0.1 - 0.4 * leafRand(), segs: low ? 1 : 2, shape: 'heart',
-      roll: (leafRand() - 0.5) * 1.0,
+      base: V(THREE, Math.sin(ang) * rr, pot.rimY - 0.005, Math.cos(ang) * rr), ang, len, width: leafW,
+      pitch0: pRise, pitch1: pBlade, pitches: [pRise, pBlade], segs: 2, segFrac: [sf, 1 - sf],
+      rowT: [0, sf + 0.3 * (1 - sf)], flat: true, roll,
+      // a thin stalk, then a heart blade widest ~30 % along it
+      shape: t => (t < sf ? 0.08 : heart((t - sf) / (1 - sf))),
     }), 'matte', p.leafColor, 'leaf');
   }
+  const vines = Math.max(2, Math.round(p.stemCount));
+  const keepVine = v => !low || v % 2 === 0 || v === vines - 1;   // low: every other vine, and the last
+  const perVine = Math.max(1, Math.floor((nFull - nCrown) / vines));
+  const VSEG = 6;
   for (let v = 0; v < vines; v++) {
-    // vines leave the rim toward the front half and fall straight down
+    // vines leave the rim toward the front half, arch over it and hang
     const a = -0.9 + 1.8 * (vines === 1 ? 0.5 : v / (vines - 1)) + (rand() - 0.5) * 0.3;
-    const rim = V(THREE, Math.sin(a) * R, pot.rimY, Math.cos(a) * R);
-    const out = (p.spread * CM) / 2 - R;
-    const drop = pot.rimY * (0.55 + 0.45 * (v % 2 ? rand() : 1));
-    const pts = [rim];
-    const segs = low ? 2 : 6;
-    for (let k = 1; k <= segs; k++) {
-      const t = k / segs;
-      const o = R + out * Math.min(1, t * 2.5) * (0.6 + 0.4 * Math.sin(t * 3 + v));
-      pts.push(V(THREE, Math.sin(a) * o, pot.rimY - drop * t, Math.cos(a) * o));
-    }
-    add(ribbon(THREE, pts, 0.004), 'matte', '#5f7d3a', 'vine');
-    const each = Math.max(1, Math.floor((nLeaves - perVine) / vines));
-    for (let k = 0; k < each; k++, placed++) {
-      const t = (k + 1) / (each + 0.5);
-      const at = pts[Math.min(pts.length - 1, Math.round(t * segs))];
+    const out = Math.max(0.01, ((p.spread * CM) / 2 - R) * 0.4);
+    // never so long that a leaf hanging off the end would reach below y = 0:
+    // with trail 0 the pot base IS the bottom, and nothing may hang below it
+    const drop = Math.max(0.02, Math.min(pot.rimY * (0.55 + 0.45 * (v % 2 ? rand() : 1)), pot.rimY - leafL * 0.9));
+    const at = t => {
+      const o = R + out * Math.min(1, t * 3) * (0.7 + 0.3 * Math.sin(t * 3 + v));
+      return V(THREE, Math.sin(a) * o, pot.rimY + 0.02 * Math.sin(Math.PI * Math.min(1, t * 3)) - drop * t, Math.cos(a) * o);
+    };
+    const pts = [];
+    for (let k = 0; k <= VSEG; k++) pts.push(at(k / VSEG));
+    const lows = [0, 2, VSEG];                                  // low: three of the same points
+    const vleaf = [];
+    for (let k = 0; k < perVine; k++) vleaf.push(leafRand());
+    if (!keepVine(v)) continue;
+    add(ribbon(THREE, low ? lows.map(k => pts[k]) : pts, 0.004), 'matte', '#5f7d3a', 'vine');
+    for (let k = 0; k < perVine; k++) {
+      if (low && k % 2 === 1) continue;
+      const base = pts[Math.min(VSEG, 1 + Math.round((k / Math.max(1, perVine - 1)) * (VSEG - 1)))];
       add(leafGeometry(THREE, {
-        base: at, ang: a + (k % 2 ? 1.2 : -1.2), len: leafL * (0.75 + 0.25 * leafRand()), width: leafW,
-        pitch0: -0.2, pitch1: -1.1, segs: 1, shape: 'heart', fold: 0.12,   // diamonds: dense vines within the cap
+        base, ang: a + (k % 2 ? 1.1 : -1.1), len: leafL * (0.8 + 0.3 * vleaf[k]), width: leafW,
+        pitch0: -0.1, pitch1: -1.0, segs: 1, shape: 'heart', flat: true,   // flat diamonds: dense vines within the cap
       }), 'matte', p.leafColor, 'leaf');
     }
   }
@@ -900,7 +1055,7 @@ function buildFicus(ctx) {
   const R = (p.potTopDiameter * CM) / 2;
   if (p.potStyle === 'bowl') {                                   // saucer (both details: it sets the footprint)
     const sc = low
-      ? lathe(THREE, [[R * 1.22, 0], [R * 1.28, 0.012], [R * 1.1, 0.012]], 8, 0, 0)   // bottom-to-top: faces point outward, plus a top ledge
+      ? lathe(THREE, [[R * 1.22, 0], [R * 1.28, 0.012], [0, 0.012]], 8, 0, 0)   // bottom-to-top: faces point outward, capped on top
       : new THREE.CylinderGeometry(R * 1.28, R * 1.22, 0.012, 12, 1, false);
     if (!low) sc.translate(0, 0.006, 0);
     add(sc, 'gloss', p.potColor, 'saucer');
@@ -909,36 +1064,47 @@ function buildFicus(ctx) {
   const trunkTop = V(THREE, 0, pot.rimY + p.plantHeight * CM * 0.28, 0);
   add(tube(THREE, V(THREE, 0, pot.rimY - 0.02, 0), trunkTop, 0.022, 0.012, low ? 4 : 7, true), 'matte', '#6b5a44', 'trunk');
   const branches = Math.max(2, Math.round(p.stemCount));
-  const nLeaves = low ? 10 : Math.max(branches * 3, Math.round(p.leafCount));
+  // A BUSHY mass (the photographed ficus): flat leaves (half the triangles
+  // of a folded one, invisible at this size) massed round the top of the
+  // trunk and along the outer branches. Low detail keeps 15 of the SAME
+  // leaves, so it never reaches past the full build whose fit it reuses
+  // (see build()).
+  const nLeaves = Math.min(80, Math.max(branches * 3, Math.round(p.leafCount)));   // (capped: triangle budget)
   const reach = (p.spread * CM) / 2;
-  let placed = 0;
+  const ends = [];
   for (let b = 0; b < branches; b++) {
     const a = (b / branches) * Math.PI * 2 + rand() * 0.7;
     const end = V(THREE, Math.sin(a) * reach * (0.35 + 0.3 * rand()), top - p.plantHeight * CM * (0.1 + 0.3 * rand()), Math.cos(a) * reach * (0.35 + 0.3 * rand()));
-    add(tube(THREE, trunkTop, end, 0.008, 0.004, low ? 3 : 5, true), 'matte', '#6b5a44', 'branch');
-    if (low) {
-      // low detail: two BIG leaves at the branch tip, pointing outward --
-      // standing in for the tip cluster (so it reads as foliage, not a bare
-      // twig) and sitting where the full build's outermost leaves are, so
-      // the footprint and the fit match the full build
-      for (const side of [-0.5, 0.5]) {
-        add(leafGeometry(THREE, {
-          base: end, ang: a + side, len: p.leafLength * CM * 1.0, width: p.leafWidth * CM * 1.8,
-          pitch0: 0.5, pitch1: -0.2, segs: 1, shape: 'oval', fold: 0.1,
-        }), 'gloss', p.leafColor, 'leaf');
-      }
-      continue;
+    add(tube(THREE, trunkTop, end, 0.006, 0.003, low ? 3 : 5, true), 'matte', '#6b5a44', 'branch');
+    ends.push(end);
+  }
+  const nClump = Math.ceil(nLeaves * 0.55);
+  for (let i = 0; i < nLeaves; i++) {
+    const end = ends[i % branches];
+    // 55 % in a dense ball round the top of the trunk, pointing outward;
+    // the rest out along the branches, thickening toward the tips
+    const clump = i < nClump;
+    let at, ang, pitch0;
+    if (clump) {
+      const u = leafRand() * Math.PI * 2, v = leafRand() * 2 - 1, r = 0.4 + 0.6 * Math.cbrt(leafRand());
+      const off = V(THREE, Math.sin(u) * Math.sqrt(1 - v * v) * r * reach * 0.45, v * r * p.plantHeight * CM * 0.14,
+        Math.cos(u) * Math.sqrt(1 - v * v) * r * reach * 0.45);
+      at = trunkTop.clone().add(off);
+      ang = u + (leafRand() - 0.5) * 0.8;
+      pitch0 = 0.1 + 0.5 * v + 0.3 * leafRand();
+    } else {
+      const t = 0.4 + 0.6 * Math.sqrt(leafRand());
+      at = trunkTop.clone().lerp(end, t).add(V(THREE, (leafRand() - 0.5) * 0.01, 0, (leafRand() - 0.5) * 0.01));
+      ang = leafRand() * Math.PI * 2;
+      pitch0 = 0.2 + 0.7 * leafRand();
     }
-    const each = Math.ceil((nLeaves - placed) / (branches - b));
-    for (let k = 0; k < each && placed < nLeaves; k++, placed++) {
-      // leaves cluster toward the branch tips
-      const t = 0.6 + 0.4 * Math.sqrt(leafRand());
-      const at = trunkTop.clone().lerp(end, t);
-      add(leafGeometry(THREE, {
-        base: at, ang: leafRand() * Math.PI * 2, len: p.leafLength * CM * (0.8 + 0.4 * leafRand()), width: p.leafWidth * CM,
-        pitch0: 0.5 + 0.4 * leafRand(), pitch1: -0.2, segs: 1, shape: 'oval', fold: 0.1,
-      }), 'gloss', p.leafColor, 'leaf');
-    }
+    const spec = {
+      base: at, ang, len: p.leafLength * CM * (0.85 + 0.35 * leafRand()), width: p.leafWidth * CM,
+      pitch0, pitch1: pitch0 - 0.4, segs: 1, shape: 'oval', flat: true, roll: (leafRand() - 0.5) * 1.4,
+    };
+    // low: 12 of the clump's leaves (the mass) and 3 along the branches
+    if (low && !(clump ? i % 3 === 0 && i / 3 < 12 : (i - nClump) % 8 === 0 && (i - nClump) / 8 < 3)) continue;
+    add(leafGeometry(THREE, spec), 'gloss', p.leafColor, 'leaf');
   }
 }
 
@@ -966,22 +1132,33 @@ function buildJade(ctx) {
   const { THREE, p, low, rand, leafRand, add } = ctx;
   const pot = buildPot(ctx, p.potStyle, 0);
   const stems = Math.max(1, Math.round(p.stemCount));
-  const nPads = low ? 8 : Math.max(stems * 2, Math.round(p.leafCount));
+  // A COMPACT CLUMP of plump pads sitting right on the rim (the
+  // photographed jade), not rosettes on long bare stems: each short stem
+  // leans out a little and carries pads spiralling all the way up it, from
+  // the rim to its tip, so the pads fill the whole height. Low detail keeps
+  // a subset of the SAME pads (as octahedra), inside the full build's
+  // outline (see build()).
+  const nPads = Math.min(24, Math.max(stems * 3, Math.round(p.leafCount)));   // (capped: triangle budget)
   const h = p.plantHeight * CM, reach = (p.spread * CM) / 2;
+  const LOW_EVERY = 2;
   let placed = 0;
   for (let s = 0; s < stems; s++) {
-    // short stems leaning out a little; each ends in a compact ROSETTE of
-    // fleshy pads spiralling round its tip, cupped upward
     const a = (s / stems) * Math.PI * 2 + rand() * 0.8;
     const b = V(THREE, (rand() - 0.5) * pot.innerR * 0.6, pot.rimY - 0.01, (rand() - 0.5) * pot.innerR * 0.6);
-    const e = V(THREE, Math.sin(a) * reach * 0.35, pot.rimY + h * (0.35 + 0.25 * rand()), Math.cos(a) * reach * 0.35);
-    add(tube(THREE, b, e, 0.006, 0.004, low ? 4 : 5, true), 'matte', '#6f6a3e', 'stem');
+    // short: the tallest stem stops ~0.4 of plantHeight above the rim
+    const e = V(THREE, Math.sin(a) * reach * 0.4, pot.rimY + h * (0.18 + 0.17 * rand()), Math.cos(a) * reach * 0.4);
+    add(tube(THREE, b, e, 0.0045, 0.003, low ? 4 : 5, true), 'matte', '#6f6a3e', 'stem');
     const each = Math.ceil((nPads - placed) / (stems - s));
     for (let k = 0; k < each && placed < nPads; k++, placed++) {
-      const at = b.clone().lerp(e, 0.88 + 0.12 * (k / Math.max(1, each - 1)));
-      const inner = k >= each / 2;                       // inner pads stand up, outer ones splay
-      add(padGeometry(THREE, at, k * 2.39996 + leafRand() * 0.3, inner ? 1.0 + 0.3 * leafRand() : 0.45 + 0.3 * leafRand(),
-        p.leafLength * CM * (inner ? 0.75 : 1) * (0.9 + 0.2 * leafRand()), p.leafWidth * CM, p.leafWidth * CM * 0.35, low), 'satin', p.leafColor, 'leaf');
+      // spread up the stem from just above the rim (t 0.15) to its tip;
+      // pads low on the stem splay out over the rim, pads at the tip stand up
+      const t = each === 1 ? 1 : 0.15 + 0.85 * (k / (each - 1));
+      const at = b.clone().lerp(e, t);
+      const pitch = 0.35 + 0.9 * t + 0.25 * leafRand();
+      const ang = a + k * 2.39996 + leafRand() * 0.4;
+      const len = p.leafLength * CM * (1.05 - 0.3 * t) * (0.9 + 0.2 * leafRand());
+      if (low && placed % LOW_EVERY !== 0) continue;
+      add(padGeometry(THREE, at, ang, pitch, len, p.leafWidth * CM, p.leafWidth * CM * 0.5, low), 'satin', p.leafColor, 'leaf');
     }
   }
 }
@@ -1037,18 +1214,18 @@ export const PRESETS = Object.freeze({
     plantHeight: 33.2, stemCount: 4, spread: 34, leafCount: 8, leafLength: 9, leafWidth: 6, leafColor: '#2f5a24', seed: 13,
   }),
   'pothos-trailing': Object.freeze({
-    kind: 'pothos', habit: 'trailing', trail: 50, width: 50.5, depth: 38.5, height: 70,
+    kind: 'pothos', habit: 'trailing', trail: 50, width: 38.5, depth: 37.5, height: 78,
     potStyle: 'cylinder', potHeight: 14, potTopDiameter: 16, potColor: '#8d8f8c',
-    plantHeight: 20, stemCount: 5, spread: 55, leafCount: 40, leafLength: 9, leafWidth: 7, leafColor: '#3f7a2a', seed: 14,
+    plantHeight: 20, stemCount: 4, spread: 55, leafCount: 64, leafLength: 9, leafWidth: 7, leafColor: '#3f7a2a', seed: 14,
   }),
   'ficus-bowl-pot': Object.freeze({
-    kind: 'ficus', width: 26.5, depth: 23.5, height: 42,
+    kind: 'ficus', width: 27.5, depth: 24, height: 42,
     potStyle: 'bowl', potHeight: 11, potTopDiameter: 18, potColor: '#d9cdb4',
-    plantHeight: 35.7, stemCount: 4, spread: 30, leafCount: 36, leafLength: 5.5, leafWidth: 3.2, leafColor: '#3c6a2c', seed: 15,
+    plantHeight: 35.7, stemCount: 4, spread: 30, leafCount: 72, leafLength: 6.5, leafWidth: 4, leafColor: '#3c6a2c', seed: 15,
   }),
   'jade-small': Object.freeze({
-    kind: 'jade', width: 13, depth: 13.5, height: 28,
+    kind: 'jade', width: 12, depth: 12, height: 23,
     potStyle: 'cylinder', potHeight: 11, potTopDiameter: 12, potColor: '#c8642e',
-    plantHeight: 26.8, stemCount: 3, spread: 22, leafCount: 16, leafLength: 5, leafWidth: 2.8, leafColor: '#6f9a45', seed: 16,
+    plantHeight: 26.8, stemCount: 5, spread: 22, leafCount: 22, leafLength: 5, leafWidth: 2.8, leafColor: '#6f9a45', seed: 16,
   }),
 });

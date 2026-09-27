@@ -2740,7 +2740,7 @@
           "type": "number",
           "minimum": 0,
           "default": 0,
-          "description": "pothos trailing only: cm the vines hang BELOW the pot base. The pot stands at y = trail, so place the item with elevation = surface height - trail."
+          "description": "pothos trailing only: cm the vines hang BELOW the pot base. The pot base stands at exactly y = trail, so place the item with elevation = surface height - trail. At 0 nothing hangs below the pot. Capped at 0.95 x height (a larger trail puts the pot base at 0.95 x height)."
         },
         "glassColor": {
           "$ref": "#/$defs/hexColor",
@@ -2853,11 +2853,16 @@
           "default": 0,
           "description": "cm, how far a 'shelf' cover runs past the body's right end. Ignored for other covers."
         },
+        "boxKick": {
+          "type": "number",
+          "minimum": 0,
+          "description": "cm, the height of the open kick-out under a 'box' cover's bottom rail. Optional: min(12, 0.14 x height) when absent. 0 runs the bottom rail and the slat panel down to the floor with no kick-out (a box that stands on the floor). Clamped so the slat panel keeps some height. Ignored for other covers."
+        },
         "pipeDrop": {
           "type": "number",
           "minimum": 0,
           "default": 0,
-          "description": "cm the pipes continue BELOW the item's own bottom (y=0), so they reach the room floor. Set it equal to the item's top-level `elevation` (17 for a radiator hung 17 cm up; 0 for a floor-standing box cover). The pipes are the ONE part allowed outside width/height/depth, and only downward by exactly this much: they hug the wall beside the radiator's ends, inside the envelope's width and depth, so the footprint and ceiling checks are unaffected."
+          "description": "cm the pipes continue BELOW the item's own bottom (y=0), so they reach the room floor. It must equal the item's top-level `elevation` (17 for a radiator hung 17 cm up; 0 for a floor-standing box cover), so LEAVE IT OUT: the furniture placer (src/furniture.js itemParams) sets it from the item's elevation whenever it is absent. An authored value wins. The pipes are the ONE part allowed outside width/height/depth, and only downward by exactly this much: they hug the wall beside the radiator's ends, inside the envelope's width and depth, so the footprint and ceiling checks are unaffected."
         }
       },
       "additionalProperties": false

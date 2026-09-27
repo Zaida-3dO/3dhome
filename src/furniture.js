@@ -40,6 +40,26 @@ export const PROXY_TOTAL_TRI_CAP = 60000;
 
 const DEG = Math.PI / 180;
 
+/**
+ * The params an item's builder is called with: the builder's DEFAULTS, the
+ * item's own `params` over them, then anything DERIVED from the item itself.
+ *
+ * One derivation today: a radiator's pipes run down to the room floor, which
+ * is the item's `elevation` below the builder's own y = 0 -- something the
+ * builder cannot see. So when the item does not author `params.pipeDrop`,
+ * it is the item's elevation (item 8596012d): a wall-hung radiator's pipes
+ * reach the floor without the house file repeating the number, and cannot
+ * be left in mid-air or pushed through the floor by a stale copy of it. An
+ * authored pipeDrop still wins.
+ */
+export function itemParams(item, builder) {
+  const params = Object.assign({}, builder.DEFAULTS, item.params || {});
+  if (item.type === 'radiator' && !(item.params && item.params.pipeDrop !== undefined)) {
+    params.pipeDrop = Math.max(0, Number(item.elevation) || 0);
+  }
+  return params;
+}
+
 /** Does this item cast a shadow (through its room's proxy)? */
 export function isCaster(item, params) {
   const elev = item.elevation || 0;
@@ -291,7 +311,7 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
     const builder = builders && builders.get(item.type);
     if (!builder) { skipped++; continue; }   // the registry already warned
     if (low && item.priority === 'minor') { skipped++; continue; }
-    const params = Object.assign({}, builder.DEFAULTS, item.params || {});
+    const params = itemParams(item, builder);
     const placement = resolvePlacement(item, params);
     let flat;
     try {

@@ -15,7 +15,10 @@
  *      side); at 'low' it never exceeds them. The pipes -- the one documented
  *      exception -- end at exactly -pipeDrop, stay inside the envelope's
  *      width and depth, and pipeDrop never changes anything else.
- *      params.elevation is ignored (the placer owns elevation).
+ *      params.elevation is ignored (the placer owns elevation): the bbox
+ *      and the body stay put. The PLACER derives pipeDrop from the item's
+ *      elevation when the item does not author it (src/furniture.js
+ *      itemParams), so the pipes reach the floor.
  *   2. The body is VERTICALLY ribbed (the real radiators), with no horizontal
  *      fins; low detail is one plain slab.
  *   3. Valves sit on the body's ENDS: the smart valve beyond the valve-side
@@ -25,7 +28,8 @@
  *      Pipes reach the envelope bottom.
  *   4. Shelf: a board strictly ABOVE the body with a RAISED front lip,
  *      overhanging the face, running shelfExtendLeft/Right past the ends,
- *      with clips.
+ *      with clips -- the valve-end clip visible (ray-cast) from the front,
+ *      a front 3/4 view and the side.
  *   5. Box: a framed slatted cover; the body is strictly inside it; every ray
  *      through the slat panel hits a slat or the DARK backing, never the
  *      radiator; the kick-out is open; bodyElevation lifts the body.
@@ -44,6 +48,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const imp = rel => import(pathToFileURL(path.join(root, rel)).href);
 const THREE = await imp('vendor/three-r160/three.module.min.js');
 const R = await imp('src/furniture/radiator.js');
+const F = await imp('src/furniture.js');
 const schema = JSON.parse(fs.readFileSync(path.join(root, 'houses/schema.json'), 'utf8'));
 
 let failures = 0, passes = 0;
@@ -186,6 +191,13 @@ const merged = p => Object.assign({}, R.DEFAULTS, p);
   const a = JSON.stringify(boxOf(R.build(THREE, {}, {})));
   check('params.elevation is ignored (the placer applies the item elevation)',
     JSON.stringify(boxOf(R.build(THREE, { elevation: 17 }, {}))) === a);
+  // ...and the BODY does not move either: the bbox alone would miss a body
+  // lifted inside an unchanged envelope (code review of PR #76, item
+  // e5457eec). Mutation: layout() adds params.elevation to bodyElevation ->
+  // the panel rises 17 cm -> fails.
+  const panelAt = g => { const b = boxOf(find(g, 'radiatorPanel')); return JSON.stringify([b.minY, b.maxY, b.minX, b.maxX]); };
+  check('params.elevation leaves the radiatorPanel where it was',
+    panelAt(R.build(THREE, { elevation: 17 }, {})) === panelAt(R.build(THREE, {}, {})));
   const g0 = R.build(THREE, {}, {}), g17 = R.build(THREE, { pipeDrop: 17 }, {});
   check('pipeDrop leaves every non-pipe part where it was', JSON.stringify(nonPipe(g0)) === JSON.stringify(nonPipe(g17)));
   check('pipeDrop 17 takes both pipes to y = -17', findAll(g17, /^pipe$/).every(p => Math.abs(boxOf(p).minY + 17) < 0.01));
@@ -193,6 +205,41 @@ const merged = p => Object.assign({}, R.DEFAULTS, p);
   check('every preset: pipeDrop equals the item elevation it is placed at', R.PRESETS.every(p => p.params.pipeDrop === p.elevation),
     R.PRESETS.map(p => [p.params.pipeDrop, p.elevation]));
   check('hallway box pipes stop at the floor it stands on', hall.params.pipeDrop === 0);
+}
+
+// ---- 1c. the PLACER derives pipeDrop from the item's elevation --------------
+// pipeDrop must equal the item's elevation or the pipes stop in mid-air (or
+// go through the floor), and nothing kept the two in step (item 8596012d).
+// src/furniture.js's itemParams() now sets it from the item when the item
+// does not author it; an authored value still wins.
+{
+  const item = (elevation, params) => ({ id: 'rad', type: 'radiator', room: 'r', x: 200, y: 100, rotationDeg: 0,
+    elevation, params: params || {} });
+  const B = { DEFAULTS: R.DEFAULTS, build: R.build };
+  // Mutation: drop the radiator branch in itemParams -> pipeDrop stays 0 -> fails.
+  check('itemParams: a radiator with no pipeDrop gets its elevation', F.itemParams(item(17), B).pipeDrop === 17, F.itemParams(item(17), B).pipeDrop);
+  check('itemParams: a floor-standing radiator gets 0', F.itemParams(item(0), B).pipeDrop === 0);
+  // Mutation: derive even when authored -> 5 becomes 17 -> fails.
+  check('itemParams: an authored pipeDrop wins, even 0', F.itemParams(item(17, { pipeDrop: 5 }), B).pipeDrop === 5 &&
+    F.itemParams(item(17, { pipeDrop: 0 }), B).pipeDrop === 0);
+  check('itemParams: other types are untouched', F.itemParams({ type: 'box', elevation: 17, params: {} }, { DEFAULTS: { width: 1 } }).pipeDrop === undefined);
+  check('itemParams: DEFAULTS under item params', F.itemParams(item(17, { width: 120 }), B).width === 120 && F.itemParams(item(17), B).height === R.DEFAULTS.height);
+  // END TO END: the placer really builds with it. A tracer builder records
+  // the params the placer passes, then builds the real radiator. Mutation:
+  // the build loop back to Object.assign(DEFAULTS, item.params) -> fails.
+  const seen = [];
+  const tracer = { DEFAULTS: R.DEFAULTS, build: (T, p, o) => { seen.push(p.pipeDrop); return R.build(T, p, o); } };
+  const quiet = fn => { const w = console.warn; console.warn = () => {}; try { return fn(); } finally { console.warn = w; } };
+  const res = quiet(() => F.buildFurnitureSync(THREE, [item(17)], new Map([['radiator', tracer]]),
+    { tx: x => x * 0.01, tz: y => y * 0.01, quality: { tier: 'high' } }));
+  check('placer: a wall-hung radiator is built with pipeDrop = its elevation', seen.length > 0 && seen.every(v => v === 17), seen);
+  // and its pipes then reach the floor: the lowest built vertex is at y = 0
+  // (elevation 17 + pipes 17 below the radiator's own bottom)
+  let minY = Infinity;
+  res.root.updateMatrixWorld(true);
+  res.root.traverse(o => { if (o.isMesh) minY = Math.min(minY, new THREE.Box3().setFromObject(o).min.y); });
+  check('placer: the radiator pipes reach the floor (lowest point y = 0)', Math.abs(minY) < 1e-3, minY);
+  F.disposeFurniture(res);
 }
 
 // ---- 2. vertical ribs, no fins; low detail is one slab ----------------------
@@ -325,6 +372,41 @@ for (const corner of R.VALVE_CORNERS) {
       check(`${tag} (${detail}): the shelf is not an enclosure`, findAll(g, /^coverSide|^coverSlat|^coverStile/).length === 0);
     }
   }
+  // The VALVE-END clip is SEEN (visual review r2 of PR #76, item 216de62a):
+  // on the top-left-valve presets it sat at the rear of the end, in the
+  // valve's height band, hidden by the valve stub and its pipe from the front
+  // and by the valve head from a front 3/4 view -- while the bedroom photo
+  // shows it as a dark tab just under the shelf. Ray-cast from each view at
+  // a grid of points on the clip's faces that view can see: most must hit
+  // the clip first. Mutation: the clip back at the rear of the end (z
+  // gap - 0.5 .. mid-body) -> hidden -> fails.
+  {
+    const views = { front: [0, 0.1, 1], 'front-left 3/4': [-1, 0.25, 1], 'left side': [-1, 0.1, 0.05] };
+    for (const [tag, p] of [['bedroom', bed], ['living room', liv]]) {
+      const g = R.build(THREE, p, { detail: 'full' });
+      g.updateMatrixWorld(true);
+      const clip = find(g, 'coverShelfClip_L');
+      const cb = boxOf(clip);
+      const others = []; g.traverse(o => { if (o.isMesh) others.push(o); });
+      for (const [vname, v] of Object.entries(views)) {
+        const dir = new THREE.Vector3(...v).normalize();
+        let seen = 0, total = 0;
+        for (let i = 1; i <= 4; i++) for (let j = 1; j <= 4; j++) {
+          const fy = cb.minY + (cb.maxY - cb.minY) * i / 5;
+          // the face this view looks at: the FRONT face for the front view,
+          // the OUTER (left) face otherwise
+          const pt = vname === 'front'
+            ? new THREE.Vector3((cb.minX + (cb.maxX - cb.minX) * j / 5) * CM, fy * CM, (cb.maxZ - 0.01) * CM)
+            : new THREE.Vector3((cb.minX + 0.01) * CM, fy * CM, (cb.minZ + (cb.maxZ - cb.minZ) * j / 5) * CM);
+          const ray = new THREE.Raycaster(pt.clone().addScaledVector(dir, 5), dir.clone().negate(), 0, 10);
+          const hit = ray.intersectObjects(others, false)[0];
+          total++;
+          if (hit && hit.object === clip) seen++;
+        }
+        check(`${tag}: the valve-end (left) shelf clip is visible from the ${vname} (${seen}/${total} sample points)`, seen >= total / 2, { seen, total, clip: cb });
+      }
+    }
+  }
   // living room: the shelf reaches out over the valve end
   const g = R.build(THREE, liv, {});
   const trv = boxOf(find(find(g, 'radiatorValveSmart'), 'head')), board = boxOf(find(g, 'coverShelf'));
@@ -397,12 +479,14 @@ function sweepSlatPanel(g, p) {
       check(`${tag} (${detail}): the backing is dark`, 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b < 0.1, c.getHexString());
       const slatC = find(g, 'coverSlat_0').material.color;
       check(`${tag} (${detail}): the slats are light`, 0.2126 * slatC.r + 0.7152 * slatC.g + 0.0722 * slatC.b > 0.6);
-      // kick-out: open between the legs
+      // kick-out: open between the legs -- unless boxKick is 0 (the hallway
+      // box stands on the floor), when the bottom rail closes it
       const rc = new THREE.Raycaster();
       g.updateMatrixWorld(true);
       rc.set(new THREE.Vector3(0, 0.03, (merged(p).depth + 5) * CM), new THREE.Vector3(0, 0, -1));
       const kick = rc.intersectObject(g, true).filter(h => /^cover/.test(h.object.name));
-      check(`${tag} (${detail}): the kick-out under the bottom rail is open`, kick.length === 0, kick.map(h => h.object.name));
+      if (R.layout(p).box.kick > 0) check(`${tag} (${detail}): the kick-out under the bottom rail is open`, kick.length === 0, kick.map(h => h.object.name));
+      else check(`${tag} (${detail}): boxKick 0 -- the bottom rail closes the front down to the floor`, kick.length > 0 && kick[0].object.name === 'coverRail_bottom', kick.map(h => h.object.name));
     }
   }
   const hall = R.PRESETS.find(p => p.params.cover === 'box');
@@ -411,7 +495,20 @@ function sweepSlatPanel(g, p) {
   check('hallway: bodyElevation puts the body 17 up inside the box', Math.abs(boxOf(find(g, 'radiatorPanel')).minY - 17) < EPS, boxOf(find(g, 'radiatorPanel')));
   const g0 = R.build(THREE, Object.assign({}, hall.params, { bodyElevation: 0 }), {});
   check('bodyElevation 0 puts the body on the envelope bottom', Math.abs(boxOf(find(g0, 'radiatorPanel')).minY) < EPS);
-  check('hallway: pipes run to the floor through the kick-out', findAll(g, /^pipe$/).every(p => Math.abs(boxOf(p).minY) < 0.01) && findAll(g, /^pipe$/).length === 2);
+  check('hallway: pipes run to the floor (behind the bottom rail)', findAll(g, /^pipe$/).every(p => Math.abs(boxOf(p).minY) < 0.01) && findAll(g, /^pipe$/).length === 2);
+  // boxKick (owner, 2026-09-27: the hallway box must reach the GROUND).
+  // Mutation: boxKick ignored (kick always the proportional default) ->
+  // the hallway rail starts 12 cm up -> fails.
+  const rail = gg => boxOf(find(gg, 'coverRail_bottom'));
+  check('hallway preset: boxKick 0 -- its bottom rail stands on the floor', hall.params.boxKick === 0 && Math.abs(rail(g).minY) < EPS, rail(g));
+  const bx = { cover: 'box', width: 75, height: 92, depth: 19 };
+  check('boxKick absent: the kick-out is min(12, 0.14 x height) (unchanged default)', Math.abs(rail(R.build(THREE, bx, {})).minY - 12) < EPS &&
+    Math.abs(rail(R.build(THREE, Object.assign({}, bx, { height: 70 }), {})).minY - 9.8) < EPS);
+  check('boxKick 5: the bottom rail starts 5 cm up', Math.abs(rail(R.build(THREE, Object.assign({}, bx, { boxKick: 5 }), {})).minY - 5) < EPS);
+  const huge = R.layout(Object.assign({}, bx, { boxKick: 500 })).box;
+  check('boxKick is clamped: the slat panel keeps some height', huge.panelY1 - huge.panelY0 >= 1 - EPS, huge);
+  check('boxKick: in the schema (minimum 0, no default: it is a proportion), not in DEFAULTS',
+    (rsk => !!rsk && rsk.minimum === 0 && !("default" in rsk) && !("boxKick" in R.DEFAULTS))(schema.$defs.furnitureParams_radiator.properties.boxKick));
   const tb = unionOf(g, n => /^coverTop/.test(n)), st = boxOf(find(g, 'coverStile_L'));
   const nose = find(g, 'coverTopNosing');
   check('hallway: the top board has a rounded front edge', !!nose && Math.abs(boxOf(nose).maxZ - 19) < EPS &&
