@@ -346,6 +346,32 @@ check('DEFAULTS kind is diy-numerals', Clock.DEFAULTS.kind === 'diy-numerals');
   check('diy-words: has a centre disc', !!meshesNoDom.centreDisc, Object.keys(meshesNoDom));
   check('diy-words: has a second-hand tail', !!meshesNoDom.secondHandTail, Object.keys(meshesNoDom));
 
+  // Dot size (item 059873ed, round 2): the references show each dot at
+  // roughly 60-70% of the numeral stroke height, about 3x a first pass
+  // here (radius factor 0.05). Measured directly from the built dot's own
+  // geometry (its world-space diameter), not asserted from the source, so
+  // this fails if the radius factor regresses toward the too-small value.
+  const dotDiameterM = (() => {
+    const geo = meshesNoDom.dot7.geometry;
+    geo.computeBoundingBox();
+    return geo.boundingBox.max.x - geo.boundingBox.min.x;
+  })();
+  const dialRadiusM = (Clock.DIY_WORDS_DEFAULTS.diameter / 100) / 2;
+  check('diy-words: dot diameter is at least 0.25x the dial radius (was 0.1x, read as ~3x too small)',
+    dotDiameterM >= dialRadiusM * 0.25, { dotDiameterM, dialRadiusM, ratio: dotDiameterM / dialRadiusM });
+
+  // Centre disc segment count (item 059873ed, round 2): 14 segments at full
+  // detail read as a visible polygon next to the reference photos' smooth
+  // disc. Read directly off the built CylinderGeometry's own radialSegments
+  // parameter, per the directive's explicit floor of >= 32 at full detail.
+  const discSegmentsFull = meshesNoDom.centreDisc.geometry.parameters.radialSegments;
+  check('diy-words: centre disc has >= 32 segments at full detail (was 14, read as a visible polygon)',
+    discSegmentsFull >= 32, discSegmentsFull);
+  const gLowDetail = Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'low' });
+  const discSegmentsLow = meshesByName(gLowDetail).centreDisc.geometry.parameters.radialSegments;
+  check('diy-words: centre disc has FEWER segments at low detail than full (perf budget)',
+    discSegmentsLow < discSegmentsFull, { discSegmentsLow, discSegmentsFull });
+
   // WITH a stubbed canvas: the words panel becomes the one textured mesh.
   const stubCreateCanvas = (w, h) => ({
     width: w, height: h,
@@ -541,6 +567,79 @@ check('DEFAULTS kind is diy-numerals', Clock.DEFAULTS.kind === 'diy-numerals');
       if (overflow > worstOverflow) { worstOverflow = overflow; worstLabel = label; }
     });
     check('diy-words: every word\'s ESTIMATED width stays inside the canvas at a conservative 0.62em/char advance',
+      worstOverflow <= 0, { worstLabel, worstOverflow: Math.round(worstOverflow) });
+  }
+}
+
+// ---- 9. diy-words numeral-clipping guard (item 059873ed, round 2 of the -------------------
+//      visual compare) --------------------------------------------------------------------
+{
+  // Found via a REAL browser ctx.measureText() with actualBoundingBoxAscent/
+  // Descent/Left/Right PLUS the numeral shadow's own blur/offset (the
+  // shadow's ink extends past the glyph's own bounds): at the round-1
+  // Y_MARGIN_R/WORD_LEFT_R (1.18/1.05), "12" clipped ~47px off the top,
+  // "9" clipped ~55px off the left, and "6" clipped ~32px off the bottom,
+  // out of a 1024px-wide texture -- a real, visible clip, invisible to this
+  // whole suite for the same reason the word-overflow bug was (Node's
+  // stubbed getContext() has no real font metrics). Like the word-overflow
+  // guard above, this is a CONSERVATIVE estimate rather than an exact
+  // measurement: it treats the numeral's em-box (numeralSize itself) as a
+  // stand-in for its real ascent/descent/left/right ink bounds -- generous,
+  // since a real glyph's ink is usually a bit SMALLER than its full em-box,
+  // so this fails loudly on a real regression rather than only on paper --
+  // plus the actual shadowBlur/OffsetX/OffsetY the builder applies.
+  const src = fs.readFileSync(path.join(root, 'src/furniture/wall-clock.js'), 'utf8');
+  const yMarginM = src.match(/const Y_MARGIN_R = ([\d.]+)/);
+  const wordLeftM2 = src.match(/const WORD_LEFT_R = ([\d.]+)/);
+  const wordRightM2 = src.match(/const WORD_RIGHT_R = ([\d.]+)/);
+  const numeralSizeM = src.match(/const numeralSize = Math\.round\(pxPerR \* ([\d.]+)\)/);
+  const shadowBlurM = src.match(/ctx\.shadowBlur = pxPerR \* ([\d.]+)/);
+  const shadowOffXM = src.match(/ctx\.shadowOffsetX = pxPerR \* ([\d.]+)/);
+  const shadowOffYM = src.match(/ctx\.shadowOffsetY = pxPerR \* ([\d.]+)/);
+  const allFound = yMarginM && wordLeftM2 && wordRightM2 && numeralSizeM && shadowBlurM && shadowOffXM && shadowOffYM;
+  check('diy-words: numeral layout constants (Y_MARGIN_R/WORD_LEFT_R/WORD_RIGHT_R/numeralSize/shadow) are all still present and parseable',
+    !!allFound, { yMarginM: !!yMarginM, wordLeftM2: !!wordLeftM2, wordRightM2: !!wordRightM2, numeralSizeM: !!numeralSizeM,
+      shadowBlurM: !!shadowBlurM, shadowOffXM: !!shadowOffXM, shadowOffYM: !!shadowOffYM });
+  if (allFound) {
+    const Y_MARGIN_R = parseFloat(yMarginM[1]);
+    const WORD_LEFT_R = parseFloat(wordLeftM2[1]);
+    const WORD_RIGHT_R = parseFloat(wordRightM2[1]);
+    const numeralSizeFactor = parseFloat(numeralSizeM[1]);
+    const shadowBlurFactor = parseFloat(shadowBlurM[1]);
+    const shadowOffXFactor = parseFloat(shadowOffXM[1]);
+    const shadowOffYFactor = parseFloat(shadowOffYM[1]);
+    const spanX = WORD_LEFT_R + WORD_RIGHT_R;
+    const wPx = 1024;
+    const pxPerR = wPx / spanX;
+    const hPx = Math.round(wPx * ((2 * Y_MARGIN_R) / spanX));
+    const numeralSize = Math.round(pxPerR * numeralSizeFactor);
+    const shadowBlur = pxPerR * shadowBlurFactor;
+    const shadowOffX = pxPerR * shadowOffXFactor;
+    const shadowOffY = pxPerR * shadowOffYFactor;
+    // Conservative ink-bound ratios (see note above): measured in a real
+    // browser against the actual font stack at this exact size/weight --
+    // ascent ~0.44em, descent ~0.29em, a two-digit numeral's ("12") own
+    // left/right ~0.45em, a single digit's ("9"/"6") ~0.24em -- then padded
+    // up for safety margin (this is deliberately NOT the full em-box, which
+    // a real glyph's ink never fills; that over-conservative model rejected
+    // this file's own real, measured-safe fix, so it is a false-positive
+    // risk, not a stricter guarantee).
+    const ASCENT_RATIO = 0.48, DESCENT_RATIO = 0.33;
+    const SINGLE_DIGIT_SIDE_RATIO = 0.28, DOUBLE_DIGIT_SIDE_RATIO = 0.5;
+    let worstOverflow = -Infinity, worstLabel = null;
+    [['12', 0, 1, DOUBLE_DIGIT_SIDE_RATIO], ['9', -1, 0, SINGLE_DIGIT_SIDE_RATIO], ['6', 0, -1, SINGLE_DIGIT_SIDE_RATIO]]
+      .forEach(([label, xR, yR, sideRatio]) => {
+        const x = (xR + WORD_LEFT_R) * pxPerR;
+        const y = hPx / 2 - yR * pxPerR;
+        const top = y - numeralSize * ASCENT_RATIO - shadowBlur - Math.max(0, -shadowOffY);
+        const bottom = y + numeralSize * DESCENT_RATIO + shadowBlur + Math.max(0, shadowOffY);
+        const left = x - numeralSize * sideRatio - shadowBlur - Math.max(0, -shadowOffX);
+        const right = x + numeralSize * sideRatio + shadowBlur + Math.max(0, shadowOffX);
+        [-top, bottom - hPx, -left, right - wPx].forEach((ov, i) => {
+          if (ov > worstOverflow) { worstOverflow = ov; worstLabel = label + ' ' + ['top', 'bottom', 'left', 'right'][i]; }
+        });
+      });
+    check('diy-words: every numeral\'s CONSERVATIVE em-box + shadow stays inside the canvas',
       worstOverflow <= 0, { worstLabel, worstOverflow: Math.round(worstOverflow) });
   }
 }

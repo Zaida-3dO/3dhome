@@ -3133,7 +3133,7 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 30,
-          "description": "cm, kept equal to `diameter` for `framed`/`diy-numerals`. For `diy-words` this is the WHOLE envelope including the words that extend right of the ring (47.25cm at the DIY_WORDS_DEFAULTS diameter of 30cm), not the ring diameter alone."
+          "description": "cm, kept equal to `diameter` for `framed`/`diy-numerals`. For `diy-words` this is the WHOLE envelope including the words that extend right of the ring (49.8cm at the DIY_WORDS_DEFAULTS diameter of 30cm), not the ring diameter alone."
         },
         "depth": {
           "type": "number",
@@ -3145,7 +3145,7 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 30,
-          "description": "cm, kept equal to `diameter` for `framed`/`diy-numerals`. For `diy-words` this includes headroom above/below the ring for the 12/6 numerals (35.4cm at the DIY_WORDS_DEFAULTS diameter of 30cm)."
+          "description": "cm, kept equal to `diameter` for `framed`/`diy-numerals`. For `diy-words` this includes headroom above/below the ring for the 12/6 numerals (39cm at the DIY_WORDS_DEFAULTS diameter of 30cm)."
         },
         "kind": {
           "type": "string",

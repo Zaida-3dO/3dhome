@@ -109,10 +109,12 @@ export const DIY_WORDS_DEFAULTS = Object.freeze(Object.assign({}, DEFAULTS, {
   // from WORD_LEFT_R/WORD_RIGHT_R/Y_MARGIN_R below: width =
   // radius*(WORD_LEFT_R+WORD_RIGHT_R), height = radius*2*Y_MARGIN_R, at
   // diameter=30 (radius=15cm). Verified exactly by test-wall-clock.mjs.
-  // width recomputed after WORD_RIGHT_R widened 1.85 -> 2.1 (item 059873ed,
-  // visual-compare round): 15 * (1.05 + 2.1) = 47.25.
-  width: 47.25,
-  height: 35.4,
+  // Recomputed twice (item 059873ed): first when WORD_RIGHT_R widened
+  // 1.85->2.1 (43.5->47.25), then again when WORD_LEFT_R/Y_MARGIN_R both
+  // widened again in round 2 to clear the "12"/"9"/"6" numeral clipping
+  // (1.05->1.22, 1.18->1.3): 15*(1.22+2.1)=49.8, 15*2*1.3=39.
+  width: 49.8,
+  height: 39,
   faceColor: '#f5f2ea', // unused by diy-words (no face disc) -- kept for shape parity
   numeralColor: '#1a1a1a',
   handColor: '#1a1a1a',
@@ -492,9 +494,23 @@ function resolveCreateCanvas(opts) {
 // shrunk every word to ~58% of its previous size, smaller than the
 // reference photos show. The chosen pair leaves "Three" ~30px of margin at
 // a 1024px texture width.
-const WORD_LEFT_R = 1.05;   // left edge of the panel, just past the ring's own left extent
+// WORD_LEFT_R and Y_MARGIN_R were both widened again (item 059873ed, round
+// 2 of the visual-compare after the coordinator viewed clock-preview.png):
+// the "12"/"9"/"6" numerals were genuinely clipped at the texture's own
+// edges -- "12"'s top, "9"'s left, "6"'s bottom -- measured with
+// ctx.measureText()'s actualBoundingBoxAscent/Descent/Left/Right PLUS the
+// numeral shadow's own blur/offset (the shadow extends real ink beyond the
+// glyph's own bounds, so a glyph-only measurement would still let the
+// shadow clip). Searched for the smallest WORD_LEFT_R/Y_MARGIN_R pair that
+// clears all three numerals at the round-2 numeral size/weight (see
+// buildWordsTexture's numeralSize/font below), then rounded UP for a real
+// safety margin (about 30-100px at a 1024px texture) rather than shipping
+// the exact zero-margin values the search found -- font metrics can vary
+// slightly across environments, and this is exactly the bug class (a
+// measured-tight fit with no slack) that clipped "Three" in round 1.
+const WORD_LEFT_R = 1.22;   // left edge of the panel, past the ring's own left extent AND the "9" numeral's ink+shadow
 const WORD_RIGHT_R = 2.1;   // right edge -- covers the words' own reach (see DIY_WORDS_DEFAULTS.width)
-const Y_MARGIN_R = 1.18;    // top/bottom edge
+const Y_MARGIN_R = 1.3;     // top/bottom edge, past the "12"/"6" numerals' ink+shadow
 
 /**
  * Draw "12"/"9"/"6" (big bold numerals, at their ring positions) and
@@ -531,8 +547,15 @@ function buildWordsTexture(THREE, wPx, hPx, numeralColor, createCanvas) {
   // (cheaper than real per-numeral depth+lighting), so the shadow is drawn
   // into that same texture with the canvas 2D shadow properties -- a soft,
   // small offset blur behind the glyph -- rather than built as geometry.
-  const numeralSize = Math.round(pxPerR * 0.62);
-  ctx.font = `900 ${numeralSize}px "Arial Rounded MT Bold", "Segoe UI", sans-serif`;
+  // Round 2 (item 059873ed): weight 900 read as far too heavy/blocky next
+  // to the references, which show a rounded MEDIUM weight with soft
+  // terminals -- dropped to 500, with the size factor also trimmed
+  // (0.62 -> 0.5) since the references' numerals are a touch smaller
+  // relative to the dial too. This is also what made the clipping fix
+  // above (WORD_LEFT_R/Y_MARGIN_R) tractable without an oversized canvas:
+  // a smaller, lighter glyph needs less margin to clear.
+  const numeralSize = Math.round(pxPerR * 0.5);
+  ctx.font = `500 ${numeralSize}px "Arial Rounded MT Bold", "Segoe UI", sans-serif`;
   ctx.shadowColor = 'rgba(0,0,0,0.35)';
   ctx.shadowBlur = pxPerR * 0.05;
   ctx.shadowOffsetX = pxPerR * 0.025;
@@ -620,11 +643,24 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
   // ---- Dots at 7, 8, 10, 11 -- solid black low-poly cylinders, flush with
   // the wall (their own back face at z=0, front at STANDOFF). ----
   const dotPositions = [7, 8, 10, 11];
-  const dotR = r * 0.05;
+  // Round 2 (item 059873ed): 0.05 read as roughly 3x too small against the
+  // references, where each dot is about 60-70% of the numeral stroke
+  // height -- widened to 0.15 (the directive's own "3x" figure; canvas 2D
+  // has no API to measure a filled glyph's own stroke width directly, so
+  // the numeral-relative percentage and the flat multiplier are taken as
+  // the same instruction stated two ways, and the simpler one is used).
+  const dotR = r * 0.15;
+  // Segment count raised alongside the 3x radius increase above -- 10
+  // segments (this module's original full-detail count, sized for the OLD,
+  // much smaller dot) became a visible polygon once the dot itself tripled
+  // in size (noticed while re-checking the round-2 preview render, not
+  // called out explicitly in the directive, but the same segment-count-vs-
+  // radius bug class the disc fix below addresses, so fixed here too rather
+  // than shipping a preview with a new, self-visible defect).
   dotPositions.forEach(hour => {
     const angle = (hour / 12) * TAU;
     const x = r * Math.sin(angle), y = r * Math.cos(angle);
-    const geo = new THREE.CylinderGeometry(dotR, dotR, STANDOFF, detail ? 5 : 10);
+    const geo = new THREE.CylinderGeometry(dotR, dotR, STANDOFF, detail ? 8 : 20);
     geo.rotateX(Math.PI / 2);
     geo.translate(0, 0, STANDOFF / 2);
     const dot = new THREE.Mesh(geo, makeFinish(THREE, 'matte', p.numeralColor));
@@ -672,7 +708,12 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
   // hub-sized circle a first pass here used (0.16r radius read as visibly
   // too small next to the reference once compared side by side). ----
   const discR = r * 0.2;
-  const discGeo = new THREE.CylinderGeometry(discR, discR, STANDOFF * 1.5, detail ? 6 : 14);
+  // Round 2 (item 059873ed): 14 segments at full detail (`detail` here is
+  // true for LOW, so this was the FULL-detail branch) still read as a
+  // visible polygon next to the reference photos' smooth disc. Raised to
+  // 32 at full detail (the directive's own floor); low detail stays modest
+  // (10, up slightly from 6) since it is never the camera's close subject.
+  const discGeo = new THREE.CylinderGeometry(discR, discR, STANDOFF * 1.5, detail ? 10 : 32);
   discGeo.rotateX(Math.PI / 2);
   discGeo.translate(0, 0, STANDOFF * 1.5 / 2);
   const disc = new THREE.Mesh(discGeo, makeFinish(THREE, 'matte', p.numeralColor));
