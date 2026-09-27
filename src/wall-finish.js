@@ -5,7 +5,8 @@
  *
  *   "finishes": [
  *     { "finish": "brick", "side": "exterior" },
- *     { "finish": "tile",  "room": "bathroom", "to": 120, "along": [385, 600] }
+ *     { "finish": "tile",  "room": "bathroom", "to": 120, "along": [385, 600],
+ *       "look": { "relief": 5, "roughness": 0.35 } }
  *   ]
  *
  * Each entry puts ONE procedural finish on ONE face of the wall, optionally
@@ -41,13 +42,15 @@
  * spec pages keep their own copy -- they are standalone pages and this port
  * does not change their behaviour.
  *
- * TILE IS A PLACEHOLDER: a plain 15 cm square off-white tile with a pale
- * grout line, so the mechanism can be exercised. The real bathroom tile look
- * is a follow-up; replace FINISH_TYPES.tile's draw/size/module, nothing else.
+ * THE TILE IS THE BATHROOM SPEC PAGES' TILE: a 40 x 25 cm landscape tile in a
+ * 0.4 cm grout joint, flat or with an embossed 5 cm relief, ported from their
+ * shared materials file. A tile entry may carry a `look` (size, grout,
+ * colours, relief, roughness -- see TILE_DEFAULTS); the defaults are that
+ * spec's flat tile. A look describes a tile, not a house.
  *
- * COST. Each finish type is ONE small canvas (brick 384 x 96, tile 128 x 128),
- * drawn once per page and shared, and ONE texture + ONE material template per
- * scene. Nothing here runs per frame.
+ * COST. Each finish LOOK is ONE small canvas (brick 384 x 96, the default
+ * tile 256 x 160, never over 512 a side), drawn once per page and shared, and
+ * ONE texture + ONE material template per scene. Nothing here runs per frame.
  *
  * Pure apart from makeFinishCanvas(), which needs a `document` (or any object
  * with createElement('canvas') returning a 2D-capable canvas). THREE is passed
@@ -116,32 +119,144 @@ export function brickLayout() {
   return out;
 }
 
-// ---- Tile (PLACEHOLDER) ------------------------------------------------
+// ---- Tile (ported from the bathroom spec pages) ---------------------------
 
-export const TILE_MODULE = 0.15;       // m, tile + grout, both axes
-export const TILE_GRID = Object.freeze({ cell: 32, grout: 2, n: 4 });
-export const TILE_GROUT = '#cfcac2';
-export const TILE_FACE = '#f2f0ec';
+/**
+ * The tile the bathroom spec pages draw (their shared materials file,
+ * makeFlatTileTexture / makeTexturedTileTexture): a 40 x 25 cm tile, landscape,
+ * with a 0.4 cm grout joint, a warm greige face and a darker grout. The canvas
+ * is ONE tile at 6.4 px/cm (256 x 160), grout as the ground and the face
+ * inset half a joint all round, so repeats meet in a full joint at the tile
+ * pitch. The same numbers are the vanity counter's defaults
+ * (src/furniture/bathroom.js), so a counter and the wall behind it agree.
+ *
+ * A tile finish may carry a `look` that changes any of these -- they are a
+ * description of a tile, not of a house:
+ *
+ *   size        [w, h] cm, the tile PITCH (grout included)     [40, 25]
+ *   grout       cm, the joint between tiles                      0.4
+ *   colour      the tile face                                    '#cdc2b1'
+ *   groutColour the joint                                        '#a89c87'
+ *   relief      cm; 0 = a FLAT tile, else the face is embossed  0
+ *               with a grid of squares about this size (the
+ *               spec's wet-area tile is relief 5: 8 x 5 squares)
+ *   roughness   the material's roughness                         0.55
+ *
+ * A RELIEF tile is the spec's makeTexturedTileTexture: one base tone over the
+ * face, each emboss square its own shade (+/-4.5), a thin seam between squares
+ * with a faint lighter highlight stroked over it. It is NOT grout -- the grout
+ * joint stays only between whole tiles. The spec jitters with Math.random();
+ * this seeds the jitter from the square's row/column (hash2), so the wall is
+ * the same on every load. The spec's whole-tile +/-5 random tone is dropped:
+ * its canvas is one tile repeated, so every tile shared that one random shade
+ * anyway -- the base is the colour itself.
+ */
+export const TILE_PX_PER_CM = 6.4;     // 32 px per 5 cm emboss square, as the spec
+export const TILE_MAX_PX = 512;        // a canvas side never exceeds this
+export const TILE_DEFAULTS = Object.freeze({
+  size: Object.freeze([40, 25]),
+  grout: 0.4,
+  colour: '#cdc2b1',
+  groutColour: '#a89c87',
+  relief: 0,
+  roughness: 0.55
+});
+/** The relief's seam (cm), per-square shade spread, and highlight, from the spec. */
+export const TILE_RELIEF = Object.freeze({ seam: 0.15, spread: 9, lift: 26, alpha: 0.35 });
 
-export function tileLayout() {
-  const { cell, grout, n } = TILE_GRID;
-  const out = [];
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      const u = hash2(r + 31, c + 17) / 4294967296;
-      out.push({ x: c * cell + grout / 2, y: r * cell + grout / 2, w: cell - grout, h: cell - grout,
-        rgb: jitterRgb(TILE_FACE, (u - 0.5) * 6) });
+const HEX6 = /^#[0-9a-fA-F]{6}$/;
+const LOOK_KEYS = Object.keys(TILE_DEFAULTS);
+
+/**
+ * A tile `look` with its defaults filled in and every value checked. A bad
+ * value is reported through `warn` and replaced by its default -- the tile is
+ * still drawn, only that one property falls back. Returns a frozen object
+ * with a canonical `key` (equal looks, equal keys), which is what the canvas,
+ * texture, material and mesh are shared by.
+ */
+export function resolveTileLook(look, warn) {
+  const say = typeof warn === 'function' ? warn : () => {};
+  const src = look && typeof look === 'object' && !Array.isArray(look) ? look : {};
+  if (look != null && src !== look) say('`look` must be an object -- using the default tile');
+  Object.keys(src).forEach(k => {
+    if (LOOK_KEYS.indexOf(k) === -1) say('look.' + k + ' is not a tile property (known: ' + LOOK_KEYS.join(', ') + ') -- ignored');
+  });
+  const pick = (k, ok, what) => {
+    if (src[k] === undefined) return TILE_DEFAULTS[k];
+    if (ok(src[k])) return src[k];
+    say('look.' + k + ' ' + JSON.stringify(src[k]) + ' is not ' + what + ' -- using ' + JSON.stringify(TILE_DEFAULTS[k]));
+    return TILE_DEFAULTS[k];
+  };
+  const num = (lo, hi) => v => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+  const size = pick('size', v => Array.isArray(v) && v.length === 2 && v.every(num(1, 500)),
+    '[w, h] in cm (1..500 each)');
+  const grout = pick('grout', v => num(0, 10)(v) && v < Math.min(size[0], size[1]) / 2,
+    'a joint in cm (0 up to half the tile)');
+  const colour = pick('colour', v => typeof v === 'string' && HEX6.test(v), 'a #rrggbb colour').toLowerCase();
+  const groutColour = pick('groutColour', v => typeof v === 'string' && HEX6.test(v), 'a #rrggbb colour').toLowerCase();
+  const relief = pick('relief', num(0, 500), 'a square size in cm (0 = flat)');
+  const roughness = pick('roughness', num(0, 1), 'between 0 and 1');
+  const out = { size: Object.freeze([size[0], size[1]]), grout, colour, groutColour, relief, roughness };
+  out.key = [size[0], size[1], grout, colour, groutColour, relief, roughness].join(',');
+  return Object.freeze(out);
+}
+
+const asLook = look => (look && look.key ? look : resolveTileLook(look));
+
+/** The tile canvas's px per cm: the spec's 6.4, shrunk so no side passes TILE_MAX_PX. */
+export function tilePxPerCm(look) {
+  const L = asLook(look);
+  return Math.min(TILE_PX_PER_CM, TILE_MAX_PX / L.size[0], TILE_MAX_PX / L.size[1]);
+}
+
+/** Emboss squares [across, down] a relief tile; [0, 0] when it is flat. */
+export function reliefGrid(look) {
+  const L = asLook(look);
+  if (!(L.relief > 0)) return [0, 0];
+  return [Math.max(1, Math.round(L.size[0] / L.relief)), Math.max(1, Math.round(L.size[1] / L.relief))];
+}
+
+/**
+ * Every rect on the tile canvas, in draw order, over the grout ground:
+ * { x, y, w, h, rgb, a? } -- `a` is an alpha, for the relief's highlight.
+ */
+export function tileLayout(look) {
+  const L = asLook(look);
+  const ppc = tilePxPerCm(L);
+  const w = Math.round(L.size[0] * ppc), h = Math.round(L.size[1] * ppc);
+  const g = L.grout > 0 ? Math.max(1, L.grout * ppc) : 0;
+  const fx = g / 2, fy = g / 2, fw = w - g, fh = h - g;
+  const out = [{ x: fx, y: fy, w: fw, h: fh, rgb: jitterRgb(L.colour, 0) }];
+  const [cols, rows] = reliefGrid(L);
+  if (!cols) return out;
+  const sw = fw / cols, sh = fh / rows;
+  const seam = Math.max(0.5, TILE_RELIEF.seam * ppc);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const u = hash2(r + 131, c + 977) / 4294967296;
+      out.push({ x: fx + c * sw + seam / 2, y: fy + r * sh + seam / 2, w: sw - seam, h: sh - seam,
+        rgb: jitterRgb(L.colour, (u - 0.5) * TILE_RELIEF.spread) });
     }
   }
+  // The faint highlight over each inner seam -- a line `seam` wide, centred
+  // on it, as the spec strokes it -- so the relief reads at a glance without
+  // acting as grout.
+  const hi = jitterRgb(L.colour, TILE_RELIEF.lift);
+  for (let c = 1; c < cols; c++) out.push({ x: fx + c * sw - seam / 2, y: fy, w: seam, h: fh, rgb: hi, a: TILE_RELIEF.alpha });
+  for (let r = 1; r < rows; r++) out.push({ x: fx, y: fy + r * sh - seam / 2, w: fw, h: seam, rgb: hi, a: TILE_RELIEF.alpha });
   return out;
 }
 
 // ---- The finish registry --------------------------------------------------
 
 /**
- * Every finish the engine can draw. `size` is the canvas in px, `repeat` the
- * THREE texture repeat in TILES PER METRE (face UVs are in metres here -- see
- * faceUvMetres), `ground` the colour under the rects (mortar/grout).
+ * Every finish the engine can draw. Each property is a function of the
+ * finish's resolved `look` (brick has none and ignores it): `size` is the
+ * canvas in px, `repeat` the THREE texture repeat in TILES PER METRE (face
+ * UVs are in metres here -- see addLongFace), `ground` the colour under the
+ * rects (mortar/grout). `srgb`: the canvas holds sRGB colours to be colour-
+ * managed -- tile yes, so the wall's #cdc2b1 renders as the counter's
+ * #cdc2b1; brick keeps the look it was signed off with.
  */
 export const FINISH_TYPES = Object.freeze({
   brick: Object.freeze({
@@ -150,55 +265,78 @@ export const FINISH_TYPES = Object.freeze({
       return { w: cols * (brickW + mortar), h: rows * (brickH + mortar) };
     },
     repeat: () => ({ x: 1 / (BRICK_TILE.cols * BRICK_MODULE_W), y: 1 / (BRICK_TILE.rows * BRICK_MODULE_H) }),
-    ground: BRICK_MORTAR,
-    layout: brickLayout,
-    roughness: 0.9
+    ground: () => BRICK_MORTAR,
+    layout: () => brickLayout(),
+    roughness: () => 0.9,
+    srgb: false,
+    hasLook: false
   }),
   tile: Object.freeze({
-    size: () => ({ w: TILE_GRID.cell * TILE_GRID.n, h: TILE_GRID.cell * TILE_GRID.n }),
-    repeat: () => ({ x: 1 / (TILE_GRID.n * TILE_MODULE), y: 1 / (TILE_GRID.n * TILE_MODULE) }),
-    ground: TILE_GROUT,
-    layout: tileLayout,
-    roughness: 0.35
+    size: look => {
+      const L = asLook(look), ppc = tilePxPerCm(L);
+      return { w: Math.round(L.size[0] * ppc), h: Math.round(L.size[1] * ppc) };
+    },
+    // The canvas IS one tile, so the repeat is tiles per metre.
+    repeat: look => { const L = asLook(look); return { x: 100 / L.size[0], y: 100 / L.size[1] }; },
+    ground: look => asLook(look).groutColour,
+    layout: look => tileLayout(look),
+    roughness: look => asLook(look).roughness,
+    srgb: true,
+    hasLook: true
   })
 });
 
 /** Finish names the engine knows. Anything else is warned about and ignored. */
 export const FINISHES = Object.freeze(Object.keys(FINISH_TYPES));
 
+/**
+ * What a finish's canvas, texture, material and per-wall mesh are shared by:
+ * the finish name, plus its look for a finish that has one. Two entries on
+ * one wall with the same key are one mesh -- one draw.
+ */
+export function finishKey(name, look) {
+  const type = FINISH_TYPES[name];
+  if (!type || !type.hasLook) return name;
+  return name + ':' + asLook(look).key;
+}
+
 const _canvases = {};
 /**
- * A finish's tile as a canvas. Drawn ONCE per page and cached per finish:
+ * A finish's tile as a canvas. Drawn ONCE per page and cached per finish key:
  * every scene (the sidebar preview and the full page are separate scenes)
  * wraps the same pixels, so a second scene costs an upload, not a redraw.
  */
-export function makeFinishCanvas(name, doc) {
-  if (_canvases[name]) return _canvases[name];
+export function makeFinishCanvas(name, doc, look) {
   const type = FINISH_TYPES[name];
   if (!type) throw new Error('unknown finish "' + name + '"');
+  const key = finishKey(name, look);
+  if (_canvases[key]) return _canvases[key];
   const d = doc || (typeof document !== 'undefined' ? document : null);
   if (!d) throw new Error('makeFinishCanvas needs a document');
-  const { w, h } = type.size();
+  const { w, h } = type.size(look);
   const c = d.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = type.ground;
+  ctx.fillStyle = type.ground(look);
   ctx.fillRect(0, 0, w, h);
-  type.layout().forEach(b => {
-    ctx.fillStyle = 'rgb(' + b.rgb[0] + ',' + b.rgb[1] + ',' + b.rgb[2] + ')';
+  type.layout(look).forEach(b => {
+    ctx.fillStyle = b.a != null
+      ? 'rgba(' + b.rgb[0] + ',' + b.rgb[1] + ',' + b.rgb[2] + ',' + b.a + ')'
+      : 'rgb(' + b.rgb[0] + ',' + b.rgb[1] + ',' + b.rgb[2] + ')';
     ctx.fillRect(b.x, b.y, b.w, b.h);
   });
-  _canvases[name] = c;
+  _canvases[key] = c;
   return c;
 }
 
 /** A CanvasTexture over the shared tile, tiled per metre. */
-export function makeFinishTexture(THREE, name, doc) {
-  const tex = new THREE.CanvasTexture(makeFinishCanvas(name, doc));
+export function makeFinishTexture(THREE, name, doc, look) {
+  const tex = new THREE.CanvasTexture(makeFinishCanvas(name, doc, look));
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  const r = FINISH_TYPES[name].repeat();
+  const r = FINISH_TYPES[name].repeat(look);
   tex.repeat.set(r.x, r.y);
   tex.anisotropy = 8;
+  if (FINISH_TYPES[name].srgb && 'colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 

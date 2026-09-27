@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Wall-face finishes -- `walls[].finishes` (schemaVersion 1.3): brick (ported
- * from the window spec pages) and a placeholder tile, on ONE face of a wall,
+ * from the window spec pages) and tile (ported from the bathroom spec pages,
+ * with an optional `look`), on ONE face of a wall,
  * optionally over a height band and a span. No framework, no install:
  * `node scripts/test-wall-finishes.mjs`.
  *
@@ -15,7 +16,7 @@
  *   2. The brick IS the spec pages' brick: every constant that sets its look
  *      is read out of both window objects' blocks in specs/WindowSpec.html
  *      and compared, so they cannot drift apart.
- *   3. The tiles (brick and the tile placeholder) are deterministic; brick is
+ *   3. The tiles (brick and tile) are deterministic; brick is
  *      running bond, uses all six shades within the spec's +/-9 jitter, and a
  *      brick straddling the tile edge is one brick. One canvas per finish type.
  *   4. END faces: a compass side pointing along a short segment (a pillar)
@@ -29,8 +30,12 @@
  *   6. Height bands and spans intersect each wall box correctly, and a wall
  *      split round a window is ONE geometry with no groups -- one draw --
  *      whose coursing runs on across its boxes.
- *   7. The scene builds one mesh per wall per finish, keeps wall boxes on a
- *      single material, joins the fade, and leaves #63's fade loop intact.
+ *   7. The scene builds one mesh per wall per finish LOOK, keeps wall boxes on
+ *      a single material, joins the fade, and leaves #63's fade loop intact.
+ *   8. The tile is the bathroom spec pages' tile (40 x 25 cm, 0.4 cm grout,
+ *      #cdc2b1 / #a89c87, flat or 5 cm relief) and agrees with the vanity
+ *      counter's defaults; a `look` changes it, is validated with fallbacks,
+ *      and keys its own canvas / texture / mesh; the tile is colour-managed.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -179,7 +184,7 @@ for (const [page, src] of brickCopies) {
   const r = F.FINISH_TYPES.brick.repeat();
   check('brick repeat = tiles per metre (1/1.8, 1/0.45)', near(r.x, 1 / 1.8) && near(r.y, 1 / 0.45), r);
   const t = F.FINISH_TYPES.tile.repeat();
-  check('tile repeat = 4 x 15 cm per tile', near(t.x, 1 / 0.6) && near(t.y, 1 / 0.6), t);
+  check('tile repeat = one 40 x 25 cm tile per canvas (2.5 x 4 per metre)', near(t.x, 1 / 0.4) && near(t.y, 1 / 0.25), t);
 }
 
 // ---- 3. the tiles ---------------------------------------------------------------
@@ -212,8 +217,8 @@ for (const [page, src] of brickCopies) {
       left && right && left.rgb.join() === right.rgb.join() && near(left.x + size.w, right.x), [left, right]);
   }
   const tl = F.tileLayout();
-  check('tile layout: 4 x 4 tiles inside a 128 px canvas', tl.length === 16 &&
-    tl.every(r => r.x >= 0 && r.y >= 0 && r.x + r.w <= 128 && r.y + r.h <= 128), tl.length);
+  check('tile layout (default, flat): one face inside a 256 x 160 px canvas', tl.length === 1 &&
+    tl.every(r => r.x >= 0 && r.y >= 0 && r.x + r.w <= 256 && r.y + r.h <= 160), tl.length);
 
   function fakeDoc(calls) {
     return { createElement: () => ({ getContext: () => ({
@@ -229,7 +234,8 @@ for (const [page, src] of brickCopies) {
   check('every brick painted', calls.filter(c => c[0] === 'rect').length === 1 + a.length);
   const tcalls = [];
   const t1 = F.makeFinishCanvas('tile', fakeDoc(tcalls));
-  check('tile has its OWN canvas', t1 !== c1 && t1.width === 128 && tcalls[0][1] === F.TILE_GROUT);
+  check('tile has its OWN canvas', t1 !== c1 && t1.width === 256 && t1.height === 160 &&
+    tcalls[0][1] === F.TILE_DEFAULTS.groutColour);
   const tex = F.makeFinishTexture(THREE, 'brick');
   check('texture wraps + tiles per metre', tex.wrapS === THREE.RepeatWrapping && tex.wrapT === THREE.RepeatWrapping &&
     near(tex.repeat.x, 1 / 1.8) && near(tex.repeat.y, 1 / 0.45) && tex.image === c1);
@@ -424,9 +430,14 @@ function triangles(geo) {
 {
   const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
   check('scene: wall loop reads finishes', /WALL_EXT\.forEach\(\(\{[^}]*\bfinishes \}\)/.test(src));
-  check('scene: ONE batch per wall per finish', /const key = id \+ '\|' \+ f\.finish;/.test(src) &&
-    /finishBatches\.set\(key,/.test(src));
-  check('scene: ONE mesh per batch', /finishBatches\.forEach\(\(\{ batch, wallId, finish, outer \}\) => \{[\s\S]{0,200}new THREE\.Mesh\(geo, finishMaterial\(finish, outer\)\)/.test(src));
+  check('scene: ONE batch per wall per finish LOOK', /const key = id \+ '\|' \+ finishKey\(f\.finish, f\.look\);/.test(src) &&
+    /finishBatches\.set\(key, \{ batch: createFinishBatch\(\), wallId: id, finish: f\.finish, look: f\.look,/.test(src));
+  check('scene: ONE mesh per batch, in its look', /finishBatches\.forEach\(\(\{ batch, wallId, finish, look, outer \}\) => \{[\s\S]{0,200}new THREE\.Mesh\(geo, finishMaterial\(finish, look, outer\)\)/.test(src));
+  check('scene: texture + material template per finish KEY, roughness from the look',
+    /const fk = finishKey\(name, look\);/.test(src) &&
+    /_finishTextures\[fk\] = makeFinishTexture\(THREE, name, null, look\)/.test(src) &&
+    /_finishTemplates\[fk\] = new THREE\.MeshStandardMaterial\(\{\s*color: 0xffffff, roughness: FINISH_TYPES\[name\]\.roughness\(look\), map: map,/.test(src) &&
+    /const m = _finishTemplates\[fk\]\.clone\(\);/.test(src));
   check('scene: finish mesh casts no shadow (no extra shadow-pass draw)', /mesh\.castShadow = false;\s*mesh\.name = 'wall-finish:'/.test(src));
   check('scene: wall boxes keep a single material (no per-face finish array)',
     !/withFaceFinish|faceSlot\(/.test(src));
@@ -436,6 +447,147 @@ function triangles(geo) {
     /finishMeshes\.forEach\(\(\{ mesh, wallId \}\) => \{\s*const host = wallEntryById\[wallId\];\s*if \(!host \|\| !host\.outer\) return;\s*wallMeshes\.push\(\{ mesh, nx: host\.nx, nz: host\.nz, outer: true \}\)/.test(src));
   check('scene: the #63 fade loop is intact (base opacity + depthWrite)',
     /wallFadeTarget\(dot, b\)/.test(src) && /wallFadeDepthWrite\(mesh\.material\.opacity, b, baseDepthWrite\)/.test(src));
+}
+
+// ---- 8. the tile: the bathroom spec pages' tile, and its look -------------------
+// The spec pages (a private house's) are not in this repo, so their numbers
+// are pinned here as literals: TILE_SPEC 40 x 25 cm + 0.4 cm grout, 6.4 px/cm,
+// #cdc2b1 face / #a89c87 grout, flat at roughness 0.55; the wet-area tile an
+// 8 x 5 grid of 5 cm squares, 0.15 cm seam, +/-4.5 per square, highlight
+// base+26 at alpha 0.35, roughness 0.35.
+{
+  const D = F.TILE_DEFAULTS;
+  check('tile default: 40 x 25 cm pitch (landscape)', D.size[0] === 40 && D.size[1] === 25, D.size);
+  check('tile default: 0.4 cm grout', D.grout === 0.4);
+  check('tile default: spec colours', D.colour === '#cdc2b1' && D.groutColour === '#a89c87', D);
+  check('tile default: flat, roughness 0.55', D.relief === 0 && D.roughness === 0.55, D);
+  check('tile canvas at the spec 6.4 px/cm', F.TILE_PX_PER_CM === 6.4);
+  check('relief: seam 0.15 cm, spread 9 (+/-4.5), highlight +26 at 0.35',
+    F.TILE_RELIEF.seam === 0.15 && F.TILE_RELIEF.spread === 9 && F.TILE_RELIEF.lift === 26 && F.TILE_RELIEF.alpha === 0.35,
+    F.TILE_RELIEF);
+
+  // The vanity counter (already in the house, in front of these walls) draws
+  // the same tile from its own defaults; the two must not drift apart.
+  const bsrc = fs.readFileSync(path.join(root, 'src/furniture/bathroom.js'), 'utf8');
+  const vd = bsrc.slice(bsrc.indexOf('const VANITY_DEFAULTS'), bsrc.indexOf('});', bsrc.indexOf('const VANITY_DEFAULTS')));
+  const vget = re => (vd.match(re) || [])[1];
+  check('counter parity: face colour', vget(/bodyColor: '(#[0-9a-fA-F]{6})'/) === D.colour, vget(/bodyColor: '([^']+)'/));
+  check('counter parity: grout colour', vget(/groutColor: '(#[0-9a-fA-F]{6})'/) === D.groutColour);
+  check('counter parity: 40 x 25 tile', +vget(/tileWidth: (\d+)/) === D.size[0] && +vget(/tileHeight: (\d+)/) === D.size[1]);
+
+  // Size, repeat and the flat face.
+  const flat = F.resolveTileLook();
+  const sz = F.FINISH_TYPES.tile.size(flat);
+  check('flat tile canvas 256 x 160 (one tile)', sz.w === 256 && sz.h === 160, sz);
+  const rp = F.FINISH_TYPES.tile.repeat(flat);
+  check('flat tile repeat 2.5 x 4 per metre', near(rp.x, 2.5) && near(rp.y, 4), rp);
+  const fl = F.tileLayout(flat);
+  check('flat: exactly one rect, the face', fl.length === 1, fl.length);
+  check('flat: face inset half the 2.56 px joint all round',
+    near(fl[0].x, 1.28) && near(fl[0].y, 1.28) && near(fl[0].w, 256 - 2.56) && near(fl[0].h, 160 - 2.56), fl[0]);
+  check('flat: face is the colour itself (no jitter)', fl[0].rgb.join() === '205,194,177' && fl[0].a === undefined, fl[0].rgb);
+  check('flat: roughness 0.55', F.FINISH_TYPES.tile.roughness(flat) === 0.55);
+
+  // The relief (wet-area) tile.
+  const wet = F.resolveTileLook({ relief: 5, roughness: 0.35 });
+  check('relief 5 on 40 x 25: an 8 x 5 grid', JSON.stringify(F.reliefGrid(wet)) === '[8,5]', F.reliefGrid(wet));
+  check('flat: no grid', JSON.stringify(F.reliefGrid(flat)) === '[0,0]');
+  const wl = F.tileLayout(wet), wl2 = F.tileLayout(F.resolveTileLook({ relief: 5, roughness: 0.35 }));
+  check('relief layout deterministic', JSON.stringify(wl) === JSON.stringify(wl2));
+  const squares = wl.slice(1).filter(r => r.a === undefined), lines = wl.filter(r => r.a !== undefined);
+  check('relief: face + 40 squares + 7 + 4 highlight lines', wl.length === 52 && squares.length === 40 && lines.length === 11,
+    [wl.length, squares.length, lines.length]);
+  const face = wl[0], seam = 0.15 * 6.4;
+  check('relief: squares inside the face, one seam apart', squares.every(r =>
+    r.x >= face.x - 1e-9 && r.y >= face.y - 1e-9 && r.x + r.w <= face.x + face.w + 1e-9 && r.y + r.h <= face.y + face.h + 1e-9 &&
+    near(r.w, face.w / 8 - seam) && near(r.h, face.h / 5 - seam)), squares[0]);
+  const base = [205, 194, 177];
+  const deltas = squares.map(r => r.rgb[0] - base[0]);
+  check('relief: each square the colour +/-4.5, same shift on every channel',
+    squares.every(r => Math.abs(r.rgb[0] - base[0]) <= 5 && r.rgb[1] - base[1] === r.rgb[0] - base[0] && r.rgb[2] - base[2] === r.rgb[0] - base[0]),
+    deltas);
+  check('relief: squares actually vary', new Set(deltas).size >= 5, [...new Set(deltas)]);
+  check('relief: highlight = colour +26 at alpha 0.35', lines.every(r => r.rgb.join() === '231,220,203' && r.a === 0.35), lines[0]);
+  const vx = lines.filter(r => r.h === face.h).map(r => r.x + r.w / 2);
+  check('relief: vertical highlights centred on the 7 inner seams',
+    vx.length === 7 && vx.every((x, i) => near(x, face.x + (i + 1) * face.w / 8)), vx);
+  check('relief: grout stays the whole-tile joint (face inset unchanged)', near(face.x, 1.28) && near(face.w, 256 - 2.56));
+  check('relief roughness from the look', F.FINISH_TYPES.tile.roughness(wet) === 0.35);
+  check('relief that does not divide the tile rounds (40 x 25 / 6 -> 7 x 4)',
+    JSON.stringify(F.reliefGrid(F.resolveTileLook({ relief: 6 }))) === '[7,4]');
+  check('relief bigger than the tile -> one square', JSON.stringify(F.reliefGrid(F.resolveTileLook({ relief: 100 }))) === '[1,1]');
+
+  // Other sizes: the canvas follows the tile, capped at 512 px a side.
+  const big = F.resolveTileLook({ size: [120, 60] });
+  const bs = F.FINISH_TYPES.tile.size(big), br = F.FINISH_TYPES.tile.repeat(big);
+  check('120 x 60 tile: canvas capped to 512 x 256', bs.w === 512 && bs.h === 256, bs);
+  check('120 x 60 tile: repeat follows the size', near(br.x, 100 / 120) && near(br.y, 100 / 60), br);
+  const sq = F.resolveTileLook({ size: [15, 15], grout: 0 });
+  check('15 cm square, no grout: face fills the canvas', F.tileLayout(sq)[0].x === 0 && F.tileLayout(sq)[0].w === 96);
+
+  // The look: validation with per-property fallback, and the key.
+  const warns = [];
+  const bad = F.resolveTileLook({ colour: 'beige', grout: 20, size: [40], roughness: 2, relief: -1, sheen: 1 }, m => warns.push(m));
+  check('bad look values fall back to the defaults', bad.colour === D.colour && bad.grout === D.grout &&
+    bad.size[0] === 40 && bad.size[1] === 25 && bad.roughness === D.roughness && bad.relief === 0, bad);
+  check('each bad look value is warned', ['look.colour', 'look.grout', 'look.size', 'look.roughness', 'look.relief', 'look.sheen']
+    .every(k => warns.some(m => m.indexOf(k) === 0)), warns);
+  check('a look that is not an object is warned', (() => { const w = []; F.resolveTileLook('wet', m => w.push(m)); return w.length === 1; })());
+  const w2 = [];
+  F.resolveTileLook({ size: [16, 16], grout: 8 }, m => w2.push(m));
+  check('grout must be under half the tile it is on', w2.some(m => /look\.grout/.test(m)), w2);
+  check('a good look is not warned about', (() => { const w = []; F.resolveTileLook({ relief: 5, roughness: 0.35, colour: '#FFFFFF' }, m => w.push(m)); return w.length === 0; })());
+  check('key: no look == {} == the defaults spelled out',
+    flat.key === F.resolveTileLook({}).key && flat.key === F.resolveTileLook({ size: [40, 25], grout: 0.4, colour: '#CDC2B1' }).key);
+  check('key: a different relief is a different key', wet.key !== flat.key);
+  check('key: roughness alone is a different key', F.resolveTileLook({ roughness: 0.3 }).key !== flat.key);
+  check('finishKey: brick ignores a look', F.finishKey('brick', wet) === 'brick');
+  check('finishKey: tile carries its look', F.finishKey('tile', wet) === 'tile:' + wet.key &&
+    F.finishKey('tile') === F.finishKey('tile', flat) && F.finishKey('tile', wet) !== F.finishKey('tile', flat));
+
+  // Canvases and textures, one per look.
+  function fakeDoc(calls) {
+    return { createElement: () => ({ getContext: () => ({
+      set fillStyle(v) { calls.push(['style', v]); },
+      fillRect: (...r) => calls.push(['rect', ...r])
+    }) }) };
+  }
+  const wc = [];
+  const cw = F.makeFinishCanvas('tile', fakeDoc(wc), wet);
+  const cw2 = F.makeFinishCanvas('tile', fakeDoc([]), F.resolveTileLook({ roughness: 0.35, relief: 5 }));
+  const cf = F.makeFinishCanvas('tile', fakeDoc([]), flat);
+  check('relief tile: its own canvas, shared by an equal look', cw === cw2 && cw !== cf);
+  check('relief canvas: grout ground first, then 52 rects', wc[0][1] === '#a89c87' && wc.filter(c => c[0] === 'rect').length === 53);
+  check('relief canvas: highlights painted with alpha', wc.some(c => c[0] === 'style' && c[1] === 'rgba(231,220,203,0.35)'));
+  const tex = F.makeFinishTexture(THREE, 'tile', null, wet);
+  check('tile texture: the relief canvas, wrapped, 2.5 x 4 per metre', tex.image === cw && tex.wrapS === THREE.RepeatWrapping &&
+    near(tex.repeat.x, 2.5) && near(tex.repeat.y, 4));
+  check('tile texture is colour-managed (sRGB, as the counter in front of it)', tex.colorSpace === THREE.SRGBColorSpace);
+  check('brick texture keeps its signed-off look (not re-flagged)', F.makeFinishTexture(THREE, 'brick').colorSpace !== THREE.SRGBColorSpace);
+
+  // The loader resolves each entry's look.
+  const { house: h, warnings } = compile(house([
+    { id: 7, start: [500, 0], end: [500, 590], finishes: [
+      { finish: 'tile', room: 'bathroom', look: { relief: 5, roughness: 0.35 } },
+      { finish: 'tile', room: 'store' },
+      { finish: 'brick', side: 'west', look: { relief: 5 } },
+      { finish: 'tile', side: 'east', along: [0, 100], look: { colour: 'teal' } }
+    ] }
+  ]));
+  const f7 = h.wallsExt.find(w => w.id === 7).finishes;
+  check('loader: all four entries kept', f7.length === 4, f7.length);
+  check('loader: tile look resolved', f7[0].look && f7[0].look.relief === 5 && f7[0].look.roughness === 0.35 && f7[0].look.key === wet.key, f7[0].look);
+  check('loader: tile without a look gets the default look', f7[1].look && f7[1].look.key === flat.key);
+  check('loader: brick has no look (and a given one is warned)', f7[2].look === null &&
+    warnings.some(m => /wall 7 finishes\[2\].*look.*tile finish only/.test(m)), warnings);
+  check('loader: a bad look value is warned with the entry named, and falls back',
+    f7[3].look.colour === D.colour && warnings.some(m => /wall 7 finishes\[3\]: look\.colour/.test(m)), warnings);
+
+  // The schema declares the look (walls are closed, so it must).
+  const schema = JSON.parse(fs.readFileSync(path.join(root, 'houses/schema.json'), 'utf8'));
+  const lk = schema.$defs.wallFinish.properties.look;
+  check('schema: look declared, closed, with exactly the engine\'s properties', !!lk && lk.additionalProperties === false &&
+    JSON.stringify(Object.keys(lk.properties).sort()) === JSON.stringify(Object.keys(D).sort()), lk && Object.keys(lk.properties));
 }
 
 console.log((failures ? 'FAILED' : 'OK') + ' -- ' + passes + ' passed, ' + failures + ' failed');

@@ -28,7 +28,7 @@
  */
 
 import { insidePoly } from './footstep-walk.js';
-import { FINISHES, outsideVector, faceNormalToward, compassVector } from './wall-finish.js';
+import { FINISHES, FINISH_TYPES, resolveTileLook, outsideVector, faceNormalToward, compassVector } from './wall-finish.js';
 
 export const HouseLoader = (() => {
   'use strict';
@@ -851,7 +851,7 @@ export const HouseLoader = (() => {
    * A bad entry is warned about and dropped: a finish is a decoration, and a
    * wall rendered plain is the right degradation.
    *
-   * @returns {Array<{finish, normal:[number,number], from:number|null,
+   * @returns {Array<{finish, look:Object|null, normal:[number,number], from:number|null,
    *   to:number|null, along:[number,number]|null}>}
    */
   function compileWallFinishes(wall, rooms, centre, warn) {
@@ -939,8 +939,16 @@ export const HouseLoader = (() => {
         warn(where + ': this face also carries the wall’s faceTexture (wallpaper); the ' + f.finish +
           ' is drawn over it');
       }
+      // The finish's look (tile only): defaults filled in, a bad value warned
+      // and replaced by its default -- the tile is still drawn.
+      let look = null;
+      if (FINISH_TYPES[f.finish].hasLook) {
+        look = resolveTileLook(f.look, m => warn(where + ': ' + m));
+      } else if (f.look != null) {
+        warn(where + ': `look` applies to a tile finish only -- ignored on ' + f.finish);
+      }
       out.push({
-        finish: f.finish, normal: normal, face: endAt ? 'end' : 'long', at: endAt,
+        finish: f.finish, look: look, normal: normal, face: endAt ? 'end' : 'long', at: endAt,
         from: from, to: to, along: along,
         // Wrap the finish round the reveals of openings and the wall's own
         // ends: on by default for an exterior skin (brick returns into the

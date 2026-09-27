@@ -316,8 +316,28 @@ found the same way a window finds its room face); give exactly one.
 - `along` — `[start, end]` in plan cm on the wall's long axis, the same numbers
   as a door's `centre`. Omit for the whole length.
 - `brick` is the running-bond buff brick from the WindowSpec and
-  BalconyWindowSpec pages, at real UK brick size. `tile` is a **placeholder**
-  15 cm off-white square tile until the real tile look is ported.
+  BalconyWindowSpec pages, at real UK brick size. `tile` is the bathroom spec
+  pages' tile: a 40 × 25 cm landscape tile in a 0.4 cm joint, greige
+  (`#cdc2b1`) with a darker grout (`#a89c87`), flat — the same tile the vanity
+  counter draws.
+- `look` (tile only) changes the tile. Every property is optional:
+
+  | Property | Default | Meaning |
+  |---|---|---|
+  | `size` | `[40, 25]` | One tile's width and height in cm, joint included. |
+  | `grout` | `0.4` | The joint, cm. `0` for butt-jointed. |
+  | `colour` | `"#cdc2b1"` | The tile face. |
+  | `groutColour` | `"#a89c87"` | The joint. |
+  | `relief` | `0` | `0` is a flat tile. Otherwise the face is embossed with a grid of squares about this many cm across, each its own shade, with a faint highlight between them — not grout. `5` on the default tile is an 8 × 5 grid. |
+  | `roughness` | `0.55` | The material's roughness (the embossed wet-area tile is `0.35`). |
+
+  ```json
+  { "finish": "tile", "side": "west", "from": 0, "look": { "relief": 5, "roughness": 0.35 } }
+  ```
+
+  A bad value is warned about and falls back to its default; the tile is still
+  drawn. Each distinct look is its own small canvas (256 × 160 px for the
+  default tile, never over 512 a side).
 - `exterior` is the long face pointing away from the house footprint's centre.
   For a wall in the notch of an L-shaped house that is wrong — name the compass
   side instead.
@@ -329,9 +349,10 @@ found the same way a window finds its room face); give exactly one.
   and round its own ends (as brick returns into a window opening). On by
   default for `"side": "exterior"`, off otherwise.
 
-A finish fades with its wall and costs **one draw per finish per wall**: all
-of a wall's finished faces are one mesh laid 1.5 mm over the painted wall,
-skipping its doors and windows.
+A finish fades with its wall and costs **one draw per finish look per wall**:
+all of a wall's faces in one finish and look are one mesh laid 1.5 mm over the
+painted wall, skipping its doors and windows. Two looks on one wall are two
+draws.
 
 ### Slabs — the floor and the ceiling
 
