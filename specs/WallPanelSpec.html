@@ -94,7 +94,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "backingDepth": 0.9,
   "hexSide": 18,
   "hexThickness": 1,
-  "hexColor": "#0a2515",
+  "hexColor": "#5a828c",
   "hexBevelWidth": 0.9,
   "hexBevelDepth": 0.5
 }/*EDITMODE-END*/;
@@ -260,12 +260,20 @@ function App() {
             t={t}
             buildModel={buildPanel}
             heightOf={tt => (tt.panelType === 'slat-panel' ? tt.slatHeightCm * 0.01 : hexClusterHeightM(tt.hexSide, HEX_LIVING_ROOM_COLUMNS, HEX_LIVING_ROOM_COLUMN_OFFSETS))}
-            // The dark-green felt (#1e3228, rgb ~22,32,27) is nearly invisible
-            // against ThreeView's default near-black background (rgb
-            // 26,26,28), making the colour hard to judge on this page. Hex
-            // mode gets a pale, off-white wall colour instead (matching the
-            // photo reference named in the plan comment above). Slat mode is
-            // unaffected (keeps the original dark viewer background).
+            // A dark-green felt is nearly invisible against ThreeView's
+            // default near-black background (rgb 26,26,28), making the
+            // colour hard to judge on this page. Hex mode gets a pale,
+            // off-white wall colour instead (matching the photo reference
+            // named in the plan comment above). Slat mode is unaffected
+            // (keeps the original dark viewer background). NOTE (round 5,
+            // 2026-09-27): the felt colour default itself is now tuned for
+            // the LIVE APP's lighting, not this page's -- this page also has
+            // an environment map (see ThreeView's own comment above) that
+            // makes the same base colour render noticeably brighter/more
+            // teal here than in the app. That is accepted, not a bug;
+            // aligning this page's lighting with the app is a separate
+            // follow-up. See wall-panels.js's HEX_CLUSTER_DEFAULTS.color for
+            // the full account of how the value was chosen.
             backgroundOf={tt => (tt.panelType === 'hex-panel-cluster' ? '#d8d3c8' : 0x1a1a1c)}
           />
         </div>

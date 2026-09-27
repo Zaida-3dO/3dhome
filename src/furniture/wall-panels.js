@@ -207,28 +207,29 @@ const HEX_CLUSTER_DEFAULTS = Object.freeze({
   columns: HEX_DEFAULT_COLUMNS,
   columnOffsets: HEX_DEFAULT_COLUMN_OFFSETS,
   thickness: 1,
-  // #1e3228 (round-2 default) rendered too bright under the spec page's
-  // lights (~rgb(51,63,55) lit) against the real panels' near-black green
-  // (review round 3, 2026-09-26). Judged empirically on the spec page
-  // under its own lights (sampled actual rendered pixels, not raw swatches):
-  // the requested #14201a-#18251e range renders to ~rgb(50,62,52) -- almost
-  // unchanged from round 2 -- because of the spec page's ENVIRONMENT MAP
-  // (round-4 correction: not the ambient light as first assumed here).
+  // TUNED FOR THE LIVE APP, NOT THE SPEC PAGE (review round 5, 2026-09-27;
+  // round 4 found #0a2515 read as pure/near-pure black in the app, so the
+  // decision was made to tune for the app instead). Earlier rounds (2-4)
+  // judged this colour on the spec page,
+  // which reads noticeably brighter than the app for the same base colour:
   // specs/spec-three.jsx installs a CubeCamera + WebGLCubeRenderTarget and
   // sets scene.environment to it, giving EVERY MeshStandardMaterial
-  // image-based lighting from the room's own (pale) background -- that IBL
-  // term adds a large near-flat floor to every channel regardless of the
-  // base colour. The live APP HAS NO ENVIRONMENT MAP, so this floor is a
-  // spec-page-only artefact; a near-black base like #050a07 crushes to
-  // ~rgb(38,38,35) on the spec page (plain black/neutral, no green left),
-  // but the same base may read differently -- possibly much closer to true
-  // black -- in the app, where nothing is adding this IBL floor. #0a2515
-  // (outside the literal suggested range, deliberately: R pushed lower and
-  // G kept relatively high to fight the spec page's IBL floor) renders to
-  // ~rgb(41,53,42) THERE -- meaningfully darker than round 2 AND still
-  // clearly green (G noticeably above both R and B). See the round-4 note
-  // on this item for how it actually reads in the app.
-  color: '#0a2515',
+  // image-based lighting from the room's own (pale) background -- an IBL
+  // term the live app does not have at all. That is why #0a2515 (chosen on
+  // the spec page in round 3) rendered to only ~rgb(1,3,1) in the app
+  // (houses/demo's lounge_hexes, main light on) -- indistinguishable from
+  // black. This value was instead tuned IN the app directly: rendered the
+  // demo house's lounge_hexes cluster with the room's real light on, sampled
+  // actual pixels (not raw swatches) at several base colours, and picked the
+  // one landing the RENDERED result in the target band (R 25-40, G 38-55,
+  // B 30-42, G clearly highest) while still reading as dark green by eye,
+  // not neutral/black. Measured in the app at #5a828c: samples across
+  // several hexes ranged ~rgb(19,33,30) to ~rgb(35,54,48), all G-dominant.
+  // The spec page inherits this same value but, per its environment map
+  // above, renders it noticeably brighter/more teal there -- accepted,
+  // round 5: the app is what this is tuned for. Aligning the spec page's
+  // own lighting with the app is a separate follow-up, not done here.
+  color: '#5a828c',
   finish: 'matte',
   // Chamfered edge (review round 3, 2026-09-26): each real panel is
   // full thickness in the centre, sloping down to a thinner rim, so two

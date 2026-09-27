@@ -177,7 +177,7 @@ const near = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
   check('hex-panel-cluster: DEFAULTS.columnOffsets shifts only column 5 (index 4) down half a hex',
     JSON.stringify(D.columnOffsets) === JSON.stringify([0, 0, 0, 0, 1, 0, 0, 0]), D.columnOffsets);
   check('hex-panel-cluster: DEFAULTS.side is 18cm', D.side === 18);
-  check('hex-panel-cluster: DEFAULTS.color is the dark green felt', D.color === '#0a2515', D.color);
+  check('hex-panel-cluster: DEFAULTS.color is the dark green felt', D.color === '#5a828c', D.color);
 
   const g = build(THREE, Object.assign({}, D), { detail: 'full' });
   const hexMeshes = [];

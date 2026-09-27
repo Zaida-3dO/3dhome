@@ -1538,8 +1538,8 @@
         },
         "color": {
           "$ref": "#/$defs/hexColor",
-          "default": "#0a2515",
-          "description": "Dark green felt. Darkened from an earlier #1e3228 (review round 3, 2026-09-26): that shade read too bright under the spec page's lights against the real panels' near-black green. Verified empirically by sampling the spec page's own rendered pixels (not the raw hex swatch): a same-order lightness reduction alone barely changed the RENDERED colour, because of the spec page's environment map (specs/spec-three.jsx installs a CubeCamera and sets scene.environment, giving every material image-based lighting from the room's own background) -- NOT the ambient light, corrected round 4. The live app has no environment map, so this floor is a spec-page-only artefact; going near-black on the spec page lost the green entirely, but the app may render this same value differently. This value keeps R low relative to G/B so the spec page's LIT result still reads clearly green rather than neutral/black."
+          "default": "#5a828c",
+          "description": "Dark green felt, tuned for the LIVE APP, not the spec page (review round 5, 2026-09-27). Earlier values (#1e3228 round 2, #0a2515 round 3-4) were judged on the spec page, which reads noticeably brighter than the app for the same base colour: specs/spec-three.jsx installs a CubeCamera and sets scene.environment, giving every material image-based lighting from the room's own background -- the live app has no such environment map. #0a2515 rendered to only ~rgb(1,3,1) in the app (houses/demo's lounge_hexes, room light on) -- indistinguishable from black. This value was tuned directly in the app: sampled actual rendered pixels at several base colours and picked the one landing in the target band (R 25-40, G 38-55, B 30-42, G clearly highest); measured ~rgb(19,33,30) to ~rgb(35,54,48) across several hexes. The spec page renders this same value noticeably brighter/more teal due to its environment map -- accepted; aligning the spec page's own lighting with the app is a separate follow-up."
         },
         "finish": {
           "$ref": "#/$defs/furnitureFinish",
