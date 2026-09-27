@@ -86,7 +86,11 @@ try {
   // ---- 1. path guard -------------------------------------------------------
   {
     ['../x.glb', '/x.glb', 'http://evil/x.glb', 'https://evil/x.glb', 'data:x.glb', 'x.gltf', 'x.js',
-      'a/../b.glb', 'a\\b.glb', '', null, 'C:/x.glb'].forEach(bad => {
+      'a/../b.glb', 'a\\b.glb', '', null, 'C:/x.glb',
+      // Percent-encoded traversal: the WHATWG URL parser decodes '%2e%2e' to
+      // '..' (case-insensitively) before collapsing dot-segments, so a
+      // literal-only '..' check is not enough on its own.
+      '%2e%2e/x.glb', '.%2e/x.glb', 'a/%2E%2E/%2e%2e/%2e%2e/x.glb'].forEach(bad => {
       check('guard refuses ' + JSON.stringify(bad), !!M.resolveModelUrl(bad, BASE).error, M.resolveModelUrl(bad, BASE));
     });
     const ok = M.resolveModelUrl(SRC, BASE);
@@ -257,6 +261,69 @@ try {
     let err = null;
     try { M.build(THREE, Object.assign({}, M.DEFAULTS, { src: 'models/slow.glb' }), { assetBase: BASE }); } catch (e) { err = e.message; }
     check('a file that never arrives times out and fails its item', !!err && /longer than 20 ms/.test(err), err);
+  }
+
+  // ---- GLB external URIs: refused before GLTFLoader ever parses -----------------
+  // A .glb is allowed (unlike .gltf) because it is meant to be self-contained,
+  // but the container's own JSON chunk can still carry buffers[].uri /
+  // images[].uri naming an external file -- relative (escaping the profile,
+  // fetched by GLTFLoader relative to the file's own directory) or an
+  // absolute https:// URL. That would quietly reopen the "a file names
+  // further files" hole the .glb-only rule exists to close.
+  {
+    // A minimal, spec-shaped GLB: 12-byte header + one JSON chunk (padded to
+    // a 4-byte boundary with ASCII spaces, per the Binary glTF spec). No BIN
+    // chunk -- these all fail before a BIN chunk would ever be read.
+    function makeGlb(json) {
+      let jsonBuf = Buffer.from(JSON.stringify(json), 'utf8');
+      const pad = (4 - (jsonBuf.length % 4)) % 4;
+      if (pad) jsonBuf = Buffer.concat([jsonBuf, Buffer.alloc(pad, 0x20)]);
+      const header = Buffer.alloc(12);
+      header.writeUInt32LE(0x46546c67, 0); header.writeUInt32LE(2, 4);
+      header.writeUInt32LE(12 + 8 + jsonBuf.length, 8);
+      const chunkHeader = Buffer.alloc(8);
+      chunkHeader.writeUInt32LE(jsonBuf.length, 0); chunkHeader.writeUInt32LE(0x4e4f534a, 4);
+      return Buffer.concat([header, chunkHeader, jsonBuf]);
+    }
+    const dir = path.join(root, BASE.replace(/\/$/, ''), 'models');
+    const write = (name, json) => fs.writeFileSync(path.join(dir, name), makeGlb(json));
+    const remove = name => { try { fs.unlinkSync(path.join(dir, name)); } catch (e) { /* already gone */ } };
+    const baseDoc = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [] }], nodes: [] };
+
+    write('external-image.glb', Object.assign({}, baseDoc, {
+      images: [{ uri: 'https://x/y.png' }],
+      buffers: [{ byteLength: 0 }]
+    }));
+    write('external-buffer.glb', Object.assign({}, baseDoc, {
+      buffers: [{ uri: '../x.bin', byteLength: 0 }]
+    }));
+    write('data-uri-ok.glb', Object.assign({}, baseDoc, {
+      // A data: URI is exactly what a self-contained .glb is meant to embed
+      // -- must NOT be refused by this guard (it may still fail to parse for
+      // other reasons; that is not what this case is testing).
+      buffers: [{ uri: 'data:application/octet-stream;base64,', byteLength: 0 }]
+    }));
+    try {
+      M.clearModelCache();
+      const r1 = await quietlyAsync(() => M.prepare([item('ext-img', { src: 'models/external-image.glb' })]));
+      let err = null;
+      try { M.build(THREE, Object.assign({}, M.DEFAULTS, { src: 'models/external-image.glb' }), { assetBase: BASE }); } catch (e) { err = e.message; }
+      check('a GLB with an external images[].uri is refused', !!err && /images\[\]\.uri/.test(err) && /external/.test(err), err);
+
+      M.clearModelCache();
+      const r2 = await quietlyAsync(() => M.prepare([item('ext-buf', { src: 'models/external-buffer.glb' })]));
+      err = null;
+      try { M.build(THREE, Object.assign({}, M.DEFAULTS, { src: 'models/external-buffer.glb' }), { assetBase: BASE }); } catch (e) { err = e.message; }
+      check('a GLB with an external buffers[].uri is refused', !!err && /buffers\[\]\.uri/.test(err) && /external/.test(err), err);
+
+      // A normal GLB (the real demo file) must still load: the guard must not
+      // false-positive on a file with no uris at all, or with only data: uris.
+      M.clearModelCache();
+      const r3 = await quietlyAsync(() => M.prepare([item('normal', { src: SRC })]));
+      check('a normal GLB (the demo file) still loads past the guard', r3.warnings.length === 0, r3.warnings);
+    } finally {
+      remove('external-image.glb'); remove('external-buffer.glb'); remove('data-uri-ok.glb');
+    }
   }
 
   // ---- 6. loadFurnitureModules awaits prepare(), never rejects -------------------

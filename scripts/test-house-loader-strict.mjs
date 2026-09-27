@@ -164,5 +164,88 @@ function check(label, cond, detail) {
         HouseLoader.isValidHouseId('ope') === true);
 }
 
+// ---------------------------------------------------------------------------
+// 6. Percent-encoded traversal in a profile's own asset paths (faceTexture,
+//    rug texture, extraOverlays, specPages). The WHATWG URL parser decodes
+//    '%2e%2e' to '..' (case-insensitively) before collapsing dot-segments,
+//    so TEXTURE_PATH_RE / OVERLAY_PATH_RE / SPEC_PATH_RE rejecting a literal
+//    '..' is not enough on its own -- each guard's use site also checks that
+//    the resolved URL still starts inside the profile directory. Every case
+//    here must be dropped with a warning, never resolved to a URL escaping
+//    "houses/demo/".
+// ---------------------------------------------------------------------------
+{
+  const BASE = {
+    kind: 'geometry', schemaVersion: '1.3', id: 'demo', name: 'Demo', units: 'cm',
+    coordinateTransform: { originX: 0, originY: 0, scale: 0.01 },
+    defaults: { wallHeight: 250, wallThickness: 10 },
+    walls: { highestIdEverAssigned: 1, segments: [{ id: 1, start: [0, 0], end: [400, 0] }] },
+    rooms: [{ id: 'r', label: 'R', polygon: [[0, 0], [400, 0], [400, 300], [0, 300]] }]
+  };
+  const compileQuiet = geo => {
+    const warnings = [];
+    const w = console.warn;
+    console.warn = (...m) => warnings.push(m.map(String).join(' '));
+    try { return { house: HouseLoader.compile(geo, 'houses/demo'), warnings }; } finally { console.warn = w; }
+  };
+
+  // faceTexture (wall)
+  for (const bad of ['%2e%2e/secret.png', 'a/%2E%2E/%2e%2e/x.png']) {
+    const geo = JSON.parse(JSON.stringify(BASE));
+    geo.walls.segments[0].faceTexture = { side: 'south', texture: { path: bad } };
+    const { house, warnings } = compileQuiet(geo);
+    check('faceTexture percent-encoded traversal refused: ' + bad,
+          Object.keys(house.wallFaceTextures || {}).length === 0 && warnings.some(w => /faceTexture path/.test(w)),
+          JSON.stringify({ wallFaceTextures: house.wallFaceTextures, warnings }));
+  }
+
+  // rug texture (room)
+  {
+    const geo = JSON.parse(JSON.stringify(BASE));
+    geo.rooms[0].rug = { texture: { path: '%2e%2e/secret.png' } };
+    const { house, warnings } = compileQuiet(geo);
+    const room = house.rooms[Object.keys(house.rooms)[0]];
+    check('rug texture percent-encoded traversal refused',
+          room.rug && room.rug.textureUrl === null && warnings.some(w => /rug texture path/.test(w)),
+          JSON.stringify({ rug: room.rug, warnings }));
+  }
+
+  // extraOverlays
+  {
+    const geo = JSON.parse(JSON.stringify(BASE));
+    geo.extraOverlays = ['%2e%2e/evil.js'];
+    const { house, warnings } = compileQuiet(geo);
+    check('extraOverlays percent-encoded traversal refused',
+          house.extraOverlays.length === 0 && warnings.some(w => /extraOverlays entry/.test(w)),
+          JSON.stringify({ extraOverlays: house.extraOverlays, warnings }));
+  }
+
+  // specPages
+  {
+    const geo = JSON.parse(JSON.stringify(BASE));
+    geo.specPages = [{ name: 'Evil', path: '%2e%2e/evil.html' }];
+    const { house, warnings } = compileQuiet(geo);
+    check('specPages percent-encoded traversal refused',
+          house.specPages.length === 0 && warnings.some(w => /specPages entry/.test(w)),
+          JSON.stringify({ specPages: house.specPages, warnings }));
+  }
+
+  // A clean profile must still compile and resolve URLs normally -- the
+  // containment check must not false-positive on an ordinary relative path.
+  {
+    const geo = JSON.parse(JSON.stringify(BASE));
+    geo.walls.segments[0].faceTexture = { side: 'south', texture: { path: 'textures/ok.png' } };
+    geo.extraOverlays = ['overlays/ok.js'];
+    geo.specPages = [{ name: 'OK', path: 'specs/ok.html' }];
+    const { house, warnings } = compileQuiet(geo);
+    check('a normal profile-relative path still resolves (no false positive)',
+          warnings.length === 0 &&
+          house.wallFaceTextures[1].url === 'houses/demo/textures/ok.png' &&
+          house.extraOverlays[0].url === 'houses/demo/overlays/ok.js' &&
+          house.specPages[0].url === 'houses/demo/specs/ok.html',
+          JSON.stringify({ warnings, wallFaceTextures: house.wallFaceTextures, extraOverlays: house.extraOverlays, specPages: house.specPages }));
+  }
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);
