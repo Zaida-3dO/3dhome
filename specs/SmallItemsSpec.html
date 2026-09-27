@@ -433,7 +433,8 @@ function SmallItemObject({ type }) {
           {type === 'photo-frame' && (
             <div id="photoPreview">
               <div className="row">
-                <label className="btn">
+                <label className="btn" tabIndex={0} role="button"
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); document.getElementById('photoFile').click(); } }}>
                   Preview an image…
                   <input id="photoFile" type="file" accept="image/*" style={{ display: 'none' }} onChange={pickPhoto} />
                 </label>
