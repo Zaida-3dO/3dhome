@@ -119,6 +119,19 @@ function importAliases(moduleSrc) {
  * contents are copied through unchanged (recursively, so a nested string or
  * backtick inside the interpolation is itself handled correctly) while only
  * the literal text around them is blanked.
+ *
+ * Round-5 (item b5a00233, optional low): also treat `=>` (an arrow
+ * function's own body position, e.g. `onChange={v => 'x'}`) and the `case`
+ * keyword (a switch-case value, e.g. `case 'x':`) as operand boundaries --
+ * both shapes that can legitimately precede a real string literal in this
+ * codebase's arrow-heavy callback style, and neither currently in
+ * OPERAND_BOUNDARY. Deliberately NOT adding bare `<`/`>` for "comparison
+ * operators": a JSX tag closer is also a bare `>` (`<div className="legend">The
+ * module's own origin...`, RadiatorSpec.html's own real text), so treating
+ * `>` as an operand boundary would reopen exactly the false positive this
+ * round-4 fix eliminated. The safe subset added here is the two-or-more
+ * character comparison operators (`===`, `!==`, `==`, `!=`, `<=`, `>=`),
+ * which cannot be confused with a JSX tag delimiter.
  */
 function stripCommentsAndStrings(src) {
   // Characters after which a `'`/`"` is judged to OPEN a string (an
@@ -127,6 +140,13 @@ function stripCommentsAndStrings(src) {
   // always the start of a statement/expression, never trailing JSX text.
   const OPERAND_BOUNDARY = new Set(['(', ',', '=', ':', '[', '{', '?', '!', '&', '|', '+', ';', '\n', undefined]);
   const RETURN_RE = /(?:^|[^\w$])return\s*$/;
+  const ARROW_RE = /=>\s*$/;
+  const CASE_RE = /(?:^|[^\w$])case\s*$/;
+  // Multi-char comparison operators only -- bare `<`/`>` are deliberately
+  // excluded (see the doc comment above: a JSX tag closer is also a bare
+  // `>`, right before real JSX text like RadiatorSpec.html's own
+  // `<div className="legend">The module's own origin...`).
+  const COMPARISON_RE = /(?:===|!==|==|!=|<=|>=)\s*$/;
 
   /** The last non-space character appended to `out` so far, or undefined at the very start. */
   function lastNonSpace(out) {
@@ -140,9 +160,12 @@ function stripCommentsAndStrings(src) {
   function quoteOpensString(out) {
     const prev = lastNonSpace(out);
     if (OPERAND_BOUNDARY.has(prev)) return true;
-    // Look back over `out` (skipping trailing whitespace) for a `return` keyword.
+    // Look back over `out` (skipping trailing whitespace) for a `return`
+    // keyword, an arrow `=>`, a `case` keyword, or a multi-char comparison
+    // operator -- all operand-position boundaries the single-character
+    // lastNonSpace() check above cannot express.
     const tail = out.slice(Math.max(0, out.length - 200));
-    return RETURN_RE.test(tail);
+    return RETURN_RE.test(tail) || ARROW_RE.test(tail) || CASE_RE.test(tail) || COMPARISON_RE.test(tail);
   }
 
   /**
@@ -471,21 +494,118 @@ function templateInterpolation() {
   const templateInterpolationCaught = templateFailedNames.length === 1 && templateFailedNames[0].includes('templateInterpolation()');
   check('self-test: templateInterpolation() -- a bare reference inside a `${...}` interpolation is still visible to the guard and caught (interpolation contents are not blanked)',
     templateInterpolationCaught, { templateFailedNames, totalChecksRun: seen2.length });
+
+  // Round-5 (item b5a00233, optional low) fixture: a real string literal
+  // preceded by `=>` (an arrow function's own expression body) or `case`
+  // (a switch-case value) must still be recognised and stripped, THE SAME
+  // WAY stringRef() above proves it for a plain assignment. BEFORE this
+  // round-5 change, neither `=>` nor `case` was in the operand boundary
+  // set, so `v => "x"` / `case "x":` wrongly left their string content
+  // LIVE -- and a WallClock-shaped mention inside one of those strings
+  // would then be misread as a real bare reference and wrongly FLAG a
+  // function that has no real bug at all (a false positive, the same
+  // failure mode as the pre-round-4 stringRef() case). Neither function
+  // below has any OTHER reference to WallClock, so each must PASS if (and
+  // only if) its string is correctly stripped.
+  const operatorFixture = `
+<script type="module">
+  import * as WallClock from '../src/furniture/wall-clock.js';
+  window.__wallClock = WallClock;
+</script>
+<script type="text/babel">
+function arrowStringRef() {
+  const onChange = v => "a string mentioning WallClock.build, not code";
+  return onChange;
+}
+function caseStringRef(mode) {
+  switch (mode) {
+    case "a string mentioning WallClock.build, not code":
+      return 1;
+    default:
+      return 2;
+  }
+}
+</script>`;
+  const seen3 = [];
+  const realCheck3 = check;
+  check = (name, cond, detail) => { seen3.push({ name, cond, detail }); }; // eslint-disable-line no-func-assign
+  try {
+    checkSpecHtml('operator-fixture', operatorFixture);
+  } finally {
+    check = realCheck3; // eslint-disable-line no-func-assign
+  }
+  const operatorFailedNames = seen3.filter(s => !s.cond).map(s => s.name);
+  // Neither function has a real bare reference to WallClock -- both must
+  // PASS (zero failures). If `=>`/`case` were missing from the operand
+  // boundary set, the string's own "WallClock.build" text would be read as
+  // a real reference and one or both would wrongly FAIL here.
+  check('self-test: a string literal after `=>` or `case` is correctly recognised as a real string (not JSX text) and stripped -- no false-positive flag on a function with no real reference',
+    operatorFailedNames.length === 0, { operatorFailedNames, totalChecksRun: seen3.length });
 }
 
 // ---- Self-test: injection probe (item b5a00233 acceptance) ------------------------
 //      For every REAL spec page with a namespace alias, inject the exact bug
-//      shape from the ClockSpec incident -- `function zzProbe() { return
-//      <alias>.zzProbe; }` -- at the end of its Babel block, and assert the
-//      guard catches it there. This is what actually proves the stripper fix:
-//      a page with a JSX-apostrophe or template-literal shape near the
-//      injection point (RadiatorSpec.html, BathroomFittingsSpec.html) must
-//      still flag the probe, not have it swallowed by a false string.
-//      KitchenSpec.html is exempt: it declares `const K` at its Babel
-//      script's own top level (Pattern 1), so EVERY function in that file,
-//      including an injected zzProbe, legitimately closes over it.
+//      shape from the ClockSpec incident and assert the guard catches it.
+//      Two injection SHAPES, not one:
+//
+//      Shape A -- APPEND a brand-new `function zzProbe() { return
+//      <alias>.zzProbe; }` at the end of the Babel block. This proves the
+//      guard catches a new top-level function added after everything else.
+//
+//      Shape B (round-5, item b5a00233's actual acceptance) -- insert a bare
+//      `<alias>.zzProbe;` statement just BEFORE the closing brace of the
+//      LAST top-level function in the block (on this codebase's pages, that
+//      is always `App()`). Shape A alone cannot pin the bug the round-4
+//      review found: RadiatorSpec.html and BathroomFittingsSpec.html's own
+//      misses were 53 lines INSIDE App()'s existing body (line 342 and
+//      368-419 of RadiatorSpec's Babel block, including the line just before
+//      App's own closing brace) -- a false string opened by a JSX apostrophe
+//      earlier in App() blanked real code ahead of the probe location, and a
+//      probe appended in a brand-new function after App() never exercises
+//      that blanked span at all. Inserting the probe statement immediately
+//      before App's closing brace instead means: if the stripper has
+//      silently blanked anything between an earlier JSX apostrophe/template
+//      literal and the end of App(), the probe statement itself falls inside
+//      that blanked run and disappears too, so the guard sees no reference
+//      and wrongly passes -- which is exactly the miss this pins.
+//
+//      KitchenSpec.html is exempt from both shapes: it declares `const K` at
+//      its Babel script's own top level (Pattern 1), so EVERY function in
+//      that file, including an injected probe, legitimately closes over it.
 {
   const KITCHEN_EXEMPT = new Set(['KitchenSpec.html']);
+
+  /**
+   * Find the raw (unstripped) offset of the LAST top-level
+   * `function NAME(...) {`...`}`'s own closing brace in `babelSrc`, by
+   * brace-counting from its last column-0 `function` declaration -- the
+   * same convention topLevelFunctionBodies relies on. Operates on the RAW
+   * block text (not the comment/string-stripped copy) so the returned
+   * offset can be used directly to splice the original source; a `{`/`}`
+   * inside a real string or comment could miscount, but every spec page's
+   * own top-level functions in this codebase close with a `}` at column 0,
+   * so a mismatched count here would show up immediately as a wrong probe
+   * placement rather than silently -- acceptable for a self-test fixture
+   * over this repo's own known-shape files. Returns
+   * { closeIdx, name, params, body } or null if no top-level function is
+   * found in this block at all.
+   */
+  function lastTopLevelFunctionCloseBrace(babelSrc) {
+    const startRe = /^function\s+(\w+)\s*\(([^)]*)\)\s*\{/gm;
+    let m, last = null;
+    while ((m = startRe.exec(babelSrc))) last = m;
+    if (!last) return null;
+    let depth = 1;
+    let start = last.index + last[0].length;
+    let i = start;
+    while (i < babelSrc.length && depth > 0) {
+      if (babelSrc[i] === '{') depth++;
+      else if (babelSrc[i] === '}') { depth--; if (depth === 0) return { closeIdx: i, name: last[1], params: last[2], body: babelSrc.slice(start, i) }; }
+      i++;
+    }
+    return null;
+  }
+
   files.forEach(file => {
     const html = fs.readFileSync(path.join(specDir, file), 'utf8');
     const moduleBlocks = moduleScriptBlocks(html);
@@ -495,16 +615,12 @@ function templateInterpolation() {
     moduleBlocks.forEach(src => importAliases(src).forEach(n => aliases.add(n)));
     if (!aliases.size) return;
 
-    aliases.forEach(alias => {
-      // Inject the probe at the end of the LAST babel block (matches how a
-      // real change would append a new function to the page's own script).
-      const probe = `\nfunction zzProbe() { return ${alias}.zzProbe; }\n`;
-      const injectedBlocks = babelBlocks.slice();
-      injectedBlocks[injectedBlocks.length - 1] = injectedBlocks[injectedBlocks.length - 1] + probe;
-      const injectedHtml = html.replace(
-        babelBlocks[babelBlocks.length - 1],
-        injectedBlocks[injectedBlocks.length - 1]
-      );
+    const lastBabelBlock = babelBlocks[babelBlocks.length - 1];
+
+    // Shape A always appends to the LAST babel block, matching how a real
+    // change would add a new top-level function to the page's own script.
+    function runProbe(shapeLabel, targetBlock, injectedBlock, alias, targetFnName) {
+      const injectedHtml = html.replace(targetBlock, injectedBlock);
 
       const seen = [];
       const realCheck = check;
@@ -514,14 +630,63 @@ function templateInterpolation() {
       } finally {
         check = realCheck; // eslint-disable-line no-func-assign
       }
-      const zzProbeFailed = seen.some(s => !s.cond && s.name.includes('zzProbe()') && s.name.includes('"' + alias + '"'));
+      const zzProbeFailed = seen.some(s => !s.cond && s.name.includes(targetFnName + '()') && s.name.includes('"' + alias + '"'));
       if (KITCHEN_EXEMPT.has(file)) {
-        check('injection probe: ' + file + ' -- zzProbe referencing "' + alias + '" is legitimately NOT flagged (top-level redeclaration exempts the whole file)',
+        check('injection probe (' + shapeLabel + '): ' + file + ' -- zzProbe referencing "' + alias + '" is legitimately NOT flagged (top-level redeclaration exempts the whole file)',
           !zzProbeFailed, { file, alias, seenNames: seen.map(s => s.name) });
       } else {
-        check('injection probe: ' + file + ' -- injecting `function zzProbe() { return ' + alias + '.zzProbe; }` is caught by the guard',
+        check('injection probe (' + shapeLabel + '): ' + file + ' -- injecting a bare "' + alias + '.zzProbe" reference is caught by the guard',
           zzProbeFailed, { file, alias, seenNames: seen.map(s => s.name) });
       }
+    }
+
+    // Shape B target: the LAST top-level function found by scanning babel
+    // blocks from the end -- NOT necessarily the last block itself. Some
+    // pages (SmallItemsSpec.html) end with a final babel block that is pure
+    // top-level statements (no `function` declaration at all, e.g. a render
+    // call), so the last block containing an actual top-level function can
+    // be an earlier one.
+    let shapeBTarget = null; // { block, fn: { closeIdx, name, body } }
+    for (let bi = babelBlocks.length - 1; bi >= 0; bi--) {
+      const fn = lastTopLevelFunctionCloseBrace(babelBlocks[bi]);
+      if (fn) { shapeBTarget = { block: babelBlocks[bi], fn }; break; }
+    }
+
+    aliases.forEach(alias => {
+      // Shape A: append a brand-new function at the end of the Babel block.
+      const appendProbe = `\nfunction zzProbe() { return ${alias}.zzProbe; }\n`;
+      runProbe('append new function', lastBabelBlock, lastBabelBlock + appendProbe, alias, 'zzProbe');
+
+      // Shape B: insert a bare reference statement just before the LAST
+      // top-level function's own closing brace (i.e. inside App()'s
+      // existing body on every real page here), so a stripper that has
+      // blanked real code earlier in that function -- the actual
+      // RadiatorSpec/BathroomFittingsSpec miss -- is pinned. Skipped only if
+      // no top-level function was found in ANY babel block on the page.
+      if (shapeBTarget === null) {
+        check('injection probe (inside last function, before its closing brace): ' + file + ' -- found a top-level function to inject into',
+          false, { file, note: 'no top-level function() declaration found in any babel block -- cannot run shape B' });
+        return;
+      }
+      const { block, fn } = shapeBTarget;
+      // A function that already has its OWN local redeclaration of this
+      // alias (Pattern 2 -- e.g. ModelSpec.html's App() has its own
+      // `const M = window.FurnitureModel;`) or a parameter shadowing it
+      // (Pattern 3) legitimately closes over a LOCAL M, not the module-scope
+      // alias -- a bare reference anywhere in that function's body,
+      // including right before its closing brace, is correctly never
+      // flagged, the same as KitchenSpec's top-level-redeclaration
+      // exemption. Skip shape B for this (file, alias) pair rather than
+      // asserting a catch that would never legitimately happen.
+      const locallyShadowed = hasLocalRedeclaration(fn.body, alias) || hasParamShadow(fn.params, alias);
+      if (locallyShadowed) {
+        check('injection probe (inside ' + fn.name + '(), before its closing brace): ' + file + ' -- zzProbe referencing "' + alias + '" is legitimately NOT flagged (' + fn.name + '() has its own local redeclaration/param shadow)',
+          true, { file, alias, fn: fn.name });
+        return;
+      }
+      const insideProbe = `\n  void ${alias}.zzProbe;\n`;
+      const injected = block.slice(0, fn.closeIdx) + insideProbe + block.slice(fn.closeIdx);
+      runProbe('inside ' + fn.name + '(), before its closing brace', block, injected, alias, fn.name);
     });
   });
 }

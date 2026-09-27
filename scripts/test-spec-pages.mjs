@@ -348,7 +348,11 @@ tableCheck('radiator', RAD.PRESETS.map(p => ({ id: p.name, params: p.params })),
 // node_modules, no bundler) and is judged out of scope to add for this one
 // widening, so those tables stay hand-rebuilt below as before -- reported
 // here rather than silently left as-is.
-check('spec-variants real-table cross-check: gaming chair/plant/cabinet/dining/clock/kitchen variants stay hand-rebuilt (SKIPPED extracting their own inline builders -- would require a real/headless browser render, which this repo does not have)', true);
+// Not a check() -- there is no pass/fail condition here, only a note that
+// these six pages' own variants builders are not cross-checked (see the
+// comment above). A `check(..., true)` here would always pass and inflate
+// the pass count with a tautology; log it instead.
+console.log('SKIP spec-variants real-table cross-check: gaming chair/plant/cabinet/dining/clock/kitchen variants stay hand-rebuilt (extracting their own inline builders would require a real/headless browser render, which this repo does not have)');
 // Gaming chair colourways.
 const GC = await imp('src/furniture/gaming-chair.js');
 tableCheck('gaming chair', Object.keys(GC.PRESETS).map(id => ({ id, params: { primaryColor: GC.PRESETS[id].primaryColor } })),
