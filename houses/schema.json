@@ -910,7 +910,7 @@
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 110,
+          "default": 125,
           "description": "cm, slab bottom to the top of the rail."
         },
         "slabThickness": {

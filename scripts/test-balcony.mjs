@@ -208,6 +208,10 @@ function frontMaxGap(g) {
   for (const [tag, p] of [['bars', {}], ['glass', { railing: 'glass' }]]) {
     const tf = triangles(B.build(THREE, p, { detail: 'full' }));
     const tl = triangles(B.build(THREE, p, { detail: 'low' }));
+    // PERF-BUDGET AMENDMENT: 1500 / 450 is above the furniture audit's
+    // 600 / 200 default for an unlisted type, on purpose -- a balcony is
+    // architecture, there is one per house, and ~78 balusters are what a
+    // bar railing is. Recorded in plan ad7a5b22 / review c69e6c5d.
     // Mutation: BAR drawn as a 12-segment cylinder, or low keeping all bars -> fails.
     check(tag + ': full <= 1500 triangles', tf <= 1500, tf);
     check(tag + ': low <= 450 triangles', tl <= 450, tl);

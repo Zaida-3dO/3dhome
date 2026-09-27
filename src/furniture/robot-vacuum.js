@@ -32,9 +32,12 @@
  * min(robotDiameter, width, depth), the tower to min(towerWidth, width) x
  * min(towerDepth, depth), the robot's height to what fits above the plate.
  *
- * CREDIT: Proportions recreated (not copied: no mesh data) from a CC-BY-4.0
- * Sketchfab robot-vacuum model by eltayerkebulan, Sketchfab model id
- * 47a9b14156cc4f48b2e9113b58c288ad.
+ * CREDIT: Proportions recreated (not copied: no mesh data) from a
+ * robot-vacuum model by eltayerkebulan on Sketchfab,
+ * https://sketchfab.com/models/47a9b14156cc4f48b2e9113b58c288ad, licensed
+ * CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Changes: the
+ * mesh was not used; this builder re-creates the overall proportions from
+ * simple primitives.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 

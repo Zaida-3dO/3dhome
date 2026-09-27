@@ -43,7 +43,7 @@ export const TYPE = 'balcony';
 export const DEFAULTS = Object.freeze({
   width: 547,              // along the facade
   depth: 155,              // building face to the front of the railing
-  height: 110,             // slab bottom to rail top
+  height: 125,             // slab bottom to rail top (a 15 slab + a ~110 guard)
   slabThickness: 15,
   railingThickness: 5,     // top rail / post section, cm
   railing: 'bars',         // 'bars' | 'glass'
