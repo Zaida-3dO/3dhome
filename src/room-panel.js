@@ -262,6 +262,53 @@ export function climateRowHtml(reading, offline) {
  *                           the lock. A second gate behind the disabled DOM.
  */
 /**
+ * The light channels rooms.json BINDS per room: roomId -> [channel], for
+ * Home3DScene.create's `boundChannels`. A channel with no entities is not a
+ * binding. `rooms` null (no rooms.json) -> {}.
+ */
+export function boundLightChannels(rooms) {
+  const out = {};
+  Object.entries(rooms || {}).forEach(([rid, groups]) => {
+    const chans = Object.entries(groups || {})
+      .filter(([, ents]) => Array.isArray(ents) && ents.length > 0)
+      .map(([ch]) => ch);
+    if (chans.length) out[rid] = chans;
+  });
+  return out;
+}
+
+/**
+ * Does a room get its (single) Ambient row?
+ *
+ * The row is the switch for the room's ambient BINDING, so it comes from
+ * rooms.json: shown exactly when the room binds `ambient` to at least one
+ * entity -- whether or not geometry draws any ambient fixture (an office
+ * whose ambient light is a cornice and desk strips has none). Only when
+ * there is no rooms.json at all (a bare demo with nothing to bind) does it
+ * fall back to the geometry channel, so the 3D ambient strips can still be
+ * switched locally.
+ *
+ * @param {?Object} rooms        rooms.json `rooms` (null when absent)
+ * @param {string}  roomId
+ * @param {boolean} hasGeometryChannel  the scene has an ambient channel for it
+ */
+export function hasAmbientRow(rooms, roomId, hasGeometryChannel) {
+  if (!rooms) return !!hasGeometryChannel;
+  const ents = rooms[roomId] && rooms[roomId].ambient;
+  return Array.isArray(ents) && ents.length > 0;
+}
+
+/**
+ * The Ambient row's label: the geometry channel's own name when geometry
+ * draws one, else "<Room> Ambience" -- a room whose ambient light is only a
+ * cornice and a desk strip has no fixture to take a name from.
+ */
+export function ambientRowLabel(lightGroup, roomName) {
+  if (lightGroup && lightGroup.name) return lightGroup.name;
+  return (roomName ? roomName + ' ' : '') + 'Ambience';
+}
+
+/**
  * Curtain SLIDER value -> command, refusing while the curtain is not
  * confirmed available -- the same rule the Open / Close buttons follow.
  * `coverPositionCommand` is HAClient.coverPositionCommand, injected so this
@@ -345,4 +392,52 @@ export function createDragSender({ build, dispatch, cancel, onRelease, writable,
       return cmd;
     }
   };
+}
+
+/** A light fixture mounted lower than this (cm) is on the floor. */
+export const FLOOR_LEVEL_MAX_CM = 50;
+
+/**
+ * A room's accent light, counted from the two profile files as authored (no
+ * WebGL) -- what a test, a reviewer or a private-house check can count.
+ *
+ *   emitters      [{ kind: 'channel'|'cornice', id, entities }] -- one per
+ *                 non-main light channel the room draws (a 'projector' draws
+ *                 nothing and is skipped) and one per lit cornice. `entities`
+ *                 is what it follows: its rooms.json channel binding, or the
+ *                 cornice's corniceLights entry.
+ *   floorFixtures non-main fixture positions below FLOOR_LEVEL_MAX_CM
+ *   ambientRows   how many Ambient rows the sidebar shows (0 or 1)
+ *
+ * @param {Object} geometry  geometry.json as parsed
+ * @param {?Object} roomsDoc rooms.json as parsed (null when absent)
+ * @param {string} roomId
+ */
+export function roomAccentSummary(geometry, roomsDoc, roomId) {
+  const g = geometry || {};
+  const rooms = roomsDoc && roomsDoc.rooms ? roomsDoc.rooms : null;
+  const sensors = (roomsDoc && roomsDoc.sensors) || {};
+  const bound = (rooms && rooms[roomId]) || {};
+  const emitters = [], floorFixtures = [];
+  let hasGeometryAmbient = false;
+  (g.lights || []).filter(l => l.room === roomId).forEach(l => {
+    (l.fixtures || []).forEach(f => {
+      if (f.channel === 'main') return;
+      if (f.channel === 'ambient') hasGeometryAmbient = true;
+      (f.positions || []).forEach((pos, i) => {
+        if (pos.heightCm != null && pos.heightCm < FLOOR_LEVEL_MAX_CM) {
+          floorFixtures.push({ channel: f.channel, id: pos.label || f.channel + '#' + i, heightCm: pos.heightCm });
+        }
+      });
+      if (f.fixtureType === 'projector') return;
+      emitters.push({ kind: 'channel', id: f.channel, entities: (bound[f.channel] || []).slice() });
+    });
+  });
+  (g.curtains || []).filter(c => c.room === roomId).forEach(c => {
+    // house-loader's rule: an absent `cornice` is a default cornice, lit.
+    const cn = c.cornice || {};
+    if (cn.enabled === false || cn.light === false) return;
+    emitters.push({ kind: 'cornice', id: c.id, entities: ((sensors.corniceLights || {})[c.id] || []).slice() });
+  });
+  return { emitters, floorFixtures, ambientRows: hasAmbientRow(rooms, roomId, hasGeometryAmbient) ? 1 : 0 };
 }

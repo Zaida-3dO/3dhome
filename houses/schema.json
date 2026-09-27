@@ -2820,6 +2820,24 @@
           "enum": ["left", "right"],
           "default": "right",
           "description": "Which side of the front edge the control panel sits on, as seen by a person standing at the front of the desk facing it. Its outer edge sits 4cm in from the desk's side edge on that side."
+        },
+        "ledStrip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Draw an LED strip tucked under the desktop's edge (one continuous run along `ledSides`). Emissive only and static: a preview of the look. A desk strip that follows a Home Assistant light is a room light fixture on its own channel instead (docs/house-profile.md)."
+        },
+        "ledColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#ff9a45",
+          "description": "The strip's colour."
+        },
+        "ledSides": {
+          "type": "array",
+          "items": { "enum": ["left", "front", "right", "back"] },
+          "uniqueItems": true,
+          "minItems": 1,
+          "default": ["left", "front", "right"],
+          "description": "Which edges the strip runs along, as seen from the front of the desk. Default: down the left, across the front, up the right."
         }
       },
       "additionalProperties": false

@@ -320,7 +320,7 @@ await quiet(async () => {
   check('room rows get the offline flag', /curtainRowHtml\(cu, pct, curtainIsAvailable\(cu\.id\), offline\)/.test(html)
     && /climateRowHtml\(climateReading\.get\(rid\) \|\| null, offline\)/.test(html)
     && /mainLightRowHtml\(s\.main, offline\)/.test(html) && /galaxyRowHtml\(s\.galaxy, offline\)/.test(html)
-    && /ambientRowHtml\(s\.ambient, lc\.ambient\.name, stripInfoHtml\(lc\.ambient\), offline\)/.test(html));
+    && /ambientRowHtml\(s\.ambient, ambientRowLabel\(lc\.ambient, rm && rm\.name\), stripInfoHtml\(lc\.ambient\), offline\)/.test(html));
   check('offline note is the first room row', /if \(haOffline\(ha\)\) keys\.push\('ha-offline'\);\s*if \(s\.main\)/.test(html));
 }
 

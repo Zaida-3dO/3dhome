@@ -966,6 +966,37 @@ that channel in `geometry.json`, so each light is drawn and driven exactly once.
 `curtains` and `corniceLights` need `schemaVersion` `"1.2"`: an engine older
 than that rejects the unknown keys, so upgrade the engine before the profile.
 
+#### A desk strip (or any accent light on its own entity)
+
+Draw it as a room light fixture on its **own named channel**, and bind that
+channel to the strip's own entity in `rooms`, exactly like `main` and
+`ambient`:
+
+```json
+// geometry.json, lights[] for the room
+{ "channel": "desk_strip", "label": "Desk strip", "fixtureType": "strip",
+  "positions": [
+    { "at": [240, 115], "heightCm": 71.5, "size": [78.8, 1, 1.2], "label": "desk left" },
+    { "at": [200, 175], "heightCm": 71.5, "size": [1.2, 1, 120],  "label": "desk front" },
+    { "at": [240, 235], "heightCm": 71.5, "size": [78.8, 1, 1.2], "label": "desk right" }
+  ] }
+// rooms.json
+"study": { "main": ["light.example_study"], "ambient": ["light.example_study_ambience"],
+           "desk_strip": ["light.example_desk_strip"] }
+```
+
+A strip's `size` is `[x, y, z]` in cm along the plan axes (x east, y south), and
+`heightCm` is the strip's CENTRE -- put it half its height below the desktop's
+underside. A named channel follows its entity's on/off, brightness and colour,
+and it gets **no sidebar row**: the room's one Ambient row still switches the
+room's `ambient` group (which in Home Assistant may well contain the strip).
+Like every accent channel it is dropped on the low GPU tier.
+
+The Ambient row comes from the room's `rooms.<id>.ambient` binding, not from a
+geometry fixture, so a room whose ambient light is only a lit cornice and a desk
+strip needs no `ambient` fixture at all -- and should not have one: a fixture
+with no `positions` is auto-placed in the room.
+
 #### Climate
 
 ```json

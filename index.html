@@ -735,7 +735,8 @@
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
-             haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml }
+             haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml,
+             boundLightChannels, hasAmbientRow, ambientRowLabel }
                               from './src/room-panel.js?v=__VERSION__';
     // Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
     // Shift+D, or the Settings sidebar "Wall numbers" switch).
@@ -1244,6 +1245,10 @@
         // Populated above from sensors.doors, outside the cfg.enabled branch,
         // so this is correct even when HA is configured off.
         sensorBoundDoorIds: doorSensorIds,
+        // Every light channel rooms.json binds gets a light state (and so an
+        // HA state target, and for 'ambient' its sidebar row) even when
+        // geometry draws no fixture for it.
+        boundChannels: boundLightChannels(rooms),
         interactive: !isPreview,
         autoRotate: isPreview,
         rotateSpeed: rotateSpeed,
@@ -1335,6 +1340,12 @@
         // Pin the sun ('morning'|'noon'|'night'|'auto') so daylight can be
         // checked at any wall-clock time -- same as the Settings sun buttons.
         sunMode: mode => home.setSunMode(mode),
+        // A room light channel's HA reading, through the same handler the
+        // live onStateChange uses -- e.g. a desk strip on its own entity:
+        //   __home3dSensors.light('study', 'desk_strip', true, 60, '#00ff66')
+        light: (roomId, channel, on, bri, color) =>
+          applyLightReading(roomId, channel, { on: !!on, bri: bri != null ? bri : 100, color: color || undefined }),
+        getLight: (roomId, channel) => (home.lightState[roomId] || {})[channel] || null,
         frameCount: () => home.getFrameCount(),
         footstepDebug: roomId => home.getFootstepDebug(roomId),
         // Per-outer-wall fade state. The only way to check which walls faded:
@@ -1866,19 +1877,26 @@
           if (selectedRoom && panelReady) renderPanel();
         });
 
-        ha.onStateChange((roomId, group, state) => {
+        ha.onStateChange((roomId, group, state) => applyLightReading(roomId, group, state));
+      }
+      // HA light reading -> the room's light state (and its row). Shared by
+      // the live onStateChange and the ?debug=1 seam below.
+      function applyLightReading(roomId, group, state) {
           const ls = home.lightState[roomId];
           if (!ls || !ls[group]) return;
           ls[group].on = state.on;
           if (state.bri !== undefined) ls[group].bri = state.bri;
           if (state.temp !== undefined && group === 'main') ls[group].temp = state.temp;
-          if (state.color !== undefined && group === 'ambient') ls[group].color = state.color;
+          // Colour follows HA for every accent channel (ambient, or a named
+          // one such as a desk strip on its own entity); main uses temp.
+          if (state.color !== undefined && group !== 'main') ls[group].color = state.color;
           home.updateLights();
           // Repaint only what shows this light: its own row when its room is
           // open, or the room list (whose dots summarise every room's lights).
           if (selectedRoom === roomId) refreshRoomRow(group);
           else if (!selectedRoom && panelView === 'controls') renderPanel();
-        });
+      }
+      if (ha) {
 
         // Presence -> footsteps on that room's floor. The client fires this
         // ONLY when the OR-ed occupancy boolean actually changes, never on an
@@ -2253,7 +2271,10 @@
         const keys = [];
         if (haOffline(ha)) keys.push('ha-offline');
         if (s.main) keys.push('main');
-        if (s.ambient) keys.push('ambient');
+        // The Ambient row follows the room's rooms.json ambient BINDING, not
+        // whether geometry happens to draw an ambient fixture (hasAmbientRow).
+        // Any other named channel (a desk strip, say) never gets a row.
+        if (s.ambient && hasAmbientRow(rooms, rid, true)) keys.push('ambient');
         if (s.galaxy) keys.push('galaxy');
         (roomDoorRows[rid] || []).forEach(d => keys.push('door:' + d.id));
         if (roomHasMotion(rid)) keys.push('motion');
@@ -2266,13 +2287,14 @@
 
       function roomRowHtml(key, rid) {
         const s = home.lightState[rid];
-        const lc = Home3DScene.LIGHTS[rid];
+        const lc = Home3DScene.LIGHTS[rid] || {};
+        const rm = Home3DScene.ROOMS[rid];
         const offline = haOffline(ha);
         if (key === 'ha-offline') return haOfflineRowHtml();
         if (key === 'main') return mainLightRowHtml(s.main, offline);
         // Exactly ONE ambience switch per room: the room's single ambient
         // group, never a switch per fixture.
-        if (key === 'ambient') return ambientRowHtml(s.ambient, lc.ambient.name, stripInfoHtml(lc.ambient), offline);
+        if (key === 'ambient') return ambientRowHtml(s.ambient, ambientRowLabel(lc.ambient, rm && rm.name), stripInfoHtml(lc.ambient), offline);
         if (key === 'galaxy') return galaxyRowHtml(s.galaxy, offline);
         if (key.startsWith('door:')) {
           const doors = roomDoorRows[rid] || [];

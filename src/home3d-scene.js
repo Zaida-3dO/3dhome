@@ -3116,6 +3116,12 @@ export const Home3DScene = (() => {
    * @param {Function} opts.onRoomClick - callback(roomId) when a room is clicked
    * @param {boolean} opts.furniture   - false = build no furniture until
    *          setFurnitureVisible(true) (the page's ?furniture=0). Default true.
+   * @param {Object}  opts.boundChannels - roomId -> [channel]: the light
+   *          channels the house's rooms.json BINDS for each room. Each gets a
+   *          lightState entry even when geometry draws no fixture for it, so
+   *          a room's switch and its HA state do not depend on a fixture
+   *          existing (an office whose only ambient light is a cornice and a
+   *          desk strip still has its Ambient channel).
    * @returns {Object|Promise<Object>} the instance, or a Promise of it when
    *          `houseId` was given.
    */
@@ -3979,10 +3985,15 @@ export const Home3DScene = (() => {
     // the controls panel and syncLights() can address every room uniformly.
     const ids = Object.keys(ROOMS);
     const lightState = {};
+    const boundChannels = opts.boundChannels || {};
     ids.forEach(id => {
       const groups = LIGHTS[id] || {};
       lightState[id] = { main: { on: false, bri: 100, temp: 4000 } };
-      Object.keys(groups).forEach(channel => {
+      const channels = Object.keys(groups);
+      (Array.isArray(boundChannels[id]) ? boundChannels[id] : []).forEach(ch => {
+        if (typeof ch === 'string' && channels.indexOf(ch) === -1) channels.push(ch);
+      });
+      channels.forEach(channel => {
         if (channel === 'main') return;
         // Accent channels default to a warm accent colour and a lower brightness;
         // that is a display default, not a fact about the house.

@@ -623,6 +623,16 @@ export const HAClient = (() => {
         }
       } else if (group === 'galaxy') {
         result.bri = (attrs.brightness != null) ? Math.round(attrs.brightness / 2.55) : (on ? 50 : 0);
+      } else {
+        // Any other named channel (a desk strip on its own entity, say) is an
+        // accent light like 'ambient': it follows brightness AND colour. Only
+        // on/off before, so a coloured strip on its own entity could not
+        // show its colour. With no rgb_color the colour is left as it was.
+        result.bri = (attrs.brightness != null) ? Math.round(attrs.brightness / 2.55) : (on ? 100 : 0);
+        if (attrs.rgb_color && Array.isArray(attrs.rgb_color)) {
+          const [r, g, b] = attrs.rgb_color;
+          result.color = '#' + [r, g, b].map(c => (c | 0).toString(16).padStart(2, '0')).join('');
+        }
       }
 
       return result;
@@ -929,6 +939,12 @@ export const HAClient = (() => {
       // the climate callback fired.
       _injectClimateState(entityId, haState) {
         return processClimateUpdate(entityId, haState);
+      },
+      // Same seam for a room LIGHT entity (rooms.json rooms.<id>.<channel>):
+      // full HA state object in; the onStateChange callbacks fire exactly as
+      // they would for a live update (echo suppression bypassed).
+      _injectLightState(entityId, haState) {
+        processStateUpdate(entityId, haState, true);
       },
       callService,
       callServiceDebounced,

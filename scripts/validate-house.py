@@ -884,7 +884,8 @@ def check_rooms_binding(rooms_doc, geo, report):
                 report.warn(
                     f"rooms.json/rooms/{rid}/{ch}",
                     "entities bound to a channel with no fixtures in geometry.json -- "
-                    "the entity will switch nothing visible",
+                    "the sidebar still switches the entity, but nothing drawn follows this channel "
+                    "(fine for an ambient group whose members are a cornice or a desk strip on their own entities)",
                 )
 
     for rid, ch in sorted(x for x in geo_channels if x[0] is not None):
