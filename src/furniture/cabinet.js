@@ -20,6 +20,21 @@
  * See docs/house-profile.md, "Furniture", and the furniture-plan review on
  * item 78f2b614 for why the palette is this narrow.
  *
+ * NO TWO FACES MAY Z-FIGHT. Two surfaces at the same depth flicker against
+ * each other as the camera moves (the TV console's jagged edges, the mirror
+ * panes' jagged vertical edges). So: the carcass sides and back stop at the
+ * top and bottom panels instead of running into them; a mirror or glass
+ * pane is recessed PANE_RECESS behind its frame and tucked under it; frame
+ * stiles stop FRAME_INSET short of the cell's edges. Faces that only touch
+ * along an edge, or back to back, are fine. scripts/test-coplanar-faces.mjs
+ * builds every preset and fails any pair that face the same way within 1 mm
+ * of one plane and overlap.
+ *
+ * FINISH: `finish` is 'matte' | 'satin' | 'gloss' for the carcass, doors,
+ * drawers, plinth and shelves. Unset (null), it follows the older boolean
+ * `gloss` (true -> 'gloss', false -> 'matte'), so existing profiles draw as
+ * before.
+ *
  * FRONTS GRID (row-based front)
  *   params.fronts is an array of rows, top to bottom:
  *     { height, cells: [ {kind, width, ...kind-specific fields} ] }
@@ -27,8 +42,10 @@
  *   Cell kinds:
  *     'door'    - hinged door, one leaf per cell. handle unless handle:false.
  *     'drawer'  - a drawer front. handle unless handle:false (push-to-open).
- *     'glass'   - fixed glass panel front, keep = true.
- *     'mirror'  - fixed mirror panel front, keep = true.
+ *     'glass'   - fixed glass panel front, keep = true. May carry an
+ *                 `interior` (see DISPLAY INTERIOR below).
+ *     'mirror'  - fixed mirror panel front, keep = true. The pane runs the
+ *                 full height of its cell between two frame stiles.
  *     'sliding' - `doors` (default 2) sliding leaves sharing this ONE cell's
  *                 full width, each split into equal horizontal `panels`
  *                 ('white', matte carcass colour, or 'mirror', keep = true).
@@ -54,9 +71,28 @@
  *                 Sub-cells cannot themselves be 'stack' (no nesting).
  *   A row with no `cells` (or an empty array) renders nothing (e.g. a plinth
  *   reveal). A row may also set `ledGapBelow: true` to place a warm emissive
- *   LED strip in the gap between it and the row below (the bedside-table-
- *   with-LED-drawers presets): it wraps the front face and both side faces of
- *   the carcass at that height, but NOT the back, and is always keep = true.
+ *   LED strip in the gap between it and the row below: it wraps the front
+ *   face and both side faces of the carcass at that height, but NOT the
+ *   back, and is always keep = true. (The older bedside-table shape; the
+ *   presets now use `channel` rows.)
+ *
+ * LIGHT CHANNEL ROWS (the LED bedside tables)
+ *   A row `{ height, channel: { color } }` has no front: it is a real
+ *   recessed channel CHANNEL_SETBACK deep that wraps the front and both
+ *   sides (not the back). The carcass sides are split round it, a filler
+ *   block forms its recessed faces, and an emissive strip in `color` sits in
+ *   it. The drawer or door directly BELOW a channel gets a low-intensity glow
+ *   band along its top edge, part of its own front. Each channel has its own
+ *   colour, so two strips on one table can differ (and be bound to two lights
+ *   at placement).
+ *
+ * OVERLAY FRONTS
+ *   `overlayFronts: true` makes the fronts cover the carcass edges, as real
+ *   overlay doors do: every carcass and base part ends behind the fronts (at
+ *   the front plane less the leaf thickness) and each front reaches the
+ *   carcass outline on its outer edges, so no top or side lip stands proud of
+ *   the doors. Default false: the carcass runs to `depth` and the fronts sit
+ *   inside it, as every preset before this one was drawn.
  *
  * COLUMNS GRID (column-based front - open shelving units)
  *   params.columns is an array of columns, left to right:
@@ -80,10 +116,24 @@
  *   behind it. `height` is optional per band (an implicit band's height
  *   splits the side's remaining clear height evenly, same rule as a fronts
  *   row/column) so a caller typically only states the structural middle
- *   band's height. The OTHER side is unaffected (a plain slab). Two units
- *   built as mirror images of each other (glass doors facing across a TV)
- *   just use `side: 'left'` on one and `side: 'right'` on the other, with the
- *   fronts grid's cell order swapped to match.
+ *   band's height. The side's clear height is the cabinet height less the
+ *   plinth and BOTH the top and bottom panels. The OTHER side is unaffected
+ *   (a plain slab). Two units built as mirror images of each other (glass
+ *   doors facing across a TV) just use `side: 'left'` on one and
+ *   `side: 'right'` on the other, with the fronts grid's cell order swapped.
+ *
+ * DISPLAY INTERIOR (a glass cell's `interior`, the tall display cabinet)
+ *   { lining, shelves, ledStrip, contents }, every field optional:
+ *     lining    '#rrggbb': the section's back, inner walls and ceiling are
+ *               lined in this colour (a dark wood); its floor stays the
+ *               carcass colour. A wall on a side with no carcass panel is a
+ *               divider.
+ *     shelves   [cm, ...]: clear glass shelves at these heights above the
+ *               section's floor.
+ *     ledStrip  { color }: a vertical emissive strip the full section height
+ *               at the BACK corner on the divider side (else the left).
+ *     contents  'none' | 'books-games' | 'console': low-poly proxies on the
+ *               floor and shelves, full detail only (<= 150 triangles).
  *
  * PRESETS live in CabinetSpec.html, not here - this module only builds
  * whatever `params` it is given. Preset *names* are generic and descriptive
@@ -119,6 +169,11 @@ export const DEFAULTS = Object.freeze({
   panelThickness: 2,
   plinth: { type: 'plinth', height: 8 },
   gloss: false,
+  // null: follow `gloss`. 'matte' | 'satin' | 'gloss' override it.
+  finish: null,
+  // false: fronts sit inside a carcass that runs to `depth` (see OVERLAY
+  // FRONTS in the header).
+  overlayFronts: false,
   color: '#f2f0ec',
   topColor: '#f2f0ec',
   shelfLights: false,
@@ -129,6 +184,14 @@ export const DEFAULTS = Object.freeze({
 });
 
 // ---- finish + mesh helpers ----------------------------------------------
+
+const BODY_FINISHES = ['matte', 'satin', 'gloss'];
+
+/** The carcass/front finish: `finish` when it is one of BODY_FINISHES, else `gloss` decides. */
+export function resolveFinish(p) {
+  if (p && BODY_FINISHES.indexOf(p.finish) !== -1) return p.finish;
+  return p && p.gloss ? 'gloss' : 'matte';
+}
 
 /** A material from the shared palette, with keep-flag bookkeeping left to the caller. */
 function finish(THREE, cls, color) {
@@ -147,11 +210,51 @@ function box(THREE, w, h, d) {
   return new THREE.BoxGeometry(Math.max(w, 0.0005), Math.max(h, 0.0005), Math.max(d, 0.0005));
 }
 
+/** A tagged box mesh spanning [x0,x1] x [y0,y1] x [z0,z1] (metres). */
+function slab(THREE, group, mat, x0, x1, y0, y1, z0, z1, name) {
+  const m = new THREE.Mesh(box(THREE, x1 - x0, y1 - y0, z1 - z0), mat);
+  m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+  tag(m, name);
+  group.add(m);
+  return m;
+}
+
 // How far a handle projects beyond its door/drawer front face, in METRES.
 // `depth` INCLUDES the handles: every front panel's own outer face sits at
 // `depth - HANDLE_PROJECTION`, so a handle projecting HANDLE_PROJECTION
 // further out lands exactly at `depth` - never past the declared bbox.
 const HANDLE_PROJECTION = 0.025;
+
+/** A door or drawer leaf's thickness for a cabinet `depth` metres deep. */
+function frontThickness(depth) { return Math.min(0.018, depth * 0.06); }
+
+// Z-fighting clearances (see the header). 2 mm and 3 mm are far above what
+// the depth buffer resolves at room distances, and far below what a person
+// sees as a gap.
+const PANE_RECESS = 0.003;   // a mirror/glass pane behind its frame's face
+const PANE_TUCK = 0.004;     // how far a pane runs under each stile
+const FRAME_INSET = 0.002;   // a stile in from its cell's edges
+const FRAME_BACKSET = 0.002; // a stile's face behind the front plane
+const MIRROR_PANE_T = 0.006;
+const GLASS_PANE_T = 0.006;
+
+// Light channels (the LED bedside tables).
+const CHANNEL_SETBACK = 0.015; // how far the channel's faces sit behind the fronts / sides
+const STRIP_PROUD = 0.002;     // the LED strip's face in front of the channel face
+const GLOW_SHARE = 0.35;       // the glow band: this much LED colour over the front's colour
+const GLOW_DIM = 1;            // ... at this brightness (the base white carries the rest)
+
+/** Is the fronts row a light channel? */
+function isChannel(row) { return !!(row && row.channel); }
+
+/**
+ * The plane every hinged/fixed front's face lies in: `depth` for a
+ * handleless cabinet, else HANDLE_PROJECTION back from it so a handle ends
+ * exactly at `depth` (see buildFrontCell).
+ */
+function frontPlane(p, depth) {
+  return p.handles === false ? depth : depth - HANDLE_PROJECTION;
+}
 
 // ---- fronts grid normalisation -----------------------------------------
 
@@ -255,55 +358,104 @@ export function normaliseColumns(columns, width) {
 
 // ---- builders for each front-cell kind ---------------------------------
 
-function buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, handles, faceZ) {
+/**
+ * A door or drawer leaf's rectangle inside its cell. Inner edges keep a
+ * reveal (1% of the cell width each side, `revealY` of its height top and
+ * bottom); with overlay fronts, an edge on the carcass OUTLINE (edges.l/r/t/b)
+ * runs right to the cell's edge, so the front covers the carcass there.
+ */
+function leafRect(x0, x1, yBot, yTop, revealY, edges) {
   const w = x1 - x0, h = yTop - yBot;
-  const cx = (x0 + x1) / 2, cy = (yBot + yTop) / 2;
-  const T = Math.min(0.018, depth * 0.06);
-  const mat = finish(THREE, gloss ? 'gloss' : 'matte', color);
-  const leaf = new THREE.Mesh(box(THREE, w * 0.98, h * 0.98, T), mat);
-  leaf.position.set(cx, cy, faceZ - T / 2);
-  tag(leaf, 'cabinetDoor');
-  group.add(leaf);
+  const e = edges || {};
+  return {
+    lx0: e.l ? x0 : x0 + w * 0.01,
+    lx1: e.r ? x1 : x1 - w * 0.01,
+    ly0: e.b ? yBot : yBot + h * revealY,
+    ly1: e.t ? yTop : yTop - h * revealY
+  };
+}
+
+/** A leaf, optionally with a glow band along its top edge (below a light channel). */
+function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor) {
+  if (glowColor) {
+    // The glow band is part of the leaf -- the top slice of the same front,
+    // in the same plane -- not a plate stuck on in front of it.
+    const bandH = Math.min(0.03, (r.ly1 - r.ly0) * 0.2);
+    const band = slab(THREE, group, finish(THREE, 'emissive', glowTint(glowColor, baseColor)),
+      r.lx0, r.lx1, r.ly1 - bandH, r.ly1, faceZ - T, faceZ, 'channelGlow');
+    band.castShadow = false;
+    return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1 - bandH, faceZ - T, faceZ, name);
+  }
+  return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1, faceZ - T, faceZ, name);
+}
+
+/** '#rrggbb' of the glow band: GLOW_SHARE of the LED colour over the front's, dimmed. */
+function glowTint(led, base) {
+  const toRgb = h => {
+    const n = parseInt(String(h).replace('#', ''), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+  const a = toRgb(led), b = toRgb(/^#[0-9a-fA-F]{6}$/.test(base) ? base : '#ffffff');
+  const c = a.map((v, i) => Math.round((v * GLOW_SHARE + b[i] * (1 - GLOW_SHARE)) * GLOW_DIM));
+  return '#' + c.map(v => ('0' + v.toString(16)).slice(-2)).join('');
+}
+
+function buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, color, handles, faceZ, ctx) {
+  const T = frontThickness(depth);
+  const mat = finish(THREE, fin, color);
+  const r = leafRect(x0, x1, yBot, yTop, 0.01, ctx && ctx.edges);
+  addLeaf(THREE, group, r, faceZ, T, mat, 'cabinetDoor', ctx && ctx.glow, color);
   if (handles !== false && cell.handle !== false) {
-    addHandle(THREE, group, x1 - Math.min(0.04, w * 0.08), cy, faceZ);
+    addHandle(THREE, group, x1 - Math.min(0.04, (x1 - x0) * 0.08), (yBot + yTop) / 2, faceZ);
   }
 }
 
-function buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, handles, faceZ) {
-  const w = x1 - x0, h = yTop - yBot;
-  const cx = (x0 + x1) / 2, cy = (yBot + yTop) / 2;
-  const T = Math.min(0.018, depth * 0.06);
-  const mat = finish(THREE, gloss ? 'gloss' : 'matte', color);
-  const front = new THREE.Mesh(box(THREE, w * 0.98, h * 0.94, T), mat);
-  front.position.set(cx, cy, faceZ - T / 2);
-  tag(front, 'drawerFront');
-  group.add(front);
+function buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, color, handles, faceZ, ctx) {
+  // A drawer in the top row spans the top panel's height too; its handle
+  // must stay below that panel (it used to reach up into it, its face in
+  // the panel's front plane -- the mobile pedestal's top drawer).
+  const h = yTop - yBot;
+  const cx = (x0 + x1) / 2;
+  const T = frontThickness(depth);
+  const mat = finish(THREE, fin, color);
+  const r = leafRect(x0, x1, yBot, yTop, 0.03, ctx && ctx.edges);
+  addLeaf(THREE, group, r, faceZ, T, mat, 'drawerFront', ctx && ctx.glow, color);
   const showHandle = handles !== false && cell.handle !== false;
   if (showHandle) {
-    addHandle(THREE, group, cx, yTop - h * 0.12, faceZ, true);
+    const maxY = ctx && ctx.handleMaxY != null ? ctx.handleMaxY : Infinity;
+    addHandle(THREE, group, cx, Math.min(yTop - h * 0.12, maxY - 0.007 - 0.004), faceZ, true);
   }
 }
 
-function buildGlassOrMirrorCell(THREE, group, kind, x0, x1, yBot, yTop, depth, faceZ) {
-  const w = x1 - x0, h = yTop - yBot;
-  const cx = (x0 + x1) / 2, cy = (yBot + yTop) / 2;
-  const T = kind === 'glass' ? 0.006 : 0.01;
-  const mat = finish(THREE, kind, null);
-  const pane = new THREE.Mesh(box(THREE, w * 0.94, h * 0.94, T), mat);
-  pane.position.set(cx, cy, faceZ - T / 2);
-  tag(pane, kind === 'glass' ? 'cabinetGlassDoor' : 'cabinetMirrorDoor');
-  pane.userData.isMirror = kind === 'mirror'; // spec-three.jsx env-cube convention
-  group.add(pane);
-  // Thin frame so a glass/mirror door still reads as a door, not a hole.
+/**
+ * A fixed glass or mirror front: two frame stiles and a pane between them.
+ * The pane runs the cell's FULL height (the owner's review: no gap above or
+ * below the mirror), tucks PANE_TUCK under each stile and sits PANE_RECESS
+ * behind the stiles' faces, so it never shares a plane with them. The stiles
+ * stop FRAME_INSET short of the cell's edges and sit FRAME_BACKSET behind the
+ * front plane, so they never share one with the carcass either (a stile used
+ * to lie in the carcass side's outer face and the top panel's top face).
+ */
+function buildGlassOrMirrorCell(THREE, group, kind, x0, x1, yBot, yTop, depth, faceZ, ctx) {
+  const T = frontThickness(depth);
+  const FT = Math.min(0.02, (x1 - x0) / 5);
+  const sFace = faceZ - FRAME_BACKSET;
+  const sy0 = yBot + FRAME_INSET, sy1 = yTop - FRAME_INSET;
   const frameMat = finish(THREE, 'matte', '#ffffff');
-  [x0, x1].forEach(fx0 => {
-    const FT = 0.02;
-    const fx = fx0 === x0 ? fx0 + FT / 2 : fx0 - FT / 2;
-    const stile = new THREE.Mesh(box(THREE, FT, h, T), frameMat);
-    stile.position.set(fx, cy, faceZ - T / 2);
-    tag(stile, 'cabinetDoorFrame');
-    group.add(stile);
+  [[x0 + FRAME_INSET, x0 + FRAME_INSET + FT], [x1 - FRAME_INSET - FT, x1 - FRAME_INSET]].forEach(([a, b]) => {
+    slab(THREE, group, frameMat, a, b, sy0, sy1, sFace - T, sFace, 'cabinetDoorFrame');
   });
+  // Thin enough that its back stays 2 mm clear of the stiles' backs too (a
+  // shallow cabinet has thin leaves).
+  const paneT = Math.min(kind === 'glass' ? GLASS_PANE_T : MIRROR_PANE_T, T - PANE_RECESS - 0.002);
+  const pFace = sFace - PANE_RECESS;
+  // 2 mm shorter than the stiles at each end, so the pane's own top and
+  // bottom faces never lie in a stile's.
+  const pane = slab(THREE, group, finish(THREE, kind, null),
+    x0 + FRAME_INSET + FT - PANE_TUCK, x1 - FRAME_INSET - FT + PANE_TUCK,
+    sy0 + FRAME_INSET, sy1 - FRAME_INSET, pFace - paneT, pFace,
+    kind === 'glass' ? 'cabinetGlassDoor' : 'cabinetMirrorDoor');
+  pane.userData.isMirror = kind === 'mirror'; // spec-three.jsx env-cube convention
 }
 
 /**
@@ -318,6 +470,10 @@ function buildGlassOrMirrorCell(THREE, group, kind, x0, x1, yBot, yTop, depth, f
  * PER adjacent sliding cell - two adjacent 'sliding' cells side by side
  * would build 2 independent runs (4 doors), which is why a multi-door
  * sliding front must be authored as ONE cell with `doors: N`.
+ *
+ * A mirror panel sits PANE_RECESS behind its door's frame and rails (it
+ * used to lie in their plane, and the carcass side's, and flicker at every
+ * edge it ran under them).
  */
 function buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth) {
   const w = x1 - x0, h = yTop - yBot;
@@ -361,9 +517,10 @@ function buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth) {
       const kind = panels[i] === 'mirror' ? 'mirror' : 'matte';
       const inset = kind === 'mirror' ? 0.01 : 0.006;
       const paneT = kind === 'mirror' ? 0.008 : T;
+      const paneFace = kind === 'mirror' ? door.faceZ - PANE_RECESS : door.faceZ;
       const mat = finish(THREE, kind, '#ffffff');
       const pane = new THREE.Mesh(box(THREE, dw - inset * 2, Math.max(0.01, panelH - railT), paneT), mat);
-      pane.position.set(dcx, pcy, door.faceZ - paneT / 2);
+      pane.position.set(dcx, pcy, paneFace - paneT / 2);
       tag(pane, kind === 'mirror' ? 'slidingMirrorPanel' : 'slidingWhitePanel');
       pane.userData.isMirror = kind === 'mirror';
       group.add(pane);
@@ -401,22 +558,27 @@ function buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth) {
  * front flush at `depth` instead, since nothing needs the clearance.
  * (`sliding` is exempt: its two-track system is an intentional multi-plane
  * design of its own, not part of this shared plane.)
+ *
+ * `ctx` carries { edges, glow, fin, interior } for this cell: which of its
+ * edges are on the carcass outline (overlay fronts), the glow colour when a
+ * light channel sits directly above it, and the interior build context.
  */
-function buildFrontCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p, low) {
-  const faceZ = p.handles === false ? depth : depth - HANDLE_PROJECTION;
+function buildFrontCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, color, p, low, ctx) {
+  const faceZ = frontPlane(p, depth);
   switch (cell.kind) {
     case 'door':
-      buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p.handles, faceZ);
+      buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, color, p.handles, faceZ, ctx);
       break;
     case 'drawer':
-      buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, color, p.handles, faceZ);
+      buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, color, p.handles, faceZ, ctx);
       break;
     case 'glass':
-      buildGlassOrMirrorCell(THREE, group, 'glass', x0, x1, yBot, yTop, depth, faceZ);
+      buildGlassOrMirrorCell(THREE, group, 'glass', x0, x1, yBot, yTop, depth, faceZ, ctx);
       if (p.shelfLights && !low) addShelfLight(THREE, group, x0, x1, yTop, depth);
+      if (cell.interior && ctx && ctx.interior) buildInterior(THREE, group, cell.interior, x0, x1, yBot, yTop, ctx.interior, low);
       break;
     case 'mirror':
-      buildGlassOrMirrorCell(THREE, group, 'mirror', x0, x1, yBot, yTop, depth, faceZ);
+      buildGlassOrMirrorCell(THREE, group, 'mirror', x0, x1, yBot, yTop, depth, faceZ, ctx);
       break;
     case 'sliding':
       buildSlidingCell(THREE, group, cell, x0, x1, yBot, yTop, depth);
@@ -436,7 +598,7 @@ function buildFrontCell(THREE, group, cell, x0, x1, yBot, yTop, depth, gloss, co
  * a stack's sub-cells share the parent row's WIDTH already (fixed by the
  * caller) and only need their own y-split.
  */
-function buildStackCell(THREE, group, cell, x0, x1, rowYBottomCm, rowYTopCm, depth, gloss, color, p, low) {
+function buildStackCell(THREE, group, cell, x0, x1, rowYBottomCm, rowYTopCm, depth, fin, color, p, low, ctx) {
   const subCells = cell.cells || [];
   const rowHeightCm = rowYTopCm - rowYBottomCm;
   const explicitSum = subCells.reduce((s, c) => s + (c.height || 0), 0);
@@ -447,14 +609,19 @@ function buildStackCell(THREE, group, cell, x0, x1, rowYBottomCm, rowYTopCm, dep
   }
   // Sub-cells are authored TOP TO BOTTOM (same convention as fronts rows).
   let yTopCm = rowYTopCm;
-  for (const sub of subCells) {
+  subCells.forEach((sub, i) => {
     if (sub.kind === 'stack') {
       throw new Error('cabinet stack cell: sub-cells cannot themselves be "stack" (no nesting)');
     }
     const yBotCm = yTopCm - sub.height;
-    buildFrontCell(THREE, group, sub, x0, x1, yBotCm * CM, yTopCm * CM, depth, gloss, color, p, low);
+    const e = (ctx && ctx.edges) || {};
+    const subCtx = Object.assign({}, ctx, {
+      edges: { l: e.l, r: e.r, t: e.t && i === 0, b: e.b && i === subCells.length - 1 },
+      glow: i === 0 ? ctx && ctx.glow : null
+    });
+    buildFrontCell(THREE, group, sub, x0, x1, yBotCm * CM, yTopCm * CM, depth, fin, color, p, low, subCtx);
     yTopCm = yBotCm;
-  }
+  });
 }
 
 /**
@@ -481,7 +648,14 @@ function addHandle(THREE, group, x, y, faceZ, isDrawer) {
 
 // ---- plinth / legs / wheels ---------------------------------------------
 
-function buildBase(THREE, group, base, width, depth, gloss, color) {
+/**
+ * The base, under a carcass whose front is at `carcassFront`. A plinth with
+ * an explicit `inset` (cm) -- or any plinth under overlay fronts -- is set
+ * back `inset` from the FRONT PLANE `faceZ` and from each side (a shadow
+ * recess); otherwise it is drawn exactly as before (3 cm in from the sides,
+ * centred in the depth).
+ */
+function buildBase(THREE, group, base, width, depth, fin, color, carcassFront, faceZ, overlay) {
   const h = base.height * CM;
   if (h <= 0) return;
   if (base.type === 'legs') {
@@ -489,7 +663,7 @@ function buildBase(THREE, group, base, width, depth, gloss, color) {
     const inset = 0.04;
     const r = 0.012;
     const xs = [-width / 2 + inset, width / 2 - inset];
-    const zs = [inset, depth - inset];
+    const zs = [inset, carcassFront - inset];
     xs.forEach(x => zs.forEach(z => {
       const leg = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 12), legMat);
       leg.position.set(x, h / 2, z);
@@ -503,7 +677,7 @@ function buildBase(THREE, group, base, width, depth, gloss, color) {
     const r = Math.min(h / 2, 0.03);
     const inset = 0.05;
     const xs = [-width / 2 + inset, width / 2 - inset];
-    const zs = [inset, depth - inset];
+    const zs = [inset, carcassFront - inset];
     xs.forEach(x => zs.forEach(z => {
       const wheel = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.02, 16), wheelMat);
       wheel.rotation.z = Math.PI / 2;
@@ -514,7 +688,12 @@ function buildBase(THREE, group, base, width, depth, gloss, color) {
     return;
   }
   // plinth (default): a simple recessed toe-kick box.
-  const plinthMat = finish(THREE, gloss ? 'gloss' : 'matte', color);
+  const plinthMat = finish(THREE, fin, color);
+  if (overlay || typeof base.inset === 'number') {
+    const inset = (typeof base.inset === 'number' ? base.inset : 3) * CM;
+    slab(THREE, group, plinthMat, -width / 2 + inset, width / 2 - inset, 0, h, 0, faceZ - inset, 'plinth');
+    return;
+  }
   const inset = 0.03;
   const plinth = new THREE.Mesh(box(THREE, width - inset * 2, h, depth - inset), plinthMat);
   plinth.position.set(0, h / 2, (depth - inset) / 2 + inset / 2);
@@ -529,8 +708,9 @@ function buildBase(THREE, group, base, width, depth, gloss, color) {
  * one plain slab: `bands` is [{height}, {height, glassDepth, woodDepth},
  * {height}] top to bottom (cm). The middle band is split FRONT TO BACK: a
  * glass pane `glassDepth` deep at the front (keep = true) and a wood-tone
- * panel `woodDepth` deep behind it, glassDepth + woodDepth <= the cabinet
- * depth. Top and bottom bands are plain solid panels in the carcass finish.
+ * panel `woodDepth` deep behind it, glassDepth + woodDepth <= the carcass
+ * depth `D`. Top and bottom bands are plain solid panels in the carcass
+ * finish.
  *
  * A band's `height` is optional - like a fronts row/column, any band missing
  * one gets an even share of whatever height is left after the explicit
@@ -540,7 +720,7 @@ function buildBase(THREE, group, base, width, depth, gloss, color) {
  * plinth subtracted out - it is NOT the same number as the cabinet's overall
  * `height` param.
  */
-function buildGlassSidePanel(THREE, group, gsp, sx, W, D, plinthH, CARC_T, sideH, gloss, color) {
+function buildGlassSidePanel(THREE, group, gsp, sx, W, D, plinthH, CARC_T, sideH, fin, color) {
   const explicit = gsp.bands.filter(b => typeof b.height === 'number');
   const explicitSum = explicit.reduce((s, b) => s + b.height * CM, 0);
   const implicitCount = gsp.bands.length - explicit.length;
@@ -560,26 +740,30 @@ function buildGlassSidePanel(THREE, group, gsp, sx, W, D, plinthH, CARC_T, sideH
   const share = implicitCount > 0 ? remaining / implicitCount : 0;
   const bands = gsp.bands.map(b => (typeof b.height === 'number' ? b : Object.assign({}, b, { height: share / CM })));
 
-  const carcassMat = finish(THREE, gloss ? 'gloss' : 'matte', color);
+  const carcassMat = finish(THREE, fin, color);
   const x = sx * (W / 2 - CARC_T / 2);
   let yTop = plinthH + CARC_T + sideH;
-  bands.forEach((band, i) => {
+  const spans = [];
+  bands.forEach(band => {
     const h = band.height * CM;
     const yBot = yTop - h;
     const cy = (yBot + yTop) / 2;
     if (band.glassDepth) {
       // Front glass window (keep = true) + a wood-tone panel behind it.
-      const glassD = band.glassDepth * CM;
-      const woodD = Math.min(band.woodDepth * CM, D - glassD);
+      const glassD = Math.min(band.glassDepth * CM, D);
+      const woodD = Math.max(0, Math.min(band.woodDepth * CM, D - glassD));
       const glass = new THREE.Mesh(box(THREE, CARC_T, h, glassD), finish(THREE, 'glass', null));
       glass.position.set(x, cy, D - glassD / 2);
       tag(glass, 'displaySideGlass');
       group.add(glass);
 
-      const wood = new THREE.Mesh(box(THREE, CARC_T, h, woodD), finish(THREE, 'matte', '#6b4a35'));
-      wood.position.set(x, cy, D - glassD - woodD / 2);
-      tag(wood, 'displaySideWood');
-      group.add(wood);
+      if (woodD > 0) {
+        const wood = new THREE.Mesh(box(THREE, CARC_T, h, woodD), finish(THREE, 'matte', '#6b4a35'));
+        wood.position.set(x, cy, D - glassD - woodD / 2);
+        tag(wood, 'displaySideWood');
+        group.add(wood);
+      }
+      spans.push({ yBot, yTop, glassFrom: D - glassD });
     } else {
       const panel = new THREE.Mesh(box(THREE, CARC_T, h, D), carcassMat);
       panel.position.set(x, cy, D / 2);
@@ -588,6 +772,7 @@ function buildGlassSidePanel(THREE, group, gsp, sx, W, D, plinthH, CARC_T, sideH
     }
     yTop = yBot;
   });
+  return spans;
 }
 
 // ---- columns grid (open shelving) ----------------------------------------
@@ -598,9 +783,9 @@ function buildGlassSidePanel(THREE, group, gsp, sx, W, D, plinthH, CARC_T, sideH
  * divider on its right edge (shared with the next column) unless `isLast`.
  * Every bay is open - no front - so the carcass back is what's visible.
  */
-function buildColumn(THREE, group, col, yBottom, yTop, depth, panelT, gloss, color, isLast) {
+function buildColumn(THREE, group, col, yBottom, yTop, depth, panelT, fin, color, isLast) {
   const x0 = col.x0, x1 = col.x1;
-  const mat = finish(THREE, gloss ? 'gloss' : 'matte', color);
+  const mat = finish(THREE, fin, color);
   const rowCount = Math.max(1, Math.round(col.rows || 1));
   const clearH = (yTop - yBottom - panelT * (rowCount - 1)) / rowCount;
 
@@ -622,6 +807,176 @@ function buildColumn(THREE, group, col, yBottom, yTop, depth, panelT, gloss, col
   }
 }
 
+// ---- light channel (LED bedside tables) -----------------------------------
+
+/**
+ * A recessed light channel between y0 and y1: a filler block whose front and
+ * side faces sit CHANNEL_SETBACK behind the front plane and the carcass
+ * sides (the carcass sides are split round it by the caller), and an
+ * emissive strip that wraps its front and both sides, STRIP_PROUD in front
+ * of those faces. Never the back.
+ */
+function buildChannel(THREE, group, row, W, faceZ, backZ, y0, y1, fin, color, low) {
+  const ledColor = (row.channel && row.channel.color) || '#dbe8ff';
+  const xs = W / 2 - CHANNEL_SETBACK;
+  const fillFront = faceZ - CHANNEL_SETBACK;
+  slab(THREE, group, finish(THREE, fin, color), -xs, xs, y0, y1, backZ, fillFront, 'channelRecess');
+  if (low) return;
+  const sh = Math.min(0.006, (y1 - y0) * 0.4);
+  const cy = (y0 + y1) / 2;
+  const ledMat = finish(THREE, 'emissive', ledColor);
+  const front = slab(THREE, group, ledMat, -xs - STRIP_PROUD, xs + STRIP_PROUD, cy - sh / 2, cy + sh / 2,
+    fillFront - 0.003, fillFront + STRIP_PROUD, 'channelStripFront');
+  front.castShadow = false;
+  [-1, 1].forEach(sx => {
+    // Each side strip ends INSIDE the front strip, so no end face lies in
+    // the front strip's plane; it runs back to 2 cm off the wall.
+    const a = sx < 0 ? -xs - STRIP_PROUD : xs - 0.001;
+    const b = sx < 0 ? -xs + 0.001 : xs + STRIP_PROUD;
+    const side = slab(THREE, group, ledMat, a, b, cy - sh / 2, cy + sh / 2, backZ + 0.02, fillFront - 0.0015, 'channelStripSide');
+    side.castShadow = false;
+  });
+}
+
+// ---- display interior (a glass cell's `interior`) -------------------------
+
+const LINING_T = 0.004;
+const INTERIOR_FLOOR_T = 0.018;
+const GLASS_SHELF_T = 0.008;
+
+/**
+ * The inside of a glass-fronted section spanning [x0, x1] x [yBot, yTop]:
+ * lining, a floor, glass shelves, a vertical LED strip and contents (see
+ * DISPLAY INTERIOR in the header). `ic` is the cabinet's interior context:
+ * { W, CARC_T, backZ, carcassFront, sideWindows: [{sx, glassFrom, yBot, yTop}], fin, color }.
+ * Returns nothing; every part is tagged 'interior*' / 'contents*'.
+ */
+function buildInterior(THREE, group, spec, x0, x1, yBot, yTop, ic, low) {
+  const W = ic.W, T = ic.CARC_T;
+  const atLeft = x0 <= -W / 2 + 1e-6, atRight = x1 >= W / 2 - 1e-6;
+  // The section's clear box. A side with no carcass panel gets a divider
+  // (the lining's thickness plus a structural 1 cm).
+  const DIV_T = 0.01;
+  const innerL = atLeft ? -W / 2 + T : x0 + DIV_T / 2;
+  const innerR = atRight ? W / 2 - T : x1 - DIV_T / 2;
+  const zBack = ic.backZ;
+  const zFront = ic.carcassFront - 0.002;
+  const floorTop = yBot + INTERIOR_FLOOR_T;
+  const ceil = yTop;
+  const lining = spec.lining || null;
+  const liningMat = lining ? finish(THREE, 'matte', lining) : finish(THREE, ic.fin, ic.color);
+  // Floor: the carcass colour (the top of the block below).
+  slab(THREE, group, finish(THREE, ic.fin, ic.color), innerL, innerR, yBot, floorTop, zBack, zFront, 'interiorFloor');
+  // Dividers where the section has no carcass side.
+  if (!atLeft) slab(THREE, group, liningMat, x0 - DIV_T / 2, innerL, yBot, ceil, zBack, zFront, 'interiorDivider');
+  if (!atRight) slab(THREE, group, liningMat, innerR, x1 + DIV_T / 2, yBot, ceil, zBack, zFront, 'interiorDivider');
+  const inL = innerL + (atLeft && lining ? LINING_T : 0);
+  const inR = innerR - (atRight && lining ? LINING_T : 0);
+  const inBack = zBack + (lining ? LINING_T : 0);
+  const inCeil = ceil - (lining ? LINING_T : 0);
+  if (lining) {
+    slab(THREE, group, liningMat, innerL, innerR, floorTop, ceil, zBack, inBack, 'interiorLining');
+    slab(THREE, group, liningMat, innerL, innerR, inCeil, ceil, inBack, zFront, 'interiorLining');
+    // Carcass-side walls: lined, but not over a glass side window (it must
+    // stay a window into the section).
+    [[atLeft, -1], [atRight, 1]].forEach(([on, sx]) => {
+      if (!on) return;
+      const win = (ic.sideWindows || []).find(s => s.sx === sx && s.yTop > floorTop && s.yBot < inCeil);
+      const zEnd = win ? Math.min(win.glassFrom, zFront) : zFront;
+      if (zEnd <= inBack + 0.005) return;
+      const a = sx < 0 ? innerL : inR, b = sx < 0 ? inL : innerR;
+      slab(THREE, group, liningMat, a, b, floorTop, inCeil, inBack, zEnd, 'interiorLining');
+    });
+  }
+  // Glass shelves, inner width, 3 cm short of the front.
+  const shelfYs = (Array.isArray(spec.shelves) ? spec.shelves : [])
+    .map(cm => floorTop + cm * CM).filter(y => y > floorTop + 0.02 && y + GLASS_SHELF_T < inCeil - 0.02);
+  const shelfFront = zFront - 0.03;
+  // The LED strip, full height, at the back corner on the divider side; the
+  // shelves stop at it (running through it, their end and back faces would
+  // lie in the strip's own).
+  const strip = spec.ledStrip && !low;
+  const onLeft = !atLeft || atRight; // the divider side; the left when both are carcass sides
+  const sw = 0.008;
+  const shL = strip && onLeft ? inL + sw : inL, shR = strip && !onLeft ? inR - sw : inR;
+  shelfYs.forEach(y => slab(THREE, group, finish(THREE, 'glass', null), shL, shR, y, y + GLASS_SHELF_T, inBack, shelfFront, 'interiorShelf'));
+  if (strip) {
+    const sx0 = onLeft ? inL : inR - sw, sx1 = onLeft ? inL + sw : inR;
+    const strip = slab(THREE, group, finish(THREE, 'emissive', spec.ledStrip.color || '#ff4fa0'),
+      sx0, sx1, floorTop, inCeil, inBack, inBack + sw, 'interiorLedStrip');
+    strip.castShadow = false;
+  }
+  // Contents, full detail only.
+  if (!low && spec.contents && spec.contents !== 'none') {
+    const levels = [floorTop].concat(shelfYs.map(y => y + GLASS_SHELF_T));
+    const tops = shelfYs.concat([inCeil]);
+    const bays = levels.map((y, i) => ({ y, h: tops[i] - y - 0.01 }));
+    buildContents(THREE, group, spec.contents, {
+      x0: inL + (spec.ledStrip ? 0.012 : 0), x1: inR, z0: inBack, z1: shelfFront - 0.005, bays
+    });
+  }
+}
+
+/**
+ * Low-poly display contents (<= 150 triangles) in the box x0..x1, z0..z1,
+ * on `bays` (bottom first: {y, h}). Each proxy is scaled down to fit its bay
+ * and the box, so nothing pokes through the glass or a shelf.
+ */
+function buildContents(THREE, group, kind, b) {
+  const W = b.x1 - b.x0, D = b.z1 - b.z0;
+  const put = (bay, x, w, h, d, color, name, fin) => {
+    const bb = b.bays[Math.min(bay, b.bays.length - 1)];
+    const hh = Math.min(h, bb.h), ww = Math.min(w, W), dd = Math.min(d, D);
+    const xx = Math.min(Math.max(b.x0 + x, b.x0), b.x1 - ww);
+    return slab(THREE, group, finish(THREE, fin || 'matte', color), xx, xx + ww, bb.y, bb.y + hh, b.z0 + 0.005, b.z0 + 0.005 + dd, name);
+  };
+  if (kind === 'books-games') {
+    // Bottom: a row of upright books and magazines.
+    const books = [[0.035, 0.28, '#7a2e2e'], [0.03, 0.26, '#2e4a6a'], [0.045, 0.30, '#d8c9a8'], [0.028, 0.25, '#3a5a3a'],
+      [0.04, 0.29, '#c0392b'], [0.032, 0.27, '#f0f0f0'], [0.038, 0.24, '#2a2a2a']];
+    let x = 0.01;
+    books.forEach(([t, h, c]) => { put(0, x, t, h, 0.2, c, 'contentsBook'); x += t + 0.002; });
+    // Middle: board-game boxes stacked flat.
+    const bay1 = b.bays[Math.min(1, b.bays.length - 1)];
+    let y = 0;
+    [[0.36, 0.06, 0.24, '#c0392b'], [0.34, 0.07, 0.23, '#f2f2f2'], [0.32, 0.06, 0.22, '#2e5aa8']].forEach(([w, h, d, c]) => {
+      const m = put(1, 0.02, w, h, d, c, 'contentsGame');
+      m.position.y += y;
+      y += Math.min(h, bay1.h) + 0.001;
+    });
+    // Top: a framed picture leaning back, and a small box.
+    const pic = put(2, 0.03, 0.30, 0.25, 0.02, '#3a2a1a', 'contentsPicture');
+    pic.position.z += 0.02;
+    pic.position.y += 0.002; // tilted, its back bottom edge would dip into the shelf
+    pic.rotation.x = -0.12;
+    put(2, 0.36, 0.1, 0.08, 0.12, '#e8e0cc', 'contentsBox');
+    return;
+  }
+  if (kind === 'console') {
+    // Bottom: a stack of game cases, a small white box, a black box.
+    put(0, 0.02, 0.135, 0.05, 0.19, '#1f4fa0', 'contentsGameCases', 'gloss');
+    put(0, 0.18, 0.1, 0.1, 0.1, '#f2f2f2', 'contentsBox');
+    put(0, 0.3, 0.08, 0.2, 0.08, '#151515', 'contentsBox');
+    // Middle: an upright console, and a dock with two controllers.
+    put(1, 0.03, 0.1, 0.39, 0.26, '#f4f4f4', 'contentsConsole', 'gloss');
+    put(1, 0.2, 0.14, 0.05, 0.08, '#202020', 'contentsDock');
+    const c1 = put(1, 0.205, 0.05, 0.1, 0.04, '#f4f4f4', 'contentsController');
+    const c2 = put(1, 0.275, 0.05, 0.1, 0.04, '#f4f4f4', 'contentsController');
+    [c1, c2].forEach(c => { c.position.y += 0.05 + 0.001; c.position.z += 0.02; });
+    // Top: a VR headset on a round stand, and a slim white stand.
+    const bay2 = b.bays[Math.min(2, b.bays.length - 1)];
+    const standH = Math.min(0.12, bay2.h * 0.5);
+    const geo = new THREE.CylinderGeometry(0.035, 0.045, standH, 6);
+    const stand = new THREE.Mesh(geo, finish(THREE, 'matte', '#f2f2f2'));
+    stand.position.set(b.x0 + 0.12, bay2.y + standH / 2, b.z0 + 0.005 + Math.min(0.12, D) / 2);
+    tag(stand, 'contentsStand');
+    group.add(stand);
+    const hs = put(2, 0.025, 0.19, 0.1, 0.12, '#f7f7f7', 'contentsHeadset', 'gloss');
+    hs.position.y += standH + 0.001;
+    put(2, 0.3, 0.04, 0.2, 0.04, '#f2f2f2', 'contentsStand');
+  }
+}
+
 // ---- main build -----------------------------------------------------------
 
 /**
@@ -637,9 +992,14 @@ export function build(THREE, params, opts) {
   const low = detail === 'low';
 
   const W = p.width * CM, H = p.height * CM, D = p.depth * CM;
-  const gloss = !!p.gloss;
+  const fin = resolveFinish(p);
   const color = p.color;
   const topColor = p.topColor || p.color;
+  const overlay = !!p.overlayFronts && !p.columns;
+  const faceZ = frontPlane(p, D);
+  // Where the carcass (and everything else behind the fronts) ends: `depth`,
+  // or behind the leaves when the fronts overlay it.
+  const CD = overlay ? faceZ - frontThickness(D) : D;
 
   const group = new THREE.Group();
   group.name = 'cabinet';
@@ -647,51 +1007,67 @@ export function build(THREE, params, opts) {
   const plinth = p.plinth || { type: 'plinth', height: 0 };
   const plinthH = (plinth.height || 0) * CM;
 
+  // ---- fronts rows first: a light channel splits the carcass sides ------
+  const rows = p.columns ? [] : normaliseFronts(p.fronts, p.width, plinth.height || 0);
+  const channels = rows.filter(isChannel).map(r => ({ row: r, y0: r.yBottom * CM, y1: r.yTop * CM }));
+
   // ---- carcass: back, two ends, top, bottom -----------------------------
-  const carcassMat = finish(THREE, gloss ? 'gloss' : 'matte', color);
+  const carcassMat = finish(THREE, fin, color);
   const CARC_T = p.columns ? (p.panelThickness || 2) * CM : 0.018;
 
-  const bottom = new THREE.Mesh(box(THREE, W, CARC_T, D), carcassMat);
-  bottom.position.set(0, plinthH + CARC_T / 2, D / 2);
+  const bottom = new THREE.Mesh(box(THREE, W, CARC_T, CD), carcassMat);
+  bottom.position.set(0, plinthH + CARC_T / 2, CD / 2);
   tag(bottom, 'carcassBottom');
   group.add(bottom);
 
-  const top = new THREE.Mesh(box(THREE, W, CARC_T, D), finish(THREE, gloss ? 'gloss' : 'matte', topColor));
-  top.position.set(0, H - CARC_T / 2, D / 2);
+  const top = new THREE.Mesh(box(THREE, W, CARC_T, CD), finish(THREE, fin, topColor));
+  top.position.set(0, H - CARC_T / 2, CD / 2);
   tag(top, 'carcassTop');
   group.add(top);
 
-  const sideH = H - plinthH - CARC_T;
+  // The sides and the back run BETWEEN the bottom and top panels. (They
+  // used to run up into the top, sharing its end and top faces -- in two
+  // colours on the TV console, whose top is dark: its jagged edges.)
+  const sideY0 = plinthH + CARC_T, sideY1 = H - CARC_T;
+  const sideH = sideY1 - sideY0;
   // glassSidePanel: an optional override for ONE side's panel (the tall
   // display cabinet), where the middle band is split front-to-back into a
   // glass window (keep = true) at the front and a wood panel behind it,
   // rather than one plain solid slab. `side` is 'left' | 'right'; `bands` is
   // [{height}, {height, glassDepth, woodDepth}, {height}] top to bottom, cm,
-  // summing to the cabinet height. The OTHER side is unaffected (plain).
+  // summing to the side's clear height. The OTHER side is unaffected.
   const gsp = p.glassSidePanel;
+  const sideWindows = [];
   [-1, 1].forEach(sx => {
     const isGlassSide = gsp && ((sx < 0 && gsp.side === 'left') || (sx > 0 && gsp.side === 'right'));
     if (isGlassSide) {
-      buildGlassSidePanel(THREE, group, gsp, sx, W, D, plinthH, CARC_T, sideH, gloss, color);
+      buildGlassSidePanel(THREE, group, gsp, sx, W, CD, plinthH, CARC_T, sideH, fin, color)
+        .forEach(s => sideWindows.push(Object.assign({ sx }, s)));
       return;
     }
-    const side = new THREE.Mesh(box(THREE, CARC_T, sideH, D), carcassMat);
-    side.position.set(sx * (W / 2 - CARC_T / 2), plinthH + CARC_T + sideH / 2, D / 2);
-    tag(side, 'carcassSide');
-    group.add(side);
+    // Split round any light channels (their filler forms the recessed side).
+    let y = sideY0;
+    const cuts = channels.slice().sort((a, b) => a.y0 - b.y0);
+    cuts.concat([{ y0: sideY1, y1: sideY1 }]).forEach(c => {
+      const y1 = Math.min(c.y0, sideY1);
+      if (y1 - y > 1e-4) slab(THREE, group, carcassMat, sx * W / 2 - (sx > 0 ? CARC_T : 0), sx * W / 2 + (sx < 0 ? CARC_T : 0), y, y1, 0, CD, 'carcassSide');
+      y = Math.max(y, c.y1);
+    });
   });
 
   // Interior back panel. Skipped for an open-shelving unit at low detail
   // (nothing hides it anyway - every bay is open) and always skipped at low
   // detail for the fronted modes too, matching the previous behaviour.
+  const BACK_T = 0.006;
   if (!low) {
-    const back = new THREE.Mesh(box(THREE, W - CARC_T * 2, sideH, 0.006), carcassMat);
-    back.position.set(0, plinthH + CARC_T + sideH / 2, 0.003);
+    const back = new THREE.Mesh(box(THREE, W - CARC_T * 2, sideH, BACK_T), carcassMat);
+    back.position.set(0, sideY0 + sideH / 2, BACK_T / 2);
     tag(back, 'carcassBack');
     group.add(back);
   }
+  const backZ = low ? 0 : BACK_T;
 
-  buildBase(THREE, group, plinth, W, D, gloss, color);
+  buildBase(THREE, group, plinth, W, D, fin, color, CD, faceZ, overlay);
 
   if (p.columns) {
     // ---- columns grid: open shelving --------------------------------------
@@ -717,13 +1093,12 @@ export function build(THREE, params, opts) {
       buildColumn(
         THREE, colsGroup,
         { x0: offsetX + (col.xLeft + dividerOffsetCm) * CM, x1: offsetX + (col.xRight + dividerOffsetCm) * CM, rows: col.rows },
-        yBottom, yTop, D, panelT, gloss, color, i === cols.length - 1
+        yBottom, yTop, D, panelT, fin, color, i === cols.length - 1
       );
       dividerOffsetCm += panelCm;
     });
   } else {
     // ---- fronts grid --------------------------------------------------------
-    const rows = normaliseFronts(p.fronts, p.width, plinth.height || 0);
     const frontsTotalH = rows.reduce((s, r) => s + (r.yTop - r.yBottom), 0);
     const available = p.height - (plinth.height || 0);
     if (Math.abs(frontsTotalH - available) > 0.5) {
@@ -735,30 +1110,41 @@ export function build(THREE, params, opts) {
     const frontsGroup = new THREE.Group();
     frontsGroup.name = 'cabinetFronts';
     group.add(frontsGroup);
+    const interiorCtx = { W, CARC_T, backZ, carcassFront: CD, sideWindows, fin, color };
+    const handleMaxY = H - CARC_T;
 
-    for (const row of rows) {
+    rows.forEach((row, ri) => {
       const yBot = row.yBottom * CM, yTop = row.yTop * CM;
+      if (isChannel(row)) {
+        buildChannel(THREE, frontsGroup, row, W, faceZ, backZ, yBot, yTop, fin, color, low);
+        return;
+      }
+      const above = rows[ri - 1];
+      const glow = isChannel(above) ? ((above.channel && above.channel.color) || '#dbe8ff') : null;
       let x = -W / 2;
       for (const cell of row.cells) {
         const cw = cell.width * CM;
         const x0 = x, x1 = x + cw;
+        const edges = overlay
+          ? { l: x0 <= -W / 2 + 1e-6, r: x1 >= W / 2 - 1e-6, t: ri === 0, b: ri === rows.length - 1 }
+          : null;
+        const ctx = { edges, glow, interior: interiorCtx, handleMaxY };
         if (cell.kind === 'stack') {
-          buildStackCell(THREE, frontsGroup, cell, x0, x1, row.yBottom, row.yTop, D, gloss, color, p, low);
+          buildStackCell(THREE, frontsGroup, cell, x0, x1, row.yBottom, row.yTop, D, fin, color, p, low, ctx);
         } else {
-          buildFrontCell(THREE, frontsGroup, cell, x0, x1, yBot, yTop, D, gloss, color, p, low);
+          buildFrontCell(THREE, frontsGroup, cell, x0, x1, yBot, yTop, D, fin, color, p, low, ctx);
         }
         x = x1;
       }
-    }
+    });
 
     // ---- optional emissive LED strip in the gap below a row --------------
     // Generic opt-in: any row can carry `ledGapBelow: true` to wrap a thin
     // warm strip around the front + both sides of the carcass at that row's
-    // bottom edge (the bedside-table-with-LED-drawers presets use this, one
-    // strip per gap between drawers). Never wraps the back.
+    // bottom edge (one strip per gap between drawers). Never wraps the back.
     for (const row of rows) {
       if (!row.ledGapBelow || low) continue;
-      addLedWrap(THREE, group, W, D, row.yBottom * CM);
+      addLedWrap(THREE, group, W, CD, row.yBottom * CM);
     }
   }
 
@@ -781,10 +1167,10 @@ function addShelfLight(THREE, group, x0, x1, y, depth) {
  * back - three separate thin boxes, centred ON the carcass faces (half
  * embedded, half proud) so they read as a lit seam without pushing the
  * cabinet's overall bounding box past the builder contract's 0.5 cm
- * tolerance on width/depth.
+ * tolerance on width/depth. `depth` is where the carcass front is.
  */
 function addLedWrap(THREE, group, width, depth, y) {
-  const proud = 0.001; // half-thickness of the strip pokes out this far
+  const proud = 0.0015; // half-thickness of the strip: pokes out this far (> 1 mm: see the header)
   const front = new THREE.Mesh(new THREE.BoxGeometry(width * 0.98, 0.006, proud * 2), finish(THREE, 'emissive', '#ff9a45'));
   front.position.set(0, y, depth);
   tag(front, 'ledWrapFront');

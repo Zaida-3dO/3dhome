@@ -370,6 +370,22 @@ jobs:
           # geometry from the vendored module.
           set -euo pipefail
           node scripts/test-cabinet.mjs
+      - name: No two faces of a cabinet or small item z-fight
+        run: |
+          # Builds every cabinet preset and every small-items type/preset at
+          # full and low detail and fails any two faces of one item that face
+          # the same way within 1 mm of one plane and overlap -- the TV-screen
+          # shimmer, the jagged mirror-pane and TV-console edges. Faces whose
+          # materials shade identically are exempt. Self-tests first.
+          set -euo pipefail
+          node scripts/test-coplanar-faces.mjs
+      - name: Live finishes are not near-black without an environment map
+        run: |
+          # The live scene has no env map, so metal/mirror use a live palette
+          # entry; asserts it keeps >= 60% diffuse and that every metal part
+          # of every registered builder actually reads it.
+          set -euo pipefail
+          node scripts/test-live-finishes.mjs
       - name: Plant builder geometry, seed determinism and finish tagging
         run: |
           # Asserts build()'s total height matches potHeight + plantHeight

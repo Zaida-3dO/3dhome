@@ -87,19 +87,6 @@ const PRESETS = {
       gloss: false, color: '#f2f0ec', topColor: '#f2f0ec'
     }
   },
-  wideMirroredWardrobe: {
-    label: 'Wide mirrored wardrobe',
-    params: {
-      width: 150, height: 237, depth: 66,
-      fronts: [{ height: 229, cells: [
-        { kind: 'mirror', width: 50 },
-        { kind: 'mirror', width: 50 },
-        { kind: 'mirror', width: 50 }
-      ] }],
-      plinth: { type: 'plinth', height: 8 },
-      gloss: false, color: '#f2f0ec', topColor: '#f2f0ec'
-    }
-  },
   slidingWardrobe4Panel: {
     label: '2-door sliding wardrobe, 4-panel doors',
     params: {
@@ -123,27 +110,59 @@ const PRESETS = {
       // first assumed) - kept both real leaf widths exact and shrunk the
       // divider instead of shrinking either door. Glass door stacked
       // white(32)/glass(125, w/ shelves + LED)/white(32) = 189 exactly.
+      // The glass section's interior: a dark lining, two clear glass
+      // shelves at 35 and 80 above its floor, a vertical pink LED strip at
+      // the back corner on the divider side, and low-poly contents.
       fronts: [
         { height: 189, cells: [
           { kind: 'door', width: 29 },
           { kind: 'open', width: 1 },
           { kind: 'stack', width: 50, cells: [
             { kind: 'door', height: 32 },
-            { kind: 'glass', height: 125 },
+            { kind: 'glass', height: 125, interior: {
+              lining: '#2b2426', shelves: [35, 80], ledStrip: { color: '#ff4fa0' }, contents: 'books-games'
+            } },
             { kind: 'door', height: 32 }
           ] }
         ] }
       ],
       plinth: { type: 'plinth', height: 0 },
       gloss: true, color: '#ffffff', topColor: '#ffffff',
-      shelfLights: true,
+      // Overlay doors: the fronts cover the carcass edges, so the top and
+      // sides are flush with the doors (no lip standing proud of them).
+      overlayFronts: true,
       // The glass door's side of the carcass has a matching glass side
-      // window (13cm deep) at the front, with a wood-tone panel (20cm deep)
-      // behind it, over the same 125cm middle band. Set side:'left' (and
-      // mirror the fronts cell order) for the second, mirror-image unit that
-      // flanks a TV on the other side.
+      // window (13cm deep) at the front, with a wood-tone panel behind it,
+      // over the same 125cm middle band. The mirror-image unit that flanks a
+      // TV on the other side is the next preset.
       glassSidePanel: {
         side: 'right',
+        bands: [ {}, { height: 125, glassDepth: 13, woodDepth: 20 }, {} ]
+      }
+    }
+  },
+  tallDisplayCabinetMirror: {
+    label: 'Tall display cabinet, mirror image (console)',
+    params: {
+      width: 80, height: 189, depth: 34,
+      fronts: [
+        { height: 189, cells: [
+          { kind: 'stack', width: 50, cells: [
+            { kind: 'door', height: 32 },
+            { kind: 'glass', height: 125, interior: {
+              lining: '#2b2426', shelves: [35, 80], ledStrip: { color: '#ff4fa0' }, contents: 'console'
+            } },
+            { kind: 'door', height: 32 }
+          ] },
+          { kind: 'open', width: 1 },
+          { kind: 'door', width: 29 }
+        ] }
+      ],
+      plinth: { type: 'plinth', height: 0 },
+      gloss: true, color: '#ffffff', topColor: '#ffffff',
+      overlayFronts: true,
+      glassSidePanel: {
+        side: 'left',
         bands: [ {}, { height: 125, glassDepth: 13, woodDepth: 20 }, {} ]
       }
     }
@@ -194,26 +213,42 @@ const PRESETS = {
     label: 'Bedside table, LED drawers — narrow',
     params: {
       width: 24, height: 60, depth: 50,
+      // Drawers 21 / 18 / 15 with a recessed 2 cm light channel between
+      // each pair; each channel has its own colour (upper cool white, lower
+      // amber), wraps the front and both sides, and lights a glow band on
+      // the drawer below. Handleless, white satin, overlay fronts, on a
+      // 2 cm base set back 1 cm.
       fronts: [
-        { height: 18, ledGapBelow: true, cells: [{ kind: 'drawer', width: 24 }] },
-        { height: 18, ledGapBelow: true, cells: [{ kind: 'drawer', width: 24 }] },
-        { height: 18, cells: [{ kind: 'drawer', width: 24 }] }
+        { height: 21, cells: [{ kind: 'drawer', width: 24 }] },
+        { height: 2, channel: { color: '#dbe8ff' } },
+        { height: 18, cells: [{ kind: 'drawer', width: 24 }] },
+        { height: 2, channel: { color: '#ffb347' } },
+        { height: 15, cells: [{ kind: 'drawer', width: 24 }] }
       ],
-      plinth: { type: 'plinth', height: 6 },
-      gloss: false, color: '#ffffff', topColor: '#ffffff'
+      plinth: { type: 'plinth', height: 2, inset: 1 },
+      finish: 'satin', handles: false, overlayFronts: true,
+      color: '#ffffff', topColor: '#ffffff'
     }
   },
   bedsideTableLedWide: {
     label: 'Bedside table, LED drawers — wide',
     params: {
       width: 50, height: 60, depth: 40,
+      // Drawers 21 / 18 / 15 with a recessed 2 cm light channel between
+      // each pair; each channel has its own colour (upper cool white, lower
+      // amber), wraps the front and both sides, and lights a glow band on
+      // the drawer below. Handleless, white satin, overlay fronts, on a
+      // 2 cm base set back 1 cm.
       fronts: [
-        { height: 18, ledGapBelow: true, cells: [{ kind: 'drawer', width: 50 }] },
-        { height: 18, ledGapBelow: true, cells: [{ kind: 'drawer', width: 50 }] },
-        { height: 18, cells: [{ kind: 'drawer', width: 50 }] }
+        { height: 21, cells: [{ kind: 'drawer', width: 50 }] },
+        { height: 2, channel: { color: '#dbe8ff' } },
+        { height: 18, cells: [{ kind: 'drawer', width: 50 }] },
+        { height: 2, channel: { color: '#ffb347' } },
+        { height: 15, cells: [{ kind: 'drawer', width: 50 }] }
       ],
-      plinth: { type: 'plinth', height: 6 },
-      gloss: false, color: '#ffffff', topColor: '#ffffff'
+      plinth: { type: 'plinth', height: 2, inset: 1 },
+      finish: 'satin', handles: false, overlayFronts: true,
+      color: '#ffffff', topColor: '#ffffff'
     }
   },
   mobilePedestal: {
@@ -362,7 +397,7 @@ function App() {
               <tr><td>Height</td><td className="num">{p.height}</td></tr>
               <tr><td>Depth</td><td className="num">{p.depth}</td></tr>
               <tr><td>Plinth / base</td><td className="num">{p.plinth ? `${p.plinth.type} · ${p.plinth.height}` : '—'}</td></tr>
-              <tr><td>Gloss</td><td className="num">{p.gloss ? 'yes' : 'no'}</td></tr>
+              <tr><td>Finish</td><td className="num">{p.finish || (p.gloss ? 'gloss' : 'matte')}</td></tr>
               <tr><td>Shelf lights</td><td className="num">{p.shelfLights ? 'yes' : 'no'}</td></tr>
               <tr><td>Front rows</td><td className="num">{(p.fronts || []).length}</td></tr>
             </tbody>

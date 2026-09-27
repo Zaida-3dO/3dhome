@@ -63,14 +63,14 @@
 
 const TYPE_ORDER = [
   'tv', 'photo-frame', 'speaker', 'subwoofer', 'tube-floor-lamp',
-  'coat-rack', 'mirror', 'shelf', 'monitor', 'pc-tower', 'wire-shelf'
+  'coat-rack', 'mirror', 'shelf', 'monitor', 'pc-tower'
 ];
 
 const TYPE_LABELS = {
   'tv': 'TV', 'photo-frame': 'Photo frame', 'speaker': 'Speaker',
   'subwoofer': 'Subwoofer', 'tube-floor-lamp': 'Tube floor lamp',
   'coat-rack': 'Coat rack', 'mirror': 'Mirror', 'shelf': 'Shelf',
-  'monitor': 'Monitor', 'pc-tower': 'PC tower', 'wire-shelf': 'Wire shelf'
+  'monitor': 'Monitor', 'pc-tower': 'PC tower'
 };
 
 // Presets are DELTAS from DEFAULTS -- only the keys that differ. Every
@@ -150,9 +150,6 @@ const PRESETS = {
   'pc-tower': {
     'Glass side panel': {},
     'No glass panel': { glassPanel: false }
-  },
-  'wire-shelf': {
-    'Default': {}
   }
 };
 
@@ -180,9 +177,32 @@ function diffFromDefaults(type, params) {
 function buildItem(t, group, THREE, ctx) {
   const impl = window.SmallItems.TYPES[t.type];
   if (!impl) return;
-  const built = impl.build(THREE, t.params, { detail: t.detail || 'full' });
+  // Tube floor lamp, light preview OFF: the tube is drawn unlit (matte).
+  const params = t.lamp && !t.lamp.on ? Object.assign({}, t.params, { finish: 'matte' }) : t.params;
+  const built = impl.build(THREE, params, { detail: t.detail || 'full' });
   group.add(built);
+  if (t.lamp) addLampPreview(THREE, group, t.params, t.lamp);
   ctx.builtType = t.type;
+}
+
+// PAGE-ONLY light preview for the tube floor lamp: a real point light at the
+// tube, in the tube's colour, and a floor and wall corner round the lamp to
+// see what it lights. Nothing here is part of the builder or the house.
+function addLampPreview(THREE, group, p, lamp) {
+  const room = new THREE.MeshStandardMaterial({ color: 0xcfc9bf, roughness: 0.9 });
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), room);
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(0, -0.001, 0.5);
+  floor.receiveShadow = true;
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(3, 2.4), room);
+  wall.position.set(0, 1.2, -0.01);
+  wall.receiveShadow = true;
+  group.add(floor, wall);
+  if (!lamp.on) return;
+  const baseH = Math.min(p.baseHeight, p.height * 0.5) / 100;
+  const light = new THREE.PointLight(new THREE.Color(p.color), lamp.brightness, 6, 2);
+  light.position.set(0, baseH + (p.height / 100 - baseH) / 2, Math.min(p.width, p.depth) / 200);
+  group.add(light);
 }
 
 function heightOfItem(t) {
@@ -203,6 +223,9 @@ function App() {
   const [overrides, setOverrides] = React.useState({});
   const [detail, setDetail] = React.useState('full');
   const [copied, setCopied] = React.useState(false);
+  // Tube floor lamp light preview (page-only): on/off and brightness; the
+  // colour is the lamp's own `color` param.
+  const [lamp, setLamp] = React.useState({ on: true, brightness: 3 });
 
   if (!ready) {
     return <div className="sub">Loading src/furniture/small-items.js…</div>;
@@ -213,7 +236,7 @@ function App() {
   const activePreset = presetName && presets[presetName] ? presetName : presetNames[0];
   const baseParams = paramsFor(type, activePreset);
   const params = Object.assign({}, baseParams, overrides);
-  const t = { type, params, detail };
+  const t = { type, params, detail, lamp: type === 'tube-floor-lamp' ? lamp : null };
 
   const selectType = (nt) => {
     setType(nt);
@@ -244,8 +267,8 @@ function App() {
       <div className="sub">
         One multi-type module (src/furniture/small-items.js) for the small wall/floor
         fittings across every room: TVs, photo frames, speakers, a subwoofer, a tube
-        floor lamp, a coat rack, mirrors, shelves, monitors, a PC tower and a wire
-        shelf. Generic names and dimensions only — the private house's own params
+        floor lamp, a coat rack, mirrors, shelves, monitors and a PC tower. Generic
+        names and dimensions only — the private house's own params
         carry the real numbers.
       </div>
 
@@ -289,6 +312,21 @@ function App() {
             Copy JSON emits only the params that differ from this type's DEFAULTS —
             exactly what a real placement's furniture[].params should carry.
           </div>
+          {type === 'tube-floor-lamp' && (
+            <div className="row" id="lampPreview">
+              <button className={'btn' + (lamp.on ? ' active' : '')}
+                onClick={() => setLamp(Object.assign({}, lamp, { on: !lamp.on }))}>
+                {lamp.on ? 'Light: on' : 'Light: off'}
+              </button>
+              <label className="legend" style={{ marginTop: 0 }}>colour{' '}
+                <input type="color" value={params.color} onChange={e => setParam('color', e.target.value)} />
+              </label>
+              <label className="legend" style={{ marginTop: 0 }}>brightness{' '}
+                <input type="range" min="0" max="10" step="0.5" value={lamp.brightness}
+                  onChange={e => setLamp(Object.assign({}, lamp, { brightness: Number(e.target.value) }))} />
+              </label>
+            </div>
+          )}
         </div>
 
         <div className="card">
