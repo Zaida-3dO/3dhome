@@ -245,6 +245,72 @@ function check(label, cond, detail) {
           house.specPages[0].url === 'houses/demo/specs/ok.html',
           JSON.stringify({ warnings, wallFaceTextures: house.wallFaceTextures, extraOverlays: house.extraOverlays, specPages: house.specPages }));
   }
+
+  // CONTAINMENT ALONE. These paths PASS every path regex -- the URL parser
+  // strips tab and newline, and '.' in the (?!.*\.\.) lookahead does not
+  // cross a newline -- yet each resolves to houses/<file>, one level above
+  // the profile. Only resolvesInsideProfile() catches them, so these are
+  // the cases that pin that layer on its own (drop it and they all fail).
+  const sneaky = ['.\t./secret', '.\n./secret', '\n../secret'];
+  for (const stem of sneaky) {
+    const geo = JSON.parse(JSON.stringify(BASE));
+    geo.walls.segments[0].faceTexture = { side: 'south', texture: { path: stem + '.png' } };
+    geo.rooms[0].rug = { texture: { path: stem + '.png' } };
+    geo.extraOverlays = [stem + '.js'];
+    geo.specPages = [{ name: 'Evil', path: stem + '.html' }];
+    const { house, warnings } = compileQuiet(geo);
+    const room = house.rooms[Object.keys(house.rooms)[0]];
+    const tag = JSON.stringify(stem);
+    check('containment-only: faceTexture ' + tag + ' refused',
+          Object.keys(house.wallFaceTextures || {}).length === 0 && warnings.some(w => /faceTexture path/.test(w)),
+          JSON.stringify({ wallFaceTextures: house.wallFaceTextures, warnings }));
+    check('containment-only: rug texture ' + tag + ' refused',
+          room.rug && room.rug.textureUrl === null && warnings.some(w => /rug texture path/.test(w)),
+          JSON.stringify({ rug: room.rug, warnings }));
+    check('containment-only: extraOverlays ' + tag + ' refused',
+          house.extraOverlays.length === 0 && warnings.some(w => /extraOverlays entry/.test(w)),
+          JSON.stringify({ extraOverlays: house.extraOverlays, warnings }));
+    check('containment-only: specPages ' + tag + ' refused',
+          house.specPages.length === 0 && warnings.some(w => /specPages entry/.test(w)),
+          JSON.stringify({ specPages: house.specPages, warnings }));
+  }
+
+  // EMPTY dir (compile(doc, '') is a documented call shape) on a page whose
+  // URL is not a bare directory: containment must compare against the page's
+  // directory, not the page URL itself -- otherwise every path is refused.
+  {
+    const saved = globalThis.location;
+    globalThis.location = { href: 'http://h.invalid/app/index.html?house=x#top' };
+    try {
+      const geo = JSON.parse(JSON.stringify(BASE));
+      geo.walls.segments[0].faceTexture = { side: 'south', texture: { path: 'textures/ok.png' } };
+      geo.rooms[0].rug = { texture: { path: 'textures/rug.png' } };
+      geo.extraOverlays = ['overlays/ok.js'];
+      geo.specPages = [{ name: 'OK', path: 'specs/ok.html' }];
+      const warnings = [];
+      const w = console.warn;
+      console.warn = (...m) => warnings.push(m.map(String).join(' '));
+      let house;
+      try { house = HouseLoader.compile(geo, ''); } finally { console.warn = w; }
+      const room = house.rooms[Object.keys(house.rooms)[0]];
+      check('empty dir on /app/index.html?query: normal paths still resolve',
+            warnings.length === 0 &&
+            house.wallFaceTextures[1] && house.wallFaceTextures[1].url === 'textures/ok.png' &&
+            room.rug && room.rug.textureUrl === 'textures/rug.png' &&
+            house.extraOverlays.length === 1 && house.specPages.length === 1,
+            JSON.stringify({ warnings, wallFaceTextures: house.wallFaceTextures }));
+      // ...and containment still bites with an empty dir.
+      const geo2 = JSON.parse(JSON.stringify(BASE));
+      geo2.extraOverlays = ['\n../evil.js'];
+      console.warn = (...m) => warnings.push(m.map(String).join(' '));
+      let house2;
+      try { house2 = HouseLoader.compile(geo2, ''); } finally { console.warn = w; }
+      check('empty dir: an escaping overlay is still refused', house2.extraOverlays.length === 0,
+            JSON.stringify(house2.extraOverlays));
+    } finally {
+      if (saved === undefined) delete globalThis.location; else globalThis.location = saved;
+    }
+  }
 }
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

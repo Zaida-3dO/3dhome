@@ -109,7 +109,10 @@ export const HouseLoader = (() => {
     const anchor = typeof location !== 'undefined' && location.href ? location.href : 'http://localhost/';
     try {
       const resolved = new URL(dir + relPath, anchor).href;
-      const base = new URL(dir, anchor).href;
+      // './' drops any query, hash and last path segment, so an empty dir
+      // (compile(doc, '')) contains against the page's DIRECTORY, not the
+      // page URL itself (/app/index.html?house=x -> /app/).
+      const base = new URL('./', new URL(dir, anchor)).href;
       return resolved.startsWith(base);
     } catch (e) {
       // dir/relPath failed to parse as a URL at all -- treat as not contained

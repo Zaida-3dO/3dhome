@@ -111,7 +111,11 @@ export function resolveModelUrl(src, assetBase) {
   // does not anticipate -- containment is checked on the RESOLVED url, which
   // is the thing that is actually fetched.
   try {
-    const baseHref = new URL(base, anchor).href;
+    // './' against the resolved base drops any query, hash and last path
+    // segment: with an empty assetBase the base is the page's DIRECTORY
+    // (e.g. /app/ for /app/index.html?house=x), not the page URL itself --
+    // otherwise nothing could ever start with it.
+    const baseHref = new URL('./', new URL(base, anchor)).href;
     if (!url.startsWith(baseHref)) {
       return { error: 'params.src "' + src + '" resolves outside the profile directory' };
     }
@@ -213,40 +217,68 @@ export function gltfToAsset(gltf) {
  * relative path resolved against the profile directory, or an absolute
  * https:// URL); GLTFLoader will happily fetch either. That would silently
  * reopen exactly the "a file names further files" hole the .glb-only rule
- * exists to close. So this reads the GLB's JSON chunk by hand and refuses
+ * exists to close. So this reads the GLB's JSON chunks by hand and refuses
  * any external (non-`data:`) uri BEFORE handing the bytes to GLTFLoader.
  *
  * GLB layout (see the Binary glTF spec): a 12-byte header (magic uint32,
  * version uint32, total length uint32), then one or more chunks, each an
  * 8-byte header (chunkLength uint32, chunkType uint32) followed by that many
- * bytes. The JSON chunk's type is the ASCII bytes "JSON" read little-endian,
- * i.e. 0x4e4f534a, and by spec it is always first.
+ * bytes. A JSON chunk's type is the ASCII bytes "JSON" read little-endian
+ * (0x4e4f534a).
+ *
+ * FAIL CLOSED. Every shape this cannot fully vouch for is refused, not
+ * passed on to GLTFLoader, because GLTFLoader accepts more than the spec:
+ *   - bytes whose magic is not "glTF" -- GLTFLoader.parse then falls back
+ *     to JSON.parse of the whole buffer, i.e. a renamed .gltf;
+ *   - a version other than 2, or a declared length past the end of the file;
+ *   - a chunk that overruns the declared length, or a trailing partial
+ *     chunk header;
+ *   - no JSON chunk, or one that is not a JSON object.
+ * And EVERY chunk is walked (the same bound GLTFLoader walks: the declared
+ * length), and every JSON chunk is checked -- GLTFLoader uses the LAST JSON
+ * chunk it meets, wherever it sits, so checking only the first one (or only
+ * the chunk at offset 12) would let a benign decoy through.
  *
  * @returns {?string} a human-readable reason to refuse the file, or null
  */
 function findExternalGlbUri(buf) {
+  const bad = why => 'is not a well-formed binary glTF (' + why + ') -- refused';
+  if (!(buf instanceof ArrayBuffer) || buf.byteLength < 12) return bad('shorter than a GLB header');
   const dv = new DataView(buf);
-  if (buf.byteLength < 20 || dv.getUint32(0, true) !== 0x46546c67) return null; // not a GLB -- let GLTFLoader report it
-  const chunkLength = dv.getUint32(12, true);
-  const chunkType = dv.getUint32(16, true);
-  if (chunkType !== 0x4e4f534a) return null; // no JSON chunk where the spec requires one -- let GLTFLoader report it
-  const jsonStart = 20;
-  if (jsonStart + chunkLength > buf.byteLength) return null;
-  let json;
-  try {
-    json = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(buf, jsonStart, chunkLength)));
-  } catch (e) {
-    return null; // unparseable -- let GLTFLoader produce the real parse error
-  }
+  if (dv.getUint32(0, true) !== 0x46546c67) return bad('no "glTF" magic');
+  if (dv.getUint32(4, true) !== 2) return bad('version ' + dv.getUint32(4, true) + ', not 2');
+  const total = dv.getUint32(8, true);
+  if (total < 12 || total > buf.byteLength) return bad('declared length ' + total + ' but the file has ' + buf.byteLength + ' bytes');
   const isExternal = uri => typeof uri === 'string' && !/^data:/i.test(uri);
-  for (const kind of ['buffers', 'images']) {
-    const arr = Array.isArray(json[kind]) ? json[kind] : [];
-    for (const entry of arr) {
-      if (entry && isExternal(entry.uri)) {
-        return kind + '[].uri "' + entry.uri + '" is external -- a .glb must be self-contained (data: URIs only)';
+  const decoder = new TextDecoder('utf-8');
+  let jsonChunks = 0;
+  for (let at = 12; at < total;) {
+    if (at + 8 > total) return bad('truncated chunk header');
+    const chunkLength = dv.getUint32(at, true);
+    const chunkType = dv.getUint32(at + 4, true);
+    const start = at + 8;
+    if (start + chunkLength > total) return bad('a chunk runs past the end of the file');
+    if (chunkType === 0x4e4f534a) {
+      jsonChunks++;
+      let json;
+      try {
+        json = JSON.parse(decoder.decode(new Uint8Array(buf, start, chunkLength)));
+      } catch (e) {
+        return bad('unparseable JSON chunk');
+      }
+      if (!json || typeof json !== 'object' || Array.isArray(json)) return bad('JSON chunk is not an object');
+      for (const kind of ['buffers', 'images']) {
+        const arr = Array.isArray(json[kind]) ? json[kind] : [];
+        for (const entry of arr) {
+          if (entry && isExternal(entry.uri)) {
+            return kind + '[].uri "' + entry.uri + '" is external -- a .glb must be self-contained (data: URIs only)';
+          }
+        }
       }
     }
+    at = start + chunkLength;
   }
+  if (!jsonChunks) return bad('no JSON chunk');
   return null;
 }
 

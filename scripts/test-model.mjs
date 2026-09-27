@@ -96,6 +96,26 @@ try {
     const ok = M.resolveModelUrl(SRC, BASE);
     check('guard accepts a profile-relative .glb', ok.url === origin + BASE + SRC, ok);
     check('guard accepts upper-case .GLB', !M.resolveModelUrl('a/B.GLB', BASE).error);
+    // CONTAINMENT ALONE: these pass MODEL_PATH_RE (the URL parser strips tab
+    // and newline; '.' in the (?!.*\.\.) lookahead does not cross a newline)
+    // but resolve to houses/x.glb, outside the profile. Only the resolved-URL
+    // containment check refuses them.
+    ['.\t./x.glb', '.\n./x.glb', '\n../x.glb'].forEach(bad => {
+      check('regex alone passes ' + JSON.stringify(bad), M.MODEL_PATH_RE.test(bad));
+      check('containment refuses ' + JSON.stringify(bad), /outside the profile/.test(M.resolveModelUrl(bad, BASE).error || ''),
+        M.resolveModelUrl(bad, BASE));
+    });
+    // EMPTY assetBase on a page whose URL is not a bare directory: contain
+    // against the page's directory, not the page URL itself.
+    {
+      const saved = globalThis.location;
+      globalThis.location = { href: origin + 'app/index.html?house=x#top' };
+      try {
+        const r = M.resolveModelUrl('models/a.glb', '');
+        check('empty assetBase on /app/index.html?query resolves under /app/', r.url === origin + 'app/models/a.glb', r);
+        check('empty assetBase: an escape is still refused', !!M.resolveModelUrl('\n../x.glb', '').error);
+      } finally { globalThis.location = saved; }
+    }
   }
 
   // ---- 2. prepare: one fetch per file, real GLTFLoader ------------------------
@@ -321,8 +341,92 @@ try {
       M.clearModelCache();
       const r3 = await quietlyAsync(() => M.prepare([item('normal', { src: SRC })]));
       check('a normal GLB (the demo file) still loads past the guard', r3.warnings.length === 0, r3.warnings);
+
+      // A data: uri is NOT refused: the file reaches GLTFLoader (it then
+      // fails for having no mesh, which is not the guard's business).
+      M.clearModelCache();
+      await quietlyAsync(() => M.prepare([item('data-ok', { src: 'models/data-uri-ok.glb' })]));
+      err = null;
+      try { M.build(THREE, Object.assign({}, M.DEFAULTS, { src: 'models/data-uri-ok.glb' }), { assetBase: BASE }); } catch (e) { err = e.message; }
+      check('a GLB with only a data: buffer uri passes the guard', !!err && !/external|refused/.test(err) && /no full-detail mesh|no scene/.test(err), err);
     } finally {
       remove('external-image.glb'); remove('external-buffer.glb'); remove('data-uri-ok.glb');
+    }
+  }
+
+  // ---- GLB guard fails CLOSED on shapes GLTFLoader still accepts ---------------
+  // Each file below would make GLTFLoader fetch https://example.invalid/x.bin
+  // if the guard let it through. fetch is wrapped so the test sees every URL
+  // the real prepare() -> defaultLoadGltf -> GLTFLoader path requests; the
+  // only request allowed is the .glb itself.
+  {
+    const EVIL = 'https://example.invalid/x.bin';
+    const pad4 = (b, byte) => { const p = (4 - (b.length % 4)) % 4; return p ? Buffer.concat([b, Buffer.alloc(p, byte)]) : b; };
+    const chunk = (type, body) => {
+      const h = Buffer.alloc(8); h.writeUInt32LE(body.length, 0); h.writeUInt32LE(type, 4);
+      return Buffer.concat([h, body]);
+    };
+    const JSONT = 0x4e4f534a, BINT = 0x004e4942;
+    const jsonBody = obj => pad4(Buffer.from(JSON.stringify(obj), 'utf8'), 0x20);
+    const glb = (chunks, declared, version) => {
+      const body = Buffer.concat(chunks);
+      const h = Buffer.alloc(12);
+      h.writeUInt32LE(0x46546c67, 0); h.writeUInt32LE(version != null ? version : 2, 4);
+      h.writeUInt32LE(declared != null ? declared : 12 + body.length, 8);
+      return Buffer.concat([h, body]);
+    };
+    // A mesh whose POSITION accessor reads buffer 0, so GLTFLoader really
+    // does fetch that buffer's uri when the guard lets the file through.
+    const evilDoc = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }],
+      nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+      accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 1] }],
+      bufferViews: [{ buffer: 0, byteLength: 36 }],
+      buffers: [{ uri: EVIL, byteLength: 36 }] };
+    const benignDoc = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [] }], nodes: [] };
+    const hostileFull = glb([chunk(JSONT, jsonBody(evilDoc))]);
+    const files = {
+      // (a) a renamed .gltf: plain JSON text, no "glTF" magic
+      'plain-json.glb': Buffer.from(JSON.stringify(evilDoc), 'utf8'),
+      // (b) a real GLB with the BIN chunk first and the JSON chunk second
+      'bin-first.glb': glb([chunk(BINT, Buffer.alloc(4)), chunk(JSONT, jsonBody(evilDoc))]),
+      // (c) a benign JSON chunk, then a hostile one (GLTFLoader uses the LAST)
+      'two-json.glb': glb([chunk(JSONT, jsonBody(benignDoc)), chunk(JSONT, jsonBody(evilDoc))]),
+      // (d) truncated: the header declares more bytes than the file holds
+      'truncated.glb': hostileFull.subarray(0, hostileFull.length - 8),
+      // (e) a JSON chunk that does not parse
+      'bad-json.glb': glb([chunk(JSONT, pad4(Buffer.from('{"buffers":[', 'utf8'), 0x20))]),
+      // (f) a header version other than 2
+      'version3.glb': glb([chunk(JSONT, jsonBody(benignDoc))], null, 3)
+    };
+    // The refusal each file must get -- pinned per file, so each layer of the
+    // guard is tested on its own rather than rescued by a later one.
+    const reason = {
+      'plain-json.glb': /no "glTF" magic/,
+      'bin-first.glb': /buffers\[\]\.uri "https:\/\/example\.invalid\/x\.bin" is external/,
+      'two-json.glb': /buffers\[\]\.uri "https:\/\/example\.invalid\/x\.bin" is external/,
+      'truncated.glb': /declared length \d+ but the file has \d+ bytes/,
+      'bad-json.glb': /unparseable JSON chunk/,
+      'version3.glb': /version 3, not 2/
+    };
+    const dir = path.join(root, BASE.replace(/\/$/, ''), 'models');
+    const realFetch = globalThis.fetch;
+    try {
+      for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), bytes);
+      for (const name of Object.keys(files)) {
+        const seen = [];
+        globalThis.fetch = (u, ...rest) => { seen.push(String(u && u.url ? u.url : u)); return realFetch(u, ...rest); };
+        M.clearModelCache();
+        await quietlyAsync(() => M.prepare([item(name, { src: 'models/' + name })]));
+        globalThis.fetch = realFetch;
+        let err = null;
+        try { M.build(THREE, Object.assign({}, M.DEFAULTS, { src: 'models/' + name }), { assetBase: BASE }); } catch (e) { err = e.message; }
+        check(name + ' is refused by the guard for the right reason', !!err && reason[name].test(err), err);
+        check(name + ': nothing but the .glb itself is fetched',
+          seen.length === 1 && seen[0].endsWith('/' + BASE + 'models/' + name), seen);
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+      for (const name of Object.keys(files)) { try { fs.unlinkSync(path.join(dir, name)); } catch (e) { /* gone */ } }
     }
   }
 
