@@ -644,6 +644,8 @@ jobs:
         run: node scripts/test-sidebar-pin.mjs
       - name: Camera zoom (dolly-through, never inverts) and two-finger pan/pinch classification
         run: node scripts/test-camera-gestures.mjs
+      - name: Sliders and popover -- every range part styled, diamond matches the card, color-scheme dark
+        run: node scripts/test-range-styles.mjs
       - name: Accent light colour -- rgb/hs conversion, colour square, HA colour parsing
         run: node scripts/test-light-color.mjs
       - name: Real sun -- solar position, daylight curve, window sun pools, sun.sun, ?time=

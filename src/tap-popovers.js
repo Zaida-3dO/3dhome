@@ -424,8 +424,8 @@ const STATUS = {
  *   rangeGap        the slider's margin-top below the row
  */
 export const GEOM = {
-  fine:   { ibH: 28, ibHitY: 4, swH: 20, swHitY: 12, rangeGap: 8, rangeH: 20 },
-  coarse: { ibH: 34, ibHitY: 5, swH: 24, swHitY: 10, rangeGap: 5, rangeH: 40 },
+  fine:   { ibH: 28, ibHitY: 4, swH: 20, swHitY: 12, rangeGap: 8, rangeH: 24 },
+  coarse: { ibH: 34, ibHitY: 5, swH: 24, swHitY: 10, rangeGap: 5, rangeH: 44 },
 };
 /** Pixels by which a control's hit area overlaps the slider below (<= 0: none). */
 export function hitOverlapPx(g) {
@@ -439,30 +439,38 @@ export function hitOverlapPx(g) {
 // a desktop browser cannot be made to report a coarse pointer.
 const GC = GEOM.coarse, GF = GEOM.fine;
 const MARQ_PAD = 6;   // px the marquee's fade reaches past the title box
-const COARSE = '--w:216px;--ib-w:38px;--ib-h:' + GC.ibH + 'px;--sw-w:40px;--sw-h:' + GC.swH + 'px;--thumb:20px;';
+const COARSE = '--w:216px;--ib-w:38px;--ib-h:' + GC.ibH + 'px;--sw-w:40px;--sw-h:' + GC.swH + 'px;--thumb:26px;--track-h:8px;';
 const coarseRules = sel => `
 ${sel} .tp-pop { ${COARSE} }
 ${sel} .tp-status::after { inset: -14px; }
 ${sel} .tp-btns { gap: 6px; }
 ${sel} .tp-ib::after { inset: -${GC.ibHitY}px -3px; }
 ${sel} .tp-sw::after { inset: -${GC.swHitY}px -2px; }
-${sel} .tp-range { height: ${GC.rangeH}px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 10)}px; }
-${sel} .tp-crow { gap: 12px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 10)}px; }
+${sel} .tp-range { height: ${GC.rangeH}px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 12)}px; }
+${sel} .tp-crow { gap: 12px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 12)}px; }
 ${sel} .tp-crow .tp-range { margin: 0; }
 ${sel} .tp-color { --sq: 20px; --pad: 12px; }
 ${sel} .tp-pop.chip { padding: 10px 12px; }`;
 
 export const STYLE = `
-.tp-pop { --w:200px; --ib-w:30px; --ib-h:${GF.ibH}px; --sw-w:36px; --sw-h:${GF.swH}px; --thumb:14px;
+.tp-pop { --w:200px; --ib-w:30px; --ib-h:${GF.ibH}px; --sw-w:36px; --sw-h:${GF.swH}px; --thumb:20px; --track-h:6px;
   --ink:#fff; --ink-2:rgba(255,255,255,0.62); --accent:#6366f1; --ok:#22c55e; --warn:#eab308; --bad:#ef4444;
   --amber:#ffd43b; --heat:#ff8a3d; --door-open:#f59e0b;
+  /* The card and its pointer diamond paint from these same two variables. */
+  --pop-bg: rgba(10,10,20,0.94); --pop-border: rgba(255,255,255,0.10);
+  /* Range parts -- see the .tp-range block below. */
+  --range-track: rgba(255,255,255,0.30); --range-thumb: #fff;
+  /* Dark is declared, so the browser's own controls render dark, and so Chrome's
+     auto dark theme and Samsung Internet's dark web pages leave the card alone
+     instead of re-colouring parts of it. */
+  color-scheme: dark;
   position: fixed; z-index: 60; width: var(--w); padding: 10px 12px; border-radius: 10px;
-  background: rgba(10,10,20,0.94); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255,255,255,0.10); box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+  background: var(--pop-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--pop-border); box-shadow: 0 6px 20px rgba(0,0,0,0.45);
   color: var(--ink); font: 12px/1.3 'Segoe UI', system-ui, sans-serif; touch-action: manipulation; box-sizing: border-box; }
 .tp-pop *, .tp-pop *::before, .tp-pop *::after { box-sizing: border-box; }
 .tp-pop:focus { outline: none; }   /* the card itself holds focus only as a fallback; its controls show rings */
-.tp-arrow { position: absolute; width: 11px; height: 11px; background: rgb(10,10,20); border: 0 solid rgba(255,255,255,0.10); }
+.tp-arrow { position: absolute; width: 11px; height: 11px; background: var(--pop-bg); border: 0 solid var(--pop-border); }
 .tp-arrow.bottom { bottom: -6px; transform: translateX(-50%) rotate(45deg); border-right-width: 1px; border-bottom-width: 1px; }
 .tp-arrow.top { top: -6px; transform: translateX(-50%) rotate(45deg); border-left-width: 1px; border-top-width: 1px; }
 .tp-arrow.left { left: -6px; transform: translateY(-50%) rotate(45deg); border-left-width: 1px; border-bottom-width: 1px; }
@@ -538,20 +546,31 @@ export const STYLE = `
 .tp-range:disabled { opacity: 0.35; cursor: not-allowed; }
 .tp-offline { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: #fecaca; }
 .tp-offline::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
-.tp-range { --p: 50%; display: block; width: 100%; height: ${GF.rangeH}px; margin: ${GF.rangeGap}px 0 -2px; background: transparent;
-  -webkit-appearance: none; appearance: none; cursor: pointer; outline: none; }
-.tp-range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
-  background: linear-gradient(to right, var(--fill, var(--accent)) var(--p), rgba(255,255,255,0.16) var(--p)); }
-.tp-range::-moz-range-track { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.16); }
-.tp-range::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--fill, var(--accent)); }
-.tp-range::-webkit-slider-thumb { -webkit-appearance: none; width: var(--thumb); height: var(--thumb); border-radius: 50%;
-  background: #fff; margin-top: calc(2px - var(--thumb) / 2); box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
-.tp-range::-moz-range-thumb { width: var(--thumb); height: var(--thumb); border-radius: 50%; background: #fff; border: 0; }
+.tp-range { --p: 50%; display: block; width: 100%; height: ${GF.rangeH}px; margin: ${GF.rangeGap}px 0 -4px; background: transparent;
+  -webkit-appearance: none; appearance: none; cursor: pointer; outline: none; accent-color: var(--fill, var(--accent)); }
+/* EVERY part of the range is styled here, in both engines. A part left to the
+   browser renders its own way -- thumb, track and colours differ between
+   Chrome, Android Chrome, Samsung Internet, Safari and a WebView -- which is
+   why the same card looked different on each device. Filled part: --fill up
+   to --p (set from the value in JS); the rest: --range-track. Thumb: white
+   disc with a ring in the fill colour and a dark halo, so it separates from
+   the card, the fill and the unfilled track alike. */
+.tp-range::-webkit-slider-runnable-track { height: var(--track-h); border-radius: 999px; border: 0;
+  background: linear-gradient(to right, var(--fill, var(--accent)) var(--p), var(--range-track) var(--p)); }
+.tp-range::-moz-range-track { height: var(--track-h); border-radius: 999px; border: 0; background: var(--range-track); }
+.tp-range::-moz-range-progress { height: var(--track-h); border-radius: 999px; border: 0; background: var(--fill, var(--accent)); }
+.tp-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; box-sizing: border-box;
+  width: var(--thumb); height: var(--thumb); border-radius: 50%; margin-top: calc((var(--track-h) - var(--thumb)) / 2);
+  background: var(--range-thumb); border: 3px solid var(--fill, var(--accent));
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.55); }
+.tp-range::-moz-range-thumb { box-sizing: border-box; width: var(--thumb); height: var(--thumb); border-radius: 50%;
+  background: var(--range-thumb); border: 3px solid var(--fill, var(--accent));
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.55); }
 .tp-range.temp { --fill: var(--heat); }
 /* Accent light: colour square inline with the brightness slider. The input's
    box is the hit area; its padding insets the visible swatch, and matching
    negative margins keep the layout at the swatch's size. */
-.tp-crow { display: flex; align-items: center; gap: 8px; margin: ${GF.rangeGap}px 0 -2px; }
+.tp-crow { display: flex; align-items: center; gap: 8px; margin: ${GF.rangeGap}px 0 -4px; }
 .tp-crow .tp-range { flex: 1 1 auto; width: auto; min-width: 0; margin: 0; }
 .tp-color { --sq: 18px; --pad: 4px; flex: none; width: calc(var(--sq) + 2 * var(--pad)); height: calc(var(--sq) + 2 * var(--pad));
   margin: calc(-1 * var(--pad)); padding: 0; border: 0; background: none; cursor: pointer; -webkit-appearance: none; appearance: none; }
@@ -560,7 +579,7 @@ export const STYLE = `
 .tp-color::-moz-color-swatch { border: 1px solid rgba(255,255,255,0.35); border-radius: 5px; }
 .tp-color:disabled { opacity: 0.35; cursor: not-allowed; }
 .tp-color:focus-visible { outline: 2px solid #a5b4fc; outline-offset: -2px; }
-.tp-range.off { --fill: rgba(255,255,255,0.4); }
+.tp-range.off { --fill: rgba(255,255,255,0.55); }
 /* Robot vacuum card: a status line with the battery, three labelled buttons,
    then one chip per bound room. */
 .tp-pop[data-kind=vacuum] { --w: 236px; }
