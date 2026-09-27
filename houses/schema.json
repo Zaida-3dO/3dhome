@@ -316,6 +316,13 @@
           ],
           "additionalProperties": false
         },
+        "finishes": {
+          "type": "array",
+          "description": "OPTIONAL per-face finishes: brick, tile... on ONE long face of this wall each, optionally over only a height range and a span along the wall. The finish is drawn procedurally (no image file) at its real size, and fades with its wall. A finish covering a face completely costs no extra mesh; a partial one is a thin panel over just that rectangle, and skips the wall's doors and windows. Added in schemaVersion 1.3; an older engine ignores it.",
+          "items": {
+            "$ref": "#/$defs/wallFinish"
+          }
+        },
         "notes": {
           "type": "string"
         }
@@ -324,6 +331,88 @@
         "id",
         "start",
         "end"
+      ],
+      "additionalProperties": false
+    },
+    "wallFinish": {
+      "type": "object",
+      "title": "A finish on one face of a wall",
+      "description": "Names ONE long face of the wall -- by `side` (\"exterior\", or a compass side) or by `room` (the face that fronts that room, derived exactly as a window's room face is) -- and puts `finish` on it. Give exactly one of `side` and `room`. `from`/`to` limit it to a height band and `along` to a span of the wall; omit them to cover the whole face.",
+      "properties": {
+        "finish": {
+          "type": "string",
+          "enum": [
+            "brick",
+            "tile"
+          ],
+          "description": "`brick`: the running-bond buff brick the WindowSpec and BalconyWindowSpec pages draw on the outer leaf (UK 215 x 65 mm brick, 10 mm joint). `tile`: a PLACEHOLDER 15 cm square off-white tile, pending the real bathroom tile look."
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "exterior",
+            "north",
+            "south",
+            "east",
+            "west",
+            "start",
+            "end"
+          ],
+          "description": "`exterior`: the long face pointing away from the house footprint's centre (judged per wall -- name a compass side instead for a wall in the notch of an L-shaped house). A compass side names the face that looks that way: a LONG face (north/south of an east-west wall, east/west of a north-south one) or an END face (north/south of a north-south wall -- e.g. the north face of a pillar authored as a short north-south segment). `start`/`end`: the end face at the segment's authored start or end point."
+        },
+        "room": {
+          "$ref": "#/$defs/roomId",
+          "description": "The face of this wall that fronts this room. The room must actually border the wall (over `along`, if given)."
+        },
+        "from": {
+          "type": "number",
+          "description": "Bottom of the finish, cm above the floor. Omit to start at the bottom of the wall (below the floor, for an exterior wall that runs down through the slab)."
+        },
+        "to": {
+          "type": "number",
+          "description": "Top of the finish, cm above the floor -- e.g. tiles stopping below the ceiling. Omit to run to the top of the wall. Must be above `from`."
+        },
+        "along": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[start, end]: the span of the wall to finish, in plan cm on the wall's long axis (x for an east-west wall, y for a north-south one) -- the same convention as `door.centre`. Omit to finish the whole length. Needs an axis-aligned wall; ignored on an end face."
+        },
+        "reveals": {
+          "type": "boolean",
+          "description": "Also wrap the finish round the reveals (jambs) of the wall's doors and windows and round the wall's own ends, within the finish's height band -- as brick returns into a window opening. Defaults to true for `side: \"exterior\"` and false otherwise."
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "finish"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "side"
+          ],
+          "not": {
+            "required": [
+              "room"
+            ]
+          }
+        },
+        {
+          "required": [
+            "room"
+          ],
+          "not": {
+            "required": [
+              "side"
+            ]
+          }
+        }
       ],
       "additionalProperties": false
     },

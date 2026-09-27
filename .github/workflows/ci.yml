@@ -465,6 +465,8 @@ jobs:
         run: node scripts/test-model.mjs
       - name: Wall side is probed at the item, not from the room's bbox
         run: node scripts/test-wall-side.mjs
+      - name: Wall finishes (schema, brick spec-page parity, one face only, bands and spans, fade)
+        run: node scripts/test-wall-finishes.mjs
       - name: Furniture drift (registry, schema params blocks, builder DEFAULTS)
         run: node scripts/test-furniture-defaults.mjs
       - name: Kitchen builders (corner, sink, LEDs, draw budget)

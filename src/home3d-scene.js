@@ -26,6 +26,10 @@ import {
   disposeFurniture
 } from './furniture.js';
 import { startLiveClock } from './furniture/wall-clock.js';
+import {
+  FINISH_TYPES, makeFinishTexture, alongToMetres, finishRectOnBox, createFinishBatch, addLongFace,
+  addCrossFace, buildFinishGeometry, revealEnds
+} from './wall-finish.js';
 
 export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------
@@ -1268,6 +1272,44 @@ export const Home3DScene = (() => {
         : [plain, wallpaperMat, plain, plain, plain, plain];
     }
 
+    // WALL FINISHES (wall.finishes, schemaVersion 1.3) -- brick, tile, ...
+    // on ONE face of a wall, optionally over a height band and a span; see
+    // src/wall-finish.js for the model and house-loader for how each face is
+    // resolved. Every finished face of a wall, for one finish, is ONE merged
+    // mesh (quads 1.5 mm proud of the painted boxes), so a finish costs one
+    // draw per wall however many boxes the wall is split into, and the boxes
+    // keep their single material. One texture and one material template per
+    // finish type per scene, created on first use so a house with no finishes
+    // allocates nothing; each wall's mesh clones the template so it can fade
+    // on its own. The tint lives in the map, so `color` stays white (the
+    // material.color x map multiply trap, LEARNINGS #57). Every tier gets
+    // them: the canvases are 384 x 96 and 128 x 128 px, below any mobile
+    // texture budget, and a brick house drawn plain on a phone would be a
+    // different house rather than a cheaper one.
+    const _finishTextures = {};
+    const _finishTemplates = {};
+    function finishMaterial(name, isOuter) {
+      if (!_finishTemplates[name]) {
+        const map = _finishTextures[name] || (_finishTextures[name] = makeFinishTexture(THREE, name));
+        _finishTemplates[name] = new THREE.MeshStandardMaterial({
+          color: 0xffffff, roughness: FINISH_TYPES[name].roughness, map: map,
+          // Seen from its own face only, and pulled toward the camera in
+          // depth so it never z-fights the painted face 1.5 mm behind it.
+          side: THREE.FrontSide,
+          polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2
+        });
+      }
+      const m = _finishTemplates[name].clone();
+      m.userData.finish = name;
+      m.transparent = !!isOuter;
+      m.opacity = 1;
+      return m;
+    }
+    // wall id + finish -> { batch, wallId, finish, outer }. Built into meshes
+    // after the wall loop; they join the fade after the outward derivation.
+    const finishBatches = new Map();
+    const finishMeshes = [];   // { mesh, wallId }
+
     const wallMeshes = [];
     const wallEntryById = {};   // wall id -> its first wallMeshes entry (see addWallBox)
     // HEIGHTS REMODEL (2026-07-11, ACK'd) — wall vertical extents now depend
@@ -1292,7 +1334,7 @@ export const Home3DScene = (() => {
     const WALL_INT_BOTTOM_Y = 0;                          // internal: floor top
     const WALL_EXT_BOTTOM_Y = -HOUSE.slabs.thickness;     // external: floor bottom
     const WALL_TOP_Y = WH;                // BOTH cap at the ceiling underside
-    WALL_EXT.forEach(({ id, x1, y1, x2, y2, outer, thickness }) => {
+    WALL_EXT.forEach(({ id, x1, y1, x2, y2, outer, thickness, finishes }) => {
       // Per-wall vertical geometry, keyed off the outer flag (see block above).
       const WALL_BOTTOM_Y = outer ? WALL_EXT_BOTTOM_Y : WALL_INT_BOTTOM_Y;
       const WALL_YC = (WALL_TOP_Y + WALL_BOTTOM_Y) / 2;
@@ -1308,6 +1350,34 @@ export const Home3DScene = (() => {
       // wall except #3, which overrides it. Same units conversion WT itself
       // was defined with (WT_CM * S === WT).
       const wallWidthM = thickness * S;
+      // Each finish's face slot, span (m from this wall's start) and height
+      // range (world m), decided once per wall so every pier/cill/lintel box
+      // of it agrees.
+      // Each finish's batch, span (m from this wall's start) and height band
+      // (world m), decided once per wall so every pier/cill/lintel box agrees.
+      const frame = { wx1, wz1, ux: dx / len, uz: dz / len, T: wallWidthM };
+      const wallFinishes = (finishes || []).map(f => {
+        const key = id + '|' + f.finish;
+        if (!finishBatches.has(key)) {
+          finishBatches.set(key, { batch: createFinishBatch(), wallId: id, finish: f.finish, outer: !!outer });
+        }
+        return {
+          finish: f.finish, normal: f.normal, face: f.face, reveals: !!f.reveals,
+          batch: finishBatches.get(key).batch,
+          span: alongToMetres({ x1, y1, x2, y2 }, f.along, S),
+          range: [Math.max(WALL_BOTTOM_Y, f.from != null ? f.from * S : -Infinity),
+                  Math.min(WALL_TOP_Y, f.to != null ? f.to * S : Infinity)],
+          // An END face: its wall distance, from the AUTHORED end point
+          // projected onto this (corner-extended) centreline.
+          endS: f.face === 'end' ? ((tx(f.at[0]) - wx1) * dx + (tz(f.at[1]) - wz1) * dz) / len : null
+        };
+      });
+      // End faces belong to the wall, not to a box: one quad each.
+      wallFinishes.forEach(wf => {
+        if (wf.face !== 'end' || !(wf.range[1] - wf.range[0] > 0.005)) return;
+        const facing = (wf.normal[0] * dx + wf.normal[1] * dz) >= 0 ? 1 : -1;
+        addCrossFace(wf.batch, frame, wf.endS, facing, wf.range[0], wf.range[1]);
+      });
       // One wall box centred at (mx,mz): length lm (m), vertical centre yc, height h.
       // Reuses the segment's rotation + normal so sub-boxes of a descending
       // segment don't flip their exterior-fade direction.
@@ -1332,6 +1402,25 @@ export const Home3DScene = (() => {
         const mat = faceTex
           ? buildFaceTexturedMaterials(faceTex.faceAxis, faceTex.url, plainMatFactory, lm, h, outer)
           : plainMatFactory();
+        // This box's place on the wall -- metres from the wall's start, and
+        // its world bottom/top -- and the finished quads it contributes to
+        // its wall's finish mesh. The box already stops at any opening, so
+        // the quads do too.
+        const boxS0 = ((mx - wx1) * dx + (mz - wz1) * dz) / len - lm / 2;
+        const boxSpan = [boxS0, boxS0 + lm], boxY = [yc - h / 2, yc + h / 2];
+        wallFinishes.forEach(wf => {
+          if (wf.face === 'end') return;
+          const rect = finishRectOnBox(boxSpan, boxY, wf.span, wf.range);
+          if (!rect) return;
+          const r = rect.full ? { s0: boxSpan[0], s1: boxSpan[1], y0: boxY[0], y1: boxY[1] } : rect;
+          addLongFace(wf.batch, frame, wf.normal, r.s0, r.s1, r.y0, r.y1);
+          // Reveals: the finish returns round a full-height box's ends -- the
+          // jambs of the openings beside it and the wall's own ends.
+          if (wf.reveals && revealEnds(h, WALL_FULL_H)) {
+            if (r.s0 - boxSpan[0] < 1e-3) addCrossFace(wf.batch, frame, boxSpan[0], -1, r.y0, r.y1);
+            if (boxSpan[1] - r.s1 < 1e-3) addCrossFace(wf.batch, frame, boxSpan[1], 1, r.y0, r.y1);
+          }
+        });
         const wall = new THREE.Mesh(new THREE.BoxGeometry(wallWidthM, h, lm), mat);
         wall.position.set(mx, yc, mz);
         wall.rotation.y = angle;
@@ -1401,6 +1490,20 @@ export const Home3DScene = (() => {
         if (WALL_TOP_Y - o.top > 0.005) boxAt(a, b, (o.top + WALL_TOP_Y) / 2, WALL_TOP_Y - o.top);
         if (o.bot - WALL_BOTTOM_Y > 0.005) boxAt(a, b, (WALL_BOTTOM_Y + o.bot) / 2, o.bot - WALL_BOTTOM_Y);
       });
+    });
+
+    // One mesh per wall per finish (see WALL FINISHES above): a single draw,
+    // no shadow cast (the painted box behind it already casts that shadow).
+    finishBatches.forEach(({ batch, wallId, finish, outer }) => {
+      const geo = buildFinishGeometry(THREE, batch);
+      if (!geo) return;
+      const mesh = new THREE.Mesh(geo, finishMaterial(finish, outer));
+      mesh.receiveShadow = true;
+      mesh.castShadow = false;
+      mesh.name = 'wall-finish:' + wallId + ':' + finish;
+      mesh.userData.wallFinish = { wall: wallId, finish: finish };
+      scene.add(mesh);
+      finishMeshes.push({ mesh, wallId });
     });
 
     // ---- Hallway wallpaper overlay — wall #22, hallway segment ONLY ----
@@ -2954,6 +3057,12 @@ export const Home3DScene = (() => {
     // normal and votes on mesh positions, and these meshes sit inside
     // wall-local groups whose `position` is not a world position.
     fittingFades.forEach(({ mesh, wallId }) => {
+      const host = wallEntryById[wallId];
+      if (!host || !host.outer) return;
+      wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true });
+    });
+    // Wall finish meshes likewise fade with their host wall.
+    finishMeshes.forEach(({ mesh, wallId }) => {
       const host = wallEntryById[wallId];
       if (!host || !host.outer) return;
       wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true });
