@@ -79,8 +79,9 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "color0": "#9a9a96",
   "color1": "#e8e2d4",
   "color2": "#2f7e8c",
-  "bandWidth": 18,
-  "angle": 35,
+  "bandWidth": 26,
+  "angle": 40,
+  "zigzags": 1,
   "pileNoise": 0.18,
   "seed": 1,
   "widthCm": 210,
@@ -94,7 +95,7 @@ const LONG_SIDE_PX = 512;
 function patternParams(t) {
   return {
     pattern: t.pattern, colors: [t.color0, t.color1, t.color2],
-    bandWidth: t.bandWidth, angle: t.angle, pileNoise: t.pileNoise, seed: t.seed,
+    bandWidth: t.bandWidth, angle: t.angle, zigzags: t.zigzags, pileNoise: t.pileNoise, seed: t.seed,
     widthCm: t.widthCm, depthCm: t.depthCm
   };
 }
@@ -253,6 +254,8 @@ function App() {
           onChange={v => setTweak('bandWidth', v)} />
         <TweakSlider label="Angle" value={t.angle} min={0} max={60} step={1} unit="°"
           onChange={v => setTweak('angle', v)} />
+        <TweakSlider label="Zig-zags across" value={t.zigzags} min={1} max={4} step={1} unit=""
+          onChange={v => setTweak('zigzags', v)} />
         <TweakSlider label="Pile noise" value={t.pileNoise} min={0} max={0.5} step={0.01} unit=""
           onChange={v => setTweak('pileNoise', v)} />
         <TweakSlider label="Seed" value={t.seed} min={1} max={50} step={1} unit=""

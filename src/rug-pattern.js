@@ -20,8 +20,9 @@
 export const RUG_PATTERN_DEFAULTS = Object.freeze({
   pattern: 'chevron',          // 'chevron' | 'solid'
   colors: Object.freeze(['#9a9a96', '#e8e2d4', '#2f7e8c']),
-  bandWidth: 18,               // cm, measured across a band (perpendicular to the rug's length)
-  angle: 35,                   // degrees, the zig-zag's slope off the rug's width axis
+  bandWidth: 26,               // cm, measured across a band (perpendicular to the rug's length)
+  angle: 40,                   // degrees, the zig-zag's slope off the rug's width axis
+  zigzags: 1,                  // full zig-zags across the width: 1 = one big V, as on a bold shag
   pileNoise: 0.18,             // 0 = flat print, ~0.2 = shag; fuzzes band edges and shades strands
   seed: 1,
   widthCm: 210,
@@ -77,8 +78,8 @@ export function fillRugPattern(rgba, w, h, params) {
   const solid = p.pattern === 'solid';
   const rand = mulberry32(Math.floor(Number(p.seed) || 0));
   const cmPerPxX = widthCm / w, cmPerPxY = depthCm / h;
-  // Two full zig-zags across the rug's width, kinks centred on it.
-  const zigPeriod = widthCm / 2;
+  // `zigzags` full zig-zags across the rug's width, kinks centred on it.
+  const zigPeriod = widthCm / Math.max(1, Math.round(Number(p.zigzags) || 1));
   // Strand streaks: shag strands lie in a common direction, so shade each
   // pixel partly from a short run shared with its neighbours down the column.
   const runLen = Math.max(2, Math.round(h / 60));

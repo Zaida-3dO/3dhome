@@ -43,9 +43,9 @@ const palette = R.RUG_PATTERN_DEFAULTS.colors.map(h => R.hexToRgb(h).join(','));
 
 // ---- exports ------------------------------------------------------------------------
 check('RUG_PATTERN_DEFAULTS frozen', Object.isFrozen(R.RUG_PATTERN_DEFAULTS));
-check('defaults: chevron, 3 colours, 18 cm bands, 35 deg, 210 x 150',
+check('defaults: chevron, 3 colours, 26 cm bands, 40 deg, one big zig-zag, 210 x 150',
   R.RUG_PATTERN_DEFAULTS.pattern === 'chevron' && R.RUG_PATTERN_DEFAULTS.colors.length === 3 &&
-  R.RUG_PATTERN_DEFAULTS.bandWidth === 18 && R.RUG_PATTERN_DEFAULTS.angle === 35 &&
+  R.RUG_PATTERN_DEFAULTS.bandWidth === 26 && R.RUG_PATTERN_DEFAULTS.angle === 40 && R.RUG_PATTERN_DEFAULTS.zigzags === 1 &&
   R.RUG_PATTERN_DEFAULTS.widthCm === 210 && R.RUG_PATTERN_DEFAULTS.depthCm === 150, R.RUG_PATTERN_DEFAULTS);
 
 // ---- 1. determinism -------------------------------------------------------------------
@@ -99,6 +99,10 @@ for (const row of [Math.floor(H * 0.25), Math.floor(H * 0.5), Math.floor(H * 0.8
   check('row ' + row + ': >= 2 colour changes per colour cycle along the row', changes >= 2 * Math.floor(periods), { changes, periods });
   check('row ' + row + ': the band order runs both ways (zig AND zag)', fwd > 0 && back > 0, { fwd, back });
 }
+
+// ---- 3b. zigzags is honoured ---------------------------------------------------------------
+// Mutation: hard-code zigPeriod = widthCm / 2 (ignore p.zigzags) -> 1 and 2 build the same.
+check('zigzags 1 and 2 draw different patterns', !same(fill({ pileNoise: 0, zigzags: 1 }), fill({ pileNoise: 0, zigzags: 2 })));
 
 // ---- 4. solid ------------------------------------------------------------------------------
 // Mutation: ignore p.pattern (always chevron) -> more than one colour.
