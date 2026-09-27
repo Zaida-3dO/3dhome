@@ -645,13 +645,14 @@ function contained(g, p) {
   check('default preset: the leg along B is 65 + 214 = 279', preset.a.depth + preset.b.width === 279);
   check('default preset: run A is 60/45/55/60/55 = 275 and, with the 65 cm fridge, fits a 340.4 cm wall', preset.a.width === 275 &&
     preset.a.modules.map(m => m.width).join('/') === '60/45/55/60/55' && preset.a.width + preset.fridge.width <= 340.4);
-  // The sink spans 115-205 from run A's left end: 10 cm into the 55 cm cabinet
-  // (105-160), the rest over the dishwasher (160-220).
+  // The sink spans 67.5-157.5 from run A's left end: over the two plain
+  // cabinets (60-105, 105-160), 2.5 cm short of the dishwasher at 160.
   quietly(() => {
     const ga = K.TYPES['kitchen-base-run'].build(THREE, Object.assign({}, K.TYPES['kitchen-base-run'].DEFAULTS, preset.a), { detail: 'full' });
     const sk = unionBox(meshes(ga, m => m.name === 'sink' || m.name === 'sink-rim'));
     const off = preset.a.width / 2;
-    check('default preset: the sink spans 115-205 along run A', near(sk.x0 + off, 115, 0.05) && near(sk.x1 + off, 205, 0.05), { x0: sk.x0 + off, x1: sk.x1 + off });
+    check('default preset: the sink spans 67.5-157.5 along run A, clear of the dishwasher', near(sk.x0 + off, 67.5, 0.05) && near(sk.x1 + off, 157.5, 0.05) &&
+      sk.x1 + off < 160, { x0: sk.x0 + off, x1: sk.x1 + off });
   });
   // Wall run A ends where the fridge starts: the three 60 cm uppers lose 5 cm each.
   check('default preset: wall run A is 65/45/55/55/55 = 275, ending at the fridge', preset.wall.width === 275 &&
