@@ -466,6 +466,12 @@ function cornerLine(corner, reach, W) {
  * corner end, picks up. The line is continuous and neither run draws outside
  * its box.
  *
+ * These are a STATIC glow in the builder's own colour: they follow no light
+ * and throw none. In a house whose strips follow Home Assistant, the strips
+ * are room light fixtures on their own channels instead (docs/house-profile.md,
+ * "Kitchen LED strips"), and these flags are turned off so the line is not
+ * drawn twice.
+ *
  * @param {Object} o  { mat, flag, name, zBack (strip's set-back from the
  *   front, cm), dz (its thickness in z), yOf(m) -> [y0, y1] }
  */
@@ -613,6 +619,22 @@ function growCorner(mods, corner, cornerDepth, type) {
   if (corner === 'left') { m.x1 += give; n.x0 += give; } else { m.x0 -= give; n.x1 -= give; }
 }
 
+/**
+ * The J-rail's spans along a base run: one per maximal run of adjacent
+ * modules that are not a `gap`, as [x0, x1] in local cm. Exported for the
+ * tests.
+ */
+export function railSpans(mods) {
+  const out = [];
+  (mods || []).forEach(m => {
+    if (m.kind === 'gap') return;
+    const last = out[out.length - 1];
+    if (last && Math.abs(last[1] - m.x0) < 0.01) last[1] = m.x1;
+    else out.push([m.x0, m.x1]);
+  });
+  return out.filter(([a, b]) => b - a > 0.5);
+}
+
 function buildBaseRun(THREE, params, opts) {
   const p = resolve(BASE_DEFAULTS, params);
   const detail = opts && opts.detail === 'low' ? 'low' : 'full';
@@ -690,8 +712,12 @@ function buildBaseRun(THREE, params, opts) {
     add(g, box(THREE, mats.front, a, b, 0, P, 0, D - 8, 'plinth'));
   }
   if (style === 'rail' && full) {
-    // Handleless: one continuous recessed metal J-rail under the worktop.
-    add(g, box(THREE, mats.handle, -W / 2, W / 2, fTop + 0.5, yW - 0.5, zF0 - 1, zF0, 'handle-rail'));
+    // Handleless: a recessed metal J-rail under the worktop, continuous along
+    // the fronts and broken at every `gap` (a bare space has no fronts to
+    // open, so no rail runs across it).
+    railSpans(mods).forEach(([a, b]) => {
+      add(g, box(THREE, mats.handle, a, b, fTop + 0.5, yW - 0.5, zF0 - 1, zF0, 'handle-rail'));
+    });
   }
 
   const cutouts = [];

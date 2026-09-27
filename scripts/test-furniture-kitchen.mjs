@@ -526,6 +526,30 @@ function contained(g, p) {
     .every(b => b.x1 <= -30 + 0.01 || b.x0 >= 30 - 0.01));
   check('base gap: the worktop runs over it', worktopTiling(bg, bp) === 0);
   checkEnvelope('base with a gap', BASE, bp);
+  // The handleless J-rail breaks at the gap: one rail over each side's fronts
+  // (-90..-30 and 30..90), none across the bare space (8920c211).
+  const rp = Object.assign({}, bp, { handleStyle: 'rail' });
+  const rails = meshes(BASE.build(THREE, rp, { detail: 'full' }), m => m.name === 'handle-rail').map(boxCm)
+    .sort((a, b) => a.x0 - b.x0);
+  check('rail over a gap: two rails, one either side, none across it', rails.length === 2 &&
+    near(rails[0].x0, -90, 0.01) && near(rails[0].x1, -30, 0.01) &&
+    near(rails[1].x0, 30, 0.01) && near(rails[1].x1, 90, 0.01), rails);
+  checkEnvelope('base with a gap, rail handles', BASE, rp);
+  // Adjacent fronts share ONE rail: a run with no gap is a single rail, end to end.
+  const solid = meshes(BASE.build(THREE, Object.assign({}, bp, { handleStyle: 'rail',
+    modules: [{ kind: 'cabinet', width: 60 }, { kind: 'drawers', width: 60 }, { kind: 'cabinet', width: 60 }] }), { detail: 'full' }),
+  m => m.name === 'handle-rail').map(boxCm);
+  check('rail with no gap: one continuous rail over the whole run', solid.length === 1 &&
+    near(solid[0].x0, -90, 0.01) && near(solid[0].x1, 90, 0.01), solid);
+  // A gap at the END leaves one rail, stopping at the gap's edge.
+  const endGap = meshes(BASE.build(THREE, Object.assign({}, bp, { handleStyle: 'rail',
+    modules: [{ kind: 'cabinet', width: 60 }, { kind: 'cabinet', width: 60 }, { kind: 'gap', width: 60 }] }), { detail: 'full' }),
+  m => m.name === 'handle-rail').map(boxCm);
+  check('rail with a gap at the end: one rail, stopping at the gap', endGap.length === 1 &&
+    near(endGap[0].x0, -90, 0.01) && near(endGap[0].x1, 30, 0.01), endGap);
+  check('railSpans: pure, joins neighbours, skips gaps',
+    JSON.stringify(K.railSpans([{ kind: 'gap', x0: -50, x1: -20 }, { kind: 'cabinet', x0: -20, x1: 10 }, { kind: 'sink', x0: 10, x1: 50 }]))
+      === JSON.stringify([[-20, 50]]));
 }
 
 // 10.2 hinge "top": a lift-up flap, handle along its bottom edge, hinge line along its top.
