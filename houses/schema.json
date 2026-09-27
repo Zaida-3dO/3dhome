@@ -2479,7 +2479,19 @@
         "riser": { "type": "boolean", "default": false },
         "riserHeight": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm." },
         "riserWidth": { "type": "number", "exclusiveMinimum": 0, "default": 40, "description": "cm." },
-        "riserDepth": { "type": "number", "exclusiveMinimum": 0, "default": 25, "description": "cm, clamped to at most the declared `depth`." }
+        "riserDepth": { "type": "number", "exclusiveMinimum": 0, "default": 25, "description": "cm, clamped to at most the declared `depth`." },
+        "curveRadius": { "type": "number", "minimum": 0, "default": 0, "description": "cm. 0 keeps the shallow segmented bow; above 0 (with `curved`) builds a true arc of this radius -- 1000R is 100 -- with a rear housing, a neck and a flat foot. The params below marked 'arc only' apply to that build." },
+        "panelHeight": { "type": "number", "exclusiveMinimum": 0, "default": 36, "description": "cm, arc only: the panel alone; the rest of `height` is the stand (and riser)." },
+        "panelDepth": { "type": "number", "exclusiveMinimum": 0, "default": 29, "description": "cm, arc only: the set's depth WITHOUT its stand (the curve's sag, the panel and the rear housing)." },
+        "bezel": { "type": "number", "minimum": 0, "default": 1.5, "description": "cm, arc only: the bezel round the active area." },
+        "backColor": { "$ref": "#/$defs/hexColor", "default": "#f2f2f0", "description": "Arc only: the back shell and rear housing." },
+        "backFinish": { "$ref": "#/$defs/furnitureFinish", "default": "gloss", "description": "Arc only." },
+        "standColor": { "$ref": "#/$defs/hexColor", "default": "#f2f2f0", "description": "Arc only: the neck and foot." },
+        "standFinish": { "$ref": "#/$defs/furnitureFinish", "default": "gloss", "description": "Arc only." },
+        "footWidth": { "type": "number", "exclusiveMinimum": 0, "default": 37, "description": "cm, arc only: the pentagon foot's widest point." },
+        "footDepth": { "type": "number", "exclusiveMinimum": 0, "default": 30, "description": "cm, arc only: the foot, from its rear point (z = 0) to its front edge." },
+        "coreLight": { "type": "boolean", "default": false, "description": "Arc only: a glowing ring on the back round the neck's joint." },
+        "coreLightColor": { "$ref": "#/$defs/hexColor", "default": "#cfe8ff", "description": "Arc only." }
       },
       "additionalProperties": false
     },
@@ -2541,7 +2553,9 @@
         "depth": { "type": "number", "exclusiveMinimum": 0, "default": 42, "description": "cm." },
         "color": { "$ref": "#/$defs/hexColor", "default": "#141414" },
         "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
-        "glassPanel": { "type": "boolean", "default": true }
+        "glassPanel": { "type": "boolean", "default": true },
+        "glassColor": { "$ref": "#/$defs/hexColor", "default": "#a8d8e8", "description": "The glass side panel's tint." },
+        "interiorColor": { "$ref": "#/$defs/hexColor", "default": "#262626", "description": "The motherboard, CPU cooler and graphics card seen through the glass (the PSU shroud is in `color`)." }
       },
       "additionalProperties": false
     },

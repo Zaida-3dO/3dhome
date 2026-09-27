@@ -1000,6 +1000,27 @@ function buildShelf(THREE, params, opts) {
 
 // ============================================================================
 // monitor - flat or curved super-ultrawide, optional riser
+//
+// Two curved builds:
+//   curveRadius 0 (default)  the original shallow bow: slim straight
+//                            segments set back along a gentle curve, on a
+//                            plain block stand.
+//   curveRadius > 0          a TRUE arc of that radius (cm; "1000R" is 100),
+//                            the way a super-ultrawide is made: a thin panel
+//                            bent round a vertical axis in front of the
+//                            viewer, a rear housing bulging out of the back
+//                            at the centre, a neck column and a flat foot.
+//                            Used by the curved 49in 32:9 preset. The params
+//                            below marked "arc only" apply to this build.
+//
+// ARC ENVELOPE. `width` is the panel's straight-line width (the maker's set
+// width), `height` the whole set on its stand, `depth` the set on its stand
+// (foot included). `panelHeight` is the panel alone; the rest of `height`
+// is the stand (and riser, if any). `panelDepth` is the maker's "without
+// stand" depth: the curve's own sag plus the panel and the rear housing.
+// The foot's rear point is at z = 0, the panel's front corners at
+// z = depth, and the housing's back at z = depth - panelDepth; the neck
+// rises from the foot into the housing there.
 // ============================================================================
 const MONITOR_DEFAULTS = Object.freeze({
   width: 85,
@@ -1012,14 +1033,154 @@ const MONITOR_DEFAULTS = Object.freeze({
   riser: false,
   riserHeight: 10,
   riserWidth: 40,
-  riserDepth: 25
+  riserDepth: 25,
+  // Arc only (see above).
+  curveRadius: 0,
+  panelHeight: 36,
+  panelDepth: 29,
+  bezel: 1.5,
+  backColor: '#f2f2f0',
+  backFinish: 'gloss',
+  standColor: '#f2f2f0',
+  standFinish: 'gloss',
+  footWidth: 37,
+  footDepth: 30,
+  coreLight: false,
+  coreLightColor: '#cfe8ff'
 });
+
+// Arc build: the panel shell's thickness, how much of it is the front
+// (bezel-coloured) skin, and the screen's own thickness.
+const ARC_PANEL_T = 0.025;
+const ARC_FRONT_T = 0.008;
+const ARC_SCREEN_T = 0.003;
+
+/**
+ * A solid slice of an annulus round a vertical axis at (x = 0, z = zc),
+ * between radii r1 < r2, extruded from y0 up by h. The inner arc spans the
+ * half-angle a1 and the outer a2 (radians, measured from -z, the direction
+ * away from the axis towards the back): equal angles give radial end
+ * faces; angles from asin(cutX / r) give ends cut straight at x = +-cutX.
+ * A point at angle phi, radius r is x = r sin(phi), z = zc - r cos(phi).
+ */
+function arcSlab(THREE, r1, r2, a1, a2, zc, y0, h, segs, mat) {
+  const shape = new THREE.Shape();
+  // Shape space (x, s) becomes world (x, z = -s) after rotateX(-PI/2) below,
+  // and the extrusion (shape z) becomes world y.
+  const pt = (r, phi) => [r * Math.sin(phi), r * Math.cos(phi) - zc];
+  const first = pt(r1, -a1);
+  shape.moveTo(first[0], first[1]);
+  for (let i = 1; i <= segs; i++) { const q = pt(r1, -a1 + (2 * a1 * i) / segs); shape.lineTo(q[0], q[1]); }
+  for (let i = 0; i <= segs; i++) { const q = pt(r2, a2 - (2 * a2 * i) / segs); shape.lineTo(q[0], q[1]); }
+  shape.lineTo(first[0], first[1]);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false, curveSegments: 1 });
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, y0, 0);
+  return new THREE.Mesh(geo, mat);
+}
+
+function buildMonitorArc(THREE, p, opts, g, riserH) {
+  const low = opts && opts.detail === 'low';
+  const segs = low ? 12 : 48;
+  const w = m(p.width), d = m(p.depth), H = m(p.height);
+  const R = m(p.curveRadius);
+  const halfW = Math.min(w / 2, R * 0.95);
+  const footT = Math.min(0.02, (H - riserH) * 0.05);
+  const panelH = Math.max(0.02, Math.min(m(p.panelHeight), H - riserH - footT - 0.01));
+  const panelY0 = H - panelH;
+  const panelD = Math.min(m(p.panelDepth), d);
+  // The arc: the panel's front (inner) face is radius R, its front corners
+  // at x = +-halfW sit at z = d.
+  const aIn = Math.asin(halfW / R);
+  const zc = d + R * Math.cos(aIn);
+  const cut = r => Math.asin(Math.min(1, halfW / r));
+  const frontMat = makeFinish(THREE, p.finish, p.color);
+  const backMat = makeFinish(THREE, p.backFinish, p.backColor);
+  const standMat = makeFinish(THREE, p.standFinish, p.standColor);
+  const rF = R + ARC_FRONT_T, rB = R + ARC_PANEL_T;
+  // The panel: a thin front skin in the bezel colour, the back shell behind
+  // it in the back colour. Both end cut straight at x = +-halfW.
+  const front = arcSlab(THREE, R, rF, cut(R), cut(rF), zc, panelY0, panelH, segs, frontMat);
+  front.name = 'monitorBezel';
+  const shell = arcSlab(THREE, rF, rB, cut(rF), cut(rB), zc, panelY0, panelH, segs, backMat);
+  shell.name = 'monitorBackShell';
+  g.add(front, shell);
+  // The screen: the active area, OVERLAY_GAP in front of the bezel face.
+  const bez = m(p.bezel);
+  const aScreen = Math.max(0.01, aIn - bez / R);
+  const rS = R - OVERLAY_GAP;
+  const screen = arcSlab(THREE, rS - ARC_SCREEN_T, rS, aScreen, aScreen, zc,
+    panelY0 + bez, Math.max(0.01, panelH - bez * 2), segs, makeFinish(THREE, 'emissive', p.screenColor));
+  screen.name = 'monitorScreen';
+  screen.userData.keep = true;
+  g.add(screen);
+  // The rear housing: a bulge out of the back at the centre, reaching back
+  // to z = d - panelD. Skipped when panelDepth leaves no room behind the
+  // panel (then the panel's own back is the back).
+  const zHousingBack = d - panelD;
+  const rH = zc - zHousingBack;
+  let zBack = zc - rB; // the back of the set, at the centre
+  if (rH > rB + 0.005) {
+    const housingHalfW = Math.min(0.3, halfW * 0.52);
+    const aH = Math.asin(Math.min(1, housingHalfW / rH));
+    const housingH = panelH * 0.72;
+    const housing = arcSlab(THREE, rB - 0.005, rH, aH, aH, zc, panelY0 + (panelH - housingH) / 2, housingH,
+      Math.max(4, Math.round(segs / 3)), backMat);
+    housing.name = 'monitorHousing';
+    g.add(housing);
+    zBack = zHousingBack;
+  }
+  const centreY = panelY0 + panelH / 2;
+  // The foot: a flat pentagon, rear point at z = 0, widest a little way
+  // forward, a straight front edge. On the riser, if there is one.
+  const fw = Math.min(m(p.footWidth), w), fd = Math.min(m(p.footDepth), d);
+  const footShape = new THREE.Shape();
+  const fz = [0, fd * 0.4, fd];
+  // Shape (x, s) -> world (x, z = -s), as for arcSlab.
+  footShape.moveTo(0, -fz[0]);
+  footShape.lineTo(fw / 2, -fz[1]);
+  footShape.lineTo(fw * 0.405, -fz[2]);
+  footShape.lineTo(-fw * 0.405, -fz[2]);
+  footShape.lineTo(-fw / 2, -fz[1]);
+  footShape.lineTo(0, -fz[0]);
+  const footGeo = new THREE.ExtrudeGeometry(footShape, { depth: footT, bevelEnabled: false, curveSegments: 1 });
+  footGeo.rotateX(-Math.PI / 2);
+  footGeo.translate(0, riserH, 0);
+  const foot = new THREE.Mesh(footGeo, standMat);
+  foot.name = 'monitorFoot';
+  g.add(foot);
+  // The neck: a flat column from the foot up into the back of the set at
+  // the panel's centre height.
+  const neckD = 0.04, neckW = 0.07;
+  const neckZ1 = Math.max(neckD, zBack + 0.004);
+  const neckY0 = riserH + footT;
+  const neck = box(THREE, neckW, neckD, centreY - neckY0, standMat, 0, (neckY0 + centreY) / 2, neckZ1 - neckD / 2);
+  neck.name = 'monitorNeck';
+  g.add(neck);
+  // The rear light ring round the neck's joint, on the housing's back.
+  if (p.coreLight && !low) {
+    const ringR = Math.min(0.07, panelH * 0.2), tube = 0.005;
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(ringR, tube, 8, 40), makeFinish(THREE, 'emissive', p.coreLightColor));
+    ring.position.set(0, centreY, zBack + tube * 0.4);
+    ring.name = 'monitorCoreLight';
+    ring.userData.keep = true;
+    g.add(ring);
+  }
+  return g;
+}
 
 function buildMonitor(THREE, params, opts) {
   const p = Object.assign({}, MONITOR_DEFAULTS, params || {});
   const g = new THREE.Group();
   g.name = 'furniture:monitor';
   const riserH = p.riser ? m(p.riserHeight) : 0;
+  if (p.curved && p.curveRadius > 0) {
+    if (p.riser) {
+      const rw = m(p.riserWidth), rd = Math.min(m(p.riserDepth), m(p.depth));
+      g.add(box(THREE, rw, rd, riserH, makeFinish(THREE, 'matte', '#2a2a2a'), 0, riserH / 2, rd / 2));
+    }
+    return buildMonitorArc(THREE, p, opts, g, riserH);
+  }
 
   const w = m(p.width), d = m(p.depth);
   const bodyMat = makeFinish(THREE, p.finish, p.color);
@@ -1104,6 +1265,13 @@ function buildMonitor(THREE, params, opts) {
 
 // ============================================================================
 // pc-tower - a box-ish tower with a glass side panel
+//
+// With the glass panel (on the +x side) at full detail the case is a shell
+// -- the far side, top, bottom, back and front panels round a frame -- and
+// the parts inside show through the glass: the motherboard on the far side,
+// a CPU cooler with its fan, a graphics card and the PSU shroud along the
+// bottom. The shroud is in the case colour, the board, cooler and card in
+// `interiorColor`. Low detail (and `glassPanel: false`) is the plain box.
 // ============================================================================
 const PC_TOWER_DEFAULTS = Object.freeze({
   width: 22,
@@ -1111,23 +1279,75 @@ const PC_TOWER_DEFAULTS = Object.freeze({
   depth: 42,
   color: '#141414',
   finish: 'matte',
-  glassPanel: true
+  glassPanel: true,
+  glassColor: '#a8d8e8',
+  interiorColor: '#262626'
 });
 
-function buildPcTower(THREE, params) {
+const PC_FAN_COLOR = '#3a3a3c';
+
+function buildPcTower(THREE, params, opts) {
   const p = Object.assign({}, PC_TOWER_DEFAULTS, params || {});
   const w = m(p.width), h = m(p.height), d = m(p.depth);
+  const low = opts && opts.detail === 'low';
   const g = new THREE.Group();
   g.name = 'furniture:pc-tower';
   const bodyMat = makeFinish(THREE, p.finish, p.color);
   const glassSide = p.glassPanel ? Math.min(0.008, w * 0.08) : 0;
-  g.add(box(THREE, w - glassSide, d, h, bodyMat, -glassSide / 2, h / 2, d / 2));
-  if (p.glassPanel) {
-    const glassMat = makeFinish(THREE, 'glass', '#a8d8e8');
-    const glass = box(THREE, glassSide, d * 0.92, h * 0.92, glassMat, w / 2 - glassSide / 2, h / 2, d / 2);
-    glass.userData.keep = true;
-    g.add(glass);
+  if (!p.glassPanel || low) {
+    g.add(box(THREE, w - glassSide, d, h, bodyMat, -glassSide / 2, h / 2, d / 2));
+    if (p.glassPanel) {
+      const glass = box(THREE, glassSide, d * 0.92, h * 0.92, makeFinish(THREE, 'glass', p.glassColor), w / 2 - glassSide / 2, h / 2, d / 2);
+      glass.userData.keep = true;
+      g.add(glass);
+    }
+    return g;
   }
+  // THE SHELL. `ft` is the frame (top, bottom, back and front panels), which
+  // runs out to the glass side's face; the far side panel is `st` thick.
+  const ft = Math.min(0.015, h * 0.04, d * 0.04, w * 0.1);
+  const st = Math.min(0.006, w * 0.05);
+  const x0 = -w / 2 + st; // the far side panel's inner face
+  const spanW = w - st, spanCx = (x0 + w / 2) / 2;
+  const add = (mesh, name) => { mesh.name = name; g.add(mesh); return mesh; };
+  add(box(THREE, st, d, h, bodyMat, -w / 2 + st / 2, h / 2, d / 2), 'towerSide');
+  add(box(THREE, spanW, d, ft, bodyMat, spanCx, h - ft / 2, d / 2), 'towerTop');
+  add(box(THREE, spanW, d, ft, bodyMat, spanCx, ft / 2, d / 2), 'towerBottom');
+  add(box(THREE, spanW, ft, h - ft * 2, bodyMat, spanCx, h / 2, ft / 2), 'towerBack');
+  add(box(THREE, spanW, ft, h - ft * 2, bodyMat, spanCx, h / 2, d - ft / 2), 'towerFront');
+  const glass = box(THREE, glassSide, d - ft * 2, h - ft * 2, makeFinish(THREE, 'glass', p.glassColor),
+    w / 2 - glassSide / 2, h / 2, d / 2);
+  glass.userData.keep = true;
+  add(glass, 'towerGlass');
+  // THE PARTS INSIDE, all clear of the glass's inner face.
+  const inMat = makeFinish(THREE, 'matte', p.interiorColor);
+  const innerW = w - st - glassSide - 0.004; // x room from the far side to the glass
+  const innerD = d - ft * 2, innerH = h - ft * 2;
+  const z0 = ft;
+  // PSU shroud: along the bottom, the full depth, up to the glass.
+  const shroudH = innerH * 0.22;
+  add(box(THREE, innerW, innerD - 0.002, shroudH, bodyMat, x0 + innerW / 2, ft + shroudH / 2, d / 2), 'towerShroud');
+  // Motherboard: a thin board on the far side panel above the shroud.
+  const boardT = 0.003;
+  const boardY0 = ft + shroudH + 0.01, boardY1 = h - ft - 0.012;
+  const boardZ0 = z0 + 0.012, boardZ1 = z0 + innerD * 0.72;
+  add(box(THREE, boardT, boardZ1 - boardZ0, boardY1 - boardY0, inMat, x0 + boardT / 2,
+    (boardY0 + boardY1) / 2, (boardZ0 + boardZ1) / 2), 'towerBoard');
+  const reach = Math.max(0.01, innerW - boardT - 0.004); // how far a part may stand off the board
+  // Graphics card: a long slab out from the board, a little above the shroud.
+  const gpuX = Math.min(reach, 0.13), gpuH = Math.min(0.05, innerH * 0.1);
+  const gpuY = boardY0 + (boardY1 - boardY0) * 0.18;
+  add(box(THREE, gpuX, innerD * 0.66, gpuH, inMat, x0 + boardT + gpuX / 2, gpuY + gpuH / 2,
+    boardZ0 + 0.005 + innerD * 0.33), 'towerGpu');
+  // CPU cooler: a block out from the board, its fan facing the front.
+  const coolX = Math.min(reach, 0.12), coolH = Math.min(0.12, (boardY1 - boardY0) * 0.4), coolD = 0.05;
+  const coolY = boardY0 + (boardY1 - boardY0) * 0.68, coolZ = boardZ0 + (boardZ1 - boardZ0) * 0.45;
+  add(box(THREE, coolX, coolD, coolH, inMat, x0 + boardT + coolX / 2, coolY, coolZ), 'towerCooler');
+  const fanR = Math.min(coolX, coolH) * 0.45, fanT = 0.02;
+  const fanGeo = new THREE.CylinderGeometry(fanR, fanR, fanT, 20);
+  fanGeo.rotateX(Math.PI / 2);
+  fanGeo.translate(x0 + boardT + coolX / 2, coolY, coolZ + coolD / 2 + fanT / 2);
+  add(new THREE.Mesh(fanGeo, makeFinish(THREE, 'matte', PC_FAN_COLOR)), 'towerFan');
   return g;
 }
 
