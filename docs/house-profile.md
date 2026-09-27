@@ -1591,6 +1591,15 @@ to model something the profile could already express.
 "decor": ["acoustic-panels"]
 ```
 
+The living-room panel on wall 1 takes its span from that wall's optional
+`slats` field — `[start, end]` in plan cm on the wall's long axis, the same
+convention as a finish's `along`. The step return onto wall 3 is drawn at the
+higher end. Without it the panel keeps its original span, 353.4 to 707.8.
+
+```json
+{ "id": 1, "start": [288.3, -19.8], "end": [288.3, 791.8], "slats": { "along": [289.2, 707.8] } }
+```
+
 **It belongs in `geometry.json`, because it is a fact about the house.** A house
 that owns slat panelling owns it wherever the profile is loaded — the embedding
 page should not have to know, and a page that forgets would silently render a
