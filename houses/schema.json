@@ -3927,7 +3927,7 @@
             "drawn": { "type": "boolean", "default": true, "description": "For fixtureType 'strip': false draws no emitter mesh, only the light. Use it when a furniture item draws the strip itself and follows the same channel (a bedside table channel with `light`, cabinet.js), so the line is not drawn twice." },
             "reachCm": { "type": "number", "exclusiveMinimum": 0, "description": "For fixtureType 'strip': how far the light reaches, in centimetres (its cut-off distance; default 250). A small light tucked into furniture wants a short reach." },
             "aim": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "For fixtureType 'strip': a plan direction [dx, dy] (x east, y south) the light faces. The light becomes a shadowless spot that lights only within `spreadDeg` of it -- a bedside table level's light faces out of the table, so it washes the fronts beside it and the floor in front but never reaches straight up or down to the other level's channel." },
-            "spreadDeg": { "type": "number", "exclusiveMinimum": 0, "maximum": 89, "description": "With `aim`: the spot's half-angle in degrees (default 75)." }
+            "spreadDeg": { "type": "number", "exclusiveMinimum": 0, "maximum": 90, "default": 90, "description": "With `aim`: the spot's half-angle in degrees (default 90: the whole half-space the light faces)." }
             },
             "required": [
               "at"
