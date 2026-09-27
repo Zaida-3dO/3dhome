@@ -272,7 +272,9 @@ function findExternalGlbUri(buf) {
       }
       if (!json || typeof json !== 'object' || Array.isArray(json)) return bad('JSON chunk is not an object');
       for (const kind of ['buffers', 'images']) {
-        const arr = Array.isArray(json[kind]) ? json[kind] : [];
+        // Every value, not only an array's: GLTFLoader indexes json[kind][i],
+        // which reads a plain object {"0": {...}} just as well (code review r3).
+        const arr = json[kind] && typeof json[kind] === 'object' ? Object.values(json[kind]) : [];
         for (const entry of arr) {
           if (entry && isExternal(entry.uri)) {
             return kind + '[].uri "' + entry.uri + '" is external -- a .glb must be self-contained (data: URIs only)';
