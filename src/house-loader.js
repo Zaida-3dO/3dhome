@@ -28,6 +28,7 @@
  */
 
 import { insidePoly } from './footstep-walk.js';
+import { FINISHES, outsideVector, faceNormalToward, compassVector } from './wall-finish.js';
 
 export const HouseLoader = (() => {
   'use strict';
@@ -186,7 +187,8 @@ export const HouseLoader = (() => {
         outer: w.outer,
         thickness: w.thickness != null ? w.thickness : defaultThickness,
         height: w.height,
-        faceTexture: w.faceTexture
+        faceTexture: w.faceTexture,
+        finishes: w.finishes || []
       };
     });
   }
@@ -840,6 +842,116 @@ export const HouseLoader = (() => {
   }
 
   /**
+   * A wall's `finishes` (schemaVersion 1.3), resolved for the renderer.
+   *
+   * Each entry names ONE long face -- `side: "exterior"` (the face pointing
+   * away from the footprint centre), `side: <compass>`, or `room: <id>` (the
+   * face fronting that room, probed exactly as a window's is) -- and this turns
+   * it into a plan-space unit `normal`, so the renderer never re-derives it.
+   * A bad entry is warned about and dropped: a finish is a decoration, and a
+   * wall rendered plain is the right degradation.
+   *
+   * @returns {Array<{finish, normal:[number,number], from:number|null,
+   *   to:number|null, along:[number,number]|null}>}
+   */
+  function compileWallFinishes(wall, rooms, centre, warn) {
+    const out = [];
+    const horizontal = Math.abs(wall.y2 - wall.y1) < Math.abs(wall.x2 - wall.x1);
+    const axisAligned = Math.abs(wall.x1 - wall.x2) < 0.5 || Math.abs(wall.y1 - wall.y2) < 0.5;
+    wall.finishes.forEach((f, i) => {
+      const where = 'wall ' + wall.id + ' finishes[' + i + ']';
+      if (!f || FINISHES.indexOf(f.finish) === -1) {
+        warn(where + ': unknown finish "' + (f && f.finish) + '" (known: ' + FINISHES.join(', ') + ') -- skipped');
+        return;
+      }
+      if ((f.side == null) === (f.room == null)) {
+        warn(where + ': give exactly one of `side` or `room` -- skipped');
+        return;
+      }
+      let along = null;
+      if (f.along != null) {
+        if (!Array.isArray(f.along) || f.along.length !== 2 || !f.along.every(Number.isFinite)) {
+          warn(where + ': `along` must be [start, end] in plan cm -- skipped');
+          return;
+        }
+        if (!axisAligned) {
+          warn(where + ': `along` needs a wall that runs along plan x or y -- finishing the whole length');
+        } else {
+          along = [Math.min(f.along[0], f.along[1]), Math.max(f.along[0], f.along[1])];
+        }
+      }
+      const from = Number.isFinite(f.from) ? f.from : null;
+      const to = Number.isFinite(f.to) ? f.to : null;
+      if (from !== null && to !== null && !(to > from)) {
+        warn(where + ': `to` (' + to + ') must be above `from` (' + from + ') -- skipped');
+        return;
+      }
+      let normal = null;
+      let endAt = null;   // plan point of the END face this finish is on, if it is on one
+      const dl = Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1) || 1;
+      const dir = [(wall.x2 - wall.x1) / dl, (wall.y2 - wall.y1) / dl];
+      if (f.side === 'exterior') {
+        normal = outsideVector(wall, centre);
+      } else if (f.side === 'start' || f.side === 'end') {
+        // A segment END face, named by which end of the authored segment.
+        endAt = f.side === 'start' ? [wall.x1, wall.y1] : [wall.x2, wall.y2];
+        normal = f.side === 'start' ? [-dir[0], -dir[1]] : dir;
+      } else if (f.side != null) {
+        const cv = compassVector(f.side);
+        if (!cv) {
+          warn(where + ': side "' + f.side + '" is not a compass side, "exterior", "start" or "end" -- skipped');
+          return;
+        }
+        const ends = horizontal ? ['east', 'west'] : ['north', 'south'];
+        if (axisAligned && ends.indexOf(f.side) !== -1) {
+          // A compass side along the wall names that END face -- e.g. the
+          // north face of a pillar authored as a short north-south segment.
+          const startIsIt = (dir[0] * cv[0] + dir[1] * cv[1]) < 0;
+          endAt = startIsIt ? [wall.x1, wall.y1] : [wall.x2, wall.y2];
+          normal = cv;
+        } else {
+          normal = faceNormalToward(wall, cv);
+        }
+      } else {
+        const room = rooms[f.room];
+        if (!room) {
+          warn(where + ': room "' + f.room + '" does not exist -- skipped');
+          return;
+        }
+        const lo = horizontal ? Math.min(wall.x1, wall.x2) : Math.min(wall.y1, wall.y2);
+        const hi = horizontal ? Math.max(wall.x1, wall.x2) : Math.max(wall.y1, wall.y2);
+        const a = along ? Math.max(along[0], lo) : lo, b = along ? Math.min(along[1], hi) : hi;
+        const side = wallSide('finish', { id: wall.id + '/' + i, wall: wall.id, centre: (a + b) / 2 },
+          wall, room, warn, Math.max(0, b - a));
+        if (!side) return;
+        normal = side.axis === 'x' ? [0, side.inDir] : [side.inDir, 0];
+      }
+      if (!normal) return;
+      if (endAt && along) {
+        warn(where + ': `along` does not apply to an end face -- ignored');
+        along = null;
+      }
+      // A wallpapered face under a finish: the finish is drawn over it, which
+      // is almost certainly not what the author meant. Compass sides only --
+      // that is how faceTexture names its face.
+      const ftv = wall.faceTexture && compassVector(wall.faceTexture.side);
+      if (!endAt && ftv && Math.abs(ftv[0] - normal[0]) < 1e-6 && Math.abs(ftv[1] - normal[1]) < 1e-6) {
+        warn(where + ': this face also carries the wall’s faceTexture (wallpaper); the ' + f.finish +
+          ' is drawn over it');
+      }
+      out.push({
+        finish: f.finish, normal: normal, face: endAt ? 'end' : 'long', at: endAt,
+        from: from, to: to, along: along,
+        // Wrap the finish round the reveals of openings and the wall's own
+        // ends: on by default for an exterior skin (brick returns into the
+        // window reveals, as on the spec pages), off otherwise.
+        reveals: typeof f.reveals === 'boolean' ? f.reveals : (f.side === 'exterior')
+      });
+    });
+    return out;
+  }
+
+  /**
    * Compile a geometry document into the renderer's internal shapes.
    *
    * @param {Object} geo      a parsed geometry.json
@@ -884,7 +996,10 @@ export const HouseLoader = (() => {
       outer: w.exterior ? 1 : 0,
       thickness: w.thickness != null ? w.thickness : defaults.wallThickness,
       height: w.height,
-      faceTexture: w.faceTexture
+      faceTexture: w.faceTexture,
+      // Raw here; resolved to face normals by compileWallFinishes once the
+      // rooms and the footprint exist (see after the footprint below).
+      finishes: Array.isArray(w.finishes) ? w.finishes : []
     }));
     const wallsExt = extendWallsForCorners(rawWalls, defaults.wallThickness);
     const wallsById = {};
@@ -1212,6 +1327,15 @@ export const HouseLoader = (() => {
       minX: Math.min.apply(null, fpXs), maxX: Math.max.apply(null, fpXs),
       minY: Math.min.apply(null, fpYs), maxY: Math.max.apply(null, fpYs)
     };
+
+    // ---- Wall finishes (schemaVersion 1.3) --------------------------------
+    // Resolved here, after the rooms (a `room` finish probes its room) and the
+    // footprint (an `exterior` one faces away from its centre) exist. The
+    // corner-extended copy shares the resolved list: extension lengthens a
+    // wall, it never turns it round.
+    const fpCentre = [(footprint.minX + footprint.maxX) / 2, (footprint.minY + footprint.maxY) / 2];
+    rawWalls.forEach(w => { w.finishes = compileWallFinishes(w, rooms, fpCentre, warn); });
+    wallsExt.forEach(w => { w.finishes = wallsById[w.id].finishes; });
     // The point every default camera looks at, and where the ground plane and
     // the cloud field are centred. The footprint's geometric middle is the
     // right default, but it is not always the point a house is best FRAMED

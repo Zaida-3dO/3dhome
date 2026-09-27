@@ -1,6 +1,6 @@
 {
   "kind": "geometry",
-  "schemaVersion": "1.2",
+  "schemaVersion": "1.3",
   "id": "demo",
   "name": "Demo Flat",
   "description": "A wholly fictional seven-room flat, invented for this repository. It exists so the app is runnable and evaluable straight after a clone, and so every feature of the engine has something to render: an L-shaped room, a pillar, interior and exterior walls, a cupboard door with a small swing, several lighting channels per room and both forms of rug. It is not anyone's home and no part of it is measured from one.",
@@ -297,7 +297,10 @@
         ],
         "thickness": 20.0,
         "exterior": true,
-        "notes": "South shell."
+        "finishes": [
+          { "finish": "brick", "side": "exterior" }
+        ],
+        "notes": "South shell. Brick on the outside face only."
       },
       {
         "id": 4,
@@ -411,7 +414,10 @@
           700
         ],
         "thickness": 10.0,
-        "notes": "Store / bathroom divider."
+        "finishes": [
+          { "finish": "tile", "room": "bathroom", "along": [540, 700] }
+        ],
+        "notes": "Store / bathroom divider. Bathroom side tiled full height over the shower corner only (a span)."
       },
       {
         "id": 14,
@@ -424,7 +430,10 @@
           700
         ],
         "thickness": 10.0,
-        "notes": "Bathroom / bedroom divider."
+        "finishes": [
+          { "finish": "tile", "room": "bathroom", "to": 120 }
+        ],
+        "notes": "Bathroom / bedroom divider. Bathroom side tiled to 120 cm (a height band)."
       },
       {
         "id": 15,

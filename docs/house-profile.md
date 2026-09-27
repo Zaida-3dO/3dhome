@@ -296,6 +296,43 @@ somewhere else. Record the highest id you have ever used in
 `walls.highestIdEverAssigned`, mint new ids above it, and never reuse a retired
 one. The validator enforces this.
 
+**Wall finishes** (`schemaVersion` `1.3`). `finishes` puts a procedural
+finish — `brick` or `tile` — on **one long face** of a wall, optionally over
+only a height band and a span. Each entry names its face by `side`
+(`"exterior"`, or a compass side) or by `room` (the face fronting that room,
+found the same way a window finds its room face); give exactly one.
+
+```json
+{ "id": 3, "start": [900, 700], "end": [0, 700], "thickness": 20.0, "exterior": true,
+  "finishes": [ { "finish": "brick", "side": "exterior" } ] }
+
+{ "id": 14, "start": [420, 380], "end": [420, 700], "thickness": 10.0,
+  "finishes": [ { "finish": "tile", "room": "bathroom", "to": 120 },
+                { "finish": "tile", "room": "bathroom", "from": 120, "along": [540, 700] } ] }
+```
+
+- `from` / `to` — cm above the floor. Omit for the whole height (an exterior
+  wall's goes down through the slab).
+- `along` — `[start, end]` in plan cm on the wall's long axis, the same numbers
+  as a door's `centre`. Omit for the whole length.
+- `brick` is the running-bond buff brick from the WindowSpec and
+  BalconyWindowSpec pages, at real UK brick size. `tile` is a **placeholder**
+  15 cm off-white square tile until the real tile look is ported.
+- `exterior` is the long face pointing away from the house footprint's centre.
+  For a wall in the notch of an L-shaped house that is wrong — name the compass
+  side instead.
+- A compass side that points **along** the wall names that **end** face: the
+  north face of a pillar drawn as a short north–south segment is
+  `"side": "north"`. `"start"` / `"end"` name the ends by the segment's own
+  authored points. `along` does not apply to an end face.
+- `reveals` wraps the finish round the jambs of the wall's doors and windows
+  and round its own ends (as brick returns into a window opening). On by
+  default for `"side": "exterior"`, off otherwise.
+
+A finish fades with its wall and costs **one draw per finish per wall**: all
+of a wall's finished faces are one mesh laid 1.5 mm over the painted wall,
+skipping its doors and windows.
+
 ### Slabs — the floor and the ceiling
 
 A house has exactly **one floor** and exactly **one ceiling**. Each is a single

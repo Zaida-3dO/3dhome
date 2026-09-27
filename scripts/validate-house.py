@@ -254,6 +254,7 @@ def check_geometry(geo, report, schema=None):
     rooms_by_id = {r.get("id"): r for r in rooms}
     check_wall_fittings(geo, wall_ids, room_ids, report, rooms_by_id)
     check_furniture(geo, wall_ids, rooms_by_id, report, schema)
+    check_wall_finishes(geo, room_ids, report)
 
     seen_channels = set()
     for entry in geo.get("lights", []):
@@ -298,6 +299,64 @@ def check_geometry(geo, report, schema=None):
             )
 
     return room_ids, seen_channels
+
+
+def check_wall_finishes(geo, room_ids, report):
+    """`walls[].finishes` (schemaVersion 1.3).
+
+    The schema checks the shape (finish names, exactly one of side/room, the
+    along pair); this checks what it cannot: the declared version, that a
+    `room` exists, that `to` is above `from`, that `along` lies on the wall
+    (and is not given for an END face), and that a finish does not land on
+    the face the wall's wallpaper (`faceTexture`) is on.
+    Which face a `room` finish lands on is probed by the engine (the same
+    probe windows use); see src/house-loader.js compileWallFinishes.
+    """
+    segments = (geo.get("walls") or {}).get("segments", [])
+    finished = [w for w in segments if w.get("finishes")]
+    if not finished:
+        return
+    version = str(geo.get("schemaVersion") or "")
+    try:
+        major, minor = (int(part) for part in version.split(".", 1))
+    except ValueError:
+        major = minor = -1
+    if (major, minor) < (1, 3):
+        report.warn(
+            "geometry.json/schemaVersion",
+            f"wall `finishes` need schemaVersion 1.3 or newer, but this profile declares '{version}' -- bump it",
+        )
+    for w in finished:
+        axis = _wall_axis(w)
+        for i, f in enumerate(w.get("finishes") or []):
+            where = f"walls/{w.get('id')}/finishes/{i}"
+            side, room = f.get("side"), f.get("room")
+            end_face = side in ("start", "end")
+            if side in ("north", "south", "east", "west") and axis is not None:
+                horizontal = axis[0]
+                end_face = side in (("east", "west") if horizontal else ("north", "south"))
+            ft = w.get("faceTexture") or {}
+            if not end_face and side is not None and side == ft.get("side"):
+                report.warn(where, f"the {side} face also carries this wall's faceTexture (wallpaper); "
+                                   f"the {f.get('finish')} is drawn over it")
+            if end_face and f.get("along") is not None:
+                report.warn(where, "`along` does not apply to an end face -- ignored")
+            if room is not None and room not in room_ids:
+                report.error(where, f"room '{room}' is not a room in this profile")
+            lo_h, hi_h = f.get("from"), f.get("to")
+            if lo_h is not None and hi_h is not None and not hi_h > lo_h:
+                report.error(where, f"`to` ({hi_h}) must be above `from` ({lo_h})")
+            along = f.get("along")
+            if along is not None and not end_face:
+                if axis is None:
+                    report.warn(where, "`along` on a wall that is not axis-aligned is ignored -- the whole length is finished")
+                else:
+                    _, lo, hi = axis
+                    a, b = sorted(along)
+                    if b <= lo or a >= hi:
+                        report.error(where, f"`along` {along} does not overlap the wall ({lo}..{hi})")
+                    elif a < lo - 0.5 or b > hi + 0.5:
+                        report.warn(where, f"`along` {along} runs past the wall ({lo}..{hi}); clipped to it")
 
 
 def _wall_axis(wall):
