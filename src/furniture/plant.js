@@ -75,6 +75,10 @@ export const WALL_CONTENTS = Object.freeze(['spiky', 'succulent', 'snake-plant']
 // corn plant's crown spread (60) and its total height, pot included
 // (potHeight + plantHeight = 56 + 110 = 166). A caller resizes the whole
 // plant by overriding width/depth/height -- fitToEnvelope() makes that exact.
+/** Parts that keep a single horizontal scale in the envelope fit (see
+ * fitToEnvelope). Each is built centred on the plant's axis. */
+const RIGID_PARTS = new Set(['pot', 'soil', 'saucer', 'nurseryRim', 'water']);
+
 export const DEFAULTS = Object.freeze({
   kind: 'corn-plant',
   width: 60,
@@ -143,13 +147,43 @@ function fitToEnvelope(THREE, group, widthM, depthM, heightM) {
   wrapper.name = group.name;
   wrapper.userData = group.userData;
   wrapper.userData.fitScale = { x: sx, y: sy, z: sz };
+  // RIGID parts (the pot and what sits in it) take ONE horizontal scale
+  // about their own axis, so a pot stays round whatever the
+  // foliage does to the fit -- e.g. at low detail, where fewer leaves
+  // change the raw footprint. They always sit inside the foliage's
+  // footprint, so the envelope is still set by the rest.
+  // If the rigid parts themselves set the raw footprint on an axis, that
+  // axis's scale is forced (else the envelope would miss); if they set it
+  // on both, they take the plain per-axis fit like everything else.
+  const rb = new THREE.Box3();
+  group.children.forEach(c => { if (RIGID_PARTS.has(c.name)) rb.expandByObject(c); });
+  const EPSR = 1e-4;
+  const touchX = !rb.isEmpty() && rb.max.x - rb.min.x >= rawW - EPSR;
+  const touchZ = !rb.isEmpty() && rb.max.z - rb.min.z >= rawD - EPSR;
+  // Otherwise they take the VERTICAL scale sy -- the "whole plant got
+  // bigger/smaller" factor, ~1 for a preset -- so a pot keeps its true
+  // diameter even when the foliage's footprint differs between details;
+  // failing that, min(sx, sz); failing that, the plain per-axis fit.
+  const fits = r => rb.min.x * r - ax * sx >= -widthM / 2 - EPSR && rb.max.x * r - ax * sx <= widthM / 2 + EPSR &&
+    rb.min.z * r - az * sz >= -EPSR && rb.max.z * r - az * sz <= depthM + EPSR;
+  const cands = touchX ? [sx] : touchZ ? [sz] : [sy, Math.min(sx, sz)];
+  const sr = cands.find(fits);
+  const rigidOn = !(touchX && touchZ) && sr !== undefined;
   for (const child of group.children.slice()) {
+    const rigid = rigidOn && RIGID_PARTS.has(child.name);
     child.position.x = (child.position.x - ax) * sx;
     child.position.y = (child.position.y - ay) * sy;
     child.position.z = (child.position.z - az) * sz;
-    child.scale.x *= sx;
+    if (rigid) {
+      // Every rigid part is built around the plant's axis (x = z = 0 raw),
+      // with its position at 0, so the line above already moved that axis
+      // to where the fit maps it; scaling by sr is then about that axis.
+      child.scale.x *= sr; child.scale.z *= sr;
+    } else {
+      child.scale.x *= sx;
+      child.scale.z *= sz;
+    }
     child.scale.y *= sy;
-    child.scale.z *= sz;
     wrapper.add(child);
   }
   return wrapper;
@@ -240,7 +274,14 @@ function makeCtx(THREE, group, p, detail) {
     group.add(m);
     return m;
   };
-  return { THREE, group, p, detail, low: detail === 'low', rand: mulberry32((p.seed | 0) || 1), add };
+  // `rand` lays out STRUCTURE (canes, stems, branches); `leafRand` lays out
+  // the leaves. Two streams, so a low-detail build (fewer leaves) keeps the
+  // same branches as the full one -- and so the same footprint and fit.
+  return {
+    THREE, group, p, detail, low: detail === 'low', add,
+    rand: mulberry32((p.seed | 0) || 1),
+    leafRand: mulberry32((((p.seed | 0) || 1) * 7919 + 13) >>> 0),
+  };
 }
 
 const V = (THREE, x, y, z) => new THREE.Vector3(x, y, z);
@@ -284,6 +325,9 @@ export const LEAF_SHAPES = {
   oval: t => Math.pow(Math.sin(Math.PI * Math.min(0.999, 0.06 + 0.94 * t)), 0.6),
   // snake plant / spiky: near-parallel sides, tapering over the last third
   sword: t => (t < 0.66 ? 0.8 + 0.3 * t : Math.max(0, 1 - (t - 0.66) / 0.34)),
+  // corn / dracaena strap: a short narrowing into the cane, then parallel
+  // sides for most of the length, tapering over the last ~30 % to a point
+  strap: t => (t < 0.06 ? 0.55 + 7 * t : t < 0.7 ? 1 : Math.max(0, 1 - (t - 0.7) / 0.3)),
   // a petiole-then-blade leaf (peace lily on its long stalk): stalk for the
   // first 40 % of the length, then a lance blade
   stalked: t => (t < 0.4 ? 0.07 : Math.pow(Math.sin(Math.PI * Math.min(1, (t - 0.4) / 0.6)), 0.7)),
@@ -291,7 +335,7 @@ export const LEAF_SHAPES = {
 
 export function leafGeometry(THREE, spec) {
   const {
-    base, ang, len, width, pitch0, pitch1, segs, shape, fold = 0.18, bendPow = 1.4, pitches, roll = 0,
+    base, ang, len, width, pitch0, pitch1, segs, shape, fold = 0.18, bendPow = 1.4, pitches, roll = 0, rowT,
   } = spec;
   // `pitches` (optional) gives each segment's pitch explicitly; otherwise
   // the pitch eases from pitch0 to pitch1.
@@ -317,7 +361,14 @@ export function leafGeometry(THREE, spec) {
   // the tip -- a needle whose widest point is the narrow base. So a
   // one-segment leaf is a DIAMOND instead: a single base point, one row at
   // the profile's widest t, and the tip (4 faces a side instead of 2).
-  const diamond = n === 1;
+  // `rowT` (optional, one t per segment) places the rows explicitly along
+  // the spine instead of at t = i/n -- e.g. a strap leaf puts its two rows
+  // just past the base and ~2/3 along, so it is wide for most of its length.
+  const diamond = n === 1 && !rowT;
+  const spineAt = t => {
+    const f = Math.min(n - 1e-9, Math.max(0, t * n)), k = Math.floor(f);
+    return spine[k].clone().lerp(spine[k + 1], f - k);
+  };
   let tw = 0.5;
   if (diamond) {
     let best = -1;
@@ -326,9 +377,9 @@ export function leafGeometry(THREE, spec) {
   const pos = [];
   if (diamond) pos.push(base.x, base.y, base.z);
   for (let i = 0; i < n; i++) {                       // rows 0..n-1: edge, midrib, edge
-    const t = diamond ? tw : i / n;
+    const t = diamond ? tw : (rowT ? rowT[i] : i / n);
     const hw = (width / 2) * prof(t);
-    const c = diamond ? spine[0].clone().lerp(spine[1], tw) : spine[i];
+    const c = diamond ? spine[0].clone().lerp(spine[1], tw) : (rowT ? spineAt(t) : spine[i]);
     const pitch = diamond ? rowPitch(0, 1) : rowPitch(i, n);
     const lift = hw * fold;                            // midrib raised along the leaf normal-ish
     const up = [-dh[0] * Math.sin(pitch), Math.cos(pitch), -dh[1] * Math.sin(pitch)];
@@ -372,6 +423,7 @@ export function leafGeometry(THREE, spec) {
   geo.setIndex(idx.concat(back));
   geo.computeVertexNormals();
   geo.userData.tip = tip;
+  geo.userData.spine = spine.map(v => v.clone());   // the leaf's midline, base to tip
   // (margin strips assume an untwisted blade: roll 0)
   geo.userData.edges = { left, right, side: new THREE.Vector3(side[0], 0, side[1]) };
   return geo;
@@ -472,8 +524,9 @@ function buildPot(ctx, style, y0) {
       radial = low ? 8 : 20;
       finish = 'gloss';
       break;
-    case 'bowl':                                    // squat glazed bowl on a saucer
-      prof = [[0, 0], [1.08, 0], [1.1, 0.06], [0.72, 0.1], [0.95, 0.5], [1.02, 0.85], [0.98, 1]];
+    case 'bowl':                                    // squat glazed bowl on a foot ring
+      prof = low ? [[0, 0], [0.8, 0], [0.72, 0.1], [1.0, 0.6], [0.98, 1]]
+        : [[0, 0], [1.08, 0], [1.1, 0.06], [0.72, 0.1], [0.95, 0.5], [1.02, 0.85], [0.98, 1]];
       finish = 'gloss';
       break;
     case 'cylinder':
@@ -495,7 +548,7 @@ function buildPot(ctx, style, y0) {
     default:
       prof = [[0, 0], [0.8, 0], [1, 1]];
   }
-  if (low && prof.length > 5) {
+  if (low && prof.length > 5 && (style === 'egg' || style === 'glass-bubble')) {
     const keep = [0, Math.round(prof.length * 0.35), Math.round(prof.length * 0.6), prof.length - 2, prof.length - 1];
     prof = prof.filter((_, i) => keep.indexOf(i) !== -1);
   }
@@ -508,7 +561,7 @@ function buildPot(ctx, style, y0) {
       const x = pos.getX(i), z = pos.getZ(i), y = pos.getY(i);
       if (y < y0 + h * 0.2) continue;
       const a = Math.atan2(z, x);
-      const f = 1 + 0.045 * Math.cos(a * radial / 2);   // +/- on alternate columns
+      const f = 1 + 0.08 * Math.cos(a * radial / 2);    // +/- on alternate columns: visible ribs
       pos.setX(i, x * f); pos.setZ(i, z * f);
     }
     geo.computeVertexNormals();
@@ -574,9 +627,10 @@ function buildCornPlant(ctx) {
     const n = LEAVES[s] !== undefined ? LEAVES[s] : LEAVES[LEAVES.length - 1];
     const tuftH = Math.min(0.35, plantH * fr * 0.8);
     const lenScale = s === 0 ? 1 : (s === 1 ? 0.95 : 0.85);
-    // the crown radius this cane's leaves aim for (the mid/short tufts are
-    // narrower than the top crown)
-    const reach = s === 0 ? spreadR : spreadR * 0.75;
+    // the crown radius this cane's leaves aim for: the top tuft spreads to
+    // about twice the rim (~60 cm, as photographed; the 1.3 makes up for
+    // the arch reaching less far than its aim), the mid/short tufts less
+    const reach = s === 0 ? spreadR * 1.3 : spreadR * 0.75;
     for (let i = 0; i < n; i++) {
       const t = n === 1 ? 1 : i / (n - 1);             // 0 = lowest, 1 = crown
       const y = topY - tuftH * (1 - t);
@@ -591,17 +645,22 @@ function buildCornPlant(ctx) {
       // changes. Upper leaves: short reach, gentle bend (they stand up);
       // lower leaves: long reach, strong bend (they splay out and droop).
       const baseOff = Math.hypot(top.x, top.z);
-      const want = Math.max(0.02, (reach - baseOff - leafW / 2) * (up ? 0.4 + 0.3 * rand() : 0.8 + 0.2 * rand()));
+      const want = Math.max(0.02, (reach - baseOff - leafW / 2) * (up ? 0.75 + 0.25 * rand() : 0.85 + 0.15 * rand()));
       // lower/middle leaves bend hard enough that their tips droop BELOW
       // horizontal (the photographed fountain); crown leaves arch gently
       const bend = up ? 0.8 + 0.5 * rand() : 1.7 + 0.5 * rand();
       const maxReach = len * Math.cos(bend / 2);
       const aRise = bend / 2 + Math.acos(Math.min(1, want / maxReach));
       const pitches = [Math.min(1.55, aRise), Math.min(1.55, aRise) - bend];
+      // low detail is one straight segment: aim it so it reaches as far out
+      // as the arched full-detail leaf does (same footprint at both details)
+      const m = (pitches[0] + pitches[1]) / 2;
+      const lowPitch = Math.sign(m || 1) * Math.acos(Math.min(1, Math.cos((pitches[0] - pitches[1]) / 2) * Math.cos(m)));
       const segs = low ? 1 : 2;
       add(leafGeometry(THREE, {
         base: V(THREE, top.x, y, top.z), ang: a, len, width: leafW,
-        pitch0: pitches[0], pitch1: pitches[1], pitches: low ? [(pitches[0] + pitches[1]) / 2] : pitches, segs, shape: 'lance', fold: 0.2,
+        pitch0: pitches[0], pitch1: pitches[1], pitches: low ? [lowPitch] : pitches, segs, shape: 'strap', fold: 0.2,
+        rowT: low ? undefined : [0.06, 0.66],
         roll: (rand() - 0.5) * 1.6,
       }), 'satin', p.leafColor, 'leaf');
     }
@@ -636,10 +695,13 @@ function buildWallPlanter(ctx) {
   soil.computeVertexNormals();
   add(soil, 'matte', '#2e2319', 'soil');
   // Brass wire: every ceramic edge, then the open mirror image up to U.
-  if (!low) {
+  // Kept at BOTH details (3-sided at low): the wire carries the top apex
+  // that sets the envelope's height, so dropping it would make the fit
+  // stretch the ceramic and move its rim at low detail.
+  {
     const r = Math.max(0.0015, W * 0.007);
     const edges = [[B, BL], [B, BR], [B, F], [BL, BR], [BR, F], [F, BL], [U, BL], [U, BR], [U, F]];
-    edges.forEach(([a, b]) => add(tube(THREE, a, b, r, r, 4, true), 'metal', p.frameColor, 'wire'));
+    edges.forEach(([a, b]) => add(tube(THREE, a, b, r, r, low ? 3 : 4, true), 'metal', p.frameColor, 'wire'));
   }
   // Contents, rising from the opening's centroid.
   const cx = 0, cz = D / 3, cy = hTop - H * 0.02;
@@ -742,13 +804,13 @@ function buildSnakePlant(ctx) {
 // POTHOS (heart-leaf), upright or trailing
 // =====================================================================
 function buildPothos(ctx) {
-  const { THREE, p, low, rand, add } = ctx;
+  const { THREE, p, low, rand, leafRand, add } = ctx;
   const trailing = p.habit === 'trailing';
   const trail = trailing ? Math.max(0, p.trail) * CM : 0;
   const pot = buildPot(ctx, p.potStyle, trail);
   const R = (p.potTopDiameter * CM) / 2;
   const leafL = p.leafLength * CM, leafW = p.leafWidth * CM;
-  const nLeaves = low ? Math.min(9, Math.round(p.leafCount * 0.4) + 3) : Math.max(3, Math.round(p.leafCount));
+  const nLeaves = low ? Math.min(trailing ? 14 : 9, Math.round(p.leafCount * 0.4) + 3) : Math.max(3, Math.round(p.leafCount));
   if (!trailing) {
     // arching stems, a heart leaf at the end of each (plus side leaves)
     const stems = Math.max(2, Math.round(p.stemCount));
@@ -760,16 +822,23 @@ function buildPothos(ctx) {
       const b = V(THREE, 0, pot.rimY - 0.01, 0);
       const mid = V(THREE, Math.sin(a) * reach * 0.4, pot.rimY + h * 0.75, Math.cos(a) * reach * 0.4);
       const end = V(THREE, Math.sin(a) * reach, pot.rimY + h * 0.6, Math.cos(a) * reach);
-      if (!low) add(ribbon(THREE, [b, mid, end], 0.004), 'matte', '#5f7d3a', 'stem');
+      // a gently curved stem: a quadratic from the rim through `mid` to `end`
+      const curve = [];
+      for (let q = 0; q <= 5; q++) {
+        const u = q / 5, w0 = (1 - u) * (1 - u), w1 = 2 * u * (1 - u), w2 = u * u;
+        curve.push(V(THREE, b.x * w0 + mid.x * w1 + end.x * w2, b.y * w0 + mid.y * w1 + end.y * w2, b.z * w0 + mid.z * w1 + end.z * w2));
+      }
+      // stems at BOTH details (a 2-segment ribbon at low), so no leaf floats
+      add(ribbon(THREE, low ? [curve[0], curve[2], curve[5]] : curve, 0.004), 'matte', '#5f7d3a', 'stem');
       const per = Math.ceil((nLeaves - placed) / (stems - s));
       for (let k = 0; k < per && placed < nLeaves; k++, placed++) {
         const t = per === 1 ? 1 : 0.45 + 0.55 * (k / (per - 1));
-        const at = t < 0.75 ? b.clone().lerp(mid, t / 0.75) : mid.clone().lerp(end, (t - 0.75) / 0.25);
-        const la = a + (k % 2 ? 0.9 : -0.9) * rand();
+        const at = curve[Math.min(5, Math.round(t * 5))];
+        const la = a + (k % 2 ? 0.9 : -0.9) * leafRand();
         add(leafGeometry(THREE, {
-          base: at, ang: la, len: leafL * (0.8 + 0.3 * rand()), width: leafW,
-          pitch0: 0.2, pitch1: -0.5 - 0.4 * rand(), segs: low ? 1 : 3, shape: 'heart', fold: 0.15,
-          roll: (rand() - 0.5) * 1.2,   // tilt: leaves face every which way, not all flat
+          base: at, ang: la, len: leafL * (0.8 + 0.3 * leafRand()), width: leafW,
+          pitch0: 0.2, pitch1: -0.5 - 0.4 * leafRand(), segs: low ? 1 : 3, shape: 'heart', fold: 0.15,
+          roll: (leafRand() - 0.5) * 1.2,   // tilt: leaves face every which way, not all flat
         }), 'matte', p.leafColor, 'leaf');
       }
     }
@@ -777,12 +846,14 @@ function buildPothos(ctx) {
   }
   // TRAILING: a crown of leaves on the pot plus vines hanging to y = 0
   const vines = low ? 3 : Math.max(2, Math.round(p.stemCount));
-  const perVine = Math.max(1, Math.floor(nLeaves / (vines + 1)));
+  // a full crown on the pot: ~40 % of the leaves; the rest along the vines
+  const perVine = Math.max(2, Math.round(nLeaves * 0.4));
   let placed = 0;
   for (let i = 0; i < perVine; i++, placed++) {                 // crown
     add(leafGeometry(THREE, {
-      base: V(THREE, (rand() - 0.5) * R, pot.rimY, (rand() - 0.5) * R), ang: rand() * Math.PI * 2,
-      len: leafL, width: leafW, pitch0: 1.2, pitch1: 0.2, segs: low ? 1 : 2, shape: 'heart',
+      base: V(THREE, (leafRand() - 0.5) * R * 1.4, pot.rimY, (leafRand() - 0.5) * R * 1.4), ang: (i / perVine) * Math.PI * 2 + leafRand() * 0.6,
+      len: leafL, width: leafW, pitch0: 0.9 + 0.4 * leafRand(), pitch1: -0.1 - 0.4 * leafRand(), segs: low ? 1 : 2, shape: 'heart',
+      roll: (leafRand() - 0.5) * 1.0,
     }), 'matte', p.leafColor, 'leaf');
   }
   for (let v = 0; v < vines; v++) {
@@ -804,8 +875,8 @@ function buildPothos(ctx) {
       const t = (k + 1) / (each + 0.5);
       const at = pts[Math.min(pts.length - 1, Math.round(t * segs))];
       add(leafGeometry(THREE, {
-        base: at, ang: a + (k % 2 ? 1.2 : -1.2), len: leafL * (0.75 + 0.25 * rand()), width: leafW,
-        pitch0: -0.2, pitch1: -1.1, segs: low ? 1 : 2, shape: 'heart', fold: 0.12,
+        base: at, ang: a + (k % 2 ? 1.2 : -1.2), len: leafL * (0.75 + 0.25 * leafRand()), width: leafW,
+        pitch0: -0.2, pitch1: -1.1, segs: 1, shape: 'heart', fold: 0.12,   // diamonds: dense vines within the cap
       }), 'matte', p.leafColor, 'leaf');
     }
   }
@@ -815,17 +886,19 @@ function buildPothos(ctx) {
 // FICUS (small thick-trunk tree)
 // =====================================================================
 function buildFicus(ctx) {
-  const { THREE, p, low, rand, add } = ctx;
+  const { THREE, p, low, rand, leafRand, add } = ctx;
   const pot = buildPot(ctx, p.potStyle, 0);
   const R = (p.potTopDiameter * CM) / 2;
-  if (p.potStyle === 'bowl' && !low) {                           // saucer
-    const sc = new THREE.CylinderGeometry(R * 1.28, R * 1.22, 0.012, 12, 1, false);
-    sc.translate(0, 0.006, 0);
+  if (p.potStyle === 'bowl') {                                   // saucer (both details: it sets the footprint)
+    const sc = low
+      ? lathe(THREE, [[R * 1.28, 0.012], [R * 1.22, 0]], 8, 0, 0)
+      : new THREE.CylinderGeometry(R * 1.28, R * 1.22, 0.012, 12, 1, false);
+    if (!low) sc.translate(0, 0.006, 0);
     add(sc, 'gloss', p.potColor, 'saucer');
   }
   const top = pot.rimY + p.plantHeight * CM;
   const trunkTop = V(THREE, 0, pot.rimY + p.plantHeight * CM * 0.28, 0);
-  add(tube(THREE, V(THREE, 0, pot.rimY - 0.02, 0), trunkTop, 0.022, 0.012, low ? 5 : 7, true), 'matte', '#6b5a44', 'trunk');
+  add(tube(THREE, V(THREE, 0, pot.rimY - 0.02, 0), trunkTop, 0.022, 0.012, low ? 4 : 7, true), 'matte', '#6b5a44', 'trunk');
   const branches = Math.max(2, Math.round(p.stemCount));
   const nLeaves = low ? 10 : Math.max(branches * 3, Math.round(p.leafCount));
   const reach = (p.spread * CM) / 2;
@@ -833,15 +906,28 @@ function buildFicus(ctx) {
   for (let b = 0; b < branches; b++) {
     const a = (b / branches) * Math.PI * 2 + rand() * 0.7;
     const end = V(THREE, Math.sin(a) * reach * (0.35 + 0.3 * rand()), top - p.plantHeight * CM * (0.1 + 0.3 * rand()), Math.cos(a) * reach * (0.35 + 0.3 * rand()));
-    add(tube(THREE, trunkTop, end, 0.008, 0.004, low ? 4 : 5, true), 'matte', '#6b5a44', 'branch');
+    add(tube(THREE, trunkTop, end, 0.008, 0.004, low ? 3 : 5, true), 'matte', '#6b5a44', 'branch');
+    if (low) {
+      // low detail: two BIG leaves at the branch tip, pointing outward --
+      // standing in for the tip cluster (so it reads as foliage, not a bare
+      // twig) and sitting where the full build's outermost leaves are, so
+      // the footprint and the fit match the full build
+      for (const side of [-0.5, 0.5]) {
+        add(leafGeometry(THREE, {
+          base: end, ang: a + side, len: p.leafLength * CM * 1.0, width: p.leafWidth * CM * 1.8,
+          pitch0: 0.5, pitch1: -0.2, segs: 1, shape: 'oval', fold: 0.1,
+        }), 'gloss', p.leafColor, 'leaf');
+      }
+      continue;
+    }
     const each = Math.ceil((nLeaves - placed) / (branches - b));
     for (let k = 0; k < each && placed < nLeaves; k++, placed++) {
       // leaves cluster toward the branch tips
-      const t = 0.6 + 0.4 * Math.sqrt(rand());
+      const t = 0.6 + 0.4 * Math.sqrt(leafRand());
       const at = trunkTop.clone().lerp(end, t);
       add(leafGeometry(THREE, {
-        base: at, ang: rand() * Math.PI * 2, len: p.leafLength * CM * (0.8 + 0.4 * rand()), width: p.leafWidth * CM,
-        pitch0: 0.5 + 0.4 * rand(), pitch1: -0.2, segs: 1, shape: 'oval', fold: 0.1,
+        base: at, ang: leafRand() * Math.PI * 2, len: p.leafLength * CM * (0.8 + 0.4 * leafRand()), width: p.leafWidth * CM,
+        pitch0: 0.5 + 0.4 * leafRand(), pitch1: -0.2, segs: 1, shape: 'oval', fold: 0.1,
       }), 'gloss', p.leafColor, 'leaf');
     }
   }
@@ -868,23 +954,25 @@ function padGeometry(THREE, base, ang, pitch, len, wid, thick, low) {
 }
 
 function buildJade(ctx) {
-  const { THREE, p, low, rand, add } = ctx;
+  const { THREE, p, low, rand, leafRand, add } = ctx;
   const pot = buildPot(ctx, p.potStyle, 0);
   const stems = Math.max(1, Math.round(p.stemCount));
   const nPads = low ? 8 : Math.max(stems * 2, Math.round(p.leafCount));
   const h = p.plantHeight * CM, reach = (p.spread * CM) / 2;
   let placed = 0;
   for (let s = 0; s < stems; s++) {
+    // short stems leaning out a little; each ends in a compact ROSETTE of
+    // fleshy pads spiralling round its tip, cupped upward
     const a = (s / stems) * Math.PI * 2 + rand() * 0.8;
     const b = V(THREE, (rand() - 0.5) * pot.innerR * 0.6, pot.rimY - 0.01, (rand() - 0.5) * pot.innerR * 0.6);
-    const e = V(THREE, Math.sin(a) * reach * 0.6, pot.rimY + h * (0.45 + 0.25 * rand()), Math.cos(a) * reach * 0.6);
+    const e = V(THREE, Math.sin(a) * reach * 0.35, pot.rimY + h * (0.35 + 0.25 * rand()), Math.cos(a) * reach * 0.35);
     add(tube(THREE, b, e, 0.006, 0.004, low ? 4 : 5, true), 'matte', '#6f6a3e', 'stem');
     const each = Math.ceil((nPads - placed) / (stems - s));
     for (let k = 0; k < each && placed < nPads; k++, placed++) {
-      const t = 0.7 + 0.3 * (k / Math.max(1, each - 1));
-      const at = b.clone().lerp(e, t);
-      add(padGeometry(THREE, at, a + (k - each / 2) * 1.1 + rand() * 0.5, 0.5 + 0.7 * rand(),
-        p.leafLength * CM * (0.8 + 0.3 * rand()), p.leafWidth * CM, p.leafWidth * CM * 0.35, low), 'satin', p.leafColor, 'leaf');
+      const at = b.clone().lerp(e, 0.88 + 0.12 * (k / Math.max(1, each - 1)));
+      const inner = k >= each / 2;                       // inner pads stand up, outer ones splay
+      add(padGeometry(THREE, at, k * 2.39996 + leafRand() * 0.3, inner ? 1.0 + 0.3 * leafRand() : 0.45 + 0.3 * leafRand(),
+        p.leafLength * CM * (inner ? 0.75 : 1) * (0.9 + 0.2 * leafRand()), p.leafWidth * CM, p.leafWidth * CM * 0.35, low), 'satin', p.leafColor, 'leaf');
     }
   }
 }
@@ -908,7 +996,7 @@ const BUILDERS = {
  * to its diameter (a mismatched envelope would stretch it into an oval). */
 export const PRESETS = Object.freeze({
   'corn-plant-tall': Object.freeze({
-    kind: 'corn-plant', width: 55.5, depth: 45.5, height: 166,
+    kind: 'corn-plant', width: 61.5, depth: 60.5, height: 166,
     potStyle: 'egg', potHeight: 56, potTopDiameter: 30, potColor: '#a67c4e',
     plantHeight: 110, stemCount: 3, spread: 60, leafLength: 45, leafWidth: 6, leafColor: '#1f3a1c', seed: 7,
   }),
@@ -935,23 +1023,23 @@ export const PRESETS = Object.freeze({
     plantHeight: 29.8, leafCount: 3, leafWidth: 4.5, leafColor: '#35502a', accentColor: '#c9c46a', seed: 12,
   }),
   'pothos-upright-ribbed-pot': Object.freeze({
-    kind: 'pothos', habit: 'upright', width: 32.5, depth: 35.5, height: 30,
+    kind: 'pothos', habit: 'upright', width: 32, depth: 33, height: 30,
     potStyle: 'ribbed-footed', potHeight: 14, potTopDiameter: 11, potColor: '#f1efea',
-    plantHeight: 30.8, stemCount: 4, spread: 34, leafCount: 8, leafLength: 9, leafWidth: 6, leafColor: '#2f5a24', seed: 13,
+    plantHeight: 33.2, stemCount: 4, spread: 34, leafCount: 8, leafLength: 9, leafWidth: 6, leafColor: '#2f5a24', seed: 13,
   }),
   'pothos-trailing': Object.freeze({
-    kind: 'pothos', habit: 'trailing', trail: 50, width: 46.5, depth: 35, height: 70,
+    kind: 'pothos', habit: 'trailing', trail: 50, width: 50.5, depth: 38.5, height: 70,
     potStyle: 'cylinder', potHeight: 14, potTopDiameter: 16, potColor: '#8d8f8c',
-    plantHeight: 20, stemCount: 5, spread: 55, leafCount: 32, leafLength: 9, leafWidth: 7, leafColor: '#3f7a2a', seed: 14,
+    plantHeight: 20, stemCount: 5, spread: 55, leafCount: 40, leafLength: 9, leafWidth: 7, leafColor: '#3f7a2a', seed: 14,
   }),
   'ficus-bowl-pot': Object.freeze({
-    kind: 'ficus', width: 24, depth: 23, height: 42,
+    kind: 'ficus', width: 26.5, depth: 23.5, height: 42,
     potStyle: 'bowl', potHeight: 11, potTopDiameter: 18, potColor: '#d9cdb4',
     plantHeight: 35.7, stemCount: 4, spread: 30, leafCount: 36, leafLength: 5.5, leafWidth: 3.2, leafColor: '#3c6a2c', seed: 15,
   }),
   'jade-small': Object.freeze({
-    kind: 'jade', width: 15, depth: 17, height: 28,
+    kind: 'jade', width: 13, depth: 13.5, height: 28,
     potStyle: 'cylinder', potHeight: 11, potTopDiameter: 12, potColor: '#c8642e',
-    plantHeight: 23.0, stemCount: 3, spread: 22, leafCount: 16, leafLength: 5, leafWidth: 2.8, leafColor: '#6f9a45', seed: 16,
+    plantHeight: 26.8, stemCount: 3, spread: 22, leafCount: 16, leafLength: 5, leafWidth: 2.8, leafColor: '#6f9a45', seed: 16,
   }),
 });

@@ -252,13 +252,16 @@ for (const k of KINDS) {
   const leaves = meshes(g, /^leaf$/);
   const topCane = canes[0];
   const stats = leaves.map(o => {
+    // length along the leaf's own midline (userData.spine, base to tip),
+    // transformed to world -- i.e. AFTER the envelope fit
+    const sp = o.geometry.userData.spine.map(v => v.clone().applyMatrix4(o.matrixWorld));
+    let len = 0;
+    for (let i = 1; i < sp.length; i++) len += sp[i].distanceTo(sp[i - 1]);
     const vc = o.geometry.attributes.position.count / 2;   // front half
     const rows = (vc - 1) / 3;
-    let len = 0, prev = wv(o, 1), w = 0;
-    for (let r = 1; r < rows; r++) { const c = wv(o, r * 3 + 1); len += c.distanceTo(prev); prev = c; }
-    len += wv(o, vc - 1).distanceTo(prev);
+    let w = 0;
     for (let r = 0; r < rows; r++) w = Math.max(w, wv(o, r * 3).distanceTo(wv(o, r * 3 + 2)));
-    return { len: len / CM, w: w / CM, baseY: wv(o, 1).y / CM };
+    return { len: len / CM, w: w / CM, baseY: sp[0].y / CM };
   });
   const top = stats.filter(s => s.baseY > topCane - 40);
   const mean = a => a.reduce((s, x) => s + x, 0) / a.length;
@@ -269,6 +272,19 @@ for (const k of KINDS) {
   // mutation: leafWidth 6 -> 3 in the preset -> ~3.3 -> fails
   check('corn: leaves average 5-7 cm wide (post-fit)', allW >= 5 && allW <= 7, allW);
   check('corn: ~48 leaves in tufts (not 13-leaf rosettes)', leaves.length >= 40, leaves.length);
+  // the top tuft spreads to about twice the rim (visual review c775141a).
+  // Mutation: top-cane reach back to spreadR -> ~50 -> fails.
+  const tb = new THREE.Box3();
+  leaves.forEach(o => { if (o.geometry.userData.spine[0].clone().applyMatrix4(o.matrixWorld).y / CM > topCane - 40) tb.expandByObject(o); });
+  const tuftW = Math.max(tb.max.x - tb.min.x, tb.max.z - tb.min.z) / CM;
+  check('corn: top tuft ~60 cm across (about twice the 30 cm rim)', tuftW >= 55 && tuftW <= 68, tuftW);
+  // strap leaves: wide along most of the length. Mutation: shape 'lance' -> fails.
+  check('corn: strap-shaped leaves at full detail', leaves.every(o => {
+    const a = o.geometry.attributes.position, vc = a.count / 2, rows = (vc - 1) / 3;
+    if (rows < 2) return false;
+    const w = r => new THREE.Vector3(a.getX(r * 3), a.getY(r * 3), a.getZ(r * 3)).distanceTo(new THREE.Vector3(a.getX(r * 3 + 2), a.getY(r * 3 + 2), a.getZ(r * 3 + 2)));
+    return w(0) >= 0.85 * w(rows - 1);
+  }));
 }
 
 // ---- 7. wall planter geometry -------------------------------------------------
@@ -309,8 +325,15 @@ for (const k of KINDS) {
     const apexZ = (() => { let best = null; wires.forEach(o => { const bb = bboxCm(o); if (near(bb.maxY, wireTop, 0.01)) best = bb; }); return best ? best.minZ : null; })();
     check(name + ': the top apex hangs ON the wall (z ~ 0)', apexZ !== null && apexZ < 0.5, apexZ);
     const low = build(THREE, pr, { detail: 'low' });
-    // mutation: build the wire at low detail too -> fails
-    check(name + ': low detail drops the wire', meshes(low, /^wire$/).length === 0);
+    // The wire stays at low detail (cheaper, 3-sided): it carries the top
+    // apex that sets the envelope height, and dropping it made the fit
+    // stretch the ceramic (visual review c775141a).
+    // Mutation: drop the wire at low -> the ceramic rescales -> fails.
+    check(name + ': low keeps the wire, cheaper', meshes(low, /^wire$/).length === 9 && tris(low) < tris(g));
+    const bodyLow = meshes(low, /^planterBody$/)[0];
+    const bf = bboxCm(body), bl = bboxCm(bodyLow);
+    check(name + ': the ceramic is the same size at both details', near(bf.maxX - bf.minX, bl.maxX - bl.minX, 0.2) &&
+      near(bf.maxY, bl.maxY, 0.2) && near(bf.maxZ, bl.maxZ, 0.2), { bf, bl });
   }
   const count = (name, re) => meshes(build(THREE, PRESETS[name]), re).length;
   check('contents differ: spiky tuft has many blades', count('wall-planter-large', /^leaf$/) >= 15);
@@ -348,6 +371,16 @@ for (const [name, pr] of Object.entries(PRESETS)) {
   // than the other; an oval from the fit was 25-35 % before this fix.
   check(name + ': pot is round (x/z within 7 %)', Math.abs(w / d - 1) <= 0.07, { w, d });
   check(name + ': pot keeps its diameter within 10 %', Math.abs(w / pr.potTopDiameter - 1) <= 0.2, { w, dia: pr.potTopDiameter });
+  // and at LOW detail too (fewer leaves change the raw footprint; the pot is
+  // a rigid part of the fit). Mutation: remove 'pot' from RIGID_PARTS -> fails.
+  const gl = build(THREE, pr, { detail: 'low' });
+  const pl = bboxCm(meshes(gl, /^pot$/)[0]);
+  check(name + ' (low): pot is round (x/z within 7 %)', Math.abs((pl.maxX - pl.minX) / (pl.maxZ - pl.minZ) - 1) <= 0.07, pl);
+  // ...and the same size as at full detail: no jump when the detail
+  // switches (visual review 13fdd666). Mutation: drop 'pot' from
+  // RIGID_PARTS -> the corn pot shrinks at low -> fails.
+  check(name + ' (low): pot width within 12 % of full', Math.abs((pl.maxX - pl.minX) / w - 1) <= 0.12, { low: pl.maxX - pl.minX, full: w });
+  check(name + ' (low): pot height within 10 % of full', Math.abs((pl.maxY - pl.minY) / (pb.maxY - pb.minY) - 1) <= 0.1, { low: pl.maxY - pl.minY, full: pb.maxY - pb.minY });
 }
 {
   // the peace lily at low detail keeps its leaf count, capped at 7
@@ -401,6 +434,10 @@ for (const [name, pr] of Object.entries(PRESETS)) {
   const up = build(THREE, Object.assign({}, pr, { habit: 'upright' }), { detail: 'full' });
   const upPot = bboxCm(meshes(up, /^pot$/)[0]).minY;
   check('upright pothos: pot on the ground, trail ignored', near(upPot, 0, 0.5), upPot);
+  // no leaf floats at low detail: every leaf base sits on a stem (the stems
+  // are kept at low). Mutation: skip the stems when low -> fails.
+  const upLow = build(THREE, PRESETS['pothos-upright-ribbed-pot'], { detail: 'low' });
+  check('upright pothos (low): stems are kept', meshes(upLow, /^stem$/).length === PRESETS['pothos-upright-ribbed-pot'].stemCount);
 }
 
 console.log(`${passes} passed, ${failures} failed.`);
