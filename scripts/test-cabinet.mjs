@@ -1060,9 +1060,11 @@ Object.keys(CABINET_PRESETS).forEach(k => {
   const lit = C.build(THREE, p, { detail: 'full' });
   const plain = C.build(THREE, Object.assign({}, p, { gain: 1 }), { detail: 'full' });
   const r = (g, name) => meshesNamed(g, name)[0].material.color.r;
-  check('gain 1.5 multiplies the drawer fronts, carcass and top colour by 1.5',
-    ['drawerFront', 'carcassSide', 'carcassTop'].every(n => Math.abs(r(lit, n) - 1.5 * r(plain, n)) < 1e-6),
-    ['drawerFront', 'carcassSide', 'carcassTop'].map(n => [r(lit, n), r(plain, n)]));
+  const BODY = ['drawerFront', 'carcassSide', 'carcassTop', 'plinth', 'channelRecess'];
+  check('gain 1.5 multiplies the body -- fronts, carcass sides, top, plinth, channel recess -- by 1.5',
+    BODY.every(n => meshesNamed(lit, n).length > 0 && meshesNamed(lit, n).every((m, i) =>
+      Math.abs(m.material.color.r - 1.5 * meshesNamed(plain, n)[i].material.color.r) < 1e-6)),
+    BODY.map(n => [n, meshesNamed(lit, n).length, r(lit, n), r(plain, n)]));
   check('...but not the emissive LED strips', meshesNamed(lit, 'channelStripFront').every((m, i) =>
     m.material.color.r === meshesNamed(plain, 'channelStripFront')[i].material.color.r));
   // Only the BODY: every part outside it keeps its colour at gain 1.5 --

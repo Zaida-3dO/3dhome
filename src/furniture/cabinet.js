@@ -440,8 +440,8 @@ function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor, glo
     // smoothly (vertex alpha over WASH_ALPHA's rows) from the channel down
     // over min(WASH_MAX_H, WASH_SHARE of the leaf), at the fixed WASH_OPACITY
     // (which the wall-fade loop owns). light-parts.js colours it from the
-    // channel's state -- brightness dims it through the colour -- and hides it
-    // when the level is off.
+    // channel's state and scales its gradient by brightness (the vertex alpha,
+    // so it fades to nothing at 0), and hides it when the level is off.
     const base = /^#[0-9a-fA-F]{6}$/.test(baseColor) ? baseColor : '#ffffff';
     const washH = Math.min(WASH_MAX_H, (r.ly1 - r.ly0) * WASH_SHARE);
     const w = r.lx1 - r.lx0;
@@ -468,6 +468,8 @@ function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor, glo
     tagLightPart(wash, glowLight, 'glow');
     wash.userData.baseColor = base;
     wash.userData.wash = true;
+    // The gradient as built, per vertex: light-parts.js scales it by brightness.
+    wash.userData.washAlpha = Array.from({ length: n }, (_, v) => WASH_ALPHA[Math.floor(v / 2)]);
     return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1, faceZ - T, faceZ, name);
   }
   if (glowColor) {
