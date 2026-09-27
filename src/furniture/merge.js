@@ -61,13 +61,33 @@
  * is tested and what is drawn cannot drift apart. A part with no usable tag is
  * quantised from its material's numbers, with a warning.
  *
+ * DYNAMIC PARTS (item 059873ed / 816d71ee): a part whose mesh OR material
+ * carries `userData.dynamic = true` is not merged AT ALL -- it does not
+ * become a bucket `part`, however its finish/keep tags read. It is instead
+ * returned separately (flattenGroup's `dynamic` array) as the live mesh
+ * object itself, unflattened, so the caller (src/furniture.js) can keep it
+ * in the scene graph as its OWN mesh, parented so it keeps following the
+ * item's placement, and free to have its rotation/pose driven every tick
+ * (a clock's hands, an LED strip segment) -- something no bucket can do,
+ * since a bucket's geometry is one static, concatenated snapshot taken at
+ * build time. This is the general mechanism `keep` alone could not provide:
+ * `keep` only controls which BUCKET a part's geometry is copied into at
+ * build time, never whether it stays their own separately posable mesh
+ * afterward -- and matte/gloss/metal/mirror parts (`isPaletteMaterial`,
+ * below) get folded back into the shared palette bucket regardless of
+ * `keep`, which is exactly why two matte hands could not survive as
+ * separate meshes before this. Use `dynamic` sparingly: every dynamic part
+ * is its own permanent draw call, never amortised by the merge, so it is for
+ * the few things that must keep moving after the house is built (a clock's
+ * hands, a light-following strip segment), not a general escape hatch.
+ *
  * Hand-rolled on purpose (no BufferGeometryUtils), like the footsteps merge in
  * home3d-scene.js: every part is converted to non-indexed geometry, so merging
  * is plain array concatenation.
  *
  * Pure ESM with THREE injected; no `import 'three'` (plan amendment A4).
  */
-import { FINISH_PARAMS, liveFinishParams, partFinish, partKeep, isKeptFinish } from './finishes.js';
+import { FINISH_PARAMS, liveFinishParams, partFinish, partKeep, partDynamic, isKeptFinish } from './finishes.js';
 
 /** Finishes that can go into a vertex-coloured bucket. */
 export const OPAQUE_FINISHES = Object.freeze(['matte', 'gloss', 'metal']);
@@ -162,18 +182,33 @@ export function materialSignature(mat) {
  * BufferGeometry with `position` and `normal` only, in world space; the
  * builder's own geometry is left untouched for the caller to dispose.
  *
- * @returns {{parts: Array<Object>, warnings: string[]}}
+ * A mesh tagged `userData.dynamic` (mesh or material, see finishes.js
+ * partDynamic) is skipped entirely here -- it becomes neither a bucket part
+ * nor a warning -- and is instead returned in `dynamic`, as the ORIGINAL
+ * live mesh object (still parented where the builder put it, untouched,
+ * still owning its own geometry/material). The caller decides what to do
+ * with it; flattenGroup only separates it out.
+ *
+ * @returns {{parts: Array<Object>, dynamic: Array<Object>, warnings: string[]}}
  *   part = { geometry, finish, keep, color, emissive, material, textured, triangles }
+ *   dynamic = the live THREE.Mesh objects tagged userData.dynamic
  */
 export function flattenGroup(THREE, group, opts) {
   const o = opts || {};
   const warnings = [];
   const parts = [];
+  const dynamic = [];
   group.updateMatrixWorld(true);
   group.traverse(obj => {
     if (!obj.isMesh || !obj.geometry || !obj.geometry.attributes || !obj.geometry.attributes.position) return;
     if (obj.visible === false) return;
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    {
+      const firstMat = mats[0];
+      const dyn = partDynamic(obj, firstMat);
+      if (dyn.error) warnings.push((o.label ? o.label + ': ' : '') + dyn.error + ' -- treating as not dynamic');
+      if (dyn.dynamic && !dyn.error) { dynamic.push(obj); return; }
+    }
     // Split a multi-material mesh by its groups, so each slice is tagged by
     // its own material.
     let src = obj.geometry.index ? obj.geometry.toNonIndexed() : obj.geometry.clone();
@@ -253,7 +288,7 @@ export function flattenGroup(THREE, group, opts) {
     });
     src.dispose();
   });
-  return { parts: parts, warnings: warnings };
+  return { parts: parts, dynamic: dynamic, warnings: warnings };
 }
 
 /**

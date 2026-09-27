@@ -39,6 +39,18 @@
  *      shadow render (stub WebGL) creates no new program.
  *   9. Room clicks: furniture is never clickable, and the scene's click
  *      handler still finds the room catcher underneath it.
+ *  10. Dynamic parts (item 059873ed / 816d71ee): a mesh tagged
+ *      userData.dynamic is excluded from EVERY bucket by flattenGroup and
+ *      instead comes back re-parented into its own per-item wrapper group
+ *      (buildFurnitureSync's dynamicByItemId), positioned exactly like the
+ *      builder's own group -- verified against the SAME world position a
+ *      non-dynamic marker part at the same local offset would land at.
+ *      Re-posing a dynamic mesh after attach (mimicking a live clock's
+ *      setClockTime) actually rotates the attached mesh, proving it is a
+ *      real, individually-posable scene object and not a snapshot. A
+ *      cancelled sliced build frees a dynamic part's geometry/material same
+ *      as any other. disposeFurniture() frees a dynamic part's own material
+ *      (never tracked in result.materials, since it was never bucketed).
  *
  * Builds real three.js geometry from the vendored r160 module.
  */
@@ -54,6 +66,7 @@ const M = await imp('src/furniture/merge.js');
 const Box = await imp('src/furniture/box.js');
 const Fin = await imp('src/furniture/finishes.js');
 const { HouseLoader } = await imp('src/house-loader.js');
+const { resolvePlacement } = await imp('src/furniture/place.js');
 
 let failures = 0, passes = 0;
 function check(name, cond, detail) {
@@ -93,8 +106,28 @@ const Marker = {
     return g;
   }
 };
+// A minimal stand-in for wall-clock's hands (item 059873ed / 816d71ee): a
+// matte body (bucketed as usual) plus a `pointer` mesh at the item's
+// front-right corner, tagged userData.dynamic -- excluded from every bucket,
+// individually posable after attach, exactly like a clock hand.
+const DynamicMarker = {
+  DEFAULTS: Object.freeze({ width: 60, depth: 20, height: 50 }),
+  build(T, p) {
+    const g = new T.Group();
+    const w = p.width / 100, d = p.depth / 100, h = p.height / 100;
+    const body = new T.Mesh(new T.BoxGeometry(w, h, d).translate(0, h / 2, d / 2), Fin.makeFinish(T, 'matte', '#888888'));
+    const pointer = new T.Mesh(new T.BoxGeometry(0.02, 0.02, 0.02).translate(w / 2 - 0.01, h / 2, d - 0.01),
+      Fin.makeFinish(T, 'matte', '#111111'));
+    pointer.name = 'pointer';
+    pointer.userData.keep = true;
+    pointer.userData.dynamic = true;
+    g.add(body); g.add(pointer);
+    return g;
+  }
+};
 const builders = extra => new Map(Object.entries(Object.assign({
   box: { DEFAULTS: Box.DEFAULTS, build: Box.build },
+  'dynamic-marker': DynamicMarker,
   marker: Marker
 }, extra || {})));
 
@@ -1117,6 +1150,480 @@ const buildFixture = (quality, opts) => quietly(() => F.buildFurnitureSync(THREE
   check('the scene builds furniture with buildFurnitureSliced', /buildFurnitureSliced\(THREE, furnitureItems/.test(src) &&
     !/buildFurnitureSync\(THREE, furnitureItems/.test(src));
   [sync, sliced, res2].forEach(r => r && F.disposeFurniture(r));
+}
+
+// ---- 10. Dynamic parts (item 059873ed / 816d71ee) --------------------------------------
+{
+  const h = compile([
+    { id: 'd1', room: 'r', type: 'dynamic-marker', at: [200, 200] },
+    { id: 'd2', room: 'r', type: 'dynamic-marker', at: [350, 250] }
+  ]);
+  const r = build(h, ULTRA, {});
+
+  // The dynamic part never joins a bucket: only each item's matte BODY
+  // (2 items) is in the palette bucket, never the pointer (2 pointers would
+  // otherwise merge into the same matte palette mesh as their bodies).
+  const palette = r.beauty.find(m => m.userData.bucket.startsWith('palette'));
+  check('dynamic: the body still merges into the palette bucket', !!palette && palette.userData.parts === 2,
+    palette && palette.userData.parts);
+  check('dynamic: no bucket carries the pointer (only 1 bucket total: the palette)', r.beauty.length === 1,
+    r.beauty.map(m => m.userData.bucket));
+
+  // Each item gets its own dynamicByItemId entry: a real Group, attached
+  // under root, positioned so its child mesh lands at the SAME world
+  // position a non-dynamic marker's own corner mesh would.
+  check('dynamic: dynamicByItemId has one entry per dynamic item',
+    Object.keys(r.dynamicByItemId).sort().join(',') === 'd1,d2', Object.keys(r.dynamicByItemId));
+  const d1 = r.dynamicByItemId.d1;
+  check('dynamic: the wrapper group is attached under root', d1.group.parent === r.root);
+  check('dynamic: the wrapper carries the item id and type', d1.itemId === 'd1' && d1.type === 'dynamic-marker');
+  const pointer1 = d1.group.getObjectByName('pointer');
+  check('dynamic: the pointer mesh itself is inside the wrapper', !!pointer1);
+
+  // Compare against a non-dynamic Marker's own front-right corner (the SAME
+  // local offset DynamicMarker's pointer uses) placed at the same spot, to
+  // confirm attach() preserved the correct world position rather than just
+  // "some" position.
+  const hMarker = compile([{ id: 'm1', room: 'r', type: 'marker', at: [200, 200] }]);
+  const rMarker = build(hMarker, ULTRA, {});
+  // Marker's matte body and gloss corner cube share ONE opaque palette
+  // bucket (matte/gloss/metal are all "opaque" -- see bucketClass), so this
+  // isolates just the gloss-tagged vertices by their palette uv, the same
+  // way finishBox() already does for the merge's own bucket tests above.
+  const glossBucket = rMarker.beauty.find(m => m.userData.finishes.includes('gloss'));
+  const markerCorner = new THREE.Vector3();
+  finishBox(glossBucket, 'gloss').getCenter(markerCorner);
+  // pointer1's own offset is baked into its GEOMETRY (translate()), same as
+  // Marker's corner cube -- getWorldPosition() would read the mesh's
+  // transform origin, not the geometry offset, so this reads the same way
+  // finishBox()/centreOf() do: from a world-space bounding box.
+  d1.group.updateMatrixWorld(true);
+  const pointerWorld = new THREE.Vector3();
+  new THREE.Box3().setFromObject(pointer1).getCenter(pointerWorld);
+  check('dynamic: the pointer lands at the SAME world position a bucketed marker at the same spot would',
+    near(pointerWorld.x, markerCorner.x, 1e-3) && near(pointerWorld.y, markerCorner.y, 1e-3) && near(pointerWorld.z, markerCorner.z, 1e-3),
+    { pointerWorld: pointerWorld.toArray(), markerCorner: markerCorner.toArray() });
+  F.disposeFurniture(rMarker);
+
+  // The pointer is a REAL, individually posable mesh after attach -- pose it
+  // as a live clock's setClockTime would pose an hour hand (rotate it about
+  // a pivot OFFSET from its own centre, the same shape as addHands: the
+  // mesh's local origin is the pivot, not its geometry centre) and confirm
+  // its world position actually moves. Re-parent it under a pivot group at
+  // its own base first, exactly so the rotation has a lever arm to move --
+  // otherwise (as wall-clock.js's own hands rely on) rotating a mesh about
+  // ITS OWN origin sitting AT that origin cannot move its origin, and the
+  // check would be trivially true for a merged, unposable vertex too.
+  const pivot = new THREE.Group();
+  d1.group.add(pivot);
+  pivot.position.copy(pointer1.position);
+  pointer1.position.set(0, 0, 0.1); // give the pivot a lever arm to swing
+  pivot.attach(pointer1);
+  pivot.updateMatrixWorld(true);
+  const beforeRotate = new THREE.Vector3();
+  pointer1.getWorldPosition(beforeRotate);
+  pivot.rotation.y = Math.PI / 2;
+  pivot.updateMatrixWorld(true);
+  const afterRotate = new THREE.Vector3();
+  pointer1.getWorldPosition(afterRotate);
+  check('dynamic: re-posing the attached mesh after attach actually moves it (a real object, not a merged snapshot)',
+    !near(beforeRotate.x, afterRotate.x, 1e-4) || !near(beforeRotate.z, afterRotate.z, 1e-4),
+    { beforeRotate: beforeRotate.toArray(), afterRotate: afterRotate.toArray() });
+
+  // F2 (code review, item 059873ed): the check above used `at: [200, 200]`
+  // -- rotation 0 -- so dynamicGroup.rotation.copy(...) copying a ZERO
+  // rotation was indistinguishable from not calling it at all; deleting
+  // that line still passed every check (verified: it broke the hands on 3
+  // of 4 real wall orientations, hour-hand tips displaced 6.9-15cm, per the
+  // reviewer). Rewritten here at all 4 WALL orientations (rot 0/90/180/270,
+  // same fixture shape as the "world placement in all four orientations"
+  // section above), and the pointer is RE-POSED after attach() with a
+  // rotation.z (exactly what setClockTime does to a real hand), then
+  // compared against a builder group placed and posed the SAME way but
+  // WITHOUT going through flattenGroup/buildPlaced at all -- so this fails
+  // if the wrapper's rotation, position, OR the re-pose math drifts.
+  const wallCases = [
+    { wall: 1, rot: 0 }, { wall: 2, rot: 180 }, { wall: 3, rot: 270 }, { wall: 4, rot: 90 }
+  ];
+  wallCases.forEach(({ wall, rot }) => {
+    const hw = compile([{ id: 'w' + wall, room: 'r', type: 'dynamic-marker', wall, centre: 200 }]);
+    const rw = build(hw, ULTRA, {});
+    const dynW = rw.dynamicByItemId['w' + wall];
+    check('dynamic: wall ' + wall + ' (rot ' + rot + ') -- wrapper actually carries a non-zero rotation where expected',
+      rot === 0 || Math.abs(dynW.group.rotation.y) > 1e-6, dynW.group.rotation.y);
+    const ptr = dynW.group.getObjectByName('pointer');
+    // Re-pose exactly as setClockTime does: rotation.z on the mesh itself,
+    // AFTER attach (the wrapper's own transform must already be correct
+    // for this to land in the right place).
+    ptr.rotation.z = Math.PI / 6; // an arbitrary non-zero angle, like a clock hand mid-sweep
+    dynW.group.updateMatrixWorld(true);
+    const dynTip = new THREE.Vector3();
+    ptr.getWorldPosition(dynTip);
+
+    // The SAME item, built and placed directly (no flattenGroup/buildPlaced
+    // in the path at all) -- the independent reference this check compares
+    // against.
+    const builderGroup = DynamicMarker.build(THREE, DynamicMarker.DEFAULTS, {});
+    const directPlacement = resolvePlacement(hw.furniture[0], DynamicMarker.DEFAULTS);
+    F.placeGroup(builderGroup, directPlacement, tx, tz);
+    const directPtr = builderGroup.getObjectByName('pointer');
+    directPtr.rotation.z = Math.PI / 6;
+    builderGroup.updateMatrixWorld(true);
+    const directTip = new THREE.Vector3();
+    directPtr.getWorldPosition(directTip);
+
+    check('dynamic: wall ' + wall + ' -- re-posed hand tip matches a directly-placed, independently-posed builder group',
+      near(dynTip.x, directTip.x, 1e-4) && near(dynTip.y, directTip.y, 1e-4) && near(dynTip.z, directTip.z, 1e-4),
+      { wall, dynTip: dynTip.toArray(), directTip: directTip.toArray() });
+    F.disposeFurniture(rw);
+  });
+
+  // Draw-cost accounting: stated in the PR per the coordinator's ask. 2
+  // dynamic parts (one pointer per item, matching "3 hands per clock is
+  // fine" scale) -> 2 extra draws, a handful of triangles each.
+  check('dynamic: stats count exactly the dynamic draws/triangles', r.stats.dynamicDraws === 2 && r.stats.dynamicTriangles > 0,
+    r.stats);
+
+  // A part tagged dynamic on the MATERIAL instead of the mesh is honoured
+  // too (the same either/or convention as keep/finish).
+  const MatDynamic = {
+    DEFAULTS: Object.freeze({ width: 60, depth: 20, height: 50 }),
+    build(T, p) {
+      const g = new T.Group();
+      const w = p.width / 100, d = p.depth / 100, h = p.height / 100;
+      const body = new T.Mesh(new T.BoxGeometry(w, h, d).translate(0, h / 2, d / 2), Fin.makeFinish(T, 'matte', '#888888'));
+      const mat = Fin.makeFinish(T, 'matte', '#111111');
+      mat.userData.dynamic = true;
+      const pointer = new T.Mesh(new T.BoxGeometry(0.02, 0.02, 0.02).translate(w / 2 - 0.01, h / 2, d - 0.01), mat);
+      pointer.name = 'pointer';
+      g.add(body); g.add(pointer);
+      return g;
+    }
+  };
+  const hMat = compile([{ id: 'md', room: 'r', type: 'mat-dynamic', at: [200, 200] }]);
+  const rMat = build(hMat, ULTRA, { 'mat-dynamic': MatDynamic });
+  check('dynamic: material-level userData.dynamic is honoured too',
+    !!rMat.dynamicByItemId.md && !!rMat.dynamicByItemId.md.group.getObjectByName('pointer'));
+  F.disposeFurniture(rMat);
+
+  // Disposal: a dynamic part's OWN material (never in result.materials,
+  // since it was never bucketed) is freed by disposeFurniture -- confirmed
+  // by spying on Material.prototype.dispose rather than trusting a missing
+  // reference (a spy proves the call happened; nulling the reference alone
+  // would not distinguish "disposed" from "just detached").
+  const disposedMats = new Set();
+  const origMatDispose = THREE.Material.prototype.dispose;
+  THREE.Material.prototype.dispose = function () { disposedMats.add(this); return origMatDispose.call(this); };
+  const pointerMat = pointer1.material;
+  try {
+    F.disposeFurniture(r);
+  } finally {
+    THREE.Material.prototype.dispose = origMatDispose;
+  }
+  check('dynamic: disposeFurniture frees the dynamic part\'s own material', disposedMats.has(pointerMat));
+
+  // A cancelled sliced build frees a dynamic part's geometry/material same
+  // as any other part -- confirmed by spying on BufferGeometry.dispose.
+  const madeGeo = new Set(), liveGeo = new Set();
+  const origSet2 = THREE.BufferGeometry.prototype.setAttribute;
+  const origDispose2 = THREE.BufferGeometry.prototype.dispose;
+  THREE.BufferGeometry.prototype.setAttribute = function (name, attr) {
+    if (name === 'position' && !madeGeo.has(this)) { madeGeo.add(this); liveGeo.add(this); }
+    return origSet2.call(this, name, attr);
+  };
+  THREE.BufferGeometry.prototype.dispose = function () { liveGeo.delete(this); return origDispose2.call(this); };
+  let cancelled = false, steps = 0;
+  let cancelledResult;
+  try {
+    cancelledResult = await F.buildFurnitureSliced(THREE, h.furniture, builders({}),
+      { tx, tz, quality: ULTRA, walls: h.walls, sliceMs: 0, isCancelled: () => cancelled,
+        yieldFn: () => { if (++steps === 1) cancelled = true; return Promise.resolve(); } });
+  } finally {
+    THREE.BufferGeometry.prototype.setAttribute = origSet2;
+    THREE.BufferGeometry.prototype.dispose = origDispose2;
+  }
+  check('dynamic: a build cancelled part-way (incl. a dynamic part) resolves null and frees every geometry it made',
+    cancelledResult === null && madeGeo.size > 0 && liveGeo.size === 0, { made: madeGeo.size, live: liveGeo.size });
+}
+
+// ---- 10b. A real wall-clock through the SAME dynamic-part pipeline --------------------
+{
+  const WC = await imp('src/furniture/wall-clock.js');
+  const h = compile([
+    { id: 'clk', room: 'r', type: 'wall-clock', wall: 1, centre: 200, params: { kind: 'diy-words' } }
+  ]);
+  const r = build(h, ULTRA, { 'wall-clock': WC });
+  const dyn = r.dynamicByItemId.clk;
+  check('wall-clock: item builds through dynamicByItemId (not skipped)', !!dyn && dyn.type === 'wall-clock');
+  const names = dyn ? dyn.group.children.map(c => c.name).sort() : [];
+  check('wall-clock: exactly the 4 hand meshes are dynamic (hourHand, minuteHand, secondHand, secondHandTail)',
+    names.join(',') === 'hourHand,minuteHand,secondHand,secondHandTail', names);
+  check('wall-clock: draw-cost stated -- exactly 4 dynamic draws for one diy-words clock (hands + tail)',
+    r.stats.dynamicDraws === 4, r.stats.dynamicDraws);
+  // The hub (does not move) stays a normal bucketed part, not dynamic -- it
+  // must NOT show up as its own dynamic entry.
+  check('wall-clock: the hub is NOT dynamic (it never rotates)', !dyn.group.getObjectByName('hub'));
+
+  // setClockTime through the SAME live group the scene would drive with
+  // startLiveClock -- proves two matte hands (same finish, same colour)
+  // survive as independently rotatable meshes post-merge (the mechanism
+  // src/furniture/merge.js's userData.dynamic opt-out provides).
+  const hour = dyn.group.getObjectByName('hourHand');
+  const second = dyn.group.getObjectByName('secondHand');
+  const tail = dyn.group.getObjectByName('secondHandTail');
+  WC.setClockTime(dyn.group, new Date(2026, 0, 1, 3, 0, 0));
+  const rotAt3 = hour.rotation.z;
+  WC.setClockTime(dyn.group, new Date(2026, 0, 1, 9, 0, 0));
+  const rotAt9 = hour.rotation.z;
+  check('wall-clock: setClockTime on the LIVE dynamic group actually rotates the hour hand',
+    !near(rotAt3, rotAt9, 1e-6), { rotAt3, rotAt9 });
+  // F6 (code review, item 059873ed): the old check here only asserted
+  // !!tail -- true the moment the mesh exists, regardless of its angle, so
+  // it could never fail on a broken tail relationship (test-wall-clock.mjs
+  // already covers the mutation properly; this one just had a name
+  // promising more than it checked). Rewritten to assert the actual
+  // geometric relationship setClockTime is supposed to keep: the tail's
+  // rotation.z must equal the second hand's own rotation.z plus PI, at
+  // several different times (not just whatever time the group happened to
+  // be built/posed at last).
+  [new Date(2026, 0, 1, 3, 0, 0), new Date(2026, 0, 1, 7, 15, 30), new Date(2026, 0, 1, 11, 45, 10)].forEach(d => {
+    WC.setClockTime(dyn.group, d);
+    const diff = tail.rotation.z - second.rotation.z;
+    // Normalise to (-PI, PI] before comparing to PI, since rotation.z can
+    // wrap to -PI depending on which side of the branch cut the angle
+    // math lands on -- +PI and -PI are the same physical angle.
+    const normalised = ((diff % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
+    check('wall-clock: the second-hand tail sits at exactly +180deg from the second hand at ' + d.toTimeString().slice(0, 8),
+      near(Math.abs(normalised), Math.PI, 1e-6), { diff, normalised });
+  });
+
+  // startLiveClock itself, through this exact pipeline (a fake doc/now, no
+  // real timers): ticks immediately, ticks again on a fake 1s interval via
+  // Node's real setInterval (short-lived, cleaned up), and stop() halts it.
+  let ticks = 0;
+  const fakeDoc = { hidden: false, addEventListener() {}, removeEventListener() {} };
+  const stop = WC.startLiveClock(dyn.group, { doc: fakeDoc, onTick: () => { ticks++; } });
+  check('wall-clock: startLiveClock ticks immediately on the real attached group', ticks === 1);
+  await new Promise(res => setTimeout(res, 1150));
+  const ticksBeforeStop = ticks;
+  check('wall-clock: startLiveClock ticks again about a second later', ticksBeforeStop >= 2, ticksBeforeStop);
+  stop();
+  await new Promise(res => setTimeout(res, 1150));
+  check('wall-clock: stop() halts further ticking', ticks === ticksBeforeStop, { ticks, ticksBeforeStop });
+
+  F.disposeFurniture(r);
+}
+
+// ---- 10c. home3d-scene.js wiring (source-pattern checks, matching the -----------------
+//      file's own established style for DOM-only code no Node test can run) -----------
+{
+  const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+  check('the scene imports startLiveClock from wall-clock.js',
+    /import\s*\{\s*startLiveClock\s*\}\s*from\s*'\.\/furniture\/wall-clock\.js'/.test(src));
+  check('the scene starts a live clock for every wall-clock item on attach',
+    /type\s*[!=]==\s*'wall-clock'/.test(src) && /startLiveClock\(/.test(src));
+  check('the scene looks up the item\'s dynamic group (dynamicByItemId) rather than a bucket',
+    /dynamicByItemId/.test(src));
+  check('a tick requests a single repaint (requestRender), not a sustained wake()',
+    /onTick:\s*\(\)\s*=>\s*requestRender\(\)/.test(src));
+  // F3 (code review, item 059873ed, round 2): the round-3 fix for this was
+  // itself not anchored to the start of the line, so `// stopLiveClocks();`
+  // and `if (false) stopLiveClocks();` both still matched the "call
+  // statement" half of the pattern (the text `stopLiveClocks();\n...` is
+  // present as a SUBSTRING of both mutations) -- verified by the round-2
+  // reviewer's own mutation probes. Anchored with `^\s*` (multiline mode)
+  // so the call must be the first non-whitespace content on its own line;
+  // neither a leading `//` nor a leading `if (false) ` can satisfy that.
+  check('the scene calls stopLiveClocks() as its own statement (not commented out or gated on a constant false) immediately before disposeFurniture in dispose()',
+    /^\s*stopLiveClocks\(\);\s*\n\s*if \(furnitureResult\) \{ disposeFurniture/m.test(src), src.includes('stopLiveClocks();'));
+  check('stopLiveClocks is still defined (both facts matter: it exists AND it is called)',
+    /function stopLiveClocks\(\)/.test(src) && /liveClockStops/.test(src));
+}
+
+// ---- 10e. startLiveClock's stop() actually halts ticking (item 059873ed, ------------
+//      code review F3, round 2 correction) -------------------------------------------
+//      NAMING, per the round-2 reviewer: this does NOT reach into
+//      home3d-scene.js and cannot fail if that file's own dispose() stops
+//      calling stopLiveClocks() -- it only re-implements the SAME
+//      Map/closure shape locally, so it tests startLiveClock's own stop()
+//      contract, not the scene's wiring to it (that wiring is what 10c's
+//      anchored source-pattern check above covers, on the real file).
+//      home3d-scene.js needs a real DOM canvas to instantiate (no test in
+//      this file does), so calling its actual dispose() is not available
+//      here at all. Second half renamed too: "a never-stopped timer keeps
+//      ticking" is definitionally true of any setInterval and was flagged
+//      as tautological -- kept only as a sanity check that startLiveClock
+//      really does return an independent, callable stop() per instance
+//      (two clocks, two stops, stopping one must not affect the other),
+//      which IS a real fact worth checking, just not "leak detection".
+{
+  const WC = await imp('src/furniture/wall-clock.js');
+  const h = compile([{ id: 'clk3', room: 'r', type: 'wall-clock', wall: 1, centre: 200, params: { kind: 'diy-words' } }]);
+  const r = build(h, ULTRA, { 'wall-clock': WC });
+  const dyn = r.dynamicByItemId.clk3;
+
+  function sceneDisposeShape(callStopLiveClocks) {
+    // The exact shape from home3d-scene.js: a Map of itemId -> stop(), a
+    // drain function, and (if callStopLiveClocks) the call site inside
+    // "dispose()" immediately before disposeFurniture -- otherwise the
+    // F3 mutation itself: disposeFurniture runs with NOTHING stopping the
+    // timers first.
+    const liveClockStops = new Map();
+    function stopLiveClocks() { liveClockStops.forEach(stop => stop()); liveClockStops.clear(); }
+    let ticks = 0;
+    const stop = WC.startLiveClock(dyn.group, { doc: { hidden: false, addEventListener(){}, removeEventListener(){} },
+      onTick: () => { ticks++; } });
+    liveClockStops.set('clk3', stop);
+    return {
+      dispose() {
+        if (callStopLiveClocks) stopLiveClocks();
+        F.disposeFurniture(r);
+      },
+      getTicks: () => ticks
+    };
+  }
+
+  // startLiveClock's own stop() contract: calling it actually halts that
+  // instance's ticking.
+  const correct = sceneDisposeShape(true);
+  await new Promise(res => setTimeout(res, 1150));
+  const ticksBeforeDispose = correct.getTicks();
+  correct.dispose();
+  await new Promise(res => setTimeout(res, 1150));
+  check('startLiveClock: calling the returned stop() actually halts that instance\'s ticking',
+    correct.getTicks() === ticksBeforeDispose, { before: ticksBeforeDispose, after: correct.getTicks() });
+
+  // Two INDEPENDENT clocks: stopping one's timer must not affect the
+  // other's. This is the real fact a "stop() per instance" contract needs
+  // (as opposed to a shared/global timer some future refactor could
+  // accidentally introduce) -- not "a timer nobody stopped keeps ticking",
+  // which is true of any setInterval and proves nothing about this module.
+  const h2 = compile([{ id: 'clk4', room: 'r', type: 'wall-clock', wall: 1, centre: 300, params: { kind: 'diy-words' } }]);
+  const r2 = build(h2, ULTRA, { 'wall-clock': WC });
+  const dyn2 = r2.dynamicByItemId.clk4;
+  let ticksA = 0, ticksB = 0;
+  const stopA = WC.startLiveClock(dyn.group, { doc: { hidden: false, addEventListener(){}, removeEventListener(){} },
+    onTick: () => { ticksA++; } });
+  const stopB = WC.startLiveClock(dyn2.group, { doc: { hidden: false, addEventListener(){}, removeEventListener(){} },
+    onTick: () => { ticksB++; } });
+  await new Promise(res => setTimeout(res, 1150));
+  stopA();
+  const ticksAAfterStop = ticksA;
+  await new Promise(res => setTimeout(res, 1150));
+  check('startLiveClock: stopping clock A does not stop clock B (independent timers, not a shared one)',
+    ticksA === ticksAAfterStop && ticksB > 0, { ticksA, ticksAAfterStop, ticksB });
+  stopB(); // clean up so this timer does not outlive the test file
+  F.disposeFurniture(r2);
+}
+
+// ---- 10d. Dynamic parts join the wall fade (item 059873ed, code review F1) -----------
+{
+  // A dynamic-marker tall enough and on an exterior wall to auto-fade (the
+  // same fixture shape as the existing A3/fade-registration tests above:
+  // wall: 1, centre: 200, height: 150 -- top 150 > FADE_MIN_TOP 100).
+  const h = compile([
+    { id: 'fadeDyn', room: 'r', type: 'dynamic-marker', wall: 1, centre: 200, params: { height: 150 } }
+  ]);
+  const r = build(h, ULTRA, {});
+  check('dynamic: the fading item actually has a fadeWallId', r.byId.fadeDyn.fadeWallId === 1, r.byId.fadeDyn.fadeWallId);
+  const dyn = r.dynamicByItemId.fadeDyn;
+  check('dynamic: dynamicByItemId carries the item\'s own fadeWallId', dyn.fadeWallId === 1, dyn.fadeWallId);
+  const pointer = dyn.group.getObjectByName('pointer');
+  check('dynamic: a dynamic mesh on a fading item is marked transparent (findable, not left opaque forever)',
+    pointer.material.transparent === true);
+  check('dynamic: the material carries the same fade tag a beauty fade clone gets',
+    pointer.material.userData.fade === true);
+
+  // fadeRegistrations() -- the ACTUAL function the scene calls to build
+  // wallMeshes -- must include this dynamic mesh, not just beauty buckets.
+  const regs = F.fadeRegistrations(r);
+  const dynReg = regs.find(reg => reg.mesh === pointer);
+  check('dynamic: fadeRegistrations() includes the dynamic mesh with the item\'s own wall id',
+    !!dynReg && dynReg.wallId === 1, dynReg);
+  // Round-3 review (item 059873ed): every dynamic part today is opaque (a
+  // clock's matte hands), so its fade registration must record the exact
+  // "safe, fully-opaque" base task f7324d3f's own glass/translucent lock
+  // exists to require -- baseOpacity: 1, baseDepthWrite: true -- not just
+  // "some truthy value" or `undefined` (which would coincidentally still
+  // fade correctly via wallFadeTarget's own `base == null -> 1` fallback,
+  // but is not what the code actually declares, and would silently stop
+  // being correct the moment a translucent dynamic part exists). Checked
+  // against the EXACT values, so an 0.25 mutation (a wrong-but-still-
+  // truthy base) cannot survive.
+  check('dynamic: the fade registration records the exact base values (opacity 1, depthWrite true), not just any truthy value',
+    dynReg.baseOpacity === 1 && dynReg.baseDepthWrite === true, dynReg);
+
+  // A dynamic item with NO fade wall (free placement, short) must not be
+  // marked transparent or registered -- this fix must not force every
+  // dynamic part transparent unconditionally, only ones that actually fade.
+  const hNoFade = compile([{ id: 'noFadeDyn', room: 'r', type: 'dynamic-marker', at: [300, 250] }]);
+  const rNoFade = build(hNoFade, ULTRA, {});
+  const pointerNoFade = rNoFade.dynamicByItemId.noFadeDyn.group.getObjectByName('pointer');
+  check('dynamic: a NON-fading item\'s dynamic mesh is left alone (not forced transparent)',
+    pointerNoFade.material.transparent !== true, pointerNoFade.material.transparent);
+  check('dynamic: a NON-fading item is not registered for the fade',
+    F.fadeRegistrations(rNoFade).every(reg => reg.mesh !== pointerNoFade));
+
+  // BEHAVIOURAL: simulate the actual render-loop fade math (mirrors
+  // home3d-scene.js's wallMeshes.forEach block exactly -- opacity eased
+  // toward a target by 0.12 per call) directly on the registered dynamic
+  // mesh, proving it responds exactly like a beauty bucket would.
+  let opacity = 1.0;
+  const targetOpacity = 0.05; // camera facing the wall, per the real fade block
+  for (let i = 0; i < 60; i++) opacity += (targetOpacity - opacity) * 0.12;
+  pointer.material.opacity = opacity;
+  check('dynamic: the SAME fade easing math the scene uses drives this mesh\'s opacity down',
+    pointer.material.opacity < 0.1, pointer.material.opacity);
+
+  F.disposeFurniture(r);
+  F.disposeFurniture(rNoFade);
+}
+
+// ---- 10f. Low-detail shadow-proxy rebuild frees its OWN dynamic parts -----------------
+//      (code review F6, item 059873ed: "the low-detail proxy dynamic dispose
+//      is unguarded by any test (mutation survived)") ---------------------------------
+{
+  // dynamic-marker is tall enough (DEFAULTS.height 50) and low enough
+  // (elevation 0) to be a caster (isCaster: elevation < 30, height >= 40).
+  // roomTriCap: 1 forces ANY caster over budget, so this deterministically
+  // exercises furnitureBuildSteps' toLow() path -- the low-detail rebuild
+  // exists ONLY to make the shadow proxy; its own dynamic parts are never
+  // attached anywhere and must be disposed immediately after the rebuild
+  // (src/furniture.js's toLow(): "if (flat.dynamicGroup) disposeBuilt(...)").
+  const h = compile([{ id: 'lowDyn', room: 'r', type: 'dynamic-marker', at: [200, 200] }]);
+  const madeGeo = new Set(), liveGeo = new Set();
+  const origSet = THREE.BufferGeometry.prototype.setAttribute;
+  const origDispose = THREE.BufferGeometry.prototype.dispose;
+  THREE.BufferGeometry.prototype.setAttribute = function (name, attr) {
+    if (name === 'position' && !madeGeo.has(this)) { madeGeo.add(this); liveGeo.add(this); }
+    return origSet.call(this, name, attr);
+  };
+  THREE.BufferGeometry.prototype.dispose = function () { liveGeo.delete(this); return origDispose.call(this); };
+  let r;
+  try {
+    r = build(h, ULTRA, {}, { roomTriCap: 1 });
+    check('low-proxy: the room actually went low-detail (roomTriCap:1 forced it)',
+      r.stats.proxyLowRooms.includes('r'), r.stats.proxyLowRooms);
+    // At this point, BEFORE disposeFurniture(r): the ATTACHED build's own
+    // dynamic parts (from the full-detail build) are still live and
+    // correctly NOT disposed yet -- only the DISCARDED low-detail rebuild's
+    // dynamic geometry (made and thrown away inside toLow(), never attached
+    // to anything) should already be freed.
+    check('low-proxy: some geometry was made twice (full attach + discarded low rebuild), and the low one is ALREADY freed',
+      liveGeo.size < madeGeo.size, { made: madeGeo.size, stillLive: liveGeo.size });
+    // The spy must still be installed for THIS call, or disposeFurniture's
+    // real dispose() calls go unseen and every check after it is
+    // meaningless -- this is exactly the bug an earlier draft of this test
+    // had: restoring setAttribute/dispose in a `finally` right after
+    // build() returned, so disposeFurniture(r) below ran against the
+    // ORIGINAL dispose() and liveGeo never updated, reporting a false leak.
+    F.disposeFurniture(r);
+    check('low-proxy: everything is freed once the real result is disposed too',
+      liveGeo.size === 0, { made: madeGeo.size, stillLive: liveGeo.size });
+  } finally {
+    THREE.BufferGeometry.prototype.setAttribute = origSet;
+    THREE.BufferGeometry.prototype.dispose = origDispose;
+  }
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

@@ -25,6 +25,7 @@ import {
   wallFadeTarget, wallFadeDepthWrite,
   disposeFurniture
 } from './furniture.js';
+import { startLiveClock } from './furniture/wall-clock.js';
 
 export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------
@@ -3929,6 +3930,21 @@ export const Home3DScene = (() => {
     let furnitureResult = null;
     let furnitureStarted = false;
     const furnitureTimeline = { start: null, buildStart: null, buildEnd: null, attachedAt: null, stats: null };
+    // Live clocks (item 059873ed): itemId -> the stop() startLiveClock
+    // returned. A wall-clock's hands are a "dynamic" part (merge.js), so
+    // they reach the scene as their own live mesh (result.dynamicByItemId),
+    // not folded into a static bucket -- this is what actually lets
+    // setClockTime keep moving them once the house is built, closing the
+    // KNOWN GAP wall-clock.js's own header used to document. Stopped on
+    // dispose/teardown (stopLiveClocks below), including a dispose that
+    // lands mid-build (scheduleFurnitureAttach already frees a mid-build
+    // dispose's geometry; this only needs to also clear its timers, since a
+    // mid-build dispose never reaches attachFurniture in the first place).
+    const liveClockStops = new Map();
+    function stopLiveClocks() {
+      liveClockStops.forEach(stop => stop());
+      liveClockStops.clear();
+    }
     function attachFurniture(result) {
       furnitureResult = result;
       result.root.visible = furnitureVisible;
@@ -3944,6 +3960,20 @@ export const Home3DScene = (() => {
       });
       furnitureTimeline.attachedAt = performance.now();
       furnitureTimeline.stats = result.stats;
+      // Start a live clock for every placed wall-clock. onTick asks for a
+      // single repaint (requestRender, not wake()) -- a one-shot redraw per
+      // second-boundary tick, never a sustained render loop; see the
+      // render-on-demand note near requestRender()/wake() above for why a
+      // re-arming timer here would defeat that gate while looking like it
+      // respected it (this one does NOT re-arm: startLiveClock owns its own
+      // setInterval entirely outside the render loop).
+      Object.keys(result.byId).forEach(itemId => {
+        if (result.byId[itemId].type !== 'wall-clock') return;
+        const dyn = result.dynamicByItemId[itemId];
+        if (!dyn) return; // e.g. a clock preset with no dynamic hands somehow
+        const stop = startLiveClock(dyn.group, { onTick: () => requestRender() });
+        liveClockStops.set(itemId, stop);
+      });
       // MOVES GEOMETRY (new casters) -> shadows must refresh once.
       invalidateShadows();
       requestRender();
@@ -5050,7 +5080,12 @@ export const Home3DScene = (() => {
         // Before the traverse below: the furniture owns materials the scene
         // graph cannot reach (a proxy's customDepthMaterial, the depth
         // precompile material). A still-pending attach sees _disposed and
-        // frees its own build instead of attaching it.
+        // frees its own build instead of attaching it (scheduleFurnitureAttach
+        // calls disposeFurniture directly on that path -- attachFurniture,
+        // and so liveClockStops, never runs for a mid-build dispose, so
+        // there is nothing to stop there; stopLiveClocks() below only ever
+        // has entries once a clock was actually attached and ticking).
+        stopLiveClocks();
         if (furnitureResult) { disposeFurniture(furnitureResult); furnitureResult = null; }
         shadowDepthProbeMats.forEach(m => m.dispose());
         shadowDepthProbeMats.length = 0;

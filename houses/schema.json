@@ -3127,13 +3127,13 @@
 
     "furnitureParams_wall-clock": {
       "type": "object",
-      "description": "Params for `wall-clock` (src/furniture/wall-clock.js): a working wall clock in two styles -- `framed` (a round face + rim + hands) or `diy-numerals` (numerals/dots stuck straight on the wall around a plain hands unit, matching a photo of a real DIY wall clock). `time` only sets the hands' pose at BUILD time; a live scene re-poses them continuously via wall-clock.js's exported setClockTime(group, date) helper. Each `default` equals wall-clock.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `wall-clock` (src/furniture/wall-clock.js): a working wall clock in three styles -- `framed` (a round face + rim + hands), `diy-numerals` (numerals/dots stuck straight on the wall around a plain hands unit, matching a photo of a real DIY wall clock), or `diy-words` (a frameless stick-on clock -- big numerals at 12/9/6, dots at 7/8/10/11, the words \"One\" to \"Five\" to the right of the 1-5 ring positions, a centre disc, tapered hands and a red second hand -- matching the owner's actual kitchen clock, item 059873ed). `time` only sets the hands' pose at BUILD time; a live scene re-poses them continuously via wall-clock.js's exported setClockTime(group, date) helper. Each `default` equals wall-clock.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs) -- `diy-words`'s OWN defaults (wider width/height, to include the words) live in the module's separately-exported DIY_WORDS_DEFAULTS, the same two-defaults-objects pattern wall-sconce.js uses for its own second kind.",
       "properties": {
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 30,
-          "description": "cm, kept equal to `diameter`."
+          "description": "cm, kept equal to `diameter` for `framed`/`diy-numerals`. For `diy-words` this is the WHOLE envelope including the words that extend right of the ring (49.8cm at the DIY_WORDS_DEFAULTS diameter of 30cm), not the ring diameter alone."
         },
         "depth": {
           "type": "number",
@@ -3145,19 +3145,19 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 30,
-          "description": "cm, kept equal to `diameter`."
+          "description": "cm, kept equal to `diameter` for `framed`/`diy-numerals`. For `diy-words` this includes headroom above/below the ring for the 12/6 numerals (39cm at the DIY_WORDS_DEFAULTS diameter of 30cm)."
         },
         "kind": {
           "type": "string",
-          "enum": ["framed", "diy-numerals"],
+          "enum": ["framed", "diy-numerals", "diy-words"],
           "default": "diy-numerals",
-          "description": "`framed`: a conventional round face, rim and hands. `diy-numerals`: numerals/dots stuck directly on the wall around a plain hands unit, no face disc -- the style the reference photo shows."
+          "description": "`framed`: a conventional round face, rim and hands. `diy-numerals`: numerals/dots stuck directly on the wall around a plain hands unit, no face disc. `diy-words`: a frameless stick-on clock with numerals, dots AND words, matching the owner's actual kitchen clock -- see the block description."
         },
         "diameter": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 30,
-          "description": "cm, kept equal to `width`/`height`."
+          "description": "cm, the RING's diameter -- kept equal to `width`/`height` for `framed`/`diy-numerals` only; `diy-words`'s width/height are the wider full envelope (see those fields)."
         },
         "faceColor": {
           "$ref": "#/$defs/hexColor",
@@ -3174,6 +3174,11 @@
         "handColor": {
           "$ref": "#/$defs/hexColor",
           "default": "#1a1a1a"
+        },
+        "secondHandColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#c62828",
+          "description": "The second hand's own colour -- defaults to `handColor` when not set, EXCEPT `diy-words`, whose DIY_WORDS_DEFAULTS sets this red while the other hands stay black (the owner's photo)."
         },
         "time": {
           "type": "string",

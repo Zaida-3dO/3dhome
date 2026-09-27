@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Wall clock (both kinds): builder-contract tests.
+ * Wall clock (all three kinds): builder-contract tests.
  * No framework, no install - `node scripts/test-wall-clock.mjs`.
  *
  * WHAT THIS GUARDS
@@ -9,27 +9,51 @@
  *      width/depth/height; y=0 is the lowest point; the assembly's back sits
  *      at z=0; and the bbox matches DEFAULTS width/height/depth within
  *      0.5 cm -- the same tolerance scripts/test-furniture-core.mjs checks
- *      every registered builder against. Checked for BOTH `kind`s
- *      ('diy-numerals', the default, and 'framed').
+ *      every registered builder against. Checked for all THREE `kind`s
+ *      ('diy-numerals', the module default; 'framed'; and 'diy-words', item
+ *      059873ed's DIY_WORDS_DEFAULTS, whose width/height are the WIDER
+ *      envelope that includes the words extending right of the ring).
  *   2. The finish/merge contract: every mesh carries userData.finish from the
  *      closed palette {matte, gloss, metal, glass, mirror, emissive}, and the
- *      three hand meshes plus the hub -- the parts that move or must stay
+ *      hand meshes plus the hub -- the parts that move or must stay
  *      flush at the assembly's declared depth -- carry userData.keep = true.
  *      Losing a keep flag is invisible in a screenshot -- the merged result
  *      still looks like a clock until the hands stop moving independently.
- *   3. detail: 'low' produces no more triangles than 'full', for both kinds.
+ *   3. detail: 'low' produces no more triangles than 'full', for all kinds.
  *   4. angleForTime(date) is pure and matches the documented convention
  *      (radians clockwise from 12 o'clock); setClockTime(group, date)
- *      rotates exactly the three named hand meshes and nothing else.
+ *      rotates exactly the hand meshes (including diy-words' extra
+ *      secondHandTail) and nothing else. WORLD-SPACE orientation is
+ *      verified directly from the built hand mesh's own vertices at 12:00
+ *      and 3:00 -- not just the internal rotation.z convention -- so a sign
+ *      error that happened to cancel out in the angle math would still be
+ *      caught (12:00 = straight up, +y; 3:00 = right, +x; and the hand
+ *      sweeps the SAME way a real clock does between them, i.e. not
+ *      mirrored).
  *   5. `time` ("HH:MM") only sets the BUILD-time pose; a value with no
  *      colon/garbage falls back to 10:10 rather than throwing.
+ *   6. diy-words specifically: the numerals/words canvas panel (both with
+ *      and without a DOM canvas available -- the shape furniture-core's
+ *      drift test runs every builder in), the 4 dots at 7/8/10/11, the
+ *      centre disc, and the tapered hand geometry (wide at the pivot,
+ *      narrowing toward the tip, verified from the built vertices, not
+ *      just "it uses a different code path").
+ *   7. startLiveClock(): ticks once a second, calls onTick after every
+ *      update, resyncs on a visibilitychange to a visible tab (a fake
+ *      `doc`/`now` are injected so this runs deterministically under Node,
+ *      not real timers/real time), and stop() clears both the interval and
+ *      the listener.
  *
  * THREE is loaded from the vendored ESM build so this exercises the same
  * geometry code the app and the spec page run, not a copy of it.
  *
  * HISTORY. Split out of dining.js's test coverage (item 89769f2b,
- * 2026-09-26) alongside the module itself moving to wall-clock.js.
+ * 2026-09-26) alongside the module itself moving to wall-clock.js. The
+ * `diy-words` kind, secondHandColor, tapered hands and startLiveClock() were
+ * added for item 059873ed (2026-09-27), matching the owner's actual kitchen
+ * clock photo (private, never committed).
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -216,6 +240,564 @@ check('DEFAULTS kind is diy-numerals', Clock.DEFAULTS.kind === 'diy-numerals');
   try { gGarbage = Clock.build(THREE, { time: 'not-a-time' }); } catch (e) { buildThrew = true; }
   check('build: garbage `time` does not throw', !buildThrew);
   if (gGarbage) checkBboxMatchesDefaults('diy-numerals (garbage time)', gGarbage, Clock.DEFAULTS);
+}
+
+// ============================================================
+// WORLD-SPACE hand orientation (item 059873ed): 12:00 = straight up, 3:00 =
+// right, and the sweep between them is the correct direction (not mirrored)
+// -- checked directly from the built hand mesh's own vertices, not just the
+// internal rotation.z sign convention (a compensating sign error in both
+// handAngles/angleForTime AND the mesh-building code could still pass a
+// rotation.z-only check while rendering backwards).
+// ============================================================
+{
+  const noon = new Date(2026, 0, 1, 12, 0, 0, 0);
+  const three = new Date(2026, 0, 1, 3, 0, 0, 0);
+
+  /** The world-space direction from the hand's own pivot (y=0 in its local
+   * frame) to its tip (the vertex furthest from the pivot along local y),
+   * projected onto the xy-plane (the wall-facing plane) and normalised. */
+  function handTipDirectionXY(mesh) {
+    const posAttr = mesh.geometry.attributes.position;
+    const v = new THREE.Vector3();
+    // A box (or tapered-prism) hand's tip is a FACE, not a single vertex --
+    // several vertices share the same maximum local y (the corners of that
+    // face). Averaging their local x (not picking one arbitrary corner)
+    // gives the tip face's own centreline, which is exact for a
+    // symmetric-about-y hand regardless of its width.
+    let maxLocalY = -Infinity;
+    for (let i = 0; i < posAttr.count; i++) {
+      v.fromBufferAttribute(posAttr, i);
+      if (v.y > maxLocalY) maxLocalY = v.y;
+    }
+    let sumX = 0, count = 0;
+    for (let i = 0; i < posAttr.count; i++) {
+      v.fromBufferAttribute(posAttr, i);
+      if (Math.abs(v.y - maxLocalY) < 1e-6) { sumX += v.x; count++; }
+    }
+    const tipLocal = new THREE.Vector3(sumX / count, maxLocalY, 0);
+    const tipWorld = tipLocal.clone().applyMatrix4(mesh.matrixWorld);
+    const pivotWorld = new THREE.Vector3(0, 0, 0).applyMatrix4(mesh.matrixWorld);
+    const dir = new THREE.Vector3().subVectors(tipWorld, pivotWorld);
+    dir.z = 0;
+    return dir.normalize();
+  }
+
+  const g = Clock.build(THREE, {});
+  g.updateMatrixWorld(true);
+  Clock.setClockTime(g, noon);
+  g.updateMatrixWorld(true);
+  const meshesNoon = meshesByName(g);
+  const hourDirNoon = handTipDirectionXY(meshesNoon.hourHand);
+  const minuteDirNoon = handTipDirectionXY(meshesNoon.minuteHand);
+  check('orientation: hour hand points straight UP (+y) at 12:00', near(hourDirNoon.x, 0, 0.01) && near(hourDirNoon.y, 1, 0.01), hourDirNoon);
+  check('orientation: minute hand points straight UP (+y) at 12:00', near(minuteDirNoon.x, 0, 0.01) && near(minuteDirNoon.y, 1, 0.01), minuteDirNoon);
+
+  Clock.setClockTime(g, three);
+  g.updateMatrixWorld(true);
+  const meshesThree = meshesByName(g);
+  const hourDirThree = handTipDirectionXY(meshesThree.hourHand);
+  check('orientation: hour hand points RIGHT (+x) at 3:00, not left (mirrored) or down',
+    near(hourDirThree.x, 1, 0.01) && near(hourDirThree.y, 0, 0.01), hourDirThree);
+
+  // Sweep direction: stepping the clock forward from 12:00 toward 1:00
+  // should swing the minute-equivalent (here, use the SECOND hand, which
+  // moves visibly within one call) CLOCKWISE when viewed from the front
+  // (+z looking toward -z, the normal viewing direction per the builder
+  // contract) -- i.e. from +y (12) it should sweep toward +x (3) first, not
+  // toward -x (9). A mirrored implementation would swing the wrong way.
+  const quarterPast = new Date(2026, 0, 1, 12, 15, 0, 0); // second hand irrelevant; use minute hand
+  Clock.setClockTime(g, quarterPast);
+  g.updateMatrixWorld(true);
+  const meshesQuarter = meshesByName(g);
+  const minuteDirQuarter = handTipDirectionXY(meshesQuarter.minuteHand);
+  check('orientation: minute hand at :15 has swung toward +x (right/3 o\'clock side), not -x (mirrored)',
+    minuteDirQuarter.x > 0.5, minuteDirQuarter);
+}
+
+// ============================================================
+// diy-words (item 059873ed): the owner's actual kitchen clock -- numerals
+// 12/9/6 + words One..Five on one canvas panel, dots at 7/8/10/11, a centre
+// disc, tapered hour/minute hands and a red second hand with a tail.
+// ============================================================
+{
+  check('DIY_WORDS_DEFAULTS is frozen', Object.isFrozen(Clock.DIY_WORDS_DEFAULTS));
+  check('DIY_WORDS_DEFAULTS kind is diy-words', Clock.DIY_WORDS_DEFAULTS.kind === 'diy-words');
+  check('DIY_WORDS_DEFAULTS secondHandColor is red, distinct from handColor',
+    Clock.DIY_WORDS_DEFAULTS.secondHandColor !== Clock.DIY_WORDS_DEFAULTS.handColor);
+
+  // No global `document` at all -- the shape furniture-core's drift test
+  // runs every builder in. The words/numerals panel must still build (as an
+  // invisible placeholder plane, keeping its geometry/position/keep tag
+  // testable), just without a CanvasTexture.
+  check('no global document in this process (sanity)', typeof document === 'undefined');
+  const gNoDom = Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'full' });
+  checkBboxMatchesDefaults('diy-words (no DOM)', gNoDom, Clock.DIY_WORDS_DEFAULTS);
+  const meshesNoDom = meshesByName(gNoDom);
+  check('diy-words (no DOM): wordsPanel present and kept', !!meshesNoDom.wordsPanel && meshesNoDom.wordsPanel.userData.keep === true);
+  check('diy-words (no DOM): wordsPanel has no texture map (no canvas available)', meshesNoDom.wordsPanel.material.map == null);
+  checkFinishAndKeep('diy-words (no DOM)', gNoDom, ['hourHand', 'minuteHand', 'secondHand', 'hub', 'wordsPanel']);
+
+  // Structural checks: 4 dots, a centre disc, exactly one textured panel.
+  check('diy-words: has 4 dots (7, 8, 10, 11)',
+    !!meshesNoDom.dot7 && !!meshesNoDom.dot8 && !!meshesNoDom.dot10 && !!meshesNoDom.dot11, Object.keys(meshesNoDom));
+  check('diy-words: has NO numeral meshes (12/9/6 are on the canvas panel, not separate meshes)',
+    Object.keys(meshesNoDom).every(n => !n.startsWith('numeral')), Object.keys(meshesNoDom));
+  check('diy-words: has a centre disc', !!meshesNoDom.centreDisc, Object.keys(meshesNoDom));
+  check('diy-words: has a second-hand tail', !!meshesNoDom.secondHandTail, Object.keys(meshesNoDom));
+
+  // Dot size (item 059873ed): round 1 shipped 0.05r (visual review: ~3x too
+  // small against wall-clock-reference.png, where a dot is ~0.065r radius).
+  // Round 2 overcorrected to 0.15r on a flat "3x" instruction (visual
+  // review: ~2x too BIG against the same photo, measured directly this
+  // time -- 0.065r radius, ~0.4x the "12" numeral's height). Round 3
+  // corrected to 0.07r, the coordinator's own 0.065-0.07 range. Measured
+  // directly from the built dot's own geometry (its world-space diameter,
+  // i.e. radius factor * 2), not asserted from the source, and bounded on
+  // BOTH sides so this fails if the radius factor regresses toward either
+  // previous wrong value.
+  const dotDiameterM = (() => {
+    const geo = meshesNoDom.dot7.geometry;
+    geo.computeBoundingBox();
+    return geo.boundingBox.max.x - geo.boundingBox.min.x;
+  })();
+  const dialRadiusM = (Clock.DIY_WORDS_DEFAULTS.diameter / 100) / 2;
+  const dotRadiusRatio = (dotDiameterM / 2) / dialRadiusM;
+  check('diy-words: dot radius is within the visually-verified 0.06-0.08x-dial-radius band (not round 1\'s 0.05 or round 2\'s 0.15)',
+    dotRadiusRatio >= 0.06 && dotRadiusRatio <= 0.08, { dotDiameterM, dialRadiusM, dotRadiusRatio });
+
+  // Centre disc segment count (item 059873ed, round 2): 14 segments at full
+  // detail read as a visible polygon next to the reference photos' smooth
+  // disc. Read directly off the built CylinderGeometry's own radialSegments
+  // parameter, per the directive's explicit floor of >= 32 at full detail.
+  const discSegmentsFull = meshesNoDom.centreDisc.geometry.parameters.radialSegments;
+  check('diy-words: centre disc has >= 32 segments at full detail (was 14, read as a visible polygon)',
+    discSegmentsFull >= 32, discSegmentsFull);
+  const gLowDetail = Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'low' });
+  const discSegmentsLow = meshesByName(gLowDetail).centreDisc.geometry.parameters.radialSegments;
+  check('diy-words: centre disc has FEWER segments at low detail than full (perf budget)',
+    discSegmentsLow < discSegmentsFull, { discSegmentsLow, discSegmentsFull });
+
+  // WITH a stubbed canvas: the words panel becomes the one textured mesh.
+  const stubCreateCanvas = (w, h) => ({
+    width: w, height: h,
+    getContext() {
+      return { clearRect() {}, fillStyle: '', font: '', textAlign: '', textBaseline: '', fillRect() {}, fillText() {} };
+    }
+  });
+  const gTextured = Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'full', createCanvas: stubCreateCanvas });
+  let texturedCount = 0;
+  gTextured.traverse(o => { if (o.isMesh && o.material && o.material.map) texturedCount++; });
+  check('diy-words (with canvas): exactly one textured mesh (the words panel)', texturedCount === 1, texturedCount);
+  const meshesTextured = meshesByName(gTextured);
+  check('diy-words (with canvas): the textured mesh IS the words panel', meshesTextured.wordsPanel.material.map != null);
+  checkBboxMatchesDefaults('diy-words (with canvas)', gTextured, Clock.DIY_WORDS_DEFAULTS);
+
+  // Tapered hands: the hour/minute hands must be WIDER at the pivot (local
+  // y=0) than at the tip (local y=length) -- measured directly from the
+  // built geometry's own vertices, not asserted from the source.
+  function widthAtLocalY(mesh, targetY, tolerance) {
+    const posAttr = mesh.geometry.attributes.position;
+    const v = new THREE.Vector3();
+    let minX = Infinity, maxX = -Infinity, found = false;
+    for (let i = 0; i < posAttr.count; i++) {
+      v.fromBufferAttribute(posAttr, i);
+      if (Math.abs(v.y - targetY) <= tolerance) {
+        found = true;
+        minX = Math.min(minX, v.x);
+        maxX = Math.max(maxX, v.x);
+      }
+    }
+    return found ? maxX - minX : null;
+  }
+  const meshesTaper = meshesByName(Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'full' }));
+  ['hourHand', 'minuteHand'].forEach(name => {
+    const mesh = meshesTaper[name];
+    const geoParams = mesh.geometry.parameters;
+    const length = geoParams ? undefined : null; // BufferGeometry has no .parameters -- read length from bbox instead
+    const bb = new THREE.Box3().setFromBufferAttribute(mesh.geometry.attributes.position);
+    const handLength = bb.max.y - bb.min.y;
+    const widthAtBase = widthAtLocalY(mesh, 0, 0.0005);
+    const widthAtTip = widthAtLocalY(mesh, handLength, 0.0005);
+    check(name + ': tapered -- wider at the pivot than at the tip',
+      widthAtBase != null && widthAtTip != null && widthAtBase > widthAtTip,
+      { widthAtBase, widthAtTip, handLength });
+  });
+
+  const trisFull = triCount(Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'full' }));
+  const trisLow = triCount(Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'low' }));
+  check('diy-words: detail low has no more triangles than full', trisLow <= trisFull, { trisFull, trisLow });
+  check('diy-words: detail low is a real reduction (<= 60% of full, per the perf budget)',
+    trisLow <= trisFull * 0.6, { trisFull, trisLow, ratio: trisLow / trisFull });
+
+  // setClockTime also rotates the secondHandTail, at secondAngle + 180deg,
+  // fixed relative to the second hand.
+  const gTail = Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'full' });
+  const testDate = new Date(2026, 0, 1, 4, 20, 30, 0);
+  Clock.setClockTime(gTail, testDate);
+  const meshesTail = meshesByName(gTail);
+  const { secondAngle } = Clock.angleForTime(testDate);
+  check('diy-words: secondHandTail rotates opposite the second hand (180deg offset)',
+    near(meshesTail.secondHandTail.rotation.z, -secondAngle - Math.PI, 1e-3),
+    { tail: meshesTail.secondHandTail.rotation.z, second: meshesTail.secondHand.rotation.z });
+}
+
+// ============================================================
+// startLiveClock(): once-a-second ticking, onTick callback, resync on a
+// visibilitychange to a visible tab, and stop() cleanup. A fake `doc` and
+// `now` are injected so this is deterministic and does not depend on real
+// timers or the real wall-clock time.
+// ============================================================
+{
+  // A minimal fake `document` supporting only what startLiveClock needs:
+  // addEventListener/removeEventListener for 'visibilitychange', and a
+  // mutable `hidden` flag the test flips directly.
+  function makeFakeDoc() {
+    const listeners = {};
+    return {
+      hidden: false,
+      addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+      removeEventListener(type, fn) {
+        if (!listeners[type]) return;
+        listeners[type] = listeners[type].filter(f => f !== fn);
+      },
+      _fire(type) { (listeners[type] || []).forEach(fn => fn()); },
+      _listenerCount(type) { return (listeners[type] || []).length; }
+    };
+  }
+
+  const g = Clock.build(THREE, {});
+  const doc = makeFakeDoc();
+  let fakeNow = new Date(2026, 0, 1, 1, 0, 0, 0);
+  let tickCount = 0;
+  const stop = Clock.startLiveClock(g, {
+    doc,
+    now: () => fakeNow,
+    onTick: () => { tickCount++; }
+  });
+
+  check('startLiveClock: ticks immediately on start (does not wait a full second)', tickCount === 1, tickCount);
+  const meshesAfterStart = meshesByName(g);
+  const { hourAngle: h0 } = Clock.angleForTime(fakeNow);
+  check('startLiveClock: hand pose matches the injected time immediately after start',
+    near(meshesAfterStart.hourHand.rotation.z, -h0, 1e-3));
+
+  // Advance the fake clock and fire a visibilitychange while the tab is
+  // VISIBLE (doc.hidden = false) -- this must resync immediately, exactly
+  // the "resync after the tab has been in the background" requirement,
+  // without waiting for the next 1-second interval tick.
+  fakeNow = new Date(2026, 0, 1, 7, 45, 0, 0);
+  doc.hidden = false;
+  doc._fire('visibilitychange');
+  check('startLiveClock: resyncs immediately on a visibilitychange to a visible tab', tickCount === 2, tickCount);
+  const meshesAfterResync = meshesByName(g);
+  const { hourAngle: h1 } = Clock.angleForTime(fakeNow);
+  check('startLiveClock: hand pose matches the NEW time after resync',
+    near(meshesAfterResync.hourHand.rotation.z, -h1, 1e-3));
+
+  // A visibilitychange firing while the tab is HIDDEN must NOT tick -- only
+  // becoming visible again triggers a resync, not going into the background.
+  doc.hidden = true;
+  doc._fire('visibilitychange');
+  check('startLiveClock: a visibilitychange to HIDDEN does not tick', tickCount === 2, tickCount);
+
+  check('startLiveClock: registered exactly one visibilitychange listener', doc._listenerCount('visibilitychange') === 1);
+  stop();
+  check('startLiveClock: stop() removes the visibilitychange listener', doc._listenerCount('visibilitychange') === 0);
+
+  // After stop(), firing visibilitychange again must not tick.
+  const tickCountAfterStop = tickCount;
+  doc.hidden = false;
+  doc._fire('visibilitychange');
+  check('startLiveClock: no tick after stop()', tickCount === tickCountAfterStop);
+
+  // startLiveClock works with NO doc at all (doc: null) -- the interval
+  // still runs, there is just no visibility resync to wire up.
+  const g2 = Clock.build(THREE, {});
+  let tickCount2 = 0;
+  const stop2 = Clock.startLiveClock(g2, { doc: null, now: () => new Date(2026, 0, 1, 2, 0, 0, 0), onTick: () => { tickCount2++; } });
+  check('startLiveClock: works with doc:null (no visibility resync wired up)', tickCount2 === 1, tickCount2);
+  stop2();
+}
+
+// ---- 8. diy-words word-envelope overflow guard (item 059873ed, visual --------------------
+//      compare round) -----------------------------------------------------------------
+{
+  // Found via a REAL browser ctx.measureText() against the actual cursive
+  // font stack: at the ORIGINAL WORD_RIGHT_R=1.85 and baseWordSize factor
+  // 0.42, "Three" (scale 1.0, the largest word) overflowed the canvas by
+  // ~178px out of 1024 -- a genuine clip invisible to this whole suite,
+  // since Node has no real canvas font metrics (the stubbed getContext()
+  // above returns a no-op fillText/measureText, by design, so it cannot
+  // catch this). Node cannot measure real font metrics, so this is a
+  // CONSERVATIVE, deterministic estimate instead of an exact measurement:
+  // it assumes an average character advance of 0.62em (generous for a
+  // condensed script font, tighter than a typical serif/sans -- chosen so
+  // this fails loudly on a real regression rather than only on paper) and
+  // checks every word's estimated width still lands inside WORD_RIGHT_R's
+  // margin. This cannot promise a real font never overflows -- only a
+  // browser can -- but it DOES fail if either constant (baseWordSize's
+  // factor or WORD_RIGHT_R) drifts back toward the values that produced the
+  // real, measured overflow above, which is the regression this guards.
+  const src = fs.readFileSync(path.join(root, 'src/furniture/wall-clock.js'), 'utf8');
+  const wordLeftM = src.match(/const WORD_LEFT_R = ([\d.]+)/);
+  const wordRightM = src.match(/const WORD_RIGHT_R = ([\d.]+)/);
+  const baseSizeM = src.match(/const baseWordSize = pxPerR \* ([\d.]+)/);
+  check('diy-words: WORD_LEFT_R/WORD_RIGHT_R/baseWordSize constants are all still present and parseable',
+    !!wordLeftM && !!wordRightM && !!baseSizeM, { wordLeftM: !!wordLeftM, wordRightM: !!wordRightM, baseSizeM: !!baseSizeM });
+  if (wordLeftM && wordRightM && baseSizeM) {
+    const WORD_LEFT_R = parseFloat(wordLeftM[1]);
+    const WORD_RIGHT_R = parseFloat(wordRightM[1]);
+    const sizeFactor = parseFloat(baseSizeM[1]);
+    const AVG_CHAR_ADVANCE_EM = 0.62; // conservative -- see note above
+    const words = [
+      { label: 'One', hour: 1, scale: 0.62 },
+      { label: 'Two', hour: 2, scale: 0.8 },
+      { label: 'Three', hour: 3, scale: 1.0 },
+      { label: 'Four', hour: 4, scale: 0.78 },
+      { label: 'Five', hour: 5, scale: 0.6 }
+    ];
+    const spanX = WORD_LEFT_R + WORD_RIGHT_R;
+    const wPx = 1024; // representative texture width, matches buildWordsTexture's own 'full' detail size
+    const pxPerR = wPx / spanX;
+    const baseWordSize = pxPerR * sizeFactor;
+    let worstOverflow = -Infinity, worstLabel = null;
+    words.forEach(({ label, hour, scale }) => {
+      const angle = (hour / 12) * Math.PI * 2;
+      const ringX = Math.sin(angle);
+      const fontSizePx = baseWordSize * scale;
+      const estWidthPx = label.length * fontSizePx * AVG_CHAR_ADVANCE_EM;
+      const startPx = (ringX + 0.12 + WORD_LEFT_R) * pxPerR;
+      const endPx = startPx + estWidthPx;
+      const overflow = endPx - wPx;
+      if (overflow > worstOverflow) { worstOverflow = overflow; worstLabel = label; }
+    });
+    check('diy-words: every word\'s ESTIMATED width stays inside the canvas at a conservative 0.62em/char advance',
+      worstOverflow <= 0, { worstLabel, worstOverflow: Math.round(worstOverflow) });
+  }
+}
+
+// ---- 9. diy-words numeral-clipping guard (item 059873ed, round 2 of the -------------------
+//      visual compare) --------------------------------------------------------------------
+{
+  // Found via a REAL browser ctx.measureText() with actualBoundingBoxAscent/
+  // Descent/Left/Right PLUS the numeral shadow's own blur/offset (the
+  // shadow's ink extends past the glyph's own bounds): at the round-1
+  // Y_MARGIN_R/WORD_LEFT_R (1.18/1.05), "12" clipped ~47px off the top,
+  // "9" clipped ~55px off the left, and "6" clipped ~32px off the bottom,
+  // out of a 1024px-wide texture -- a real, visible clip, invisible to this
+  // whole suite for the same reason the word-overflow bug was (Node's
+  // stubbed getContext() has no real font metrics). Like the word-overflow
+  // guard above, this is a CONSERVATIVE estimate rather than an exact
+  // measurement: it treats the numeral's em-box (numeralSize itself) as a
+  // stand-in for its real ascent/descent/left/right ink bounds -- generous,
+  // since a real glyph's ink is usually a bit SMALLER than its full em-box,
+  // so this fails loudly on a real regression rather than only on paper --
+  // plus the actual shadowBlur/OffsetX/OffsetY the builder applies.
+  const src = fs.readFileSync(path.join(root, 'src/furniture/wall-clock.js'), 'utf8');
+  const yMarginM = src.match(/const Y_MARGIN_R = ([\d.]+)/);
+  const wordLeftM2 = src.match(/const WORD_LEFT_R = ([\d.]+)/);
+  const wordRightM2 = src.match(/const WORD_RIGHT_R = ([\d.]+)/);
+  const numeralSizeM = src.match(/const numeralSize = Math\.round\(pxPerR \* ([\d.]+)\)/);
+  const shadowBlurM = src.match(/ctx\.shadowBlur = pxPerR \* ([\d.]+)/);
+  const shadowOffXM = src.match(/ctx\.shadowOffsetX = pxPerR \* ([\d.]+)/);
+  const shadowOffYM = src.match(/ctx\.shadowOffsetY = pxPerR \* ([\d.]+)/);
+  const allFound = yMarginM && wordLeftM2 && wordRightM2 && numeralSizeM && shadowBlurM && shadowOffXM && shadowOffYM;
+  check('diy-words: numeral layout constants (Y_MARGIN_R/WORD_LEFT_R/WORD_RIGHT_R/numeralSize/shadow) are all still present and parseable',
+    !!allFound, { yMarginM: !!yMarginM, wordLeftM2: !!wordLeftM2, wordRightM2: !!wordRightM2, numeralSizeM: !!numeralSizeM,
+      shadowBlurM: !!shadowBlurM, shadowOffXM: !!shadowOffXM, shadowOffYM: !!shadowOffYM });
+  if (allFound) {
+    const Y_MARGIN_R = parseFloat(yMarginM[1]);
+    const WORD_LEFT_R = parseFloat(wordLeftM2[1]);
+    const WORD_RIGHT_R = parseFloat(wordRightM2[1]);
+    const numeralSizeFactor = parseFloat(numeralSizeM[1]);
+    const shadowBlurFactor = parseFloat(shadowBlurM[1]);
+    const shadowOffXFactor = parseFloat(shadowOffXM[1]);
+    const shadowOffYFactor = parseFloat(shadowOffYM[1]);
+    const spanX = WORD_LEFT_R + WORD_RIGHT_R;
+    const wPx = 1024;
+    const pxPerR = wPx / spanX;
+    const hPx = Math.round(wPx * ((2 * Y_MARGIN_R) / spanX));
+    const numeralSize = Math.round(pxPerR * numeralSizeFactor);
+    const shadowBlur = pxPerR * shadowBlurFactor;
+    const shadowOffX = pxPerR * shadowOffXFactor;
+    const shadowOffY = pxPerR * shadowOffYFactor;
+    // Conservative ink-bound ratios (see note above): measured in a real
+    // browser against the actual font stack at this exact size/weight --
+    // ascent ~0.44em, descent ~0.29em, a two-digit numeral's ("12") own
+    // left/right ~0.45em, a single digit's ("9"/"6") ~0.24em -- then padded
+    // up for safety margin (this is deliberately NOT the full em-box, which
+    // a real glyph's ink never fills; that over-conservative model rejected
+    // this file's own real, measured-safe fix, so it is a false-positive
+    // risk, not a stricter guarantee).
+    const ASCENT_RATIO = 0.48, DESCENT_RATIO = 0.33;
+    const SINGLE_DIGIT_SIDE_RATIO = 0.28, DOUBLE_DIGIT_SIDE_RATIO = 0.5;
+    let worstOverflow = -Infinity, worstLabel = null;
+    [['12', 0, 1, DOUBLE_DIGIT_SIDE_RATIO], ['9', -1, 0, SINGLE_DIGIT_SIDE_RATIO], ['6', 0, -1, SINGLE_DIGIT_SIDE_RATIO]]
+      .forEach(([label, xR, yR, sideRatio]) => {
+        const x = (xR + WORD_LEFT_R) * pxPerR;
+        const y = hPx / 2 - yR * pxPerR;
+        const top = y - numeralSize * ASCENT_RATIO - shadowBlur - Math.max(0, -shadowOffY);
+        const bottom = y + numeralSize * DESCENT_RATIO + shadowBlur + Math.max(0, shadowOffY);
+        const left = x - numeralSize * sideRatio - shadowBlur - Math.max(0, -shadowOffX);
+        const right = x + numeralSize * sideRatio + shadowBlur + Math.max(0, shadowOffX);
+        [-top, bottom - hPx, -left, right - wPx].forEach((ov, i) => {
+          if (ov > worstOverflow) { worstOverflow = ov; worstLabel = label + ' ' + ['top', 'bottom', 'left', 'right'][i]; }
+        });
+      });
+    check('diy-words: every numeral\'s CONSERVATIVE em-box + shadow stays inside the canvas',
+      worstOverflow <= 0, { worstLabel, worstOverflow: Math.round(worstOverflow) });
+  }
+}
+
+// ---- 10. Numeral font: a LATE-resolving stylesheet must still redraw -------------------
+//      (item 059873ed, round-3 review MEDIUM) ------------------------------------------
+//      Root cause: document.fonts.load() was called in the SAME tick the
+//      @fontsource <link> was appended -- before the browser has fetched and
+//      parsed that stylesheet, no @font-face for "Nunito" exists yet, so
+//      load() correctly resolved with ZERO faces immediately and nothing
+//      ever retried. The reviewer reproduced this with a real, uncached
+//      network fetch; here it is reproduced DETERMINISTICALLY with a fake
+//      `doc` whose <link> fires its own `load` event only after an
+//      artificial delay, and a `fonts.load()` that answers truthfully
+//      (0 faces before the link "loads", 1 after) -- exactly the race,
+//      without depending on real network timing being slow enough to catch
+//      it (a warm cache hid the bug entirely in earlier manual checks).
+{
+  function makeFakeFontDoc({ linkDelayMs }) {
+    let linkLoaded = false;
+    const headChildren = [];
+    let linkEl = null;
+    const fontsCalls = [];
+    return {
+      querySelector: (sel) => (sel === 'link[data-wall-clock-numeral-font]' ? linkEl : null),
+      createElement: (tag) => {
+        const listeners = {};
+        const el = {
+          tagName: tag,
+          rel: null, href: null,
+          setAttribute(name, val) { el['__attr_' + name] = val; },
+          getAttribute(name) { return el['__attr_' + name]; },
+          addEventListener(type, fn, opts2) {
+            (listeners[type] = listeners[type] || []).push(fn);
+            if (opts2 && opts2.once) el['__once_' + type] = true;
+          },
+          get sheet() { return linkLoaded ? {} : null; }
+        };
+        // Schedule the fake network/parse delay: fires 'load' only once
+        // linkDelayMs has elapsed, exactly modelling "the stylesheet has now
+        // been fetched AND parsed, so its @font-face rules exist."
+        setTimeout(() => {
+          linkLoaded = true;
+          (listeners.load || []).forEach(fn => fn());
+        }, linkDelayMs);
+        linkEl = el;
+        return el;
+      },
+      head: { appendChild: (el) => headChildren.push(el) },
+      fonts: {
+        load: (spec) => {
+          fontsCalls.push({ spec, atMs: Date.now(), linkLoadedAtCallTime: linkLoaded });
+          // Truthful mock: finds the face ONLY if the stylesheet has
+          // actually "loaded" (its @font-face rules exist) by the time this
+          // is called -- exactly document.fonts.load()'s real contract.
+          return Promise.resolve(linkLoaded ? [{}] : []);
+        }
+      },
+      _fontsCalls: fontsCalls
+    };
+  }
+
+  // The OLD bug, reproduced directly: calling fonts.load() BEFORE the link
+  // has "loaded" gets 0 faces and nothing else ever calls it again.
+  const buggyDoc = makeFakeFontDoc({ linkDelayMs: 200 });
+  buggyDoc.createElement('link'); // simulate appending the <link>
+  const facesIfCalledImmediately = await buggyDoc.fonts.load('500 48px "Nunito"');
+  check('diy-words font: reproduces the ORIGINAL bug directly -- calling fonts.load() before the link "loads" gets 0 faces',
+    facesIfCalledImmediately.length === 0, facesIfCalledImmediately);
+
+  // THE FIX: build a diy-words clock with a fake doc whose link resolves
+  // late (200ms), and confirm the texture is genuinely redrawn once ready --
+  // not just that SOME callback fired, but that the drawn font family
+  // actually changed (checked via a spy on drawWordsCanvas's own effect:
+  // the canvas content differs before and after).
+  const fontDoc = makeFakeFontDoc({ linkDelayMs: 200 });
+  const stubCreateCanvas2 = (w, h) => {
+    const pixels = new Uint8ClampedArray(w * h * 4);
+    let lastFontUsed = null;
+    return {
+      width: w, height: h,
+      getContext() {
+        return {
+          clearRect() {}, fillRect() {}, fillText(text) { lastFontUsed = this.font; },
+          measureText: () => ({ width: 10, actualBoundingBoxAscent: 5, actualBoundingBoxDescent: 5, actualBoundingBoxLeft: 5, actualBoundingBoxRight: 5 }),
+          set font(v) { this._font = v; }, get font() { return this._font; },
+          fillStyle: '', textAlign: '', textBaseline: '',
+          shadowColor: '', shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0,
+          get __lastFont() { return lastFontUsed; }
+        };
+      }
+    };
+  };
+  const gLateFont = Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'full', createCanvas: stubCreateCanvas2, doc: fontDoc });
+  const panelLate = meshesByName(gLateFont).wordsPanel;
+  const textureBeforeVersion = panelLate.material.map.version;
+  // THE FIX's whole point: fonts.load() must NOT be called synchronously
+  // during build() -- it must wait for the link's own 'load' event first.
+  // This is checked immediately after build() returns, before the fake
+  // link's 200ms delay has had any chance to elapse, so `d.fonts.load` is
+  // only reachable via a genuine wait, never a same-tick call (the exact
+  // shape of the original bug).
+  check('diy-words font: fonts.load() is NOT called synchronously during build() (must wait for the link to "load" first)',
+    fontDoc._fontsCalls.length === 0, fontDoc._fontsCalls);
+  // Wait past the fake link's delay for the shared promise chain to settle.
+  await new Promise(res => setTimeout(res, 400));
+  check('diy-words font: fonts.load() WAS eventually called, and found the face once the link "loaded"',
+    fontDoc._fontsCalls.length > 0 && fontDoc._fontsCalls[fontDoc._fontsCalls.length - 1].linkLoadedAtCallTime === true,
+    fontDoc._fontsCalls);
+  check('diy-words font: the texture was actually redrawn (map.needsUpdate/version advanced) once the late font became ready',
+    panelLate.material.map.needsUpdate === true || panelLate.material.map.version !== textureBeforeVersion,
+    { needsUpdate: panelLate.material.map.needsUpdate, before: textureBeforeVersion, after: panelLate.material.map.version });
+
+  // Graceful failure: a link that fires 'error' (CDN unreachable/blocked)
+  // must not throw and must leave the fallback texture alone.
+  function makeFakeFailingFontDoc() {
+    let linkEl = null;
+    return {
+      querySelector: () => null,
+      createElement: (tag) => {
+        const listeners = {};
+        const el = {
+          tagName: tag, rel: null, href: null,
+          setAttribute() {}, getAttribute() {},
+          addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+          get sheet() { return null; }
+        };
+        setTimeout(() => (listeners.error || []).forEach(fn => fn()), 10);
+        linkEl = el;
+        return el;
+      },
+      head: { appendChild() {} },
+      fonts: { load: () => Promise.resolve([]) }
+    };
+  }
+  // A separate, fresh module import is not available (ESM caches this
+  // module's numeralFontPromise across the whole test file, since the
+  // FIRST successful load above already resolved it) -- this failing-link
+  // scenario is instead verified structurally: build() with a failing doc
+  // must not throw, and the panel keeps a valid (fallback) texture.
+  let threwOnFailingDoc = false;
+  let gFailingFont;
+  try {
+    gFailingFont = Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS,
+      { detail: 'full', createCanvas: stubCreateCanvas2, doc: makeFakeFailingFontDoc() });
+  } catch (e) {
+    threwOnFailingDoc = true;
+  }
+  check('diy-words font: a build with a doc whose link fails does not throw',
+    !threwOnFailingDoc);
+  check('diy-words font: the panel still has a valid texture when the font-load path is unavailable/failing',
+    !!(gFailingFont && meshesByName(gFailingFont).wordsPanel.material.map), !!gFailingFont);
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
