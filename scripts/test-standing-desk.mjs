@@ -217,5 +217,75 @@ function meshParts(group) {
   check('unknown controlSide falls back to right', panelX(badValue) > 0, panelX(badValue));
 }
 
+// ---- 7. optional LED strip under the desktop edge --------------------------
+{
+  const { LED_STRIP_H, normaliseLedSides } = await imp('src/furniture/standing-desk.js');
+  const strips = g => { const out = {}; g.traverse(o => { if (o.userData && o.userData.ledStrip) out[o.name] = o; }); return out; };
+  const boxOf = o => { o.updateMatrixWorld(true); const b = new THREE.Box3().setFromObject(o); return b; };
+  const base = { width: 120, depth: 80, topHeight: 95, minHeight: 72, maxHeight: 120 };
+
+  check('DEFAULTS.ledStrip is off (opt-in)', DEFAULTS.ledStrip === false, DEFAULTS.ledStrip);
+  check('no strip without ledStrip', Object.keys(strips(build(THREE, base))).length === 0);
+
+  const g = build(THREE, Object.assign({}, base, { ledStrip: true, ledColor: '#00ff66' }));
+  const s = strips(g);
+  check('default strip is left + front + right, and nothing else',
+    Object.keys(s).sort().join() === 'ledStripFront,ledStripLeft,ledStripRight', Object.keys(s));
+  const W = 1.2, D = 0.8, H = 0.95;
+  if (s.ledStripLeft && s.ledStripFront && s.ledStripRight) {
+    const L = boxOf(s.ledStripLeft), F = boxOf(s.ledStripFront), R = boxOf(s.ledStripRight);
+    check('left run is flush with the left edge', near(L.min.x, -W / 2, 1e-4), L.min.x);
+    check('right run is flush with the right edge', near(R.max.x, W / 2, 1e-4), R.max.x);
+    check('front run is flush with the front edge', near(F.max.z, D, 1e-4), F.max.z);
+    check('front run spans the full width', near(F.min.x, -W / 2, 1e-4) && near(F.max.x, W / 2, 1e-4), [F.min.x, F.max.x]);
+    check('left run reaches back to the back edge', near(L.min.z, 0, 1e-4), L.min.z);
+    check('right run reaches back to the back edge', near(R.min.z, 0, 1e-4), R.min.z);
+    check('left run meets the front run (one continuous line)', near(L.max.z, F.min.z, 1e-4), [L.max.z, F.min.z]);
+    check('right run meets the front run', near(R.max.z, F.min.z, 1e-4), [R.max.z, F.min.z]);
+    [L, F, R].forEach((b, i) => {
+      check('run ' + i + ' top touches the underside of the desktop', near(b.max.y, H, 1e-4), b.max.y);
+      check('run ' + i + ' hangs LED_STRIP_H below it', near(b.max.y - b.min.y, LED_STRIP_H, 1e-4), b.max.y - b.min.y);
+    });
+    const m = s.ledStripFront.material;
+    const pf = Fin.partFinish(s.ledStripFront, m);
+    check('strip is the emissive finish', pf.finish === 'emissive', pf);
+    check('strip is kept out of the opaque merge', Fin.partKeep(s.ledStripFront, m).keep === true);
+    check('strip glows in ledColor', m.emissive.getHexString() === '00ff66' && m.color.getHexString() === '00ff66',
+      [m.color.getHexString(), m.emissive.getHexString()]);
+    check('strip casts no shadow', !s.ledStripFront.castShadow);
+  }
+  let lights = 0;
+  g.traverse(o => { if (o.isLight) lights++; });
+  check('the strip adds no real light', lights === 0, lights);
+
+  const plain = bboxCm(build(THREE, base)), lit = bboxCm(g);
+  check('the strip does not change the item envelope',
+    ['minX', 'maxX', 'minY', 'maxY', 'minZ', 'maxZ'].every(k => Math.abs(plain[k] - lit[k]) <= 1e-3), { plain, lit });
+
+  // Follows topHeight: at sit and at stand the strip sits under the top.
+  for (const th of [72, 120]) {
+    const gg = build(THREE, Object.assign({}, base, { topHeight: th, ledStrip: true }));
+    const f = strips(gg).ledStripFront;
+    check('strip follows topHeight ' + th, f && near(boxOf(f).max.y, th / 100, 1e-4), f && boxOf(f).max.y);
+  }
+
+  const low = strips(build(THREE, Object.assign({}, base, { ledStrip: true }), { detail: 'low' }));
+  check('low detail keeps the strip (the part a light binding drives)', Object.keys(low).length === 3, Object.keys(low));
+
+  const frontOnly = strips(build(THREE, Object.assign({}, base, { ledStrip: true, ledSides: ['front'] })));
+  check('ledSides ["front"] draws only the front run', Object.keys(frontOnly).join() === 'ledStripFront', Object.keys(frontOnly));
+  if (frontOnly.ledStripFront) {
+    check('a lone front run still spans the full width', near(boxOf(frontOnly.ledStripFront).max.x - boxOf(frontOnly.ledStripFront).min.x, W, 1e-4));
+  }
+  const sidesOnly = strips(build(THREE, Object.assign({}, base, { ledStrip: true, ledSides: 'left,right' })));
+  check('without a front run the sides reach the front edge',
+    sidesOnly.ledStripLeft && near(boxOf(sidesOnly.ledStripLeft).max.z, D, 1e-4), sidesOnly.ledStripLeft && boxOf(sidesOnly.ledStripLeft).max.z);
+  const warn = console.warn; console.warn = () => {};
+  check('unknown sides are dropped, all-unknown falls back to the default',
+    normaliseLedSides(['front', 'top']).join() === 'front' && normaliseLedSides(['up']).join() === 'left,front,right',
+    [normaliseLedSides(['front', 'top']), normaliseLedSides(['up'])]);
+  console.warn = warn;
+}
+
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
 if (failures > 0) process.exit(1);

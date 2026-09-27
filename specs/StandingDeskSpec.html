@@ -95,7 +95,9 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "topThickness": 2.5,
   "topColor": "#f4f2ee",
   "frameColor": "#f2f1ec",
-  "controlSide": "right"
+  "controlSide": "right",
+  "ledStrip": true,
+  "ledColor": "#ff9a45"
 }/*EDITMODE-END*/;
 
 // ============== Desk model (delegates to the shared builder) ==============
@@ -118,6 +120,8 @@ function deskParams(t) {
     topColor: t.topColor,
     frameColor: t.frameColor,
     controlSide: t.controlSide,
+    ledStrip: t.ledStrip,
+    ledColor: t.ledColor,
   };
 }
 function buildDesk(t, group, THREE, ctx) {
@@ -179,6 +183,8 @@ function App() {
               <tr><td>Top thickness</td><td className="num">{t.topThickness.toFixed(1)}</td><td><b>Variable</b></td></tr>
               <tr><td>Overall envelope height <span style={{opacity:0.6}}>(DEFAULTS.height)</span></td><td className="num">{(clamped + t.topThickness).toFixed(1)}</td><td>Derived: topHeight + topThickness</td></tr>
               <tr><td>Control panel side</td><td className="num">{t.controlSide}</td><td><b>Variable</b> — left/right, 4cm gap to the desk's side edge</td></tr>
+              <tr><td>LED strip</td><td className="num">{t.ledStrip ? 'on' : 'off'}</td><td><b>Variable</b> — left, front and right edges, under the top</td></tr>
+              <tr><td>LED strip section</td><td className="num">1.2 × 1.2</td><td>Fixed; outer face flush with the top's edge</td></tr>
             </tbody>
           </table>
           <div className="legend">
@@ -200,6 +206,13 @@ function App() {
             small control panel sits on the front edge, offset to the left or right (dropped at low detail)
             — its outer edge 4cm in from the desk's side edge on that side. "Left"/"right" are as seen by a
             person standing at the front of the desk facing it.
+          </div>
+          <div className="legend">
+            Optional LED strip (<code>ledStrip</code>): one continuous run tucked under the desktop's edge — down
+            the left side, across the front, back up the right (<code>ledSides</code>). It rides with the top, so it
+            rises and falls with the height slider. It glows in <code>ledColor</code> but adds no real light. This is a
+            preview of the look: in a house, a desk strip that follows a Home Assistant light is a room light
+            fixture on its own channel (docs/house-profile.md, "A desk strip").
           </div>
           <div className="row">
             <button className="btn" onClick={copyAsJSON}>{copied ? 'Copied!' : 'Copy as furniture JSON'}</button>
@@ -246,6 +259,12 @@ function App() {
         <TweakSection label="Control panel" />
         <TweakRadio label="Side" value={t.controlSide} options={['left', 'right']}
           onChange={v => setTweak('controlSide', v)} />
+
+        <TweakSection label="LED strip" />
+        <TweakToggle label="LED strip" value={t.ledStrip}
+          onChange={v => setTweak('ledStrip', v)} />
+        <TweakColor label="LED colour" value={t.ledColor}
+          onChange={v => setTweak('ledColor', v)} />
       </TweaksPanel>
     </>
   );

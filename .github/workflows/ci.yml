@@ -294,6 +294,18 @@ jobs:
           # the lower sleeve and its overlap stay fixed).
           set -euo pipefail
           node scripts/test-standing-desk.mjs
+      - name: Desk strip as a room light channel; Ambient row comes from rooms.json
+        run: |
+          # Asserts a named light channel (a desk LED strip bound in rooms.json
+          # to its own entity) follows brightness AND colour, not just on/off,
+          # with main/ambient/galaxy unchanged and cornice and channel entities
+          # never driving each other; that a room's single Ambient row comes
+          # from its rooms.json ambient binding rather than a geometry fixture
+          # and a named channel adds no row; and that an office with a cornice
+          # and a desk strip counts exactly two accent emitters, each on its own
+          # entity, with no floor-level fixture.
+          set -euo pipefail
+          node scripts/test-desk-strip-channel.mjs
       - name: Wall decor (framed sign + wall sconce, both kinds) builder contract
         run: |
           # Asserts the builder contract for src/furniture/wall-sign.js and
