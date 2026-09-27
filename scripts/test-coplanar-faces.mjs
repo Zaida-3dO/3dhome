@@ -73,6 +73,14 @@ function pair(THREE, gap, finishA, colorA, finishB, colorB) {
   check('self-test: identical look, flush, is exempt (not a failure)', same.fights.length === 0 && same.identical.length > 0, same);
   const strict = findCoplanarFights(THREE, pair(THREE, 0, 'matte', '#ffffff', 'matte', '#ffffff'), { tol: TOL, identicalLookExempt: false });
   check('self-test: identical look is still DETECTED when the exemption is off', strict.fights.length > 0, strict);
+  // Two coplanar emissive parts differing ONLY in emissiveIntensity shade
+  // different pixels (one brighter), so they must NOT be exempted as
+  // "identical look" -- lookKey must include emissiveIntensity.
+  const dimVsBright = pair(THREE, 0, 'emissive', '#1a2733', 'emissive', '#1a2733');
+  dimVsBright.getObjectByName('body').material.emissiveIntensity = 0.3;
+  dimVsBright.getObjectByName('overlay').material.emissiveIntensity = 1.0;
+  const ei = findCoplanarFights(THREE, dimVsBright, { tol: TOL });
+  check('self-test: same finish/colour, different emissiveIntensity is NOT exempted', ei.fights.length > 0 && ei.identical.length === 0, ei);
 }
 
 // ---- the builders ----------------------------------------------------------

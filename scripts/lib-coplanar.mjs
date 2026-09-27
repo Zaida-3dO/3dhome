@@ -13,10 +13,10 @@
  * normals) do not either -- one of them is always facing away and culled.
  *
  * `identicalLookExempt` (default true): a pair whose two materials would
- * shade every pixel IDENTICALLY -- same finish, colour, emissive, side,
- * opacity, transparency, vertex colours, roughness, metalness and textures,
- * on meshes that agree on receiveShadow -- is reported separately rather
- * than as a failure. Whichever
+ * shade every pixel IDENTICALLY -- same finish, colour, emissive, emissive
+ * intensity, side, opacity, transparency, vertex colours, roughness,
+ * metalness and textures, on meshes that agree on receiveShadow -- is
+ * reported separately rather than as a failure. Whichever
  * of the two wins a pixel, the pixel is the same colour, so there is nothing
  * to see (and in the live house both land in one merged draw anyway).
  *
@@ -67,9 +67,10 @@ function lookKey(mat, mesh) {
   const f = (mat.userData && mat.userData.finish) || (mesh && mesh.userData && mesh.userData.finish) || '?';
   const c = mat.color && mat.color.getHexString ? mat.color.getHexString() : '-';
   const e = mat.emissive && mat.emissive.getHexString ? mat.emissive.getHexString() : '-';
+  const ei = mat.emissiveIntensity;
   let tex = '';
   for (const k in mat) { const v = mat[k]; if (v && v.isTexture) tex += k + '@' + (v.uuid || 'tex'); }
-  return [f, c, e, mat.side || 0, mat.opacity, !!mat.transparent, !!mat.vertexColors, mat.roughness, mat.metalness,
+  return [f, c, e, ei, mat.side || 0, mat.opacity, !!mat.transparent, !!mat.vertexColors, mat.roughness, mat.metalness,
     mesh ? !!mesh.receiveShadow : '-', tex].join('|');
 }
 

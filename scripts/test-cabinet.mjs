@@ -43,6 +43,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const imp = rel => import(pathToFileURL(path.join(root, rel)).href);
 const THREE = await imp('vendor/three-r160/three.module.min.js');
 const C = await imp('src/furniture/cabinet.js');
+const { findCoplanarFights } = await imp('scripts/lib-coplanar.mjs');
 
 let failures = 0, passes = 0;
 function check(name, cond, detail) {
@@ -782,16 +783,22 @@ Object.keys(CABINET_PRESETS).forEach(k => {
   g.traverse(o => { if (o.isMesh && /^contents/.test(o.name)) contents.push(o); });
   const tris = contents.reduce((s, o) => s + (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3, 0);
   check(k + ': contents present and <= 150 triangles', contents.length > 0 && tris <= 150, { n: contents.length, tris });
-  const walls = lining.concat(strip);
-  const clear = { x0: -Infinity, x1: Infinity };
   const glassPane = meshesNamed(g, 'cabinetGlassDoor')[0];
   const paneBack = glassPane ? mbox(glassPane).min.z : Infinity;
   const ceil = Math.min(...meshesNamed(g, 'interiorLining').map(m => mbox(m).min.y).filter(y => y > 1.0));
-  const W = p.width / 100;
+  // The section's own clear x-range: the inner face of whichever side wall
+  // bounds it on each side -- a divider where the section has no carcass
+  // side, or the lining against the carcass/glass-side-panel where it does
+  // -- not the whole cabinet width (which would pass content that pokes
+  // through that wall into a neighbouring bay or the carcass).
+  const sideWalls = meshesNamed(g, 'interiorDivider').concat(meshesNamed(g, 'interiorLining'))
+    .filter(m => { const b = mbox(m); return b.max.x - b.min.x < 0.02; }); // thin in x = a side wall, not the back/ceiling
+  const clearX0 = sideWalls.length ? Math.max(...sideWalls.filter(m => mbox(m).max.x <= 0).map(m => mbox(m).max.x)) : -Infinity;
+  const clearX1 = sideWalls.length ? Math.min(...sideWalls.filter(m => mbox(m).min.x >= 0).map(m => mbox(m).min.x)) : Infinity;
   const inside = contents.filter(o => {
     const b = mbox(o);
     return b.max.z <= paneBack - 0.002 && b.max.y <= ceil + 1e-6 && b.min.y >= mbox(floor).max.y - 0.001 &&
-      b.min.x >= -W / 2 && b.max.x <= W / 2;
+      b.min.x >= clearX0 - 1e-6 && b.max.x <= clearX1 + 1e-6;
   });
   check(k + ': every content piece is inside the section (behind the glass, under the ceiling, on the floor)',
     inside.length === contents.length, contents.filter(o => inside.indexOf(o) === -1).map(o => [o.name, mbox(o)]));
@@ -807,6 +814,36 @@ Object.keys(CABINET_PRESETS).forEach(k => {
   let lowContents = 0;
   low.traverse(o => { if (o.isMesh && /^contents/.test(o.name)) lowContents++; });
   check(k + ': contents dropped at low detail', lowContents === 0, lowContents);
+});
+
+// 15g2. The display interior WITHOUT overlay fronts (PR #74 code-review
+// follow-up dc8a2951 #1): buildInterior used to take zFront from the carcass
+// (== depth when overlayFronts is false), well in front of the glass pane's
+// own back face, so the floor/lining/divider/shelves ran ~3 cm through the
+// glass. zFront must now clear the pane's own back face instead.
+['tallDisplayCabinet', 'tallDisplayCabinetMirror'].forEach(k => {
+  [{}, { handles: false }].forEach(extra => {
+    const p = Object.assign({}, CABINET_PRESETS[k].params, { overlayFronts: false }, extra);
+    const g = C.build(THREE, p, { detail: 'full' });
+    const glassPane = meshesNamed(g, 'cabinetGlassDoor')[0];
+    const label = k + (extra.handles === false ? ' (handles:false)' : '');
+    if (!glassPane) { check(label + ': has a glass pane to check against', false); return; }
+    const paneBackZ = mbox(glassPane).min.z;
+    const interiorNames = ['interiorFloor', 'interiorLining', 'interiorDivider', 'interiorShelf'];
+    const poking = [];
+    interiorNames.forEach(n => meshesNamed(g, n).forEach(m => {
+      if (mbox(m).max.z > paneBackZ + 1e-6) poking.push([n, mbox(m).max.z, paneBackZ]);
+    }));
+    check(label + ': no interior part reaches the glass pane\'s back face', poking.length === 0, poking);
+    // Scoped to glass/interior parts: a pre-existing, unrelated doorHandle
+    // <-> carcassSide fight on this preset (present on master too, tracked
+    // separately) is out of scope for this fix and must not fail this check.
+    const r = findCoplanarFights(THREE, g, { tol: 0.001 });
+    const glassOrInterior = f => /^(cabinetGlassDoor|interior)/.test(f.a) || /^(cabinetGlassDoor|interior)/.test(f.b);
+    const relevant = r.fights.filter(glassOrInterior);
+    check(label + ': coplanar detector reports 0 glass/interior fights', relevant.length === 0,
+      relevant.slice(0, 6).map(f => f.a + ' <-> ' + f.b));
+  });
 });
 
 // 15h. The LED bedside tables (scout 80edd3ff): no plinth but a 1 cm shadow
