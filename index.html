@@ -54,12 +54,18 @@
     .back-btn svg { width: 16px; height: 16px; }
 
     /* Title overlay */
+    /* The title sits over the 3D sky, which follows the time of day (a light
+       blue at noon, near-black at night). A translucent dark plate keeps the
+       title and hint readable over ANY sky: white on the plate composited over
+       the brightest noon sky is still > 4.5:1 (task 24e8b3d3). */
     .title-overlay {
-      position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 30;
+      position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 30;
       text-align: center; pointer-events: none;
+      padding: 5px 14px 6px; border-radius: 10px;
+      background: rgba(10, 12, 20, 0.62);
     }
-    .title-overlay h1 { font-size: 18px; font-weight: 700; text-shadow: 0 2px 8px rgba(0,0,0,0.6); }
-    .title-overlay p { font-size: 11px; opacity: 0.5; margin-top: 2px; }
+    .title-overlay h1 { font-size: 18px; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+    .title-overlay p { font-size: 11px; color: rgba(255,255,255,0.82); margin-top: 2px; }
 
     /* Compass overlay — pinned bottom-right of the view. OFF by default
        (display:none). The whole rose (#compass-rose) rotates each frame to keep

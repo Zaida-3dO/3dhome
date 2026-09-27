@@ -646,6 +646,8 @@ jobs:
         run: node scripts/test-light-color.mjs
       - name: Real sun -- solar position, daylight curve, window sun pools, sun.sun, ?time=
         run: node scripts/test-sun-position.mjs
+      - name: Curtain daylight -- sun only through the open part, floor headroom, title contrast
+        run: node scripts/test-curtain-daylight.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

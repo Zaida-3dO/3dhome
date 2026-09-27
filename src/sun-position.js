@@ -286,3 +286,159 @@ export function parseSunTime(time, date, now) {
   if (out.getDate() !== d || out.getMonth() !== mo) return null;
   return out;
 }
+
+// ---- Curtains: light only through the open part ------------------------------
+//
+// A curtain does not dim a window evenly: it covers part of it. The light that
+// reaches the floor is the window's beam split by each curtain layer into what
+// passed through the GAP (unchanged) and what passed through the FABRIC
+// (times that fabric's transmission, tinted by a sheer). A blackout's share is
+// dropped outright, so a 10%-open blackout leaves a sliver-shaped pool,
+// projected along the sun ray exactly as the full window's is.
+
+/** Pieces dimmer than this are not drawn (a closed blackout passes 0.02). */
+export const MIN_PIECE_TRANSMIT = 0.03;
+
+/**
+ * Union of [lo, hi] intervals, sorted, overlaps merged. Empty and inverted
+ * intervals are dropped.
+ */
+export function intervalUnion(intervals) {
+  const s = (intervals || []).filter(iv => iv && iv[1] > iv[0]).map(iv => [iv[0], iv[1]])
+    .sort((a, b) => a[0] - b[0]);
+  const out = [];
+  s.forEach(iv => {
+    const last = out[out.length - 1];
+    if (last && iv[0] <= last[1]) last[1] = Math.max(last[1], iv[1]);
+    else out.push(iv);
+  });
+  return out;
+}
+
+/** The parts of [lo, hi] NOT covered by `covered` (any intervals). */
+export function intervalComplement(covered, lo, hi) {
+  const out = [];
+  let cur = lo;
+  intervalUnion(covered).forEach(([a, b]) => {
+    if (b <= lo || a >= hi) return;
+    if (a > cur) out.push([cur, Math.min(a, hi)]);
+    cur = Math.max(cur, b);
+  });
+  if (cur < hi) out.push([cur, hi]);
+  return out;
+}
+
+const mulTint = (a, b) => [a[0] * b[0], a[1] * b[1], a[2] * b[2]];
+
+/**
+ * The window's light on the floor, split by its curtains.
+ *
+ * @param {object} o  everything windowSunPool takes (outer, inner, inward,
+ *   toSun, room, floorY), plus
+ * @param {object[]} o.layers  one per curtain, nearest the glass first:
+ *   { covered: [[lo, hi], ...] along-wall cm the fabric covers,
+ *     across: the curtain's hanging line, cm (plan, across the wall),
+ *     transmit: 0..1 through the fabric, tint: [r, g, b] }
+ * @param {function} o.rect  (lo, hi, across) -> 4 world [x, y, z] corners of
+ *   a full-height rectangle on that plane, round the rectangle
+ * @param {number} o.span  [lo, hi] along-wall cm the gaps are measured in
+ * @returns {{poly: number[][], transmit: number, tint: number[]}[]} lit
+ *   pieces on the floor (world [x, z]), clipped to the room. Empty when no
+ *   direct sun comes in at all.
+ */
+export function windowLightPieces(o) {
+  const toSun = o.toSun, floorY = o.floorY || 0;
+  if (!(toSun[1] > 0.02)) return [];
+  const inDot = -(toSun[0] * o.inward[0] + toSun[2] * o.inward[1]);
+  if (!(inDot > 1e-3)) return [];
+  const proj = pts => pts.map(p => projectToFloor(p, toSun, floorY));
+  const beam = clipPolygon(proj(o.outer), proj(o.inner));
+  if (beam.length < 3 || polygonArea(beam) < 1e-4) return [];
+  let pieces = [{ poly: beam, transmit: 1, tint: [1, 1, 1] }];
+  (o.layers || []).forEach(layer => {
+    const covered = intervalUnion(layer.covered);
+    if (!covered.length) return;
+    const open = intervalComplement(covered, o.span[0], o.span[1]);
+    const shapes = [];
+    open.forEach(([lo, hi]) => shapes.push({ poly: proj(o.rect(lo, hi, layer.across)), fabric: false }));
+    covered.forEach(([lo, hi]) => shapes.push({ poly: proj(o.rect(lo, hi, layer.across)), fabric: true }));
+    const next = [];
+    pieces.forEach(pc => {
+      shapes.forEach(sh => {
+        const transmit = sh.fabric ? pc.transmit * layer.transmit : pc.transmit;
+        if (transmit < MIN_PIECE_TRANSMIT) return;
+        const poly = clipPolygon(pc.poly, sh.poly);
+        if (poly.length < 3 || polygonArea(poly) < 1e-5) return;
+        next.push({ poly, transmit, tint: sh.fabric ? mulTint(pc.tint, layer.tint) : pc.tint });
+      });
+    });
+    pieces = next;
+  });
+  const out = [];
+  pieces.forEach(pc => {
+    const lit = clipPolygon(o.room, pc.poly);
+    if (lit.length >= 3 && polygonArea(lit) >= 1e-4) out.push({ poly: lit, transmit: pc.transmit, tint: pc.tint });
+  });
+  return out;
+}
+
+/**
+ * The window's width [lo, hi] split into runs of equal curtain cover:
+ * [{ lo, hi, transmit, tint }] (the sky pool follows the same openings).
+ * Runs dimmer than MIN_PIECE_TRANSMIT are dropped.
+ */
+export function windowSegments(lo, hi, layers) {
+  const cuts = [lo, hi];
+  const ls = (layers || []).map(l => Object.assign({}, l, { covered: intervalUnion(l.covered) }));
+  ls.forEach(l => l.covered.forEach(([a, b]) => {
+    if (a > lo && a < hi) cuts.push(a);
+    if (b > lo && b < hi) cuts.push(b);
+  }));
+  cuts.sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const a = cuts[i], b = cuts[i + 1];
+    if (b - a < 1e-6) continue;
+    const mid = (a + b) / 2;
+    let transmit = 1, tint = [1, 1, 1];
+    ls.forEach(l => {
+      if (l.covered.some(([x, y]) => mid > x && mid < y)) { transmit *= l.transmit; tint = mulTint(tint, l.tint); }
+    });
+    if (transmit < MIN_PIECE_TRANSMIT) continue;
+    const last = out[out.length - 1];
+    if (last && Math.abs(last.hi - a) < 1e-9 && last.transmit === transmit &&
+        last.tint.every((c, k) => c === tint[k])) last.hi = b;
+    else out.push({ lo: a, hi: b, transmit, tint });
+  }
+  return out;
+}
+
+// ---- Tone-mapping headroom -------------------------------------------------------
+//
+// The pools blend multiply-add: floor * (1 + gain). On a light floor that runs
+// past 1 and clips to flat white (the office's white rug at noon). The fixed
+// blend cannot compress (it has no dst^2 term), so the gain is capped per room
+// by the brightest thing on its floor: its brightest surface, as displayed,
+// times (1 + gain) stays under POOL_HEADROOM.
+
+/** Brightest a pooled floor may display (0..1), leaving texture visible. */
+export const POOL_HEADROOM = 0.98;
+/** Displayed value (95th percentile, max channel) of a white-rug floor at
+ *  13:00 on ultra BEFORE the pool is added, measured on the reference render:
+ *  150/255. The pile texture's darker 95 % then stays under the clip. */
+export const FLOOR_DISPLAY_AT_WHITE = 0.59;
+
+/** Relative luminance-ish brightness (max channel) of a 0xRRGGBB colour, 0..1. */
+export function colourBrightness(hex) {
+  const h = hex | 0;
+  return Math.max((h >> 16) & 255, (h >> 8) & 255, h & 255) / 255;
+}
+
+/**
+ * The pool gain for a room: `base`, capped so its brightest floor surface
+ * (albedo 0..1, see colourBrightness) keeps texture.
+ */
+export function poolGainForFloor(base, brightestAlbedo) {
+  const shown = FLOOR_DISPLAY_AT_WHITE * Math.max(0.05, Math.min(1, brightestAlbedo));
+  return Math.max(0.15, Math.min(base, POOL_HEADROOM / shown - 1));
+}
