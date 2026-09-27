@@ -41,16 +41,22 @@
 <div id="root"></div>
 
 <!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
-     scripts/test-spec-pages.mjs). Both are the one `plant` registry type, but a
-     potted plant and a wall planter have different controls and different
-     names, so they are two OBJECTS; the measured presets are their VARIANTS. -->
+     scripts/test-spec-pages.mjs). All are the one `plant` registry type, but
+     each KIND has its own controls and its own name, so each kind is an
+     OBJECT (the corn plant keeps the id "potted-plant" so old links land);
+     the presets of a kind are its VARIANTS. -->
 <script type="application/json" id="spec-manifest">
 {
   "title": "Plants",
   "description": "All units cm. Procedural potted and wall-mounted plants with seeded (deterministic) leaves. Pick an object and a variant, then fine-tune in the Tweaks panel.",
   "objects": [
-    { "id": "potted-plant", "label": "Potted plant", "types": ["plant"] },
-    { "id": "wall-planter", "label": "Wall planter", "types": ["plant"] }
+    { "id": "potted-plant", "label": "Corn plant", "types": ["plant"] },
+    { "id": "wall-planter", "label": "Wall planter", "types": ["plant"] },
+    { "id": "peace-lily", "label": "Peace lily", "types": ["plant"] },
+    { "id": "snake-plant", "label": "Snake plant", "types": ["plant"] },
+    { "id": "pothos", "label": "Pothos", "types": ["plant"] },
+    { "id": "ficus", "label": "Ficus", "types": ["plant"] },
+    { "id": "jade", "label": "Jade", "types": ["plant"] }
   ]
 }
 </script>
@@ -89,13 +95,19 @@
    fixture, not a record of any particular building.
    ─────────────────────────────────────────────────────────────────────
 
-   Two kinds, picked as two OBJECTS in the shared picker bar (SpecPage):
-     corn-plant    a potted Dracaena fragrans: woven/ribbed tapered pot,
-                   several staggered-height canes, each topped with a
-                   strap-leaf rosette. Free-standing.
-     wall-planter  a hanging faceted white ceramic diamond with a thin
-                   gold/brass wire frame, holding spiky sansevieria-style
-                   leaves. Wall-mounted (back at z=0).
+   Seven kinds, each an OBJECT in the shared picker bar (SpecPage):
+     corn-plant    a potted Dracaena: an egg-shaped ribbed vase, three bare
+                   banded canes crowned by tufts of long strap leaves.
+     wall-planter  a geometric wall planter: a ceramic lower half with a
+                   flat back and a brass wire diamond outline; spiky,
+                   succulent or snake-plant contents. Wall-mounted.
+     peace-lily    grown in water in a clear glass bubble vase, roots
+                   visible, broad glossy leaves and one white spathe.
+     snake-plant   stiff sword leaves with a pale margin.
+     pothos        heart leaves: upright on arching stems, or trailing
+                   vines that hang `trail` cm below the pot.
+     ficus         a small thick-trunk tree with clusters of small leaves.
+     jade          a succulent: compact rosettes of fleshy pads.
 
    The geometry itself is NOT built here -- it lives in
    src/furniture/plant.js (build / buildPlant), loaded above as a real ES
@@ -114,18 +126,26 @@ const { DEFAULTS, PRESETS } = window.FurniturePlant;
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "preset": "corn-plant-tall",
   "kind": "corn-plant",
-  "width": 40,
-  "depth": 40,
+  "width": 60,
+  "depth": 59.5,
   "height": 166,
+  "potStyle": "egg",
   "potHeight": 56,
   "potTopDiameter": 30,
-  "potColor": "#9c7c4a",
+  "potColor": "#a67c4e",
   "plantHeight": 110,
   "stemCount": 3,
-  "spread": 40,
-  "leafColor": "#33502a",
+  "spread": 60,
+  "leafLength": 45,
+  "leafWidth": 6,
   "leafCount": 5,
+  "leafColor": "#1f3a1c",
+  "accentColor": "#d8d3a8",
+  "habit": "upright",
+  "trail": 0,
+  "glassColor": "#dcecef",
   "frameColor": "#b8945a",
+  "contents": "spiky",
   "seed": 7,
   "detail": "full"
 }/*EDITMODE-END*/;
@@ -140,15 +160,23 @@ function paramsFromTweaks(t) {
     width: t.width,
     depth: t.depth,
     height: t.height,
+    potStyle: t.potStyle,
     potHeight: t.potHeight,
     potTopDiameter: t.potTopDiameter,
     potColor: t.potColor,
     plantHeight: t.plantHeight,
     stemCount: t.stemCount,
     spread: t.spread,
-    leafColor: t.leafColor,
+    leafLength: t.leafLength,
+    leafWidth: t.leafWidth,
     leafCount: t.leafCount,
+    leafColor: t.leafColor,
+    accentColor: t.accentColor,
+    habit: t.habit,
+    trail: t.trail,
+    glassColor: t.glassColor,
     frameColor: t.frameColor,
+    contents: t.contents,
     seed: t.seed,
   };
 }
@@ -176,6 +204,26 @@ function buildPlantModel(t, group, THREE, ctx) {
   ctx.topY = plantGroup.userData.topY;
 }
 
+// Readable variant labels (the chip text); the preset ids stay the URL keys.
+const VARIANT_LABELS = {
+  'corn-plant-tall': 'Tall, ribbed egg vase',
+  'wall-planter-large': 'Large, spiky leaves',
+  'wall-planter-small': 'Small, succulent',
+  'wall-planter-large-snake': 'Large, snake plant',
+  'peace-lily-glass-vase': 'In a glass bubble vase (water)',
+  'snake-plant-small': 'Small, tapered pot',
+  'pothos-upright-ribbed-pot': 'Upright, ribbed footed pot',
+  'pothos-trailing': 'Trailing vines',
+  'ficus-bowl-pot': 'Small tree, bowl pot on a saucer',
+  'jade-small': 'Small, glossy pot',
+};
+// Manifest object id <-> builder kind (the corn plant keeps "potted-plant").
+const OBJECT_KIND = {
+  'potted-plant': 'corn-plant', 'wall-planter': 'wall-planter', 'peace-lily': 'peace-lily',
+  'snake-plant': 'snake-plant', 'pothos': 'pothos', 'ficus': 'ficus', 'jade': 'jade',
+};
+const KIND_OBJECT = Object.fromEntries(Object.entries(OBJECT_KIND).map(([o, k]) => [k, o]));
+
 // ============== App ==============
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -186,7 +234,9 @@ function App() {
   const applyPreset = (name) => {
     const preset = PRESETS[name];
     if (!preset) return;
-    setTweak(Object.assign({ preset: name }, preset));
+    // FULLY resolved: DEFAULTS first, so a key the previous preset set (a
+    // trail, a pot style) never leaks into this one.
+    setTweak(Object.assign({ preset: name }, DEFAULTS, preset));
   };
 
   const copyJson = () => {
@@ -197,11 +247,12 @@ function App() {
 
   const isWallPlanter = t.kind === 'wall-planter';
 
-  // OBJECT <-> kind; each object's VARIANTS are the presets of its kind.
-  const objectId = isWallPlanter ? 'wall-planter' : 'potted-plant';
-  const kindOf = id => (id === 'wall-planter' ? 'wall-planter' : 'corn-plant');
+  // OBJECT <-> kind; each object's VARIANTS are the presets of its kind,
+  // with FULLY resolved params (DEFAULTS + the preset).
+  const objectId = KIND_OBJECT[t.kind] || 'potted-plant';
+  const kindOf = id => OBJECT_KIND[id] || 'corn-plant';
   const variantsOf = kind => Object.keys(PRESETS).filter(n => PRESETS[n].kind === kind)
-    .map(n => ({ id: n, label: n, params: PRESETS[n] }));
+    .map(n => ({ id: n, label: VARIANT_LABELS[n] || n, params: Object.assign({}, DEFAULTS, PRESETS[n]) }));
 
   return (
     <SpecPage objectId={objectId}
@@ -212,10 +263,14 @@ function App() {
         <div className="card">
           <h2>Where the variants come from</h2>
           <div className="legend">
-            corn-plant-tall is the plant between the two home-office desks (item 889bf6ce): 3 canes,
-            56cm woven pot, 110cm plant height, ~40cm widest leaf spread. wall-planter-large/-small are
-            the bedroom wall planters: white faceted ceramic diamonds with a thin gold wire frame,
-            holding snake-plant (large) or succulent (small) leaves, mounted back-to-wall.
+            The corn plant is measured: 56 cm ribbed egg vase (rim 30); three bare banded canes whose tops
+            stand ~79 / ~33 / ~13 cm above the rim, each crowned by a tuft of 40-50 cm strap leaves, the top
+            tuft reaching ~110 above the rim and ~60 cm across. The wall-planter variants are the two common
+            retail sizes of this planter shape (22.9 x 9.5 x 38.1 and 11 x 9.8 x 14.3, wire included).
+            <b>Every other variant is ESTIMATED from photographs</b> against objects of known size -- correct
+            the sizes before they are placed. The peace lily grows in water (glass, kept as its own draw).
+            The trailing pothos hangs 50 cm below its pot, EXACTLY (the pot base is at y = trail): place it
+            with elevation = surface - trail.
           </div>
         </div>
 
@@ -229,15 +284,17 @@ function App() {
               <tr><td>Depth (envelope)</td><td className="num">{t.depth}</td><td><b>Variable</b> — final bbox depth, back at z=0</td></tr>
               <tr><td>Height (envelope)</td><td className="num">{t.height}</td><td><b>Variable</b> — final bbox height, bottom at y=0</td></tr>
               {!isWallPlanter && <>
+                <tr><td>Pot style</td><td className="num">{t.potStyle}</td><td>Proportioning</td></tr>
                 <tr><td>Pot height</td><td className="num">{t.potHeight}</td><td>Proportioning</td></tr>
                 <tr><td>Pot opening diameter</td><td className="num">{t.potTopDiameter}</td><td>Proportioning</td></tr>
                 <tr><td>Plant height (above pot)</td><td className="num">{t.plantHeight}</td><td>Proportioning</td></tr>
                 <tr><td>Stem/cane count</td><td className="num">{t.stemCount}</td><td>Proportioning</td></tr>
                 <tr><td>Widest leaf spread</td><td className="num">{t.spread}</td><td>Proportioning</td></tr>
+                <tr><td>Leaf length x width</td><td className="num">{t.leafLength} x {t.leafWidth}</td><td>Proportioning</td></tr>
+                {t.kind === 'pothos' && <tr><td>Habit / trail</td><td className="num">{t.habit} / {t.trail}</td><td>Trail = cm below the pot base</td></tr>}
               </>}
               {isWallPlanter && <>
-                <tr><td>Leaf height</td><td className="num">{t.plantHeight}</td><td>Proportioning</td></tr>
-                <tr><td>Leaf count</td><td className="num">{t.leafCount}</td><td>Proportioning</td></tr>
+                <tr><td>Contents</td><td className="num">{t.contents}</td><td><b>Variable</b></td></tr>
               </>}
               <tr><td>Seed</td><td className="num">{t.seed}</td><td><b>Variable</b> — reshuffles leaf layout deterministically</td></tr>
             </tbody>
@@ -273,45 +330,66 @@ function App() {
 
       <TweaksPanel>
         <TweakSection label="Envelope (final bounding box)" />
-        <TweakSlider label="Width" value={t.width} min={8} max={80} step={1} unit="cm"
+        <TweakSlider label="Width" value={t.width} min={8} max={100} step={0.5} unit="cm"
           onChange={v => setTweak('width', v)} />
-        <TweakSlider label="Depth" value={t.depth} min={8} max={80} step={1} unit="cm"
+        <TweakSlider label="Depth" value={t.depth} min={5} max={100} step={0.5} unit="cm"
           onChange={v => setTweak('depth', v)} />
-        <TweakSlider label="Height" value={t.height} min={15} max={220} step={1} unit="cm"
+        <TweakSlider label="Height" value={t.height} min={10} max={220} step={0.5} unit="cm"
           onChange={v => setTweak('height', v)} />
 
         {!isWallPlanter && <>
-          <TweakSection label="Corn plant — proportioning" />
-          <TweakSlider label="Pot height" value={t.potHeight} min={20} max={100} step={1} unit="cm"
+          <TweakSection label="Pot" />
+          <TweakSelect label="Pot style" value={t.potStyle}
+            options={window.FurniturePlant.POT_STYLES.slice()}
+            onChange={v => setTweak('potStyle', v)} />
+          <TweakSlider label="Pot height" value={t.potHeight} min={5} max={100} step={1} unit="cm"
             onChange={v => setTweak('potHeight', v)} />
-          <TweakSlider label="Pot opening diameter" value={t.potTopDiameter} min={10} max={50} step={1} unit="cm"
+          <TweakSlider label="Pot opening diameter" value={t.potTopDiameter} min={5} max={50} step={1} unit="cm"
             onChange={v => setTweak('potTopDiameter', v)} />
-          <TweakSlider label="Plant height" value={t.plantHeight} min={40} max={200} step={1} unit="cm"
-            onChange={v => setTweak('plantHeight', v)} />
-          <TweakSlider label="Stem/cane count" value={t.stemCount} min={1} max={5} step={1}
-            onChange={v => setTweak('stemCount', v)} />
-          <TweakSlider label="Widest leaf spread" value={t.spread} min={15} max={80} step={1} unit="cm"
-            onChange={v => setTweak('spread', v)} />
-          <TweakSection label="Corn plant — colours" />
           <TweakColor label="Pot colour" value={t.potColor}
             onChange={v => setTweak('potColor', v)} />
+          <TweakSection label="Foliage (proportioning)" />
+          <TweakSlider label="Plant height (above pot)" value={t.plantHeight} min={5} max={200} step={0.5} unit="cm"
+            onChange={v => setTweak('plantHeight', v)} />
+          <TweakSlider label="Stems / canes / branches" value={t.stemCount} min={1} max={8} step={1}
+            onChange={v => setTweak('stemCount', v)} />
+          <TweakSlider label="Widest leaf spread" value={t.spread} min={10} max={100} step={1} unit="cm"
+            onChange={v => setTweak('spread', v)} />
+          <TweakSlider label="Leaf length" value={t.leafLength} min={2} max={70} step={0.5} unit="cm"
+            onChange={v => setTweak('leafLength', v)} />
+          <TweakSlider label="Leaf width" value={t.leafWidth} min={1} max={15} step={0.1} unit="cm"
+            onChange={v => setTweak('leafWidth', v)} />
+          {t.kind !== 'corn-plant' && <TweakSlider label="Leaf count" value={t.leafCount} min={1} max={60} step={1}
+            onChange={v => setTweak('leafCount', v)} />}
+          {t.kind === 'pothos' && <>
+            <TweakRadio label="Habit" value={t.habit}
+              options={[{ value: 'upright', label: 'Upright' }, { value: 'trailing', label: 'Trailing' }]}
+              onChange={v => setTweak('habit', v)} />
+            <TweakSlider label="Trail below pot" value={t.trail} min={0} max={120} step={1} unit="cm"
+              onChange={v => setTweak('trail', v)} />
+          </>}
+          <TweakSection label="Colours" />
           <TweakColor label="Leaf colour" value={t.leafColor}
             onChange={v => setTweak('leafColor', v)} />
+          {(t.kind === 'peace-lily' || t.kind === 'snake-plant') && <TweakColor label={t.kind === 'peace-lily' ? 'Variegation' : 'Leaf margin'} value={t.accentColor}
+            onChange={v => setTweak('accentColor', v)} />}
+          {t.kind === 'peace-lily' && <TweakColor label="Glass tint" value={t.glassColor}
+            onChange={v => setTweak('glassColor', v)} />}
         </>}
 
         {isWallPlanter && <>
-          <TweakSection label="Wall planter — proportioning" />
-          <TweakSlider label="Leaf height" value={t.plantHeight} min={10} max={60} step={1} unit="cm"
-            onChange={v => setTweak('plantHeight', v)} />
-          <TweakSlider label="Leaf count" value={t.leafCount} min={2} max={10} step={1}
-            onChange={v => setTweak('leafCount', v)} />
-          <TweakSection label="Wall planter — colours" />
+          <TweakSection label="Wall planter" />
+          <TweakSelect label="Contents" value={t.contents}
+            options={window.FurniturePlant.WALL_CONTENTS.slice()}
+            onChange={v => setTweak('contents', v)} />
           <TweakColor label="Ceramic colour" value={t.potColor}
             onChange={v => setTweak('potColor', v)} />
           <TweakColor label="Wire frame colour" value={t.frameColor}
             onChange={v => setTweak('frameColor', v)} />
           <TweakColor label="Leaf colour" value={t.leafColor}
             onChange={v => setTweak('leafColor', v)} />
+          {t.contents === 'snake-plant' && <TweakColor label="Leaf margin" value={t.accentColor}
+            onChange={v => setTweak('accentColor', v)} />}
         </>}
 
         <TweakSection label="Leaf layout" />
