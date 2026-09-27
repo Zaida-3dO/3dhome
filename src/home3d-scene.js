@@ -16,6 +16,7 @@ import {
   MOBILE_START_RATIO, MIN_FPS_CAP, BLOCK_MS, COLD_FRAME_MS, createProbeScheduler
 } from './adaptive-quality.js';
 import { collapseEmitters } from './light-merge.js';
+import { wallpaperFaceAxis, overlayFace, overlayUOffset } from './wallpaper-face.js';
 import { HouseLoader } from './house-loader.js';
 import {
   insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, printYaw, WALK_DEFAULTS,
@@ -1078,29 +1079,6 @@ export const Home3DScene = (() => {
     const wallTexLoader = new THREE.TextureLoader();
 
     /**
-     * Compass side -> local BoxGeometry face for a wall.
-     *
-     * A wall box is built along its own long axis. For a wall running east-west
-     * (x1 != x2, y1 == y2) the box's local +z/-z faces point south/north; for a
-     * wall running north-south the local +x/-x faces point east/west. Returns
-     * 'px' or 'nx' — the two the material builder below understands — or null
-     * when the requested side is an END of the wall rather than a long face.
-     */
-    function sideToFaceAxis(wall, side) {
-      const horizontal = Math.abs(wall.y1 - wall.y2) < Math.abs(wall.x1 - wall.x2);
-      if (horizontal) {
-        // Long faces look north and south.
-        if (side === 'south') return 'px';
-        if (side === 'north') return 'nx';
-      } else {
-        // Long faces look east and west.
-        if (side === 'east') return 'px';
-        if (side === 'west') return 'nx';
-      }
-      return null;
-    }
-
-    /**
      * The stretch of a north-south wall's line that a room's polygon fronts,
      * as [minY, maxY] in plan cm — or null if the room does not front it.
      *
@@ -1182,7 +1160,9 @@ export const Home3DScene = (() => {
       // whose home_office face IS fronted end to end, keeps the array — as does
       // any wall the overlay pass would not build at all.
       if (_overlayPassOwns(wall, ft.clipToRoom)) return;
-      const faceAxis = sideToFaceAxis(wall, ft.side);
+      // Which of the box's long faces looks toward `side` depends on the way
+      // the wall was drawn as well as on the side (src/wallpaper-face.js).
+      const faceAxis = wallpaperFaceAxis(wall, ft.side, tx, tz);
       if (!faceAxis) {
         console.warn(
           '[Home3DScene] wall ' + wid + ' asks for a texture on its "' + ft.side + '" face, but that ' +
@@ -1575,14 +1555,20 @@ export const Home3DScene = (() => {
         const _span = _roomEdgeSpanOnWall(wall22, _overlaySpec.clipToRoom);
         const northY = _span ? _span[0] : _clipRoom.y1;
         const southY = _span ? _span[1] : _clipRoom.y2;
-        // #22 rotation is exactly 180deg (dx=0, dz<0 => atan2 = pi), but a box
-        // rotated by pi stays axis-aligned in world space (thickness spans world
-        // X, length spans world Z, mirrored). West (lower world X) = hallway
-        // side; the overlay needs no rotation, only correct X placement.
+        // The overlay panels are unrotated boxes (thickness along world X,
+        // length along world Z), so only two things depend on the profile's
+        // `side`: which world-X face they sit proud of, and which way along Z
+        // the image runs so it reads correctly from that side. Both come from
+        // src/wallpaper-face.js -- this used to hardcode the WEST face whatever
+        // `side` said.
         const wallThicknessM = (wall22.thickness != null ? wall22.thickness : WT_CM) * S;
-        const centerlineX = tx(wall22.x1);
-        const faceX = centerlineX - wallThicknessM / 2;      // hallway-facing (west) face
-        const overlayX = faceX - panelThicknessM / 2;        // sit the overlay just proud of it
+        const _face = overlayFace(wall22, _overlaySpec.side, tx, tz, wallThicknessM, panelThicknessM);
+        if (!_face) {
+          console.warn('[Home3DScene] wall ' + _wid + ' asks for a texture on its "' + _overlaySpec.side +
+            '" face, but that is an END of the wall, not one of its two long faces — ignored.');
+          return;
+        }
+        const overlayX = _face.overlayX;                     // just proud of the papered face
         const overlayPanels = []; // {tex} collected for deferred image attach
         // STRETCH-TO-FIT, ONE COPY, NO TILING. the monstera is a single mural
         // image, not a repeating pattern — so the wallpaper maps as ONE continuous
@@ -1598,6 +1584,7 @@ export const Home3DScene = (() => {
         const faceZ0 = tz(northY), faceZ1 = tz(southY);   // world-Z extent of the hallway face
         const faceLen = Math.abs(faceZ1 - faceZ0);         // total run length (m)
         const faceZMin = Math.min(faceZ0, faceZ1);         // near (min-Z) edge of the face
+        const faceZMax = Math.max(faceZ0, faceZ1);         // far (max-Z) edge of the face
         const faceY0 = 0, faceY1 = WH;                     // floor .. ceiling underside
         const faceH = faceY1 - faceY0;
         // Build one overlay panel covering [a,b] (cm along Z) at vertical centre
@@ -1611,7 +1598,7 @@ export const Home3DScene = (() => {
           tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping; // never tile
           // U spans this panel's Z-slice of the whole face; V its Y-slice.
           const uRepeat = lm / faceLen;
-          const uOffset = (zc - lm / 2 - faceZMin) / faceLen;
+          const uOffset = overlayUOffset(_face, zc - lm / 2, zc + lm / 2, faceZMin, faceZMax);
           const yBottom = yc - h / 2;
           const vRepeat = h / faceH;
           const vOffset = (yBottom - faceY0) / faceH;        // V=0 at floor
