@@ -336,6 +336,13 @@ const W = A.WINDOW;
   const desk = A.createController({ floor: 1, startRatio: 2, maxRatio: 2, level: 4, ctx: { maxLevel: 4, mobile: false, shadows: 'auto' } });
   check('30 Hz throttled high-DPI desktop: ends at DPR 2 (main\'s behaviour)', desk.jumpToStart().to === 2 && desk.ceiling === 2);
   check('jumpToStart is idempotent', desk.jumpToStart() === null);
+  // Re-measure: forget() drops the proposal and the block, so nothing in
+  // memory can re-write them.
+  const f = tabletController({ blocked: { level: 3, until: 1e15 } });
+  run(f, frames(8, 6 * W));
+  const had = f.pending;
+  f.forget();
+  check('forget() clears the pending proposal and the block', had === 2 && f.pending === null && f.blocked === null, { had });
   check('jumpToStart honours a stored cap', tabletController({ dprCap: 1.25 }).jumpToStart().to === 1.25);
 }
 
@@ -409,6 +416,11 @@ const W = A.WINDOW;
   check('scene: when frames cannot be trusted it jumps to the start ratio unmeasured',
     /if \(throttleNoted \|\| now - warmUntil > UNMEASURED_JUMP_MS\) jumpUnmeasured\(\);/.test(src) &&
     /const d = adaptive && adaptive\.jumpToStart\(\);/.test(src));
+  check('scene: Re-measure cannot be undone later in the session (visual review r1 L1)',
+    /if \(!adaptive \|\| qualityForgotten\) return;/.test(src) &&
+    /qualityForgotten = true;\s*adaptive\.forget\(\);[^\n]*\n\s*dprCapState = null;\s*const ok = clearState/.test(src));
+  check('scene: "capped from" only when this load is built below what compiles (visual review r1 L2)',
+    /\$\{!tierInfo\.overridden && tier !== tierInfo\.compileTier \? '; capped from ' \+ tierInfo\.compileTier : ''\}/.test(src));
   check('scene: resetQuality touches nothing with adaptation off', /resetQuality\(\) \{\s*if \(!adaptive\) return false;/.test(src));
   const page = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   check('page: Re-measure is only offered with adaptation on',

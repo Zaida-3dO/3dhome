@@ -3421,7 +3421,9 @@ export const Home3DScene = (() => {
       console.info(
         `[Home3DScene] Quality tier=${tier} ` +
         `(MAX_FRAGMENT_UNIFORM_VECTORS=${maxFragU}; mobileGpu=${gpu.mobileGpu} [${gpu.reason}]` +
-        `${tierInfo.capped ? '; capped from ' + tierInfo.compileTier : ''}` +
+        // Below what compiles because of the LEVEL this load was built at
+        // (a mobile start, or a measured step down) -- not the GPU class.
+        `${!tierInfo.overridden && tier !== tierInfo.compileTier ? '; capped from ' + tierInfo.compileTier : ''}` +
         `${tierInfo.overridden ? '; ?tier=' + opts.tier : ''}) ` +
         `shadows=${shadows} maxFps=${maxFps || 'uncapped'} pixelRatio<=${scenePixelRatio}. ` +
         `adaptive=${adaptiveOff ? 'off (' + adaptiveOff + ')' : 'on'} ` +
@@ -3917,8 +3919,12 @@ export const Home3DScene = (() => {
     const qualityListeners = [];
 
     function levelName(l) { return l == null ? null : LEVELS[l].name; }
+    // Set by resetQuality(): the rest of this session writes nothing, so a
+    // Re-measure cannot be undone by a decision, a settle or a maintenance
+    // probe that lands afterwards. The next load starts from the default.
+    let qualityForgotten = false;
     function persistQuality(extra) {
-      if (!adaptive) return;
+      if (!adaptive || qualityForgotten) return;
       const ok = saveState(qStorage, qKey, Object.assign({
         level: adaptive.pending != null ? adaptive.pending : startLevelIdx,
         blocked: adaptive.blocked,
@@ -3930,7 +3936,7 @@ export const Home3DScene = (() => {
       }
     }
     function qualityStatus() {
-      const pending = adaptive ? adaptive.pending : null;
+      const pending = adaptive && !qualityForgotten ? adaptive.pending : null;
       const blocked = adaptive && adaptive.blocked && Date.now() < adaptive.blocked.until ? adaptive.blocked : null;
       return {
         adaptive: !!adaptive,
@@ -5253,6 +5259,9 @@ export const Home3DScene = (() => {
       // nothing and returns false: ?tier= must never read or write storage.
       resetQuality() {
         if (!adaptive) return false;
+        qualityForgotten = true;
+        adaptive.forget();          // drop the pending proposal and any block
+        dprCapState = null;
         const ok = clearState(qStorage, qKey);
         console.info('[Home3DScene] Adaptive quality: measurements cleared; the next load starts from the default level.');
         return ok;

@@ -433,6 +433,11 @@ export function createController(o) {
     feed,
     coldFrame,
     jumpToStart,
+    /**
+     * Forget the pending next-load proposal and any block (Settings
+     * "Re-measure"). The live pixel ratio is left where it is.
+     */
+    forget() { st.pending = null; st.pendingAt = 0; st.blocked = null; },
     /** Drop the window and go quiet (resume from hidden, furniture attach). */
     quiet(now, ms) { reset(now, ms); },
     /** Is there anything a probe could still gain? (`wall`: wall-clock ms) */
