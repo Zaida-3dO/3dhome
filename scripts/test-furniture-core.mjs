@@ -544,6 +544,90 @@ function checkContract(tag, build, p) {
   check('loadBuilders: dedupes and keeps only what loaded', many.size === 1 && many.has('box'), [...many.keys()]);
 }
 
+// ---- 8b. every declared KIND through the house path ---------------------------------
+// A type with several kinds whose envelopes differ (wall-clock 'diy-words',
+// wall-sconce 'up-down') used to be merged onto the module's generic DEFAULTS
+// by furniture.js, so a house item giving only `{ kind }` declared the
+// DEFAULT kind's envelope while build() drew its own (item 7c056b3e:
+// diy-words declared 30 x 30, built 49.8 x 39, bottom 4.5 cm below y = 0).
+// Every kind enumerated from houses/schema.json -- each furnitureParams_*
+// block with a `kind` enum -- is built through buildFurnitureSync with ONLY
+// `{ kind }`, and the group build() returns must fill exactly the params
+// furniture.js handed it, bottom at y = 0.
+//
+// KNOWN_KIND_EXCEPTIONS: a kind listed here is a KNOWN mismatch owned by
+// territory this test's PR may not edit. Each entry must carry a follow-up
+// item id; an entry whose kind now PASSES fails the test, so the list cannot
+// quietly outlive the bug it excuses. Empty today: every kind passes.
+const KNOWN_KIND_EXCEPTIONS = {
+  // 'type:kind': 'follow-up item id -- why',
+};
+{
+  const F = await imp('src/furniture.js');
+  const schema = JSON.parse(fs.readFileSync(path.join(root, 'houses/schema.json'), 'utf8'));
+  const defs = schema.$defs || schema.definitions || {};
+  const kinds = [];
+  Object.keys(defs).forEach(k => {
+    if (!k.startsWith('furnitureParams_')) return;
+    const kp = (defs[k].properties || {}).kind;
+    if (kp && Array.isArray(kp.enum)) kp.enum.forEach(kind => kinds.push({ type: k.slice('furnitureParams_'.length), kind }));
+  });
+  // Guard the enumeration itself: if the schema shape moved, this section
+  // must not pass by checking nothing.
+  ['wall-clock:diy-words', 'wall-sconce:up-down', 'wall-clock:framed'].forEach(tk =>
+    check('kind sweep: schema enumerates ' + tk, kinds.some(x => x.type + ':' + x.kind === tk), kinds.length));
+  const seenExceptions = new Set();
+  for (const { type, kind } of kinds) {
+    const tag = 'house path ' + type + ' {kind: ' + kind + '}';
+    const real = (await quietlyAsync(() => R.loadBuilder(type))).value;
+    check(tag + ': builder loads', !!real);
+    if (!real) continue;
+    let rec = null;
+    const spy = Object.assign({}, real, {
+      build: (T, p, o) => {
+        const g = real.build(T, p, o);
+        rec = { p: Object.assign({}, p), b: bboxCm(g) };
+        return g;
+      }
+    });
+    const item = { id: 'k', room: 'r', type, x: 0, y: 0, rotationDeg: 0, origin: 'centre', elevation: 0, params: { kind } };
+    quietly(() => F.buildFurnitureSync(THREE, [item], new Map([[type, spy]]),
+      { tx: x => x / 100, tz: y => y / 100, quality: { tier: 'high' }, walls: [] }));
+    check(tag + ': build() was called', !!rec);
+    if (!rec) continue;
+    const { p, b } = rec;
+    const fails = [];
+    if (p.kind !== kind) fails.push('params.kind ' + p.kind);
+    if (Math.abs((b.maxX - b.minX) - p.width) > 0.5) fails.push('width built ' + (b.maxX - b.minX).toFixed(2) + ' vs declared ' + p.width);
+    if (Math.abs((b.maxY - b.minY) - p.height) > 0.5) fails.push('height built ' + (b.maxY - b.minY).toFixed(2) + ' vs declared ' + p.height);
+    if (Math.abs((b.maxZ - b.minZ) - p.depth) > 0.5) fails.push('depth built ' + (b.maxZ - b.minZ).toFixed(2) + ' vs declared ' + p.depth);
+    if (Math.abs(b.minY) > 0.5) fails.push('bottom at y = ' + b.minY.toFixed(2));
+    const key = type + ':' + kind;
+    if (Object.prototype.hasOwnProperty.call(KNOWN_KIND_EXCEPTIONS, key)) {
+      seenExceptions.add(key);
+      check(tag + ': listed as a known exception but now passes -- remove it from KNOWN_KIND_EXCEPTIONS',
+        fails.length > 0, KNOWN_KIND_EXCEPTIONS[key]);
+      continue;
+    }
+    check(tag + ': built envelope == declared params, bottom at y = 0', fails.length === 0, fails);
+  }
+  Object.keys(KNOWN_KIND_EXCEPTIONS).forEach(key =>
+    check('known kind exception ' + key + ' still names a schema kind', seenExceptions.has(key)));
+
+  // The registry carries defaultsFor through, and refuses a non-function.
+  const clock = await R.loadBuilder('wall-clock');
+  check('loadBuilder wall-clock: copies defaultsFor', clock && typeof clock.defaultsFor === 'function' &&
+    clock.defaultsFor({ kind: 'diy-words' }).width === 49.8 && clock.defaultsFor({}) === clock.DEFAULTS, clock && clock.defaultsFor);
+  const sconce = await R.loadBuilder('wall-sconce');
+  check('loadBuilder wall-sconce: copies defaultsFor', sconce && typeof sconce.defaultsFor === 'function' &&
+    sconce.defaultsFor({ kind: 'up-down' }).depth === 6 && sconce.defaultsFor({ kind: 'swing-arm-globe' }) === sconce.DEFAULTS);
+  const badW = [];
+  const { value: bad } = await quietlyAsync(() => R.loadBuilder('box', { warnings: badW,
+    importer: () => Promise.resolve({ DEFAULTS: { width: 1, depth: 1, height: 1 }, build: () => null, defaultsFor: { width: 9 } }) }));
+  check('loadBuilder: a non-function defaultsFor is dropped with a warning',
+    bad && bad.defaultsFor === undefined && badW.some(w => /defaultsFor but it is not a function/.test(w)), badW);
+}
+
 // ---- 9. no file in src/furniture imports three ------------------------------------
 // THREE is injected. A builder that imports it itself -- by the bare
 // specifier, by a path into vendor/, or dynamically -- gets a SECOND copy of

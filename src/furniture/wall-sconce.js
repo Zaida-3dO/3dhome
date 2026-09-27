@@ -72,6 +72,17 @@ export const UP_DOWN_DEFAULTS = Object.freeze({
   on: true
 });
 
+/**
+ * The DEFAULTS a house item of this `kind` starts from, BEFORE its own
+ * params are applied (src/furniture.js calls this when present, item
+ * 7c056b3e). Without it an item giving only `{ kind: 'up-down' }` declared
+ * the swing-arm globe's 15 x 45.95 x 29.5 envelope and build() stretched the
+ * up/down light's backplate to fill it.
+ */
+export function defaultsFor(params) {
+  return (params && params.kind) === 'up-down' ? UP_DOWN_DEFAULTS : DEFAULTS;
+}
+
 const CM = 0.01;
 
 const add = (group, mesh, finish, castsShadow) => {

@@ -173,11 +173,13 @@ function buildClockScene(t, group, THREE, ctx) {
   group.add(wall);
 
   // diy-words' own width/height are the WIDER full envelope (including the
-  // words), not the ring diameter -- width/height are derived by the
-  // builder from `diameter` for diy-words too (DIY_WORDS_DEFAULTS), so pass
-  // the ring diameter through `diameter` only and let the builder compute
-  // its own envelope, rather than forcing width=height=diameter as the
-  // other two kinds do.
+  // words), not the ring diameter, so they are NOT forced to the diameter as
+  // the other two kinds do: the builder draws from `diameter` and fills
+  // width/height from DIY_WORDS_DEFAULTS (49.8 x 39). The house path does
+  // the same since item 7c056b3e (wall-clock.js defaultsFor). Those defaults
+  // are the envelope at the DEFAULT 30 cm diameter only -- they are fixed
+  // numbers, not derived from `diameter` -- which is why furnitureJSON()
+  // below measures the real build and emits width/height explicitly.
   const buildParams = t.clockKind === 'diy-words'
     ? {
         diameter: t.clockDiameter, depth: t.clockDepth, kind: t.clockKind,

@@ -170,7 +170,7 @@ export function moduleUrl(type, opts) {
 /**
  * Load the builder for one type.
  *
- * Resolves to { type, DEFAULTS, build[, prepare] } or to null (with a warning pushed to
+ * Resolves to { type, DEFAULTS, build[, prepare][, defaultsFor] } or to null (with a warning pushed to
  * `opts.warnings` and the console) when the type is unregistered, its module
  * does not exist yet, or the module does not export what the contract says.
  * Never rejects: one missing builder must not cost the house its furniture.
@@ -209,6 +209,14 @@ export async function loadBuilder(type, opts) {
   // Optional: a type that needs async assets before its synchronous build()
   // (model.js) exports prepare(items, ctx). furniture.js awaits it.
   if (typeof impl.prepare === 'function') out.prepare = impl.prepare;
+  // Optional: a type with more than one kind whose envelopes differ exports
+  // defaultsFor(params) -> that kind's DEFAULTS. furniture.js merges an
+  // item's params onto it instead of DEFAULTS (item 7c056b3e). Anything
+  // other than a function is ignored with a warning, never trusted.
+  if (typeof impl.defaultsFor === 'function') out.defaultsFor = impl.defaultsFor;
+  else if (impl.defaultsFor !== undefined) {
+    warn('type "' + type + '": ' + entry.path + ' exports defaultsFor but it is not a function -- ignored, DEFAULTS used');
+  }
   return out;
 }
 
