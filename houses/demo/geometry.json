@@ -141,6 +141,11 @@
       ],
       "floorColor": "#b9a88d",
       "floorMaterial": "wood",
+      "footstepPath": {
+        "points": [[195, 218], [265, 218], [265, 85], [55, 80]],
+        "relativeTo": "room",
+        "notes": "Demo illustration of an authored route: in through the study door, east along the lower leg, north round the chimney breast, then west along the upper leg -- a walk automatic placement cannot produce."
+      },
       "notes": "L-shaped: wraps around the chimney breast at the south-west of this room. The notch is real, not a drawing error - do not square it off."
     },
     {

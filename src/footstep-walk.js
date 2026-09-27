@@ -219,3 +219,224 @@ export function walkFootsteps(opts) {
 export function printYaw(dirx, diry) {
   return -Math.atan2(diry, dirx) - Math.PI / 2;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Door gap — a rule for EVERY trail, authored or automatic.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How close a print's centre may come to any door opening, in cm.
+ *
+ * A trail is meant to read as someone walking about INSIDE one room. A print
+ * sitting on or right beside a threshold reads instead as someone standing in
+ * the doorway between two rooms — and on a floor plan it visibly straddles the
+ * wall line. So no print is laid within this distance of any door's opening,
+ * whichever room the door belongs to and whichever way the trail was placed.
+ *
+ * Measured from the print's CENTRE to the nearest point of the door's opening
+ * (the segment of wall line the leaf fills when shut). The centre, not the
+ * print's edge, so a trail down the middle of a ~1m corridor lined with doors
+ * still fits: the centre line of a 99cm corridor puts each alternating print
+ * ~41cm from either wall line.
+ */
+export const DOOR_GAP_CM = 40;
+
+/**
+ * The opening each compiled door leaves in its wall, as a segment in plan cm.
+ *
+ * Takes the loader's compiled door schedule (`wall` is the axis the wall runs
+ * along: 'x' means an east-west wall at y = `at`; anything else a north-south
+ * wall at x = `at`; `c` is the door's centre along the wall and `w` its width).
+ *
+ * @param {Array<{id:string, wall:string, at:number, c:number, w:number}>} doors
+ * @returns {Array<{id:string, ax:number, ay:number, bx:number, by:number}>}
+ */
+export function doorOpenings(doors) {
+  return (doors || []).map(d => {
+    const half = (d.w || 0) / 2;
+    return (d.wall === 'x')
+      ? { id: d.id, ax: d.c - half, ay: d.at, bx: d.c + half, by: d.at }
+      : { id: d.id, ax: d.at, ay: d.c - half, bx: d.at, by: d.c + half };
+  });
+}
+
+/** Distance from a point to a segment. */
+export function distToSegment(px, py, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay;
+  const len2 = vx * vx + vy * vy;
+  let t = len2 > 0 ? ((px - ax) * vx + (py - ay) * vy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const qx = ax + vx * t, qy = ay + vy * t;
+  return Math.hypot(px - qx, py - qy);
+}
+
+/**
+ * Is (x, y) at least `gapCm` from every door opening?
+ *
+ * @param {number} x
+ * @param {number} y
+ * @param {Array<{ax:number,ay:number,bx:number,by:number}>} openings  From doorOpenings().
+ * @param {number} [gapCm]  Defaults to DOOR_GAP_CM.
+ */
+export function clearOfDoors(x, y, openings, gapCm = DOOR_GAP_CM) {
+  for (const o of openings) {
+    if (distToSegment(x, y, o.ax, o.ay, o.bx, o.by) < gapCm) return false;
+  }
+  return true;
+}
+
+/**
+ * Drop every print that sits within the door gap. Order is preserved, so the
+ * trail still walks the way it did; a dropped print simply is not drawn.
+ *
+ * @template {{x:number,y:number}} P
+ * @param {P[]} prints
+ * @param {Array<{ax:number,ay:number,bx:number,by:number}>} openings
+ * @param {number} [gapCm]
+ * @returns {P[]}
+ */
+export function applyDoorGap(prints, openings, gapCm = DOOR_GAP_CM) {
+  return prints.filter(p => clearOfDoors(p.x, p.y, openings, gapCm));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Authored paths — `rooms[].footstepPath`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Round a polyline's corners by Chaikin corner-cutting, keeping both
+ * endpoints exactly where they were authored.
+ *
+ * Each pass replaces every interior corner with two points a quarter and three
+ * quarters of the way along its neighbouring segments. Two passes turn a sharp
+ * right angle into a curve a walker could actually follow, while the start
+ * (just inside the room, clear of the door) and the end (where the owner said
+ * the walk stops) stay put.
+ *
+ * @param {Array<[number,number]>} points
+ * @param {number} [passes]
+ * @returns {Array<[number,number]>}
+ */
+export function smoothPolyline(points, passes = 2) {
+  let pts = points.map(p => [p[0], p[1]]);
+  if (pts.length < 3) return pts;
+  for (let k = 0; k < passes; k++) {
+    const out = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [ax, ay] = pts[i], [bx, by] = pts[i + 1];
+      const q = [ax * 0.75 + bx * 0.25, ay * 0.75 + by * 0.25];
+      const r = [ax * 0.25 + bx * 0.75, ay * 0.25 + by * 0.75];
+      if (i > 0) out.push(q);
+      if (i < pts.length - 2) out.push(r);
+    }
+    out.push(pts[pts.length - 1]);
+    pts = out;
+  }
+  return pts;
+}
+
+/**
+ * Lay prints along an authored polyline, in waypoint order.
+ *
+ * The walking line starts exactly on the first waypoint and ends exactly on
+ * the last, advancing by a stride FITTED to the path length (the whole
+ * division of the path nearest `stepCm`), so the trail runs from the first
+ * waypoint to the last — waypoint order IS the direction of travel. Each
+ * print sits `strideCm / 2` either side of the line, alternating, and faces
+ * along the line's direction at that point.
+ *
+ * Unlike the automatic walk there is no count cap: the author drew the length
+ * they wanted.
+ *
+ * @param {object} opts
+ * @param {Array<[number,number]>} opts.points  Absolute plan cm, >= 2.
+ * @param {Array<[number,number]>|null} [opts.poly]
+ *        Room polygon. A print whose centre falls outside it (a stride offset
+ *        across a wall on a tight corner) is dropped rather than drawn in the
+ *        next room.
+ * @param {boolean} [opts.smooth]  Round interior corners (default true).
+ * @param {number} [opts.stepCm]
+ * @param {number} [opts.strideCm]
+ * @returns {{prints: Array<{x:number,y:number,dirx:number,diry:number}>}}
+ */
+export function walkPath(opts) {
+  const {
+    points, poly = null, smooth = true,
+    stepCm = WALK_DEFAULTS.STEP_CM,
+    strideCm = WALK_DEFAULTS.STRIDE_CM,
+  } = opts;
+  const prints = [];
+  if (!Array.isArray(points) || points.length < 2) return { prints };
+  const pts = smooth ? smoothPolyline(points) : points.map(p => [p[0], p[1]]);
+
+  // Segments with their start distance along the line; zero-length ones skipped.
+  const segs = [];
+  let total = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [ax, ay] = pts[i], [bx, by] = pts[i + 1];
+    const len = Math.hypot(bx - ax, by - ay);
+    if (len < 1e-6) continue;
+    segs.push({ ax, ay, ux: (bx - ax) / len, uy: (by - ay) / len, s0: total, len });
+    total += len;
+  }
+  if (!segs.length) return { prints };
+
+  // Fit the stride to the path so the LAST print lands on the last waypoint:
+  // the author's endpoint (the bath, the radiator) is where the walk should
+  // visibly arrive, and whole fixed strides could stop up to a stride short.
+  // The fitted stride is the nearest whole division of the path, so it stays
+  // within ~15% of stepCm for any path longer than a few strides.
+  const intervals = Math.max(1, Math.round(total / stepCm));
+  const step = total / intervals;
+  let si = 0;
+  for (let k = 0, s = 0; k <= intervals; k++, s = Math.min(total, k * step)) {
+    while (si < segs.length - 1 && s > segs[si].s0 + segs[si].len) si++;
+    const g = segs[si];
+    const t = s - g.s0;
+    const wx = g.ax + g.ux * t, wy = g.ay + g.uy * t;
+    // Side by STRIDE index, not by prints laid, so a dropped print leaves the
+    // left/right rhythm of the rest intact.
+    const side = (k % 2 === 0) ? 1 : -1;
+    const x = wx + (-g.uy) * side * (strideCm / 2);
+    const y = wy + (g.ux) * side * (strideCm / 2);
+    if (poly && !insidePoly(poly, x, y)) continue;
+    prints.push({ x, y, dirx: g.ux, diry: g.uy });
+  }
+  return { prints };
+}
+
+/**
+ * Where a room's trail goes, all rules applied. The one decision the scene
+ * delegates here so it can be tested without a GPU:
+ *
+ *   1. an authored `footstepPath` (already resolved to absolute cm by the
+ *      loader) wins outright -- the zone and the automatic walk are not even
+ *      consulted;
+ *   2. otherwise `auto()` supplies the automatic trail (zone or door walk);
+ *   3. EITHER WAY, the door gap then removes any print within `gapCm` of a
+ *      door opening.
+ *
+ * @param {object} opts
+ * @param {{poly?:Array<[number,number]>, footstepPath?:{points:Array<[number,number]>, smooth?:boolean}|null}} opts.room
+ * @param {Array<{ax:number,ay:number,bx:number,by:number}>} opts.openings  From doorOpenings().
+ * @param {() => (Array<{x:number,y:number,dirx:number,diry:number}>|null)} opts.auto
+ * @param {number} [opts.gapCm]
+ * @returns {{prints: Array<{x:number,y:number,dirx:number,diry:number}>, source: 'path'|'auto'|'none'}}
+ */
+export function placeTrail(opts) {
+  const { room, openings, auto, gapCm = DOOR_GAP_CM } = opts;
+  let prints, source;
+  if (room.footstepPath) {
+    prints = walkPath({
+      points: room.footstepPath.points,
+      poly: room.poly || null,
+      smooth: room.footstepPath.smooth !== false,
+    }).prints;
+    source = 'path';
+  } else {
+    prints = auto();
+    source = prints ? 'auto' : 'none';
+    if (!prints) prints = [];
+  }
+  return { prints: applyDoorGap(prints, openings, gapCm), source };
+}

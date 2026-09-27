@@ -167,6 +167,17 @@ jobs:
           # header.
           set -euo pipefail
           node scripts/test-footstep-zone.mjs
+      - name: Footstep paths (authored waypoints) and the door gap
+        run: |
+          # Asserts rooms[].footstepPath: prints follow the waypoints in order,
+          # alternate left/right and face along travel; reversing the waypoints
+          # reverses the walk; a path round an L stays on the floor and turns;
+          # the loader resolves waypoints relative to the room bbox and drops a
+          # path with a waypoint outside the room (falling back to the zone);
+          # a path beats a zone; and no print -- authored OR automatic -- lands
+          # within DOOR_GAP_CM of any door opening. See the script's header.
+          set -euo pipefail
+          node scripts/test-footstep-path.mjs
       - name: Radiator furniture module geometry contract
         run: |
           # Asserts src/furniture/radiator.js follows the shared furniture
@@ -523,6 +534,8 @@ jobs:
           python scripts/validate-house.py "${dirs[@]}"
       - name: Furniture schema and validator checks
         run: python scripts/test-validate-furniture.py
+      - name: footstepPath validator checks (outside waypoint, segment leaving the room, door gap empties the trail)
+        run: python scripts/test-validate-footstep-path.py
       - name: sh3d-furniture / furniture-apply tests
         run: python scripts/test-sh3d-furniture.py
 

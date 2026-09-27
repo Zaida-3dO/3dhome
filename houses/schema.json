@@ -208,6 +208,41 @@
           ],
           "additionalProperties": false
         },
+        "footstepPath": {
+          "type": "object",
+          "title": "Authored footstep route",
+          "description": "OPTIONAL route for the presence footstep trail in this room: an ordered list of waypoints the trail walks along, first to last. Waypoint order IS the direction of travel -- prints are laid from the first waypoint to the last (both ends get a print), evenly spaced at the stride nearest the engine's default that fits the path, alternating left and right of the line and facing along it. Use this when the owner knows the route people actually take (under a table, along a corridor to a radiator) and neither automatic placement nor a footstepZone rectangle can express it. TAKES PRECEDENCE over footstepZone; absent, the room behaves exactly as before.\n\nCOORDINATES ARE RELATIVE TO THE ROOM'S BOUNDING-BOX MIN CORNER (x1,y1), the same convention as footstepZone. Every waypoint must lie inside the room polygon; a path with any waypoint outside it is ignored with a warning and the room falls back to footstepZone or automatic placement.\n\nRegardless of the path, no print is ever laid within the engine's door gap (40cm, measured from the print's centre) of any door opening -- so start and end the path a little way clear of doorways, or the prints nearest the door are simply not drawn.",
+          "properties": {
+            "points": {
+              "type": "array",
+              "description": "Waypoints in walking order, in centimetres relative to the room's bbox min corner. At least two.",
+              "items": {
+                "$ref": "#/$defs/point2d"
+              },
+              "minItems": 2
+            },
+            "relativeTo": {
+              "type": "string",
+              "const": "room",
+              "default": "room",
+              "description": "As footstepZone.relativeTo: named explicitly so a future anchoring cannot be mistaken for this one. \"room\" (the bbox min corner) is the only value the engine understands; anything else is ignored with a warning."
+            },
+            "smooth": {
+              "type": "boolean",
+              "default": true,
+              "description": "Round the corners between waypoints so the trail curves rather than turning on the spot. Endpoints are never moved. Set false for a deliberately sharp turn."
+            },
+            "notes": {
+              "type": "string",
+              "description": "Why the route goes where it does (e.g. 'under the table, not around it'). Never rendered."
+            }
+          },
+          "required": [
+            "points",
+            "relativeTo"
+          ],
+          "additionalProperties": false
+        },
         "notes": {
           "type": "string",
           "description": "Free-text note for whoever edits this profile next. Never rendered."
