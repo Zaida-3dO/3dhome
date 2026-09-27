@@ -324,5 +324,60 @@ await quiet(async () => {
   check('offline note is the first room row', /if \(haOffline\(ha\)\) keys\.push\('ha-offline'\);\s*if \(s\.main\)/.test(html));
 }
 
+// ---------------------------------------------------------------------------
+// 7. Tap popovers (src/tap-popovers.js): the same rule
+// ---------------------------------------------------------------------------
+{
+  const TP = await imp('src/tap-popovers.js');
+  check('popover haOfflineConn: no client (demo) is NOT offline', TP.haOfflineConn(null) === false && TP.haOfflineConn(undefined) === false);
+  check('popover haOfflineConn: connected -> online', TP.haOfflineConn('connected') === false);
+  for (const st of ['disconnected', 'syncing', 'auth_failed', 'sync_failed', 'polling']) {
+    check('popover haOfflineConn: ' + st + ' -> offline', TP.haOfflineConn(st) === true);
+  }
+  check('popover statusKey: configured + disconnected -> haOffline', TP.statusKey('light', 'disconnected', false) === 'haOffline');
+  check('popover statusKey: syncing still the pulsing connecting dot', TP.statusKey('curtain', 'syncing', false) === 'connecting');
+  check('popover statusKey: no client -> offline (demo preview)', TP.statusKey('light', null, false) === 'offline');
+  check("popover: 'polling' is not live (dead since #58)", TP.isLive('polling') === false && TP.statusKey('light', 'polling', false) === 'haOffline');
+
+  const dot = k => '<button class="tp-status" type="button" data-a="status" data-st="' + k + '"></button>';
+  const models = haOff => ({
+    light: { status: haOff ? 'haOffline' : 'ok', na: false, haOff, on: true, bri: 60, name: 'Lounge main' },
+    curtain: { status: haOff ? 'haOffline' : 'ok', na: false, haOff, pct: 100, name: 'Lounge curtain' },
+    climate: { status: haOff ? 'haOffline' : 'ok', na: false, mock: false, off: false, haOff, current: 20.4, target: 21,
+      min: 7, max: 30, step: 0.5, activity: 'idle', name: 'Lounge radiator' },
+  });
+  // Every control in a card except the status dot sends a command.
+  const controls = html => (html.match(/<(?:button|input)\b[^>]*data-a="[^"]+"[^>]*>/g) || []).filter(c => !/data-a="status"/.test(c));
+  const on = models(false), off = models(true);
+  for (const k of ['light', 'curtain', 'climate']) {
+    const hOn = TP.popoverHtml[k](on[k], dot), hOff = TP.popoverHtml[k](off[k], dot);
+    const cOn = controls(hOn), cOff = controls(hOff);
+    check('popover ' + k + ': renders its controls in both states', cOn.length > 0 && cOn.length === cOff.length, { on: cOn.length, off: cOff.length });
+    check('popover ' + k + ': every control ENABLED while connected', cOn.every(c => !/\sdisabled\b/.test(c)), cOn.filter(c => /\sdisabled\b/.test(c)));
+    check('popover ' + k + ': every control DISABLED while HA offline', cOff.every(c => /\sdisabled\b/.test(c)), cOff.filter(c => !/\sdisabled\b/.test(c)));
+    check('popover ' + k + ': says "HA offline" only while offline', /data-offline>HA offline</.test(hOff) && !/data-offline/.test(hOn));
+  }
+
+  // The write handlers (bind) need a DOM, so they are pinned at source level;
+  // the browser check exercises them for real.
+  const src = read('src/tap-popovers.js');
+  check('popover canSend requires a fully connected client', /const canSend = \(\) => \{ const h = ha\(\); return !!h && h\.status === 'connected'; \};/.test(src));
+  check('popover writeBlocked: configured HA not connected (real or simulated)',
+    /const writeBlocked = \(\) => \{ const h = ha\(\); return haOfflineConn\(conn\(\)\) \|\| \(!!h && h\.status !== 'connected'\); \};/.test(src));
+  const guards = [
+    /sw\.addEventListener\('click', \(\) => \{\s*if \(writeBlocked\(\)\) return;/,                         // light power
+    /r\.addEventListener\('input', \(\) => \{\s*if \(writeBlocked\(\)\) return;\s*const st = s\(\);/,      // light brightness
+    /r\.addEventListener\('input', \(\) => \{\s*if \(writeBlocked\(\)\) return;\s*ctl\.dragging = true;\s*const pct/, // curtain slider
+    /const press = cmd => \{\s*if \(writeBlocked\(\)\) return;/,                                          // curtain open/close
+    /const apply = \(v, how\) => \{\s*if \(writeBlocked\(\)\) return;/,                                   // climate slider + steps
+  ];
+  guards.forEach((re, i) => check('popover write handler ' + (i + 1) + '/5 returns first while HA offline (no preview)', re.test(src)));
+  check('popover guard count: exactly the 5 write paths', (src.match(/if \(writeBlocked\(\)\) return;/g) || []).length === 5);
+  check('popover climate samples only with no HA configured', /if \(c == null && !reading\) \{/.test(src) && !/offlineConn/.test(src));
+  check('popover status table has no polling entry', !/\n  polling: \[/.test(src) && /\n  haOffline: \['bad', 'HA offline'/.test(src));
+  const html = read('index.html');
+  check("index.html: no dead 'polling' status label or dot", !/polling:\s+'HA Polling'/.test(html) && !/\.ha-status-dot\.polling/.test(html));
+}
+
 console.log('\n' + passes + ' passed, ' + failures + ' failed');
 process.exit(failures ? 1 : 0);

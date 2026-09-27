@@ -151,25 +151,39 @@ export function placePopover(x, y, w, h, bounds, gap, margin) {
 }
 
 /**
- * Is the HA client in a mode that is actually talking to Home Assistant?
- * 'connected' (websocket), 'polling' (steady REST fallback) and 'syncing'
- * (socket open, first get_states in flight) all are; every other status --
- * or no client at all -- is offline, where changes only preview.
+ * Is the HA client reaching Home Assistant at all? 'connected' and 'syncing'
+ * (socket open, snapshot in flight) are. This drives what the card SAYS about
+ * an entity (unavailable vs unknown); whether its controls work is
+ * haOfflineConn() below. There is no 'polling' mode any more: since #58 the
+ * client is WebSocket-only and never sets it.
  */
 export function isLive(conn) {
-  return conn === 'connected' || conn === 'polling' || conn === 'syncing';
+  return conn === 'connected' || conn === 'syncing';
+}
+
+/**
+ * A CONFIGURED Home Assistant that is not fully connected -- disconnected,
+ * syncing, auth or sync failed. Every control is then disabled and does
+ * nothing: no command and no preview on the model, the sidebar's rule
+ * (haOffline in src/room-panel.js). `conn` null means there is no client at
+ * all (HA not configured -- the demo house), which is NOT offline: there the
+ * controls stay a local preview on the model.
+ */
+export function haOfflineConn(conn) {
+  return conn != null && conn !== 'connected';
 }
 
 /**
  * The status dot for one popover:
- *   ok          green   HA connected over the websocket, entity reporting
- *   polling     green   HA reached over the REST fallback, entity reporting
- *                       (a steady mode, not a reconnect -- updates every few s)
- *   connecting  yellow  syncing: the socket is up, first snapshot pending (pulses)
- *   na          yellow  live, but this entity is unavailable/unknown
- *   motor       yellow  live, but a curtain motor is unavailable
- *   offline     red     no client, disconnected, auth_failed, sync_failed
- *   offlineMock red     offline AND showing sample values (climate)
+ *   ok          green   HA connected, entity reporting
+ *   connecting  yellow  syncing: the socket is up, snapshot pending (pulses);
+ *                       controls disabled until it lands
+ *   na          yellow  connected, but this entity is unavailable/unknown
+ *   motor       yellow  connected, but a curtain motor is unavailable
+ *   haOffline   red     a configured HA is disconnected / auth or sync failed;
+ *                       controls disabled
+ *   offline     red     no client at all (demo): changes only preview
+ *   offlineMock red     no client, showing sample values (climate)
  *
  * Syncing outranks an entity-unavailable flag: until the first snapshot
  * lands, "this device isn't responding" would be a claim nothing supports.
@@ -178,10 +192,11 @@ export function isLive(conn) {
  * @param entityUnavailable  true when HA is live but this entity is not
  */
 export function statusKey(kind, conn, entityUnavailable, mock) {
-  if (!isLive(conn)) return mock ? 'offlineMock' : 'offline';
+  if (conn == null) return mock ? 'offlineMock' : 'offline';
   if (conn === 'syncing') return 'connecting';
+  if (conn !== 'connected') return 'haOffline';
   if (entityUnavailable) return kind === 'curtain' ? 'motor' : 'na';
-  return conn === 'polling' ? 'polling' : 'ok';
+  return 'ok';
 }
 
 /**
@@ -311,12 +326,12 @@ const ico = (p, cls) => svg(p, 'tp-ico ' + (cls || ''));
 
 const STATUS = {
   ok: ['ok', 'Live', 'Connected to Home Assistant.'],
-  polling: ['ok', 'Live', 'Connected (updates every few seconds).'],
-  connecting: ['warn pulse', 'Connecting…', 'Syncing with Home Assistant. Changes are still sent.'],
+  connecting: ['warn pulse', 'Connecting…', 'Syncing with Home Assistant. Controls are disabled until it finishes.'],
   na: ['warn', 'Entity unavailable', 'Home Assistant is reachable, but this device isn’t responding.'],
   motor: ['warn', 'Motor unavailable', 'One of this curtain’s motors isn’t responding in Home Assistant.'],
-  offline: ['bad', 'Not connected', 'Home Assistant is offline. Changes only preview on the model.'],
-  offlineMock: ['bad', 'Not connected', 'Home Assistant is offline. Showing sample temperatures; changes only preview.'],
+  haOffline: ['bad', 'HA offline', 'Home Assistant is not connected. Controls are disabled until it reconnects.'],
+  offline: ['bad', 'Not connected', 'No Home Assistant configured. Changes only preview on the model.'],
+  offlineMock: ['bad', 'Not connected', 'No Home Assistant configured. Showing sample temperatures; changes only preview.'],
 };
 
 /**
@@ -428,6 +443,9 @@ const STYLE = `
 .tp-sw.on { background: var(--accent); }
 .tp-sw.on i { left: calc(var(--sw-w) - var(--sw-h) + 2px); }
 .tp-sw:disabled { opacity: 0.35; cursor: not-allowed; }
+.tp-range:disabled { opacity: 0.35; cursor: not-allowed; }
+.tp-offline { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: #fecaca; }
+.tp-offline::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
 .tp-range { --p: 50%; display: block; width: 100%; height: ${GF.rangeH}px; margin: ${GF.rangeGap}px 0 -2px; background: transparent;
   -webkit-appearance: none; appearance: none; cursor: pointer; outline: none; }
 .tp-range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
@@ -453,6 +471,58 @@ ${coarseRules('.tp-force-coarse')}
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fillPct = r => ((+r.value - +r.min) / ((+r.max - +r.min) || 1) * 100) + '%';
+
+// ---- Popover markup (pure: model in, HTML out) -----------------------------
+// Module-level so scripts/test-ha-resync.mjs can render each card for a
+// given model and check which controls are disabled. `dot` renders the
+// status dot (it reads the card's tooltip state, so the caller supplies it).
+const offlineLine = m => (m.haOff ? '<div class="tp-offline" data-offline>HA offline</div>' : '');
+const shellWith = dot => (icon, name, st, body) =>
+  '<div class="tp-head">' + icon + '<span class="tp-name">' + esc(name) + '</span>' + dot(st) + '</div>' + body;
+export const popoverHtml = {
+  light(m, dot) {
+    const shell = shellWith(dot);
+    const on = m.on && !m.na;
+    const val = m.na ? '<span class="tp-val muted"><b>Unavailable</b></span>'
+      : '<span class="tp-val" data-v><b>' + (m.on ? 'On' : 'Off') + '</b>' + (m.on ? ' · ' + m.bri + '%' : '') + '</span>';
+    return shell(ico(on ? I.bulb : I.bulbOff, on ? 'light-on' : (m.na ? 'dim' : '')), m.name, m.status,
+      '<div class="tp-row">' + val + '<button class="tp-sw' + (m.on ? ' on' : '') + '" data-a="power" role="switch" aria-checked="' +
+      m.on + '" aria-label="Power"' + (m.na || m.haOff ? ' disabled' : '') + '><i></i></button></div>' +
+      (m.na ? '' : '<input class="tp-range' + (m.on ? '' : ' off') + '" data-a="bri" type="range" min="5" max="100" value="' +
+        m.bri + '" aria-label="Brightness"' + (m.haOff ? ' disabled' : '') + '>') + offlineLine(m));
+  },
+  curtain(m, dot) {
+    const shell = shellWith(dot);
+    const dis = m.na || m.haOff ? ' disabled' : '';
+    const val = m.na ? '<span class="tp-val muted"><b>Motor unavailable</b></span>'
+      : '<span class="tp-val" data-v>Open <b>' + m.pct + '%</b></span>';
+    return shell(ico(m.pct > 0 ? I.curtains : I.curtainsClosed, m.na ? 'dim' : ''), m.name, m.status,
+      '<div class="tp-row">' + val + '<span class="tp-btns">' +
+      '<button class="tp-ib" data-a="close" data-tip="Close" aria-label="Close curtain"' + dis + '>' + svg(I.cClose) + '</button>' +
+      '<button class="tp-ib" data-a="open" data-tip="Open" aria-label="Open curtain"' + dis + '>' + svg(I.cOpen) + '</button>' +
+      '</span></div>' +
+      (m.na ? '' : '<input class="tp-range" data-a="pos" type="range" min="0" max="100" value="' + m.pct + '" aria-label="Open percentage"' + dis + '>') +
+      offlineLine(m));
+  },
+  climate(m, dot) {
+    const shell = shellWith(dot);
+    const f = v => (typeof v === 'number' && isFinite(v) ? v.toFixed(1) + '°' : '–');
+    const live = !m.na && !m.off && typeof m.target === 'number';
+    const dis = m.haOff ? ' disabled' : '';
+    const icon = m.na ? ico(I.radiatorIdle, 'dim') : ico(I.radiator, m.activity === 'heating' ? 'heat' : '');
+    const act = m.activity === 'heating' ? '<span class="heat">heating</span>' : m.activity ? '<span>' + m.activity + '</span>' : '';
+    const val = m.na ? '<span class="tp-val muted"><b>Unavailable</b></span>'
+      : m.off ? '<span class="tp-val tp-temp"><span class="big">Off</span><small><span>now ' + f(m.current) + '</span></small></span>'
+      : '<span class="tp-val tp-temp" data-v><span class="big" data-t>' + f(m.target) + '</span><small><span>now ' + f(m.current) + '</span>' + act + '</small></span>';
+    return shell(icon, m.name, m.status,
+      '<div class="tp-row">' + val + (live ? '<span class="tp-btns">' +
+        '<button class="tp-ib" data-a="down" data-tip="−' + m.step + '°" aria-label="Lower target"' + dis + '>' + svg(I.minus) + '</button>' +
+        '<button class="tp-ib" data-a="up" data-tip="+' + m.step + '°" aria-label="Raise target"' + dis + '>' + svg(I.plus) + '</button></span>' : '') +
+      '</div>' +
+      (live ? '<input class="tp-range temp" data-a="set" type="range" min="' + m.min + '" max="' + m.max + '" step="' + m.step +
+        '" value="' + m.target + '" aria-label="Target temperature"' + dis + '>' : '') + offlineLine(m));
+  },
+};
 
 /**
  * Attach the popover layer.
@@ -493,10 +563,13 @@ export function attachTapPopovers(o) {
   const sim = { status: undefined, raw: new Map() };
   const conn = () => (sim.status !== undefined ? sim.status : (ha() ? ha().status : null));
   const raw = eid => (sim.raw.has(eid) ? sim.raw.get(eid) : (ha() && ha().getRawState ? ha().getRawState(eid) : null));
-  // Commands go out only through a real client that is not known-down; the
-  // yellow 'connecting' states still send (polling uses REST, syncing has an
-  // open socket). Offline is preview-on-the-model only.
-  const canSend = () => { const h = ha(); return !!h && isLive(h.status); };
+  // Commands go out only through a real client that is fully connected.
+  // writeBlocked(): a configured HA that is not connected (the real status,
+  // or a ?debug=1 simulated one) -- every write handler returns at once:
+  // no command AND no preview on the model. With no client at all (the demo
+  // house) nothing is blocked and changes preview locally, as before.
+  const canSend = () => { const h = ha(); return !!h && h.status === 'connected'; };
+  const writeBlocked = () => { const h = ha(); return haOfflineConn(conn()) || (!!h && h.status !== 'connected'); };
 
   const styleEl = document.createElement('style');
   styleEl.textContent = STYLE;
@@ -567,8 +640,6 @@ export function attachTapPopovers(o) {
 
   // ---- views: model() -> data, html(m) -> inner markup, bind(el) ---------
   const roomName = id => ((Home3DScene.ROOMS || {})[id] || {}).name || id;
-  const shell = (icon, name, st, body) =>
-    '<div class="tp-head">' + icon + '<span class="tp-name">' + esc(name) + '</span>' + dot(st) + '</div>' + body;
   const dot = k => {
     const s = STATUS[k];
     return '<button class="tp-status ' + s[0] + (tipOpen ? ' tip-open' : '') + '" type="button" data-a="status" data-st="' + k +
@@ -585,23 +656,15 @@ export function attachTapPopovers(o) {
         const r = raw(t.entities[0]);
         const na = lightUnavailable(c, r);
         const lc = ((Home3DScene.LIGHTS || {})[t.roomId] || {})[t.channel];
-        return { status: statusKey('light', c, na), na, on: !!st.on, bri: st.bri != null ? st.bri : 100,
+        return { status: statusKey('light', c, na), na, haOff: haOfflineConn(c), on: !!st.on, bri: st.bri != null ? st.bri : 100,
           name: lightName(roomName(t.roomId), t.channel, lc && lc.name) };
       },
-      html(m) {
-        const on = m.on && !m.na;
-        const val = m.na ? '<span class="tp-val muted"><b>Unavailable</b></span>'
-          : '<span class="tp-val" data-v><b>' + (m.on ? 'On' : 'Off') + '</b>' + (m.on ? ' · ' + m.bri + '%' : '') + '</span>';
-        return shell(ico(on ? I.bulb : I.bulbOff, on ? 'light-on' : (m.na ? 'dim' : '')), m.name, m.status,
-          '<div class="tp-row">' + val + '<button class="tp-sw' + (m.on ? ' on' : '') + '" data-a="power" role="switch" aria-checked="' +
-          m.on + '" aria-label="Power"' + (m.na ? ' disabled' : '') + '><i></i></button></div>' +
-          (m.na ? '' : '<input class="tp-range' + (m.on ? '' : ' off') + '" data-a="bri" type="range" min="5" max="100" value="' +
-            m.bri + '" aria-label="Brightness">'));
-      },
+      html(m) { return popoverHtml.light(m, dot); },
       bind(t, el, ctl) {
         const s = () => (home.lightState[t.roomId] || {})[t.channel];
         const sw = el.querySelector('[data-a=power]');
         if (sw) sw.addEventListener('click', () => {
+          if (writeBlocked()) return;
           const st = s(); if (!st) return;
           st.on = !st.on; if (st.on && !st.bri) st.bri = 100;
           home.updateLights(); o.sendLight(t.roomId, t.channel, st, 0); onChange(); ctl.refresh(true);
@@ -609,6 +672,7 @@ export function attachTapPopovers(o) {
         const r = el.querySelector('[data-a=bri]');
         if (r) {
           r.addEventListener('input', () => {
+            if (writeBlocked()) return;
             const st = s(); if (!st) return;
             ctl.dragging = true;
             st.bri = +r.value; st.on = true;
@@ -638,25 +702,16 @@ export function attachTapPopovers(o) {
         const avail = S.curtainAvailable ? S.curtainAvailable(t.id) : null;
         const na = curtainUnavailable(c, avail);
         const pct = Math.round((S.curtainPct ? S.curtainPct(t.id) : home.getCurtainOpen(t.id)) || 0);
-        return { status: statusKey('curtain', c, na), na, pct, name: curtainNames.get(t.id) || t.id };
+        return { status: statusKey('curtain', c, na), na, haOff: haOfflineConn(c), pct, name: curtainNames.get(t.id) || t.id };
       },
-      html(m) {
-        const dis = m.na ? ' disabled' : '';
-        const val = m.na ? '<span class="tp-val muted"><b>Motor unavailable</b></span>'
-          : '<span class="tp-val" data-v>Open <b>' + m.pct + '%</b></span>';
-        return shell(ico(m.pct > 0 ? I.curtains : I.curtainsClosed, m.na ? 'dim' : ''), m.name, m.status,
-          '<div class="tp-row">' + val + '<span class="tp-btns">' +
-          '<button class="tp-ib" data-a="close" data-tip="Close" aria-label="Close curtain"' + dis + '>' + svg(I.cClose) + '</button>' +
-          '<button class="tp-ib" data-a="open" data-tip="Open" aria-label="Open curtain"' + dis + '>' + svg(I.cOpen) + '</button>' +
-          '</span></div>' +
-          (m.na ? '' : '<input class="tp-range" data-a="pos" type="range" min="0" max="100" value="' + m.pct + '" aria-label="Open percentage">'));
-      },
+      html(m) { return popoverHtml.curtain(m, dot); },
       bind(t, el, ctl) {
         const sender = o.curtainSender;
         const local = pct => { if (S.curtainLocal) S.curtainLocal(t.id, pct); else home.setCurtainOpen(t.id, pct, null); };
         const r = el.querySelector('[data-a=pos]');
         if (r) {
           r.addEventListener('input', () => {
+            if (writeBlocked()) return;
             ctl.dragging = true;
             const pct = +r.value;
             local(pct);
@@ -676,8 +731,9 @@ export function attachTapPopovers(o) {
           r.addEventListener('pointerup', end); r.addEventListener('pointercancel', end);
         }
         const press = cmd => {
+          if (writeBlocked()) return;
           if (canSend() && sender) sender.press(t.id, o.HAClient.coverOpenCloseCommand(cmd, t.entities));
-          else local(cmd === 'open' ? 100 : 0);   // offline: preview on the model
+          else local(cmd === 'open' ? 100 : 0);   // no HA configured (demo): preview on the model
           onChange(); ctl.refresh(true);
         };
         el.querySelectorAll('[data-a=open],[data-a=close]').forEach(b =>
@@ -691,10 +747,11 @@ export function attachTapPopovers(o) {
         const eid = t.entities[0];
         let reading = S.climate ? S.climate(t.id) : null;
         const r = raw(eid);
-        const offlineConn = !isLive(c);
         let mock = false, action;
-        if (offlineConn && !reading) {
-          // No client, or no reading ever: sample values, clearly marked (red dot tooltip).
+        if (c == null && !reading) {
+          // No HA configured (demo): sample values, clearly marked (red dot
+          // tooltip). A configured HA that is merely offline gets no samples:
+          // its card says "HA offline" with the controls disabled.
           if (!climateMock.has(t.id)) climateMock.set(t.id, { available: true, off: false, current: 19.5, target: 21, min: 7, max: 30, step: 0.5, action: 'heating' });
           reading = climateMock.get(t.id); mock = true; action = reading.action;
         } else {
@@ -706,27 +763,12 @@ export function attachTapPopovers(o) {
         const readingNa = !mock && (!reading || !reading.available);
         const na = readingNa && (isLive(c) || !!reading);
         const off = !na && !!(reading && reading.off);
-        return { status: statusKey('climate', c, readingNa && isLive(c), mock), na, mock, off,
+        return { status: statusKey('climate', c, readingNa && isLive(c), mock), na, mock, off, haOff: haOfflineConn(c),
           current: reading ? reading.current : null, target: reading ? reading.target : null,
           min: reading ? reading.min : 7, max: reading ? reading.max : 30, step: reading ? reading.step : 0.5,
           activity: climateActivity(action, off), name: sentenceCase(t.label || (roomName(t.id) + ' radiator')) };
       },
-      html(m) {
-        const f = v => (typeof v === 'number' && isFinite(v) ? v.toFixed(1) + '°' : '–');
-        const live = !m.na && !m.off && typeof m.target === 'number';
-        const icon = m.na ? ico(I.radiatorIdle, 'dim') : ico(I.radiator, m.activity === 'heating' ? 'heat' : '');
-        const act = m.activity === 'heating' ? '<span class="heat">heating</span>' : m.activity ? '<span>' + m.activity + '</span>' : '';
-        const val = m.na ? '<span class="tp-val muted"><b>Unavailable</b></span>'
-          : m.off ? '<span class="tp-val tp-temp"><span class="big">Off</span><small><span>now ' + f(m.current) + '</span></small></span>'
-          : '<span class="tp-val tp-temp" data-v><span class="big" data-t>' + f(m.target) + '</span><small><span>now ' + f(m.current) + '</span>' + act + '</small></span>';
-        return shell(icon, m.name, m.status,
-          '<div class="tp-row">' + val + (live ? '<span class="tp-btns">' +
-            '<button class="tp-ib" data-a="down" data-tip="−' + m.step + '°" aria-label="Lower target">' + svg(I.minus) + '</button>' +
-            '<button class="tp-ib" data-a="up" data-tip="+' + m.step + '°" aria-label="Raise target">' + svg(I.plus) + '</button></span>' : '') +
-          '</div>' +
-          (live ? '<input class="tp-range temp" data-a="set" type="range" min="' + m.min + '" max="' + m.max + '" step="' + m.step +
-            '" value="' + m.target + '" aria-label="Target temperature">' : ''));
-      },
+      html(m) { return popoverHtml.climate(m, dot); },
       bind(t, el, ctl) {
         const sender = o.climateSender;
         const m0 = () => VIEWS.climate.model(t);
@@ -735,6 +777,7 @@ export function attachTapPopovers(o) {
           const r = el.querySelector('[data-a=set]'); if (r) { r.value = v; r.style.setProperty('--p', fillPct(r)); }
         };
         const apply = (v, how) => {
+          if (writeBlocked()) return;
           const m = m0();
           v = Math.max(m.min, Math.min(m.max, Math.round(v / m.step) * m.step));
           if (m.mock) { climateMock.get(t.id).target = v; show(v); return; }

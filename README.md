@@ -89,7 +89,7 @@ Read by `deploy/entrypoint.sh` at container start.
 | `HOME3D_HA_ENABLED` | Force the HA integration on or off. | `true` when URL **and** token are both set, otherwise `false` |
 | `HOME3D_HOUSE` | Which house profile to load from `houses/`. | `demo` |
 | `HOME3D_WS_RECONNECT_MS` | Delay before reconnecting a dropped WebSocket, in ms. | `5000` |
-| `HOME3D_POLL_INTERVAL_MS` | Polling interval when the WebSocket is unavailable, in ms. | `5000` |
+| `HOME3D_POLL_INTERVAL_MS` | Ignored: the app talks to Home Assistant over its WebSocket only, with no REST polling. Still accepted so existing configs keep working. | `5000` |
 | `APP_VERSION` | Stamped into the page and onto every `?v=` cache-busting query. | *unset* |
 
 ---
