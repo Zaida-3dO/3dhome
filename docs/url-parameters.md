@@ -311,8 +311,9 @@ frame times. The GPU class only decides where a device starts.
   only frames it was drawing anyway. An untouched scene costs nothing.
 - **A throttled browser is not a slow GPU.** When the browser itself holds
   animation frames down while the scene is idle (a power-saving mode, a
-  background window), nothing is measured and nothing moves; the console
-  says so.
+  background window), nothing is measured: the pixel ratio goes straight to
+  the start ratio, as it did before adaptive quality, the level stays where
+  it is, and the console says so.
 - **Thresholds.** Headroom is a 95th percentile under 20 ms, or under the
   frame-rate cap's own cadence if that is slower (the 60 fps cap lands on
   20.8 ms at 144 Hz). Too slow is over 34 ms, and at least one refresh

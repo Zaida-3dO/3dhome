@@ -324,6 +324,19 @@ const W = A.WINDOW;
   check('fewer than 5 idle ticks -> not throttled (no evidence)', A.rafThrottle(frames(100, 4)).throttled === false);
   check('a couple of slow idle ticks among fast ones -> not throttled (median)',
     A.rafThrottle([...frames(16.7, 7), 100, 120]).throttled === false);
+  check('a couple of fast idle ticks among slow ones -> still throttled (median, not minimum)',
+    A.rafThrottle([...frames(100, 6), 8.3, 8.3]).throttled === true);
+  // Code review r1 M1: a throttled device still ends at the start ratio,
+  // unmeasured -- what main did -- rather than at the 1.0 first paint forever.
+  const at30 = A.rafThrottle(frames(33.3, 8));
+  const tab = tabletController();
+  const jt = at30.throttled ? tab.jumpToStart() : null;
+  check('30 Hz throttled tablet: jumps 1 -> 1.5 unmeasured, no level proposal',
+    jt && jt.to === 1.5 && jt.unmeasured === true && jt.proposeLevel == null && tab.ceiling === 1.5 && tab.pending == null, jt);
+  const desk = A.createController({ floor: 1, startRatio: 2, maxRatio: 2, level: 4, ctx: { maxLevel: 4, mobile: false, shadows: 'auto' } });
+  check('30 Hz throttled high-DPI desktop: ends at DPR 2 (main\'s behaviour)', desk.jumpToStart().to === 2 && desk.ceiling === 2);
+  check('jumpToStart is idempotent', desk.jumpToStart() === null);
+  check('jumpToStart honours a stored cap', tabletController({ dprCap: 1.25 }).jumpToStart().to === 1.25);
 }
 
 // ---- 3. sample rejection ------------------------------------------------------
@@ -393,6 +406,13 @@ const W = A.WINDOW;
   check('scene: the in-use maintenance probe needs a recent interaction, never runs during one, and is spaced out',
     /if \(interacting \|\| !lastInteractAt \|\| now - lastInteractAt > MAINT_ACTIVE_MS\) return false;/.test(src) &&
     /if \(now - Math\.max\(lastProbeEndAt, warmUntil\) < MAINT_PROBE_EVERY_MS\) return false;/.test(src));
+  check('scene: when frames cannot be trusted it jumps to the start ratio unmeasured',
+    /if \(throttleNoted \|\| now - warmUntil > UNMEASURED_JUMP_MS\) jumpUnmeasured\(\);/.test(src) &&
+    /const d = adaptive && adaptive\.jumpToStart\(\);/.test(src));
+  check('scene: resetQuality touches nothing with adaptation off', /resetQuality\(\) \{\s*if \(!adaptive\) return false;/.test(src));
+  const page = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  check('page: Re-measure is only offered with adaptation on',
+    /\(home\.getQualityStatus\(\)\.adaptive\s*\? '<button class="spec-btn" id="panel-quality-reset"/.test(page));
   check('scene: pausing clears continuity', /if \(paused\) \{ frameContinuous = false; gateIdleTicks = 0; return; \}/.test(src));
   check('scene: with adaptation off the old ramp still runs', /\} else \{\s*sampleRampFrame\(frameNow, renderMs, interacting\);/.test(src));
   check('scene: a stored DPR cap only applies to the level it was learned at',

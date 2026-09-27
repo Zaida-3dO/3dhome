@@ -3889,6 +3889,15 @@ export const Home3DScene = (() => {
       }
       return t.throttled;
     }
+    const UNMEASURED_JUMP_MS = 8000;
+    function jumpUnmeasured() {
+      const d = adaptive && adaptive.jumpToStart();
+      if (!d) return;
+      applyAdaptiveDecision(d, throttleNoted
+        ? 'the browser is throttling frames, so no measurement'
+        : 'no idle frames to judge the browser by, so no measurement');
+      notifyQuality();
+    }
     let vsyncMs = 0;
     let cadenceMs = 0;
     let dprCapState = storedCap;
@@ -3974,7 +3983,14 @@ export const Home3DScene = (() => {
         return true;
       }
       if (now < warmUntil) return false;
-      if (browserThrottled()) return false;
+      if (browserThrottled()) {
+        // Frame times cannot be trusted, so do what the scene did before
+        // adaptive quality: go to the start ratio unmeasured (a throttled
+        // browser, or no idle evidence within UNMEASURED_JUMP_MS). Never
+        // left at the cheap first-paint ratio for the whole session.
+        if (throttleNoted || now - warmUntil > UNMEASURED_JUMP_MS) jumpUnmeasured();
+        return false;
+      }
       // Furniture still building: its slices and first frames are not the
       // scene's cost. (Bounded, so a build that never lands cannot stop it.)
       if (furnitureStarted && !furnitureResult && now - furnitureTimeline.start < 30000) return false;
@@ -5233,9 +5249,12 @@ export const Home3DScene = (() => {
       },
       // Forget this device's measurements (Settings "Re-measure"): the next
       // load starts from the default level again. This load is unchanged.
+      // With adaptation off (?tier=, preview, a low fps cap) it touches
+      // nothing and returns false: ?tier= must never read or write storage.
       resetQuality() {
+        if (!adaptive) return false;
         const ok = clearState(qStorage, qKey);
-        if (adaptive) console.info('[Home3DScene] Adaptive quality: measurements cleared; the next load starts from the default level.');
+        console.info('[Home3DScene] Adaptive quality: measurements cleared; the next load starts from the default level.');
         return ok;
       },
       // What the exterior-fade loop is ACTUALLY doing, per outer wall. Same

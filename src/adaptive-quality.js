@@ -414,9 +414,25 @@ export function createController(o) {
     return { verdict: 'pending', p95: v, samples: n, decision: null, thresholds: t };
   }
 
+  /**
+   * Go straight to the start ratio without a measurement -- what the scene
+   * did before adaptive quality. For when frame times cannot be trusted (the
+   * browser throttles rAF): a high-DPI desktop must not sit at the cheap
+   * first-paint ratio forever. Never above a stored cap. Returns the
+   * decision, or null when already there.
+   */
+  function jumpToStart() {
+    const start = Math.min(startRatio, st.sessionMax);
+    if (st.ceiling >= start - EPS) return null;
+    const d = { kind: 'up', from: st.ceiling, to: start, proposeLevel: null, revoke: false, block: null, cap: null, unmeasured: true };
+    st.ceiling = start;
+    return d;
+  }
+
   return {
     feed,
     coldFrame,
+    jumpToStart,
     /** Drop the window and go quiet (resume from hidden, furniture attach). */
     quiet(now, ms) { reset(now, ms); },
     /** Is there anything a probe could still gain? (`wall`: wall-clock ms) */

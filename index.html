@@ -2262,8 +2262,12 @@
             html += '<div class="panel-toggle-row" style="gap:8px;">' +
               '<span class="panel-toggle-label">Quality</span>' +
               '<span id="panel-quality-readout" style="flex:1;font-size:11px;opacity:0.7;text-align:right;line-height:1.35;"></span>' +
-              '<button class="spec-btn" id="panel-quality-reset" style="width:auto;padding:4px 8px;font-size:11px;" ' +
-              'title="Forget this device\'s frame-time measurements; the next load starts from the default">Re-measure</button>' +
+              // No Re-measure when adaptation is off (?tier=, the preview, a
+              // low fps cap): nothing to forget, and ?tier= never touches storage.
+              (home.getQualityStatus().adaptive
+                ? '<button class="spec-btn" id="panel-quality-reset" style="width:auto;padding:4px 8px;font-size:11px;" ' +
+                  'title="Forget this device\'s frame-time measurements; the next load starts from the default">Re-measure</button>'
+                : '') +
               '</div>';
           }
 
