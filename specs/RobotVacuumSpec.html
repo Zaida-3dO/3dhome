@@ -79,8 +79,9 @@
    metal band round its middle, a white lid) on a thin base plate with a
    small front ramp. The robot sits at the front of the plate, its front at
    the envelope's front and its rear tucked into an alcove under the tower.
-   The robot: a round body with a chamfered top edge, a darker bumper band,
-   a lidar puck and a small glowing status LED.
+   The robot: a smooth round body (64 segments; 32 at low detail) with a
+   rounded top edge, a darker bumper round the front, two subtle top seams,
+   a raised lidar turret with a dark sensor window, and a glowing status LED.
 
    Dock off draws the robot alone; the page then sets the envelope to the
    robot's own size (width = depth = robot diameter, height = robot height).
@@ -175,7 +176,7 @@ function App() {
               <tr><td>Tower width</td><td className="num">{t.towerWidth.toFixed(0)}</td><td>clamped to width</td></tr>
               <tr><td>Tower depth</td><td className="num">{t.towerDepth.toFixed(0)}</td><td>clamped to depth</td></tr>
               <tr><td>Robot under the tower</td><td className="num">{t.dock ? Math.max(0, Math.min(t.towerDepth, t.depth) - (t.depth - Math.min(t.robotDiameter, t.width, t.depth))).toFixed(0) : '—'}</td><td>derived</td></tr>
-              <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail (caps 600 full / 200 low)</td></tr>
+              <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail (caps 2800 full / 600 low)</td></tr>
             </tbody>
           </table>
           <div className="legend">
@@ -191,8 +192,9 @@ function App() {
             A rounded white dock tower stands at the back: a white lower part, a champagne metal band round its
             middle and a white lid. It stands on a thin white base plate that runs the full depth and ends in a
             small ramp. The robot sits at the front of the plate, its rear tucked into an alcove under the tower:
-            a round white body with a chamfered top edge, a darker bumper band (dropped at low detail), a grey
-            lidar puck and a small glowing status LED.
+            a smooth round white body with a rounded top edge, a darker bumper round the front, subtle top seams,
+            a raised lidar turret with a dark sensor window and a small glowing status LED. Low detail keeps the
+            true circle on fewer segments and drops the seams and the window.
           </div>
           <div className="row">
             <button className={'btn' + (t.dock ? ' active' : '')} onClick={() => setDock(true)}>Robot on dock</button>
