@@ -1121,9 +1121,10 @@ export const EXAMPLE_L = deepFreeze({
 
 /**
  * A full L kitchen as measured: the preset KitchenSpec opens on.
- * Dimensions only. Run A (65 deep) owns the corner; run B (60 deep) starts
- * at A's front face, so A's `cornerDepth` is B's 60 and its 60 cm corner
- * module is exactly the square B hides. Every run's modules fill its width,
+ * Dimensions only. Run A (65 deep) owns the corner; run B (60 deep, 214
+ * long: 60/60/60/34) starts at A's front face, so the leg along B's wall is
+ * 65 + 214 = 279. A's `cornerDepth` is B's 60 -- the square B hides -- which
+ * is exactly its 60 cm corner module. Every run's modules fill its width,
  * so it builds with no warnings at all.
  */
 export const FULL_RUN_L = deepFreeze({
@@ -1143,13 +1144,13 @@ export const FULL_RUN_L = deepFreeze({
     sink: {at: 120, width: 90, depth: 50, bowl: 'inset', drainer: 'right'},
   },
   b: {
-    width: 210,
+    width: 214,
     depth: 60,
     modules: [
       {kind: 'cabinet', width: 60, hinge: 'left'},
       {kind: 'oven', width: 60, hob: true},
       {kind: 'cabinet', width: 60, plinthLed: true, hinge: 'right'},
-      {kind: 'cabinet', width: 30, hinge: 'right', plinthLed: true},
+      {kind: 'cabinet', width: 34, hinge: 'right', plinthLed: true},
     ],
   },
   wall: {

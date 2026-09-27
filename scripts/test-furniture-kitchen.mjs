@@ -640,8 +640,9 @@ function contained(g, p) {
   // As measured, every run's modules fill its width and A's corner module is
   // exactly B's depth: no squeeze, no widening, no warnings at all.
   check('default preset: builds with no warnings', warnings.length === 0, warnings);
-  check('default preset: base run B is 210 wide and its modules add up to 210', preset.b.width === 210 &&
-    preset.b.modules.reduce((n, m) => n + m.width, 0) === 210);
+  check('default preset: base run B is 214 wide (60/60/60/34) and its modules fill it', preset.b.width === 214 &&
+    preset.b.modules.map(m => m.width).join('/') === '60/60/60/34');
+  check('default preset: the leg along B is 65 + 214 = 279', preset.a.depth + preset.b.width === 279);
   check('default preset: A is 65 deep, B 60, and A\'s corner module is the 60 B hides', preset.a.depth === 65 &&
     preset.b.depth === 60 && preset.a.cornerDepth === 60 && preset.a.modules[0].kind === 'corner' && preset.a.modules[0].width === 60);
   keys.forEach((k, i) => check('default preset ' + k + ': validates', K.validateParams(slots[i], preset[k]).length === 0, K.validateParams(slots[i], preset[k])));
