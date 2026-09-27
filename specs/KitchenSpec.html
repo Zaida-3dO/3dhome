@@ -91,10 +91,16 @@ const ITEMS = [
   { key: 'fridge', type: 'fridge-freezer',   label: 'Fridge-freezer' },
 ];
 
-function initialState() {
+// The page opens on K.DEFAULT_PRESET; the preset menu switches between them.
+function presetById(id) {
+  return K.KITCHEN_PRESETS.find(p => p.id === id) || K.KITCHEN_PRESETS[0];
+}
+function initialState(id) {
+  const preset = presetById(id || K.DEFAULT_PRESET);
   const s = {};
-  ITEMS.forEach(it => { s[it.key] = Object.assign(clone(K.TYPES[it.type].DEFAULTS), clone(K.EXAMPLE_L[it.key] || {})); });
-  s.wallTop = K.EXAMPLE_L.wallTop;
+  ITEMS.forEach(it => { s[it.key] = Object.assign(clone(K.TYPES[it.type].DEFAULTS), clone(preset.items[it.key] || {})); });
+  s.wallTop = preset.items.wallTop;
+  s.preset = preset.id;
   return s;
 }
 
@@ -335,7 +341,7 @@ function exportJson(t) {
 }
 
 function App() {
-  const [t, setT] = React.useState(initialState);
+  const [t, setT] = React.useState(() => initialState());
   const [tab, setTab] = React.useState('a');
   const [copied, setCopied] = React.useState('');
   const setItem = (key, v) => setT(prev => Object.assign({}, prev, { [key]: v }));
@@ -413,7 +419,11 @@ function App() {
           <h2>Copy JSON — params that differ from DEFAULTS</h2>
           <div className="row" style={{ marginTop: 0 }}>
             <button className="btn" onClick={doCopy}>Copy JSON</button>
-            <button className="btn ghost" onClick={() => { setT(initialState()); setCopied(''); }}>Reset to the example L</button>
+            <label className="f">preset
+              <select id="preset" value={t.preset} onChange={e => { setT(initialState(e.target.value)); setCopied(''); }}>
+                {K.KITCHEN_PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select></label>
+            <button className="btn ghost" onClick={() => { setT(initialState(t.preset)); setCopied(''); }}>Reset to preset</button>
             <span style={{ fontSize: 11 }}>{copied}</span>
           </div>
           <pre id="json-out">{json}</pre>

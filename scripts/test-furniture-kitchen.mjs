@@ -626,6 +626,39 @@ function contained(g, p) {
   check('Load JSON: a piece that does not build is refused', (() => { try { K.parseKitchenJson(JSON.stringify([{ type: 'kitchen-base-run', params: {} }]), slots, T2); return false; } catch (e) { return /entry 1 does not build/.test(e.message); } })());
 }
 
+// ---- 12. the default preset: builds, and round-trips through Copy JSON ----------------
+{
+  const slots = ['kitchen-base-run', 'kitchen-base-run', 'kitchen-wall-run', 'kitchen-wall-run', 'fridge-freezer'];
+  const keys = ['a', 'b', 'wall', 'wallB', 'fridge'];
+  check('the page opens on the full-run L', K.DEFAULT_PRESET === 'l-full-run' && K.KITCHEN_PRESETS[0].id === K.DEFAULT_PRESET);
+  check('the generic example stays selectable', K.KITCHEN_PRESETS.some(p => p.id === 'l-example' && p.items === K.EXAMPLE_L));
+  const preset = K.KITCHEN_PRESETS.find(p => p.id === K.DEFAULT_PRESET).items;
+  // It builds, and the only warning is the known squeeze of base run B
+  // (kept exactly as entered: 180 wide, modules adding up to 210).
+  warnings.length = 0;
+  keys.forEach((k, i) => K.TYPES[slots[i]].build(THREE, Object.assign({}, K.TYPES[slots[i]].DEFAULTS, preset[k]), { detail: 'full' }));
+  // Two known warnings, both from the data as entered and both left for its
+  // owner to settle: base run B's squeeze, and base run A's 60 cm corner
+  // module widened to the other leg's 62 cm depth.
+  check('default preset: the only warnings are the two known ones', warnings.length === 2 &&
+    warnings.some(w => /modules add up to 210 cm but width is 180 cm/.test(w)) &&
+    warnings.some(w => /corner module is 60 cm but the other run is 62 cm deep/.test(w)), warnings);
+  check('default preset: base run B is as entered (180, modules summing to 210)', preset.b.width === 180 &&
+    preset.b.modules.reduce((n, m) => n + m.width, 0) === 210);
+  keys.forEach((k, i) => check('default preset ' + k + ': validates', K.validateParams(slots[i], preset[k]).length === 0, K.validateParams(slots[i], preset[k])));
+  // Copy JSON (paramsDiff) then Load JSON (parseKitchenJson) gives back exactly the preset's params.
+  const text = JSON.stringify(keys.map((k, i) => ({ type: slots[i], params: K.paramsDiff(slots[i], Object.assign({}, K.TYPES[slots[i]].DEFAULTS, preset[k])) })));
+  const back = K.parseKitchenJson(text, slots, THREE);
+  const same = keys.every((k, i) => JSON.stringify(Object.keys(preset[k]).map(f => back[i][f])) === JSON.stringify(Object.keys(preset[k]).map(f => preset[k][f])));
+  check('default preset round-trips through Copy JSON and Load JSON', same, back);
+  // Its pieces hold their envelopes like every other config.
+  keys.forEach((k, i) => {
+    const impl = K.TYPES[slots[i]], p = Object.assign({}, impl.DEFAULTS, preset[k]);
+    const g = impl.build(THREE, p, { detail: 'full' });
+    check('default preset ' + k + ': everything drawn is inside the envelope', contained(g, p), boxCm(g));
+  });
+}
+
 // ---- 9. Copy JSON ------------------------------------------------------------------
 {
   const d = K.paramsDiff('kitchen-base-run', Object.assign({}, BASE.DEFAULTS, { corner: 'left', frontColor: '#223344' }));

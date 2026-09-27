@@ -1107,6 +1107,71 @@ export const EXAMPLE_L = deepFreeze({
   wallTop: 210,
 });
 
+/**
+ * A full L kitchen as a builder of one would enter it: the preset
+ * KitchenSpec opens on. Dimensions only. Base run B is kept exactly as
+ * entered -- 180 cm wide with modules adding up to 210, which the builder
+ * squeezes to fit with a warning -- because that width is still an open
+ * question for whoever measured it.
+ */
+export const FULL_RUN_L = deepFreeze({
+  a: {
+    width: 290,
+    height: 118.5,
+    modules: [
+      {kind: 'corner', width: 60, plinthLed: true},
+      {kind: 'cabinet', width: 50, plinthLed: true},
+      {kind: 'cabinet', width: 60, plinthLed: true},
+      {kind: 'dishwasher', width: 60, plinthLed: true},
+      {kind: 'cabinet', width: 60, hinge: 'top', plinthLed: true},
+    ],
+    corner: 'left',
+    cornerDepth: 62,
+    sink: {at: 120, width: 90, depth: 50, bowl: 'inset', drainer: 'right'},
+  },
+  b: {
+    width: 180,
+    depth: 62,
+    modules: [
+      {kind: 'cabinet', width: 60, hinge: 'left'},
+      {kind: 'oven', width: 60, hob: true},
+      {kind: 'cabinet', width: 60, plinthLed: true, hinge: 'right'},
+      {kind: 'cabinet', width: 30, hinge: 'right', plinthLed: true},
+    ],
+  },
+  wall: {
+    width: 290,
+    height: 121.5,
+    modules: [
+      {kind: 'cabinet', width: 65, underLed: true, topLed: true, height: 70, hinge: 'left'},
+      {kind: 'cabinet', width: 45, height: 70, underLed: true, topLed: true, hinge: 'left'},
+      {kind: 'cabinet', width: 60, height: 55, hinge: 'right', underLed: true, topLed: true},
+      {kind: 'cabinet', width: 60, underLed: true, topLed: true, height: 55},
+      {kind: 'cabinet', width: 60, height: 70, hinge: 'right', underLed: true, topLed: true},
+    ],
+  },
+  wallB: {
+    width: 160,
+    height: 121.5,
+    modules: [
+      {kind: 'hood', width: 60, style: 'chimney', visor: 'smoked', splashback: 61.5, height: 60, at: 60},
+    ],
+  },
+  fridge: {
+    width: 65,
+    plinthLed: true,
+    topLed: true,
+  },
+  wallTop: 210,
+});
+
+/** The presets KitchenSpec offers, the first being the one it opens on. */
+export const KITCHEN_PRESETS = Object.freeze([
+  Object.freeze({ id: 'l-full-run', label: 'L kitchen, full run', items: FULL_RUN_L }),
+  Object.freeze({ id: 'l-example', label: 'Generic example L', items: EXAMPLE_L }),
+]);
+export const DEFAULT_PRESET = 'l-full-run';
+
 function sameValue(a, b) {
   if (a === b) return true;
   if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') return false;
