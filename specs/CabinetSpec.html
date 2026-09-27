@@ -306,17 +306,16 @@ const PRESETS = {
   }
 };
 
-// Bathroom mirror cabinets: mirror fronts, no plinth, no handles (moved here
-// from BathroomFittingsSpec, 2026-09-27 -- a mirror cabinet is a `cabinet`, so
-// it is signed off with the other cabinets; same params as it had there).
-function mirrorCabinetParams(w, h, d, doors) {
-  const cells = [];
-  for (let i = 0; i < doors; i++) cells.push({ kind: 'mirror', width: +(w / doors).toFixed(3) });
-  return { width: w, height: h, depth: d, plinth: { type: 'plinth', height: 0 }, handles: false,
-    color: '#f4f1ea', topColor: '#f4f1ea', fronts: [{ height: h, cells }] };
-}
-PRESETS.mirrorCabinet3Door = { label: 'Mirror cabinet, 3 doors', params: mirrorCabinetParams(120, 70, 18, 3) };
-PRESETS.mirrorCabinet2Door = { label: 'Mirror cabinet, 2 doors', params: mirrorCabinetParams(80, 70, 16, 2) };
+// Bathroom mirror cabinets: mirror fronts, no plinth, no handles. Read from
+// src/furniture/cabinet.js's own MIRROR_CABINET_PRESETS (item 365c4c72 (5):
+// this page and BathroomFittingsSpec.html used to each define their own copy
+// of mirrorCabinetParams() and its two presets, verbatim and free to drift;
+// both now read the one export). Assigned once window.CabinetFurniture is
+// ready -- see the module-script comment above on why cabinet.js's own
+// import can't be a synchronous top-level one in a text/babel script.
+window.cabinetModuleReady.then(() => {
+  Object.assign(PRESETS, window.CabinetFurniture.MIRROR_CABINET_PRESETS);
+});
 
 // OBJECT -> its VARIANTS (preset keys above), in picker order.
 const CABINET_OBJECTS = {
