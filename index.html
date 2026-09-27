@@ -3,10 +3,29 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- The app is dark. Declaring it keeps Chrome's auto dark theme (Android) and
-       Samsung Internet's dark web pages from re-colouring it, and makes the
-       browser draw its own controls and scrollbars dark. -->
+  <!-- The theme (Settings > Theme: Auto / Dark / Light) is declared, never left
+       to the browser: it keeps Chrome's auto dark theme (Android) and Samsung
+       Internet's dark web pages from re-colouring the page, and makes the
+       browser draw its own controls and scrollbars to match. The script below
+       rewrites this to the resolved theme before first paint. -->
   <meta name="color-scheme" content="dark">
+  <script>
+    /* Theme before first paint, so a Light choice never flashes dark. Mirrors
+       resolveTheme/applyTheme in src/theme.js; scripts/test-theme.mjs runs this
+       exact script and checks it agrees with the module. */
+    (function () {
+      var p = 'auto', d = true, r = document.documentElement;
+      try { p = localStorage.getItem('home3d.theme') || 'auto'; } catch (e) {}
+      if (p !== 'dark' && p !== 'light') p = 'auto';
+      try { d = !window.matchMedia || window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) {}
+      var t = p === 'auto' ? (d ? 'dark' : 'light') : p;
+      r.setAttribute('data-theme', t);
+      r.setAttribute('data-theme-pref', p);
+      r.style.colorScheme = t === 'light' ? 'only light' : 'dark';
+      var m = document.querySelector('meta[name="color-scheme"]');
+      if (m) m.setAttribute('content', t === 'light' ? 'only light' : 'dark');
+    })();
+  </script>
   <title>3dHome</title>
   <script>
     // Favicon: only registered in standalone mode.
@@ -450,6 +469,82 @@
     .spec-group-body { display: flex; flex-direction: column; gap: 6px; }
     .spec-group-body.collapsed { display: none; }
 
+    /* ---- Light theme (Settings > Theme) --------------------------------
+       The app's own colours are dark-first literals; these rules re-colour
+       all UI chrome when <html data-theme="light"> (set by src/theme.js and
+       the inline <head> script). The 3D scene, its sky, the title over it,
+       the compass rose and the loading overlay (which matches the scene's
+       background) stay as they are. */
+    :root[data-theme="light"] { color-scheme: only light; }
+    :root[data-theme="light"] body { background: #e9ecf3; }
+    :root[data-theme="light"] .panel { background: rgba(248,249,252,0.95); border-left-color: rgba(0,0,0,0.10); color: #1a1d29; }
+    :root[data-theme="light"] .panel-header,
+    :root[data-theme="light"] .panel-toggle-row { border-bottom-color: rgba(0,0,0,0.08); }
+    :root[data-theme="light"] .panel-footer { border-top-color: rgba(0,0,0,0.08); }
+    :root[data-theme="light"] .panel-back,
+    :root[data-theme="light"] .panel-close,
+    :root[data-theme="light"] .panel-pin { color: #5b6070; }
+    :root[data-theme="light"] .panel-pin:hover { color: #1a1d29; }
+    :root[data-theme="light"] .panel-pin[aria-pressed="true"] { color: #4f46e5; }
+    :root[data-theme="light"] .panel-toggle-label,
+    :root[data-theme="light"] .control-label { opacity: 0.8; }
+    :root[data-theme="light"] .panel-section-title { opacity: 0.55; }
+    :root[data-theme="light"] .back-btn,
+    :root[data-theme="light"] .top-btn,
+    :root[data-theme="light"] .ha-status { background: rgba(255,255,255,0.85); border: 1px solid rgba(0,0,0,0.12); color: #1a1d29; }
+    :root[data-theme="light"] .ha-status { opacity: 0.85; }
+    :root[data-theme="light"] .back-btn:hover,
+    :root[data-theme="light"] .top-btn:hover { background: #fff; }
+    :root[data-theme="light"] .room-tooltip { background: rgba(255,255,255,0.92); color: #1a1d29; box-shadow: 0 2px 10px rgba(0,0,0,0.25); }
+    :root[data-theme="light"] .room-list-item { color: #1a1d29; border-bottom-color: rgba(0,0,0,0.06); }
+    :root[data-theme="light"] .room-list-item:hover { background: rgba(0,0,0,0.04); }
+    :root[data-theme="light"] .room-list-area { opacity: 0.6; }
+    :root[data-theme="light"] .room-list-dot { background: #c9ccd6; }
+    :root[data-theme="light"] .room-list-dot.on { background: #f5b800; box-shadow: 0 0 6px rgba(245,184,0,0.7); }
+    :root[data-theme="light"] .row-ico { fill: rgba(0,0,0,0.62); }
+    :root[data-theme="light"] .row-ico.dim { fill: rgba(0,0,0,0.3); }
+    :root[data-theme="light"] .row-ico.light-on { fill: #d99a00; filter: none; }
+    :root[data-theme="light"] .row-ico.heat { fill: #e8590c; filter: none; }
+    :root[data-theme="light"] .row-ico.motion-on { fill: #1d6fd6; }
+    :root[data-theme="light"] .row-ico.d-open { fill: #c77700; }
+    :root[data-theme="light"] .row-ico.d-closed { fill: #15803d; }
+    :root[data-theme="light"] .toggle { background: rgba(0,0,0,0.20); }
+    :root[data-theme="light"] .toggle.on { background: #6366f1; }
+    :root[data-theme="light"] .toggle.galaxy.on { background: #7c3aed; }
+    :root[data-theme="light"] .toggle-knob { box-shadow: 0 1px 3px rgba(0,0,0,0.35); }
+    :root[data-theme="light"] .slider { --range-track: rgba(0,0,0,0.18); }
+    :root[data-theme="light"] .slider::-webkit-slider-thumb { box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 1px 4px rgba(0,0,0,0.3); }
+    :root[data-theme="light"] .slider::-moz-range-thumb { box-shadow: 0 0 0 1px rgba(0,0,0,0.25), 0 1px 4px rgba(0,0,0,0.3); }
+    :root[data-theme="light"] .slider.temp::-webkit-slider-runnable-track,
+    :root[data-theme="light"] .slider.temp::-moz-range-track { box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15); }
+    :root[data-theme="light"] .status-tag { background: rgba(0,0,0,0.06); color: rgba(0,0,0,0.7); }
+    :root[data-theme="light"] .status-tag-on { background: rgba(29,111,214,0.14); color: #1d5fbf; }
+    :root[data-theme="light"] .row-ib,
+    :root[data-theme="light"] .vac-btn,
+    :root[data-theme="light"] .panel-footer-btn,
+    :root[data-theme="light"] .spec-btn,
+    :root[data-theme="light"] .sun-mode-btn { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.14); color: #1a1d29; }
+    :root[data-theme="light"] .sun-mode-btn { color: rgba(0,0,0,0.55); }
+    :root[data-theme="light"] .row-ib:hover:not(:disabled),
+    :root[data-theme="light"] .vac-btn:hover:not(:disabled),
+    :root[data-theme="light"] .panel-footer-btn:hover,
+    :root[data-theme="light"] .spec-btn:hover,
+    :root[data-theme="light"] .sun-mode-btn:hover { background: rgba(0,0,0,0.09); color: #1a1d29; }
+    :root[data-theme="light"] .row-ib:active:not(:disabled) { background: rgba(99,102,241,0.25); }
+    :root[data-theme="light"] .sun-mode-btn.active { background: rgba(245,184,0,0.18); border-color: rgba(200,140,0,0.6); color: #9a6200; }
+    :root[data-theme="light"] .sun-mode-btn.active.night { background: rgba(79,70,229,0.12); border-color: rgba(79,70,229,0.5); color: #4338ca; }
+    :root[data-theme="light"] .panel-footer-btn.export { color: rgba(0,0,0,0.6); }
+    :root[data-theme="light"] .spec-group-header { color: #1a1d29; }
+    :root[data-theme="light"] .vac-block { border-color: rgba(0,0,0,0.10); background: rgba(0,0,0,0.025); }
+    :root[data-theme="light"] .vac-btn.primary:not(:disabled) { background: #6366f1; color: #fff; }
+    :root[data-theme="light"] .vac-room { border-color: rgba(0,0,0,0.16); color: #1a1d29; }
+    :root[data-theme="light"] .vac-room:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
+    :root[data-theme="light"] .vac-batt.low,
+    :root[data-theme="light"] .vac-status.err { color: #b91c1c; }
+    :root[data-theme="light"] .ha-offline-note { background: rgba(239,68,68,0.10); border-color: rgba(220,38,38,0.35); color: #991b1b; }
+    :root[data-theme="light"] .color-square::-webkit-color-swatch { border-color: rgba(0,0,0,0.25); }
+    :root[data-theme="light"] .color-square::-moz-color-swatch { border-color: rgba(0,0,0,0.25); }
+
     /* Wide screen: panel always open, no close/lights button */
     @media (min-width: 1500px) {
       .panel { transform: translateX(0) !important; }
@@ -872,11 +967,19 @@
     import { attachTapPopovers, climateActivity } from './src/tap-popovers.js?v=__VERSION__';
     // The sidebar's open / pinned state machine (collapsible widths only).
     import { sidebarReduce, SIDEBAR_INITIAL } from './src/sidebar-pin.js?v=__VERSION__';
+    import { createThemeController } from './src/theme.js?v=__VERSION__';
     import { isColorChannel, colorFromAttributes, supportsColor } from './src/light-color.js?v=__VERSION__';
     import { ICONS, svgIcon }  from './src/ui-icons.js?v=__VERSION__';
     import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCommand, vacuumStatusText,
              MOCK_VACUUM_READINGS, mockVacuumAfter } from './src/vacuum-control.js?v=__VERSION__';
     import { normalisePlantBindings, plantStatusText, agoText, mockPlantReading } from './src/plant-status.js?v=__VERSION__';
+
+    // Theme (Settings > Theme). The inline <head> script already painted the
+    // stored choice; this takes over, follows the system live while the choice
+    // is Auto, and stores a manual one. localStorage itself can throw (blocked
+    // storage), so it is fetched defensively; the controller treats a missing
+    // store as Auto and a refused write as a no-op.
+    const themeCtl = createThemeController(window, document, (() => { try { return window.localStorage; } catch (e) { return null; } })());
 
     // ── Why there is no DOMContentLoaded wrapper here ──────────────────────
     // There used to be one, and for classic scripts it was correct: an inline
@@ -2372,6 +2475,20 @@
             '<button class="toggle ' + (sunOn ? 'on' : '') + '" id="panel-sun-toggle"><div class="toggle-knob"></div></button>' +
             '</div>';
 
+          // Theme: Auto (follow the system) / Dark / Light -- src/theme.js.
+          const SVG_THEME_AUTO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg>';
+          const themePref = themeCtl.pref;
+          const themeBtn = (val, svg, label, extra) =>
+            '<button class="sun-mode-btn ' + (extra || '') + (themePref === val ? ' active' : '') + '" data-theme-choice="' + val +
+            '" title="' + label + '" aria-label="Theme: ' + label + '" aria-pressed="' + (themePref === val) + '">' + svg + '</button>';
+          html += '<div class="panel-toggle-row">' +
+            '<span class="panel-toggle-label">Theme</span>' +
+            '<div class="sun-mode-group" role="group" aria-label="Theme">' +
+            themeBtn('auto', SVG_THEME_AUTO, 'Auto (system)', 'night') +
+            themeBtn('dark', SVG_NIGHT, 'Dark', 'night') +
+            themeBtn('light', SVG_NOON, 'Light', '') +
+            '</div></div>';
+
           html += '<div class="panel-toggle-row">' +
             '<span class="panel-toggle-label">Compass</span>' +
             '<button class="toggle ' + (compassOn ? 'on' : '') + '" id="panel-compass-toggle"><div class="toggle-knob"></div></button>' +
@@ -2532,6 +2649,9 @@
           });
           panelBody.querySelectorAll('[data-sun-mode]').forEach(btn => {
             btn.addEventListener('click', () => { home.setSunMode(btn.dataset.sunMode); renderPanel(); });
+          });
+          panelBody.querySelectorAll('[data-theme-choice]').forEach(btn => {
+            btn.addEventListener('click', () => { themeCtl.set(btn.dataset.themeChoice); renderPanel(); });
           });
           return;
         }
