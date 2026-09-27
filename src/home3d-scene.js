@@ -3547,7 +3547,15 @@ export const Home3DScene = (() => {
     // Off, and the scene behaves exactly as before, when: ?tier= pins the
     // tier; the scene is the auto-rotating preview; or a frame-rate cap below
     // MIN_FPS_CAP puts the frame floor above the headroom threshold.
+    // `opts.level` (the /diagnostics benchmark only; see src/diagnostics/)
+    // pins the structural LEVEL -- any rung of the ladder, mid-lite and
+    // ultra-lite included, which ?tier= cannot reach -- and turns adaptation
+    // off so it neither fights the benchmark nor persists anything. Clamped to
+    // what the uniform budget compiles. Absent (every normal caller), nothing
+    // here changes.
+    const levelPinned = !tierInfo.overridden && Number.isInteger(opts.level);
     const adaptiveOff = tierInfo.overridden ? '?tier= pins it'
+      : levelPinned ? 'level pinned (diagnostics)'
       : autoRotate ? 'auto-rotating preview'
       : (maxFps > 0 && maxFps < MIN_FPS_CAP) ? `maxFps ${maxFps} < ${MIN_FPS_CAP}`
       : null;
@@ -3558,8 +3566,10 @@ export const Home3DScene = (() => {
     const levelCtx = { maxLevel, mobile: mobileGpu === true, shadows };
     const stored = adaptiveOff ? null : loadState(qStorage, qKey, maxLevel);
     const startLevelIdx = tierInfo.overridden ? maxLevel
+      : levelPinned ? Math.max(0, Math.min(maxLevel, opts.level))
       : (stored && stored.level != null ? stored.level : defaultLevel(mobileGpu === true, maxLevel));
-    const levelFrom = tierInfo.overridden ? '?tier=' : (stored && stored.level != null ? 'stored' : 'default');
+    const levelFrom = tierInfo.overridden ? '?tier=' : levelPinned ? 'pinned'
+      : (stored && stored.level != null ? 'stored' : 'default');
     // The build. At a device's default level this is the pre-adaptive build
     // exactly (scripts/test-adaptive-quality.mjs compares every uniform tier
     // x shadows= value against the old formula): the `shadows` opt still
@@ -3998,6 +4008,11 @@ export const Home3DScene = (() => {
     // ramp-up structurally CANNOT stomp a drag-triggered ramp-down — there is
     // no ordering in which the two can oscillate against each other.
     const basePixelRatio = scenePixelRatio;
+    // The two diagnostics knobs (instance.diagnostics, the /diagnostics
+    // benchmark only). Inert at their defaults: a null pin leaves the resolver
+    // below as it was, and `false` leaves the on-demand gate as it was.
+    let diagPixelRatio = null;
+    let diagContinuous = false;
     // Cap while dragging. Held at 1 rather than 0.75: below 1 the softening
     // reads as a defect on a phone rather than as responsiveness, and the win
     // from 1 -> 0.75 is a further 44% of a buffer that is already the smaller
@@ -4082,6 +4097,9 @@ export const Home3DScene = (() => {
     // Resolve the ratio for the current frame. `interacting` is passed in from
     // the loop, which already computes it.
     function resolvePixelRatio(interacting) {
+      // The diagnostics pin (instance.diagnostics.setPixelRatio) beats the
+      // ramp, the adaptive ceiling and the drag cap. null in normal use.
+      if (diagPixelRatio != null) return diagPixelRatio;
       return interacting ? Math.min(ceilingRatio, interactionRatio) : ceilingRatio;
     }
 
@@ -5095,7 +5113,7 @@ export const Home3DScene = (() => {
       // An adaptive-quality probe keeps the frames coming while it measures.
       if (tickProbe(frameNow, interacting)) needsRender = true;
 
-      if (!autoRotate && !needsRender && !interacting && !transitionsActive) {
+      if (!autoRotate && !needsRender && !interacting && !transitionsActive && !diagContinuous) {
         // Idle: the next drawn frame's gap is idleness, not cost.
         frameContinuous = false;
         if (adaptive && ++gateIdleTicks >= 3 && lastTickDelta > 0) {
@@ -5739,6 +5757,159 @@ export const Home3DScene = (() => {
       // The live orbit camera — external overlays that project world points into
       // screen space (e.g. the compass rose) read this each frame. Returned by
       // reference; callers must not mutate it.
+      /**
+       * The /diagnostics benchmark's hooks (src/diagnostics/, item 112ec00c).
+       * An explicit, documented surface so the benchmark never reaches into
+       * this closure. Nothing here runs unless called: the app never calls
+       * it, and every knob is inert at its default.
+       *
+       *   renderer / scene / camera  read-only handles for MEASUREMENT
+       *       (renderer.info, the GL context for timer queries,
+       *       scene.onBeforeRender/onAfterRender to bracket a frame).
+       *   quality()             what this load decided and built.
+       *   setPixelRatio(r)      pin the drawing-buffer ratio (null: unpin).
+       *   setContinuous(on)     draw every tick instead of on demand.
+       *   addPointLights(n)     add n synthetic, shadowless PointLights in a
+       *                         grid under the ceiling (a light-count change
+       *                         recompiles every lit material, as in the app).
+       *   clearPointLights()    remove them all again.
+       *   lightCounts()         lights in the scene, by type.
+       *   getOrbit()/homeOrbit()  the orbit camera, in world units; drive it
+       *                         with setOrbit().
+       */
+      diagnostics: {
+        version: 1,
+        renderer: ren,
+        scene,
+        camera: cam,
+        quality() {
+          return {
+            tier, compileTier: tierInfo.compileTier, level: startLevelIdx, levelName: startLevel.name,
+            levelFrom, maxLevel, defaultLevel: defaultLevel(mobileGpu === true, maxLevelFor(tierInfo.compileTier)),
+            mobileGpu: gpu.mobileGpu, mobileReason: gpu.reason, mobileCaps: tierInfo.mobileCaps,
+            maxFragU, shadows, maxFps, adaptive: adaptiveOff ? 'off: ' + adaptiveOff : 'on',
+            sunShadow: quality.sunShadow, roomShadowLights: quality.roomShadowLights,
+            shadowMapScale: quality.shadowMapScale, dropMinorFurniture: quality.dropMinorFurniture,
+            shadowMapEnabled: ren.shadowMap.enabled, basePixelRatio, furnitureItems: furnitureItems.length
+          };
+        },
+        setPixelRatio(r) {
+          diagPixelRatio = (r > 0 && Number.isFinite(r)) ? r : null;
+          applyPixelRatio(resolvePixelRatio(false));
+          needsRender = true;
+          return appliedRatio;
+        },
+        getPixelRatio() { return appliedRatio; },
+        setContinuous(on) { diagContinuous = !!on; needsRender = true; },
+        addPointLights(n) {
+          let g = scene.getObjectByName('diagnostics-synthetic-lights');
+          if (!g) { g = new THREE.Group(); g.name = 'diagnostics-synthetic-lights'; scene.add(g); }
+          const fp = HOUSE.footprint;
+          const target = g.children.length + Math.max(0, n | 0);
+          const cols = Math.max(1, Math.ceil(Math.sqrt(target)));
+          const rows = Math.max(1, Math.ceil(target / cols));
+          while (g.children.length < target) {
+            const k = g.children.length;
+            const c = k % cols, rr = Math.floor(k / cols) % rows;
+            const x = fp.minX + (fp.maxX - fp.minX) * (c + 0.5) / cols;
+            const y = fp.minY + (fp.maxY - fp.minY) * (rr + 0.5) / rows;
+            const l = new THREE.PointLight(0xfff1dc, 0.15, 4, 2);
+            l.castShadow = false;
+            l.position.set(tx(x), WH - 0.25, tz(y));
+            g.add(l);
+          }
+          invalidateShadows();
+          return g.children.length;
+        },
+        /**
+         * Add synthetic lights from explicit specs (the strip-light cost
+         * stages): {type: 'point'|'rect', position: [x,y,z] world metres,
+         * lookAt?: [x,y,z], color?, intensity, distance?, decay?, width?,
+         * height?}. A 'rect' is a THREE.RectAreaLight, which renders only
+         * after RectAreaLightUniformsLib.init() -- the caller's job. Removed
+         * by clearPointLights() with the rest. Returns the synthetic count.
+         */
+        addLights(specs) {
+          let g = scene.getObjectByName('diagnostics-synthetic-lights');
+          if (!g) { g = new THREE.Group(); g.name = 'diagnostics-synthetic-lights'; scene.add(g); }
+          (specs || []).forEach(s => {
+            const color = s.color != null ? s.color : 0xfff1dc;
+            let l;
+            if (s.type === 'rect') {
+              l = new THREE.RectAreaLight(color, s.intensity, s.width || 1, s.height || 0.02);
+            } else {
+              l = new THREE.PointLight(color, s.intensity, s.distance || 0, s.decay != null ? s.decay : 2);
+              l.castShadow = false;
+            }
+            l.position.set(s.position[0], s.position[1], s.position[2]);
+            g.add(l);
+            if (s.lookAt) { l.updateMatrixWorld(); l.lookAt(s.lookAt[0], s.lookAt[1], s.lookAt[2]); }
+          });
+          invalidateShadows();
+          return g.children.length;
+        },
+        /**
+         * n anchor points for synthetic strips, spread evenly along the
+         * house's authored walls (longest first, round-robin): 0.9 m up,
+         * 5 cm off the wall on the side facing the house centre, with `along`
+         * (unit, world) the wall's direction and `facing` a point 1 m into
+         * the room. World metres. Geometry only -- no names, no ids.
+         */
+        stripAnchors(n) {
+          const walls = WALLS.map(w => ({ w, len: Math.hypot(w.x2 - w.x1, w.y2 - w.y1) }))
+            .filter(e => e.len > 60).sort((a, b) => b.len - a.len);
+          const out = [];
+          if (!walls.length) return out;
+          const cx = tx(HOUSE.centre[0]), cz = tz(HOUSE.centre[1]);
+          const count = Math.max(0, n | 0);
+          const perWall = walls.map(() => 0);
+          for (let i = 0; i < count; i++) perWall[i % walls.length]++;
+          walls.forEach((e, wi) => {
+            const k = perWall[wi];
+            for (let j = 0; j < k; j++) {
+              const t = (j + 1) / (k + 1);
+              const x = tx(e.w.x1 + (e.w.x2 - e.w.x1) * t), z = tz(e.w.y1 + (e.w.y2 - e.w.y1) * t);
+              const ax = (e.w.x2 - e.w.x1) / e.len, az = (e.w.y2 - e.w.y1) / e.len;
+              let nx = -az, nz = ax;
+              if ((cx - x) * nx + (cz - z) * nz < 0) { nx = -nx; nz = -nz; }
+              const px = x + nx * (WT / 2 + 0.05), pz = z + nz * (WT / 2 + 0.05);
+              out.push({ position: [px, 0.9, pz], along: [ax, 0, az], facing: [px + nx, 0.9, pz + nz] });
+            }
+          });
+          return out.slice(0, count);
+        },
+        clearPointLights() {
+          const g = scene.getObjectByName('diagnostics-synthetic-lights');
+          if (g) {
+            scene.remove(g);
+            g.children.slice().forEach(l => { g.remove(l); if (typeof l.dispose === 'function') l.dispose(); });
+          }
+          invalidateShadows();
+          return 0;
+        },
+        lightCounts() {
+          const lc = { point: 0, pointShadow: 0, spot: 0, spotShadow: 0, directional: 0, directionalShadow: 0,
+            hemisphere: 0, ambient: 0, rectArea: 0, synthetic: 0, total: 0 };
+          scene.traverse(o => {
+            if (!o.isLight) return;
+            lc.total++;
+            if (o.parent && o.parent.name === 'diagnostics-synthetic-lights') lc.synthetic++;
+            if (o.isPointLight) { lc.point++; if (o.castShadow) lc.pointShadow++; }
+            else if (o.isSpotLight) { lc.spot++; if (o.castShadow) lc.spotShadow++; }
+            else if (o.isDirectionalLight) { lc.directional++; if (o.castShadow) lc.directionalShadow++; }
+            else if (o.isHemisphereLight) lc.hemisphere++;
+            else if (o.isAmbientLight) lc.ambient++;
+            else if (o.isRectAreaLight) lc.rectArea++;
+          });
+          return lc;
+        },
+        getOrbit() { return { th: orb.th, ph: orb.ph, r: orb.r, target: [orb.tgt.x, orb.tgt.y, orb.tgt.z] }; },
+        homeOrbit() {
+          const t = _homeTgt();
+          return { th: Math.PI * 0.22, ph: Math.PI * 0.32, r: _defaultDistance, target: [t.x, t.y, t.z] };
+        },
+        footprintMetres() { return { width: _fpW, depth: _fpD }; }
+      },
       getCamera() { return cam; },
       // Jump the orbit camera to a named preset view (top/se/front/iso/…) —
       // powers `?camera=<preset>` for scriptable visual review. Unknown/absent

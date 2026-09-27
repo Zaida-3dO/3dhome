@@ -59,6 +59,7 @@ export function scan(root, version) {
     ...walk(path.join(root, 'src')),
     ...walk(path.join(root, 'specs')),
     path.join(root, 'index.html'),
+    path.join(root, 'diagnostics.html'),
   ].filter(f => fs.existsSync(f));
   const bad = [];
   let relative = 0;
@@ -107,7 +108,7 @@ if (args[0] === '--scan') {
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'home3d-stamp-'));
   try {
-    for (const p of ['src', 'specs', 'index.html']) {
+    for (const p of ['src', 'specs', 'index.html', 'diagnostics.html']) {
       fs.cpSync(path.join(REPO, p), path.join(tmp, p), { recursive: true });
     }
     const run = version => execFileSync('sh', [path.join(REPO, 'deploy', 'generate-config.sh'), tmp], {
@@ -121,7 +122,7 @@ if (args[0] === '--scan') {
     run('t2.0.0');
     const second = scan(tmp, 't2.0.0');
     report('after restamp with a new version', second, 't2.0.0');
-    const doubled = walk(tmp).concat(path.join(tmp, 'index.html'))
+    const doubled = walk(tmp).concat(path.join(tmp, 'index.html'), path.join(tmp, 'diagnostics.html'))
       .flatMap(f => fs.readFileSync(f, 'utf8').match(/['"][^'"\s]*\?v=[^'"\s]*\?v=[^'"\s]*['"]/g) || []);
     check(doubled.length === 0, 'no specifier carries two ?v= queries after a restamp');
     for (const d of doubled.slice(0, 10)) console.log('        ' + d);

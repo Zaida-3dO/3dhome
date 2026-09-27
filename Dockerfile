@@ -46,6 +46,16 @@ COPY . /usr/share/nginx/html/
 # container start by the entrypoint.
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 
+# The diagnostics save endpoint (docs/diagnostics.md). OFF by default: the
+# off variant is installed as the live include, and deploy/entrypoint.sh swaps
+# in the on variant (and loads the njs module this image already ships) only
+# when HOME3D_DIAGNOSTICS_DIR names a directory. The handler lives outside the
+# web root, so it is not served.
+COPY deploy/diagnostics-off.conf /etc/nginx/home3d-diagnostics.conf
+COPY deploy/diagnostics-off.conf /etc/nginx/home3d-diagnostics-off.conf.template
+COPY deploy/diagnostics-on.conf  /etc/nginx/home3d-diagnostics-on.conf.template
+COPY deploy/njs/diagnostics.js   /etc/nginx/njs/diagnostics.js
+
 # The two scripts, installed where the nginx image will run them.
 #
 # The stock nginx entrypoint executes every /docker-entrypoint.d/*.sh in

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>3dHome diagnostics</title>
+  <!-- /diagnostics: a device benchmark for the 3D view (item 112ec00c).
+       Served at /diagnostics by deploy/nginx.conf and by scripts/dev-server.mjs.
+       It renders the SAME scene code as the app (src/home3d-scene.js) on the
+       configured house, across quality levels, pixel ratios, shadows, extra
+       lights, furniture and scripted camera moves, and produces one JSON
+       result for an agent to analyse. Schema: docs/diagnostics.md.
+
+       URLs are RELATIVE, like index.html's, so the app still works under a
+       sub-path. /diagnostics/ (trailing slash) is REDIRECTED to /diagnostics
+       by both servers, because a relative URL would otherwise resolve under it.
+       The ?v= values are stamped from APP_VERSION at container start. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three-r160/three.module.min.js?v=__VERSION__"
+    }
+  }
+  </script>
+  <script src="config.js" defer onerror="window.__home3dNoConfigJs = true;"></script>
+  <style>
+    :root { --bg: #0f0f1a; --panel: rgba(20, 22, 36, 0.94); --line: rgba(138, 180, 255, 0.25);
+            --text: #e8eaf2; --dim: #a3a8bd; --accent: #8ab4ff; --warn: #ffd479; --bad: #ff8a8a; --good: #8ce0a6; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+      font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+    #scene { position: fixed; inset: 0; }
+    .card { position: fixed; left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 24px));
+      background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5); }
+    #intro { top: 50%; transform: translate(-50%, -50%); max-height: calc(100vh - 24px); overflow: auto; }
+    #running { bottom: 12px; padding: 12px 16px; }
+    #done { top: 50%; transform: translate(-50%, -50%); max-height: calc(100vh - 24px); overflow: auto; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    h2 { font-size: 18px; margin: 0 0 8px; }
+    p { margin: 6px 0; color: var(--dim); }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+    label { color: var(--text); }
+    input[type=text] { flex: 1 1 200px; min-width: 0; background: #0b0c16; color: var(--text);
+      border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font: inherit; }
+    button { font: inherit; border-radius: 10px; border: 1px solid var(--line); background: #1c2036;
+      color: var(--text); padding: 10px 16px; cursor: pointer; min-height: 44px; }
+    button.primary { background: var(--accent); color: #0b0c16; border-color: var(--accent); font-weight: 600; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .modes { display: flex; gap: 8px; flex-wrap: wrap; }
+    .modes label { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+    .modes input { margin-right: 6px; }
+    .bar { height: 8px; background: #0b0c16; border-radius: 4px; overflow: hidden; margin: 8px 0; }
+    .bar > div { height: 100%; width: 0; background: var(--accent); transition: width 0.2s linear; }
+    .meta { display: flex; justify-content: space-between; gap: 10px; color: var(--dim); font-size: 13px; }
+    #stage-label { font-size: 14px; overflow-wrap: anywhere; }
+    .banner { display: none; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: rgba(255, 212, 121, 0.12);
+      color: var(--warn); font-size: 13px; }
+    .banner.show { display: block; }
+    #summary { margin: 10px 0; padding: 10px 12px; background: #0b0c16; border-radius: 8px; font-size: 13px;
+      white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+    #status { min-height: 1.4em; font-size: 14px; }
+    #status.ok { color: var(--good); } #status.err { color: var(--bad); } #status.info { color: var(--warn); }
+    #fallback { display: none; margin-top: 10px; }
+    #fallback textarea { width: 100%; height: 160px; background: #0b0c16; color: var(--text); border: 1px solid var(--line);
+      border-radius: 8px; font: 12px/1.3 ui-monospace, monospace; }
+    .hidden { display: none !important; }
+    .small { font-size: 13px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div id="scene"></div>
+
+  <section id="intro" class="card" aria-labelledby="intro-title">
+    <h1 id="intro-title">3dHome diagnostics</h1>
+    <p>Benchmarks this device on the real 3D view: quality levels, pixel ratios, shadows, extra lights,
+       furniture and scripted camera moves. At the end you get one result to copy or save for analysis.</p>
+    <p class="small">Keep this screen on and this tab in front while it runs. Plugged in is better: a hot or
+       battery-saving device throttles, which the run will show.</p>
+    <div class="modes" role="radiogroup" aria-label="Run length">
+      <label><input type="radio" name="mode" value="full" checked>Full (about 4 min)</label>
+      <label><input type="radio" name="mode" value="quick">Quick (about 1 min)</label>
+    </div>
+    <div class="row">
+      <label for="device-name">Device name</label>
+      <input type="text" id="device-name" maxlength="60" placeholder="e.g. Wall tablet" autocomplete="off">
+    </div>
+    <p class="small" id="house-line">Loading configuration...</p>
+    <div class="row">
+      <button class="primary" id="start" disabled>Start</button>
+      <a class="small" href="./">Back to the 3D view</a>
+    </div>
+    <p class="small" id="intro-error" style="color: var(--bad)"></p>
+  </section>
+
+  <section id="running" class="card hidden" aria-live="polite">
+    <div class="meta"><span id="stage-count">Preparing</span><span id="eta"></span></div>
+    <div class="bar"><div id="bar"></div></div>
+    <div id="stage-label">Starting...</div>
+    <div class="row" style="margin-bottom: 0">
+      <button id="abort">Abort</button>
+      <span class="small" id="wake"></span>
+    </div>
+    <div class="banner" id="hidden-warn">The page was hidden: the browser throttles a background tab, so the
+      stage that was running is marked invalid. Keep this tab in front.</div>
+  </section>
+
+  <section id="done" class="card hidden" role="dialog" aria-labelledby="done-title">
+    <h2 id="done-title">Diagnostics done</h2>
+    <div id="summary"></div>
+    <div class="row">
+      <button class="primary" id="copy">Copy result</button>
+      <button id="save">Save diagnostic run</button>
+      <button id="again">Run again</button>
+    </div>
+    <p class="small" id="save-note"></p>
+    <div id="status" role="status"></div>
+    <div id="fallback">
+      <p class="small">Copying is blocked here (common inside an app's embedded view). Select the text below and copy it by hand.</p>
+      <textarea id="json" readonly spellcheck="false"></textarea>
+      <div class="row"><button id="select-all">Select all</button></div>
+    </div>
+  </section>
+
+  <script type="module">
+    // ?v= values are stamped from APP_VERSION at deploy time; do not hardcode one.
+    import { HomeConfig }      from './src/config-loader.js?v=__VERSION__';
+    import { HouseLoader }     from './src/house-loader.js?v=__VERSION__';
+    import { Home3DScene }     from './src/home3d-scene.js?v=__VERSION__';
+    import { runDiagnostics }  from './src/diagnostics/runner.js?v=__VERSION__';
+    import { SCHEMA_VERSION }  from './src/diagnostics/result.js?v=__VERSION__';
+    import { getDeviceIdentity, setDeviceName, saveRun, copyText } from './src/diagnostics/page-io.js?v=__VERSION__';
+
+    const $ = id => document.getElementById(id);
+    const show = (el, on) => el.classList.toggle('hidden', !on);
+    let cfg = null, house = null, result = null, saveEnabled = false;
+
+    const ident = getDeviceIdentity(window);
+    $('device-name').value = ident.deviceName || '';
+    $('device-name').addEventListener('change', e => setDeviceName(window, e.target.value));
+
+    try {
+      cfg = await HomeConfig.load();
+      saveEnabled = cfg.diagnosticsSave === true;
+      house = await HouseLoader.loadWithFallback(cfg.house, 'demo');
+      $('house-line').textContent = 'House "' + house.id + '" (' + Object.keys(house.rooms).length + ' rooms), app ' +
+        cfg.version + '. Saving runs: ' + (saveEnabled ? 'on' : 'off on this server') + '.';
+      $('start').disabled = false;
+    } catch (e) {
+      $('intro-error').textContent = 'Could not load the house: ' + (e && e.message ? e.message : e);
+    }
+
+    // ---- wake lock ----
+    let wakeLock = null;
+    async function lockScreen() {
+      if (!('wakeLock' in navigator)) { $('wake').textContent = 'Screen wake lock unsupported: keep the screen on by hand.'; return; }
+      try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        $('wake').textContent = 'Screen kept awake.';
+        wakeLock.addEventListener('release', () => { if (running) $('wake').textContent = 'Wake lock released.'; });
+      } catch (e) { $('wake').textContent = 'Wake lock refused: keep the screen on by hand.'; }
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (!running) return;
+      if (document.hidden) $('hidden-warn').classList.add('show');
+      else if (wakeLock === null || wakeLock.released) lockScreen();
+    });
+
+    // ---- run ----
+    let running = false;
+    let signal = null;
+    const fmtEta = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s >= 60 ? Math.floor(s / 60) + ' min ' + (s % 60) + ' s left' : s + ' s left'; };
+
+    $('start').addEventListener('click', async () => {
+      if (running || !house) return;
+      running = true;
+      signal = { aborted: false };
+      const mode = document.querySelector('input[name=mode]:checked').value;
+      setDeviceName(window, $('device-name').value);
+      show($('intro'), false); show($('done'), false); show($('running'), true);
+      $('hidden-warn').classList.remove('show');
+      await lockScreen();
+      let current = { stageIndex: 0, stageCount: 1 };
+      try {
+        result = await runDiagnostics({
+          container: $('scene'), Home3DScene, house, houseId: house.id, version: cfg.version, mode, signal,
+          onProgress: p => {
+            if (p.phase !== 'stage-tick') current = p;
+            const idx = p.stageIndex || 0, n = p.stageCount || current.stageCount || 1;
+            if (p.phase === 'device') $('stage-count').textContent = 'Reading the device';
+            else $('stage-count').textContent = 'Stage ' + Math.max(1, idx) + ' of ' + n;
+            if (p.label) $('stage-label').textContent = p.label;
+            const frac = p.phase === 'stage-tick' ? p.fraction : 0;
+            $('bar').style.width = (100 * Math.min(1, (Math.max(0, idx - 1) + frac) / n)) + '%';
+            if (Number.isFinite(p.etaMs)) $('eta').textContent = fmtEta(p.etaMs);
+          }
+        });
+      } catch (e) {
+        running = false;
+        show($('running'), false); show($('intro'), true);
+        $('intro-error').textContent = 'The run could not start: ' + (e && e.message ? e.message : e);
+        if (wakeLock) { try { await wakeLock.release(); } catch (_) {} }
+        return;
+      }
+      running = false;
+      if (wakeLock) { try { await wakeLock.release(); } catch (_) {} wakeLock = null; }
+      show($('running'), false);
+      $('done-title').textContent = result.run.aborted ? 'Diagnostics stopped (partial result)' : 'Diagnostics done';
+      $('summary').textContent = result.summary.join('\n');
+      $('status').textContent = ''; $('status').className = '';
+      $('fallback').style.display = 'none';
+      $('save').disabled = !saveEnabled;
+      $('save-note').textContent = saveEnabled ? '' :
+        'Saving is off on this server (the operator has not set HOME3D_DIAGNOSTICS_DIR). Use Copy result instead.';
+      show($('done'), true);
+      window.__home3dDiagnosticsResult = result;
+    });
+
+    $('abort').addEventListener('click', () => { if (signal) { signal.aborted = true; signal.reason = 'aborted by the user'; } $('stage-label').textContent = 'Stopping after this frame...'; });
+    $('again').addEventListener('click', () => { show($('done'), false); show($('intro'), true); });
+
+    function status(text, kind) { $('status').textContent = text; $('status').className = kind || ''; }
+
+    function withSave(r) {
+      const id = getDeviceIdentity(window);
+      return Object.assign({}, r, { save: {
+        deviceId: id.deviceId, deviceIdPersistent: id.persistent, deviceName: id.deviceName || null,
+        appVersion: cfg.version, clientTimestamp: new Date().toISOString(), schemaVersion: SCHEMA_VERSION } });
+    }
+
+    $('copy').addEventListener('click', async () => {
+      const text = JSON.stringify(withSave(result), null, 1);
+      const how = await copyText(window, text);
+      if (how.ok) {
+        status('Copied to the clipboard (' + Math.round(text.length / 1024) + ' KB, via ' + how.method + ').', 'ok');
+        $('fallback').style.display = 'none';
+      } else {
+        status('Clipboard blocked (' + how.error + '). Showing the result below to copy by hand.', 'info');
+        $('json').value = text;
+        $('fallback').style.display = 'block';
+      }
+    });
+    $('select-all').addEventListener('click', () => { const t = $('json'); t.focus(); t.select(); t.setSelectionRange(0, t.value.length); });
+
+    $('save').addEventListener('click', async () => {
+      if (!saveEnabled) return;
+      $('save').disabled = true;
+      status('Saving...', 'info');
+      const r = await saveRun(window, '/api/diagnostics', withSave(result));
+      if (r.ok) status('Saved as run ' + r.id + '.', 'ok');
+      else { status('Save failed: ' + r.error, 'err'); $('save').disabled = false; }
+    });
+  </script>
+</body>
+</html>
