@@ -313,6 +313,42 @@ for (const type of Object.keys(SI_PRESETS || {})) {
 const RAD = await imp('src/furniture/radiator.js');
 tableCheck('radiator', RAD.PRESETS.map(p => ({ id: p.name, params: p.params })),
   v => Object.assign({}, RAD.DEFAULTS, { elevation: 12, color: '#ffffff' }, v.params));
+// 365c4c72 (3): cross-check against the PAGE'S OWN variants builder rather
+// than only the hand-rebuilt list above. RadiatorSpec.html's radiatorVariants()
+// is a standalone top-level function (unlike every other page's variants,
+// which are inline expressions inside App() closing over component-local
+// state/functions -- rendering those faithfully needs a real browser, which
+// this repo does not have; see test-spec-module-scope.mjs's own doc comment
+// on the same limitation). Cheap here because it is pure and only needs
+// `window.FurnitureRadiator` to be set to the real module: extract its
+// source text verbatim and eval it, so a change to how the PAGE composes its
+// variants (not just to radiator.js's own data) is caught too.
+{
+  const radSrc = pages['RadiatorSpec.html'].html;
+  const idFnSrc = (radSrc.match(/const radiatorVariantId = [^\n]+/) || [])[0];
+  const fnSrc = (radSrc.match(/function radiatorVariants\(\)\s*\{[\s\S]*?\n\}/) || [])[0];
+  check('RadiatorSpec.html: radiatorVariantId + radiatorVariants() extracted', !!idFnSrc && !!fnSrc, { idFnSrc, fnSrc });
+  if (idFnSrc && fnSrc) {
+    const radCtx = vm.createContext({ window: { FurnitureRadiator: RAD } });
+    const pageVariants = vm.runInContext(idFnSrc + '\n' + fnSrc + '\n;radiatorVariants()', radCtx);
+    const expected = RAD.PRESETS.map(p => ({ id: p.name.split(':')[0].toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), params: p.params }));
+    const pageVariantsNoLabel = pageVariants.map(v => ({ id: v.id, params: v.params }));
+    check('RadiatorSpec.html: radiatorVariants() matches the hand-built table this test cross-checks against (same ids, same params)',
+      JSON.stringify(pageVariantsNoLabel) === JSON.stringify(expected), { pageVariants: pageVariantsNoLabel, expected });
+    tableCheck('radiator (page\'s own radiatorVariants())', pageVariants,
+      v => Object.assign({}, RAD.DEFAULTS, { elevation: 12, color: '#ffffff' }, v.params));
+  }
+}
+// The other real-table pages below (gaming chair, plant, cabinet, dining,
+// clock, kitchen) build their variants INLINE inside App(), closing over
+// component-local state/functions (initialState, applyPreset, JSX-scoped
+// consts) -- extracting them faithfully would mean actually rendering the
+// component, which needs a real or headless browser (Playwright/Puppeteer).
+// That is not part of this repo's toolchain (no package.json, no
+// node_modules, no bundler) and is judged out of scope to add for this one
+// widening, so those tables stay hand-rebuilt below as before -- reported
+// here rather than silently left as-is.
+check('spec-variants real-table cross-check: gaming chair/plant/cabinet/dining/clock/kitchen variants stay hand-rebuilt (SKIPPED extracting their own inline builders -- would require a real/headless browser render, which this repo does not have)', true);
 // Gaming chair colourways.
 const GC = await imp('src/furniture/gaming-chair.js');
 tableCheck('gaming chair', Object.keys(GC.PRESETS).map(id => ({ id, params: { primaryColor: GC.PRESETS[id].primaryColor } })),
@@ -325,18 +361,43 @@ for (const kind of PL.KINDS) {
     .map(n => ({ id: n, params: Object.assign({}, PL.DEFAULTS, PL.PRESETS[n]) })), v => Object.assign({}, v.params));
 }
 // Cabinet presets: nested fronts grids -- deep equality matters here.
-// (the cabinet page adds its mirror-cabinet presets after the literal, so run
-// its whole presets section rather than lifting the literal alone)
+// (the cabinet page adds its mirror-cabinet presets after the literal, via
+// window.cabinetModuleReady.then(...) reading src/furniture/cabinet.js's own
+// MIRROR_CABINET_PRESETS (item 365c4c72 (5)) -- so run its whole presets
+// section, with `window.CabinetFurniture` set to the real module, rather
+// than lifting the PRESETS literal alone)
+const CAB_MODULE = await imp('src/furniture/cabinet.js');
 const cabSrc = pages['CabinetSpec.html'].html;
-const cabSection = cabSrc.slice(cabSrc.indexOf('const PRESETS = {'), cabSrc.indexOf('const TWEAK_DEFAULTS'));
+const cabSection = cabSrc.slice(cabSrc.indexOf('const PRESETS = {'), cabSrc.indexOf('const TWEAK_DEFAULTS'))
+  // The real page assigns the mirror-cabinet presets inside a
+  // `window.cabinetModuleReady.then(() => { ... })` callback (deferred until
+  // the module import resolves); here the module is already available
+  // synchronously, so the callback is invoked immediately in place.
+  .replace(/window\.cabinetModuleReady\.then\(\(\) => \{([\s\S]*?)\}\);/, '(() => {$1})();');
 const { PRESETS: CAB, CABINET_OBJECTS: CAB_OBJ } =
-  vm.runInNewContext(cabSection + '\n;({ PRESETS, CABINET_OBJECTS })');
+  vm.runInNewContext(cabSection + '\n;({ PRESETS, CABINET_OBJECTS })', { window: { CabinetFurniture: CAB_MODULE } });
 check('CabinetSpec PRESETS + CABINET_OBJECTS extracted', !!CAB && !!CAB_OBJ);
 const cabKeys = Object.values(CAB_OBJ || {}).flat();
 check('every cabinet preset belongs to exactly one object', cabKeys.length === Object.keys(CAB || {}).length &&
   new Set(cabKeys).size === cabKeys.length && cabKeys.every(k => CAB[k]), cabKeys);
 for (const [obj, keys] of Object.entries(CAB_OBJ || {})) {
   tableCheck('cabinet ' + obj, keys.map(k => ({ id: k, params: CAB[k].params })), v => JSON.parse(JSON.stringify(v.params)));
+}
+// 365c4c72 (5): neither CabinetSpec.html nor BathroomFittingsSpec.html
+// defines its own copy of mirrorCabinetParams()/the mirror-cabinet presets
+// any more -- both must read src/furniture/cabinet.js's export. Mutation
+// case: re-inline either page's own `function mirrorCabinetParams` (or an
+// `EXTRA_PRESETS`/`PRESETS.mirrorCabinetNDoor = ...` literal fallback that
+// does not go through window.CabinetFurniture/window.FurnitureCabinet) and
+// this check fails.
+{
+  const bathSrc = pages['BathroomFittingsSpec.html'].html;
+  check('CabinetSpec.html does not define its own mirrorCabinetParams (reads src/furniture/cabinet.js instead)',
+    !/function\s+mirrorCabinetParams/.test(cabSrc) && /window\.CabinetFurniture\.MIRROR_CABINET_PRESETS/.test(cabSrc));
+  check('BathroomFittingsSpec.html does not define its own mirrorCabinetParams (reads src/furniture/cabinet.js instead)',
+    !/function\s+mirrorCabinetParams/.test(bathSrc) && /window\.FurnitureCabinet\.MIRROR_CABINET_PRESETS/.test(bathSrc));
+  check('src/furniture/cabinet.js exports MIRROR_CABINET_PRESETS with both mirror-cabinet presets',
+    !!CAB_MODULE.MIRROR_CABINET_PRESETS && Object.keys(CAB_MODULE.MIRROR_CABINET_PRESETS).length === 2, Object.keys(CAB_MODULE.MIRROR_CABINET_PRESETS || {}));
 }
 // A cabinet with one front changed deep inside the grid is Custom.
 if (CAB && CAB.chestOfDrawers) {
