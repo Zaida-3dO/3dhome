@@ -55,6 +55,9 @@
       "lounge_curtain": ["light.demo_lounge_cornice"],
       "bedroom_curtain": ["light.demo_bedroom_cornice"]
     },
+    "furnitureLights": {
+      "study_desk": ["light.demo_study_desk_led"]
+    },
     "climate": {
       "lounge": "climate.demo_lounge_thermostat",
       "kitchen": "climate.demo_kitchen_radiator",

@@ -2492,6 +2492,24 @@
           "enum": ["left", "right"],
           "default": "right",
           "description": "Which side of the front edge the control panel sits on, as seen by a person standing at the front of the desk facing it. Its outer edge sits 4cm in from the desk's side edge on that side."
+        },
+        "ledStrip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Draw an LED strip tucked under the desktop's edge (one continuous run along `ledSides`). Emissive only: it glows but adds no real light. It rides with the top, so it follows `topHeight`. Bind the item in rooms.json `sensors.furnitureLights` to make it follow a Home Assistant light."
+        },
+        "ledColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#ff9a45",
+          "description": "The strip's colour at rest (no light binding, or no reading from Home Assistant yet)."
+        },
+        "ledSides": {
+          "type": "array",
+          "items": { "enum": ["left", "front", "right", "back"] },
+          "uniqueItems": true,
+          "minItems": 1,
+          "default": ["left", "front", "right"],
+          "description": "Which edges the strip runs along, as seen from the front of the desk. Default: down the left, across the front, up the right."
         }
       },
       "additionalProperties": false
@@ -3298,6 +3316,20 @@
             "corniceLights": {
               "type": "object",
               "description": "Curtain id -> the light entities of that curtain's cornice LED strip. The curtain MUST have a lit cornice in geometry (cornice not disabled, light not false). Bind the cornice's OWN entity here, and do not also list a 'curtain cornice' strip under the room's ambient channel in geometry.lights -- that would draw and drive the same strip twice. Several entities are OR-ed. Needs rooms schemaVersion 1.2.",
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/entityId"
+                },
+                "minItems": 1
+              }
+            },
+            "furnitureLights": {
+              "type": "object",
+              "description": "Furniture item id -> the light entities its glowing parts follow (on/off, brightness and colour) -- for a standing desk, its LED strip (`ledStrip`). The item MUST exist in the paired geometry profile's `furniture`. Several entities are OR-ed, like a cornice light. Emissive only: a bound item never adds a real light. With no reading yet the parts show their authored colour. Bind the item's OWN entity here, not its room's ambience group: the room's ambient channel already follows the group.",
               "propertyNames": {
                 "pattern": "^[a-z][a-z0-9_]*$"
               },

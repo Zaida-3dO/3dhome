@@ -152,6 +152,43 @@ export function climateRowHtml(reading) {
  *   onRelease(id, wasDirty) (optional) called whenever a held lock releases
  */
 /**
+ * The light channels rooms.json BINDS per room: roomId -> [channel], for
+ * Home3DScene.create's `boundChannels`. A channel with no entities is not a
+ * binding. `rooms` null (no rooms.json) -> {}.
+ */
+export function boundLightChannels(rooms) {
+  const out = {};
+  Object.entries(rooms || {}).forEach(([rid, groups]) => {
+    const chans = Object.entries(groups || {})
+      .filter(([, ents]) => Array.isArray(ents) && ents.length > 0)
+      .map(([ch]) => ch);
+    if (chans.length) out[rid] = chans;
+  });
+  return out;
+}
+
+/**
+ * Does a room get its (single) Ambient row?
+ *
+ * The row is the switch for the room's ambient BINDING, so it comes from
+ * rooms.json: shown exactly when the room binds `ambient` to at least one
+ * entity -- whether or not geometry draws any ambient fixture (an office
+ * whose ambient light is a cornice and desk strips has none). Only when
+ * there is no rooms.json at all (a bare demo with nothing to bind) does it
+ * fall back to the geometry channel, so the 3D ambient strips can still be
+ * switched locally.
+ *
+ * @param {?Object} rooms        rooms.json `rooms` (null when absent)
+ * @param {string}  roomId
+ * @param {boolean} hasGeometryChannel  the scene has an ambient channel for it
+ */
+export function hasAmbientRow(rooms, roomId, hasGeometryChannel) {
+  if (!rooms) return !!hasGeometryChannel;
+  const ents = rooms[roomId] && rooms[roomId].ambient;
+  return Array.isArray(ents) && ents.length > 0;
+}
+
+/**
  * Curtain SLIDER value -> command, refusing while the curtain is not
  * confirmed available -- the same rule the Open / Close buttons follow.
  * `coverPositionCommand` is HAClient.coverPositionCommand, injected so this

@@ -16,6 +16,16 @@
  * measures -- not the frame/underside height alone. `topHeight` is the
  * separate, sit-stand-adjustable param (clamped to
  * [minHeight, maxHeight]) that actually drives the geometry.
+ *
+ * LED STRIP (optional, `ledStrip: true`): one continuous emissive run tucked
+ * under the desktop's edge -- down the LEFT side, across the FRONT and back
+ * up the RIGHT side by default (`ledSides`). It rides with the top, so it
+ * rises and falls with `topHeight`. It is emissive and nothing else: it adds
+ * NO real light (perf budget), and like every emissive part it is kept out
+ * of the opaque merge (the renderer's unlit glow bucket). Each strip mesh is
+ * tagged `userData.ledStrip = true` so a Home Assistant light binding on the
+ * item (see src/furniture-light.js) can find exactly the strip and not, say,
+ * the control panel's display.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 
@@ -35,7 +45,33 @@ export const DEFAULTS = Object.freeze({
   topColor: '#f4f2ee',
   frameColor: '#f2f1ec',
   controlSide: 'right',
+  ledStrip: false,
+  ledColor: '#ff9a45',
+  ledSides: Object.freeze(['left', 'front', 'right']),
 });
+
+/** The edges an LED strip may run along. 'back' is allowed but not default:
+ * a desk usually stands against a wall there. */
+export const LED_SIDES = Object.freeze(['left', 'front', 'right', 'back']);
+
+/** LED strip cross-section, metres: its height (y) and how far it reaches in
+ * from the edge (the outer face sits flush with the desktop's edge, so the
+ * strip never widens the item's footprint). */
+export const LED_STRIP_H = 0.012;
+export const LED_STRIP_T = 0.012;
+
+/** Normalise `ledSides` to a de-duplicated list in LED_SIDES order. Accepts an
+ * array or a comma-separated string; unknown names are dropped with a
+ * warning; an empty/invalid value falls back to DEFAULTS.ledSides. */
+export function normaliseLedSides(sides) {
+  let list = sides;
+  if (typeof list === 'string') list = list.split(',').map(x => x.trim()).filter(Boolean);
+  if (!Array.isArray(list)) return DEFAULTS.ledSides.slice();
+  const bad = list.filter(x => LED_SIDES.indexOf(x) === -1);
+  if (bad.length) console.warn('standing-desk: unknown ledSides ' + JSON.stringify(bad) + ' ignored');
+  const out = LED_SIDES.filter(x => list.indexOf(x) !== -1);
+  return out.length ? out : DEFAULTS.ledSides.slice();
+}
 
 const CM = 0.01;
 
@@ -194,6 +230,37 @@ export function build(THREE, params, opts) {
     display.name = 'controlPanelDisplay';
     if (isKeptFinish(display.material.userData.finish)) display.userData.keep = true;
     group.add(display);
+  }
+
+  // ---- optional LED strip under the desktop edge -------------------------
+  // Kept at low detail too: it is the feature a light binding drives, and it
+  // is three boxes. Its outer face is flush with the top's edge and its top
+  // face touches the top's underside, so from any view below the desk's
+  // surface it reads as a glowing line just under the edge.
+  if (p.ledStrip) {
+    const sides = normaliseLedSides(p.ledSides);
+    const ledMat = makeFinish(THREE, 'emissive', p.ledColor);
+    const y = H - LED_STRIP_H / 2;
+    const T = LED_STRIP_T;
+    const hasFront = sides.indexOf('front') !== -1;
+    const hasBack = sides.indexOf('back') !== -1;
+    // Side runs stop short of a front/back run so the corners do not overlap.
+    const z0 = hasBack ? T : 0;
+    const z1 = hasFront ? D - T : D;
+    const addRun = (name, w, d, x, z) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, LED_STRIP_H, d), ledMat);
+      m.position.set(x, y, z);
+      m.name = name;
+      m.userData.keep = true;
+      m.userData.ledStrip = true;
+      m.castShadow = false; m.receiveShadow = false;
+      group.add(m);
+    };
+    if (sides.indexOf('left') !== -1) addRun('ledStripLeft', T, z1 - z0, -W / 2 + T / 2, (z0 + z1) / 2);
+    if (hasFront) addRun('ledStripFront', W, T, 0, D - T / 2);
+    if (sides.indexOf('right') !== -1) addRun('ledStripRight', T, z1 - z0, W / 2 - T / 2, (z0 + z1) / 2);
+    if (hasBack) addRun('ledStripBack', W, T, 0, T / 2);
+    group.userData.ledSides = sides;
   }
 
   group.userData.clampedHeight = clampedHeight;

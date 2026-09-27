@@ -725,7 +725,8 @@
     import { HouseLoader }    from './src/house-loader.js?v=__VERSION__';
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
-    import { createDragSender, curtainSliderCommand, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml }
+    import { createDragSender, curtainSliderCommand, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
+             boundLightChannels, hasAmbientRow }
                               from './src/room-panel.js?v=__VERSION__';
     // Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
     // Shift+D, or the Settings sidebar "Wall numbers" switch).
@@ -1237,6 +1238,9 @@
         // Populated above from sensors.doors, outside the cfg.enabled branch,
         // so this is correct even when HA is configured off.
         sensorBoundDoorIds: doorSensorIds,
+        // Every light channel rooms.json binds gets a light state (and so a
+        // sidebar row and an HA state target) even with no geometry fixture.
+        boundChannels: boundLightChannels(rooms),
         interactive: !isPreview,
         autoRotate: isPreview,
         rotateSpeed: rotateSpeed,
@@ -2236,7 +2240,11 @@
         const s = home.lightState[rid] || {};
         const keys = [];
         if (s.main) keys.push('main');
-        if (s.ambient) keys.push('ambient');
+        // The Ambient row follows the room's rooms.json ambient BINDING, not
+        // whether geometry happens to draw an ambient fixture (see
+        // hasAmbientRow). s.ambient exists for every bound channel because
+        // the scene is created with boundChannels.
+        if (s.ambient && hasAmbientRow(rooms, rid, true)) keys.push('ambient');
         if (s.galaxy) keys.push('galaxy');
         (roomDoorRows[rid] || []).forEach(d => keys.push('door:' + d.id));
         if (roomHasMotion(rid)) keys.push('motion');
@@ -2275,7 +2283,7 @@
           // group, never a switch per fixture.
           let h = `<div class="control-group" data-row="ambient">
             <div class="control-header">
-              <span class="control-label">${esc(lc.ambient.name.toUpperCase())}</span>
+              <span class="control-label">${esc(((lc && lc.ambient && lc.ambient.name) || 'Ambient').toUpperCase())}</span>
               <button class="toggle ${s.ambient.on ? 'on' : ''}" data-action="toggle-ambient">
                 <div class="toggle-knob"></div>
               </button>
@@ -2293,7 +2301,7 @@
               </div>
               <input type="color" class="color-input" value="${s.ambient.color}" data-action="color-input-ambient">
             </div>
-            ${stripInfoHtml(lc.ambient)}`;
+            ${stripInfoHtml(lc && lc.ambient)}`;
           }
           return h + '</div>';
         }

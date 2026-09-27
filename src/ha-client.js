@@ -197,6 +197,7 @@ export const HAClient = (() => {
     const doorCallbacks = [];
     const curtainCallbacks = [];
     const corniceCallbacks = [];
+    const furnitureLightCallbacks = [];
     const curtainAvailabilityCallbacks = [];
 
     // Reverse index: entityId -> { roomId, group }
@@ -278,14 +279,19 @@ export const HAClient = (() => {
     // real house the cornice entity is usually a member of the room's
     // ambience group, which the room's 'ambient' channel already follows.
     //
-    // fittingIndex: entityId -> { kind: 'curtain'|'cornice', targetId }
+    // A furniture light (a desk's LED strip bound to a light entity) is the
+    // same shape as a cornice light -- a light keyed by a target id that is
+    // not a room channel -- so it rides this index as a third kind.
+    //
+    // fittingIndex: entityId -> [{ kind: 'curtain'|'cornice'|'furnitureLight', targetId }]
+    //   (a list: one light entity may drive a cornice AND a desk strip, or two desks)
     // fittingGroups[kind][targetId] -> [entityId]
     // fittingEntity: entityId -> last parsed reading (per entity)
     // fittingResolved[kind]: targetId -> last dispatched value, as a JSON key
     const fittingIndex = new Map();
-    const fittingGroups = { curtain: {}, cornice: {} };
+    const fittingGroups = { curtain: {}, cornice: {}, furnitureLight: {} };
     const fittingEntity = new Map();
-    const fittingResolved = { curtain: new Map(), cornice: new Map() };
+    const fittingResolved = { curtain: new Map(), cornice: new Map(), furnitureLight: new Map() };
     // Curtain availability, tracked SEPARATELY from fittingEntity/parseCover:
     // parseCover deliberately returns null (no event, keep the last reading)
     // for 'unavailable'/'unknown', which is exactly right for position but
@@ -297,16 +303,24 @@ export const HAClient = (() => {
     // means the slider can no longer promise to move the whole curtain).
     const curtainEntityAvailable = new Map();
     const curtainAvailable = new Map();
-    if (sensors) {
+    {
       const indexFitting = (kind, map) => {
         Object.entries(map || {}).forEach(([targetId, entities]) => {
           if (!Array.isArray(entities) || !entities.length) return;
           fittingGroups[kind][targetId] = entities.slice();
-          entities.forEach(eid => fittingIndex.set(eid, { kind, targetId }));
+          entities.forEach(eid => {
+            const list = fittingIndex.get(eid) || [];
+            list.push({ kind, targetId });
+            fittingIndex.set(eid, list);
+          });
         });
       };
-      indexFitting('curtain', sensors.curtains);
-      indexFitting('cornice', sensors.corniceLights);
+      if (sensors) {
+        indexFitting('curtain', sensors.curtains);
+        indexFitting('cornice', sensors.corniceLights);
+        // rooms.json sensors.furnitureLights: furniture item id -> [light].
+        indexFitting('furnitureLight', sensors.furnitureLights);
+      }
     }
 
     /**
@@ -355,8 +369,8 @@ export const HAClient = (() => {
           : readings.some(r => r.moving === 'closing') ? 'closing' : null;
         return { pct, moving };
       }
-      // Cornice: OR the on state; brightness is the brightest; colour from the
-      // first entity that is on and reports one.
+      // Cornice / furniture light: OR the on state; brightness is the
+      // brightest; colour from the first entity that is on and reports one.
       const lit = readings.filter(r => r.on);
       return {
         on: lit.length > 0,
@@ -377,24 +391,28 @@ export const HAClient = (() => {
      * correctly reports false here.
      */
     function processFittingUpdate(entityId, haState) {
-      const mapping = fittingIndex.get(entityId);
-      if (!mapping) return false;
-      const { kind, targetId } = mapping;
+      const mappings = fittingIndex.get(entityId);
+      if (!mappings) return false;
+      let fired = false;
+      mappings.forEach(({ kind, targetId }) => {
+        if (kind === 'curtain') maybeUpdateCurtainAvailability(entityId, targetId, haState);
 
-      if (kind === 'curtain') maybeUpdateCurtainAvailability(entityId, targetId, haState);
-
-      const reading = kind === 'curtain' ? parseCover(haState) : parseCorniceLight(haState);
-      if (!reading) return false;
-      fittingEntity.set(entityId, reading);
-      const resolved = resolveFitting(kind, targetId);
-      if (!resolved) return false;
-      const key = JSON.stringify(resolved);
-      if (fittingResolved[kind].get(targetId) === key) return false;
-      fittingResolved[kind].set(targetId, key);
-      (kind === 'curtain' ? curtainCallbacks : corniceCallbacks).forEach(cb => {
-        try { cb(targetId, resolved); } catch (e) { console.warn('HAClient fittingCb:', e); }
+        const reading = kind === 'curtain' ? parseCover(haState) : parseCorniceLight(haState);
+        if (!reading) return;
+        fittingEntity.set(entityId, reading);
+        const resolved = resolveFitting(kind, targetId);
+        if (!resolved) return;
+        const key = JSON.stringify(resolved);
+        if (fittingResolved[kind].get(targetId) === key) return;
+        fittingResolved[kind].set(targetId, key);
+        const cbs = kind === 'curtain' ? curtainCallbacks
+          : kind === 'cornice' ? corniceCallbacks : furnitureLightCallbacks;
+        cbs.forEach(cb => {
+          try { cb(targetId, resolved); } catch (e) { console.warn('HAClient fittingCb:', e); }
+        });
+        fired = true;
       });
-      return true;
+      return fired;
     }
 
     /**
@@ -823,6 +841,10 @@ export const HAClient = (() => {
       // and cb(curtainId, { on, bri, color }). Fired only on a real change.
       onCurtainChange(cb) { curtainCallbacks.push(cb); },
       onCorniceChange(cb) { corniceCallbacks.push(cb); },
+      // cb(itemId, { on, bri, color }) for a furniture item bound to a light
+      // entity (rooms.json sensors.furnitureLights). Same resolution and same only-on-a-real-
+      // change guarantee as a cornice light.
+      onFurnitureLightChange(cb) { furnitureLightCallbacks.push(cb); },
       // cb(curtainId, available). Fired only when the OR-across-motors
       // availability actually flips -- 'unavailable'/'unknown' on ANY bound
       // motor resolves the whole curtain unavailable, since a slider cannot

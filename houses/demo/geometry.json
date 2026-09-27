@@ -610,8 +610,8 @@
   ],
   "furniture": [
     { "id": "study_desk", "room": "study", "type": "standing-desk", "wall": 1, "centre": 760, "offset": 0,
-      "params": { "width": 140, "depth": 70, "topHeight": 74, "height": 76.5 },
-      "label": "Desk", "notes": "Sit-stand desk at sitting height." },
+      "params": { "width": 140, "depth": 70, "topHeight": 74, "height": 76.5, "ledStrip": true },
+      "label": "Desk", "notes": "Sit-stand desk at sitting height. Its LED strip follows a demo light (rooms.json sensors.furnitureLights; emissive only, no real light)." },
     { "id": "study_screen", "room": "study", "type": "box", "wall": 1, "centre": 760, "offset": 20, "elevation": 76.5,
       "fade": "never", "params": { "width": 60, "depth": 4, "height": 36, "color": "#3a6e9e", "finish": "emissive" },
       "label": "Screen", "notes": "Emissive finish: kept as its own draw. fade never: it stays lit when the north wall fades." },

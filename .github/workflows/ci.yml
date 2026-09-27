@@ -262,6 +262,20 @@ jobs:
           # the lower sleeve and its overlap stay fixed).
           set -euo pipefail
           node scripts/test-standing-desk.mjs
+      - name: Furniture follows a Home Assistant light; Ambient row comes from rooms.json
+        run: |
+          # Asserts src/furniture-light.js: a light state { on, bri, color }
+          # becomes the look a bound part shows (off = dim grey with no glow,
+          # brightness scales the glow with a floor, an HA colour replaces the
+          # authored one, no reading = authored colour lit), painted onto real
+          # three.js materials of both kinds; that a desk binds its LED strip
+          # and not its control-panel display; ha-client's furnitureLights
+          # kind (fires only on a real change, one entity can drive a cornice
+          # and a desk, nothing leaks into the room-light path); and that a
+          # room's Ambient row comes from its rooms.json ambient binding, not
+          # from a geometry fixture existing.
+          set -euo pipefail
+          node scripts/test-furniture-light.mjs
       - name: Wall decor (framed sign + wall sconce, both kinds) builder contract
         run: |
           # Asserts the builder contract for src/furniture/wall-sign.js and
