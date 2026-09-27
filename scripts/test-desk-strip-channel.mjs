@@ -104,8 +104,9 @@ function check(name, cond, detail) {
   check('index.html copies colour for every non-main channel',
     /state\.color !== undefined && group !== 'main'\) ls\[group\]\.color = state\.color/.test(html));
   const scene = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+  // The seeding itself is unit-tested in scripts/test-light-state.mjs.
   check('the scene seeds lightState from opts.boundChannels',
-    /const boundChannels = opts\.boundChannels \|\| \{\};/.test(scene) && /boundChannels\[id\]\)\s*\?\s*boundChannels\[id\]/.test(scene));
+    /const lightState = seedLightState\(ROOMS,\s*LIGHTS,\s*opts\.boundChannels\)/.test(scene));
 }
 
 // ---- 3. the office: exactly two accent emitters -----------------------------

@@ -17,6 +17,7 @@ import {
 } from './adaptive-quality.js';
 import { collapseEmitters } from './light-merge.js';
 import { wallpaperFaceAxis, overlayFace, overlayUOffset } from './wallpaper-face.js';
+import { seedLightState } from './light-state.js';
 import { HouseLoader } from './house-loader.js';
 import {
   insidePoly, clearRun, polyAreaSqm, printCount, walkFootsteps, printYaw, WALK_DEFAULTS,
@@ -1186,6 +1187,11 @@ export const Home3DScene = (() => {
       t.needsUpdate = true;
       _wallpaperPlaceholder = t;
       return t;
+    }
+    // For dispose(): once every photo has loaded, the placeholder is on no
+    // material, so the scene's material-texture sweep never reaches it.
+    function disposeWallpaperPlaceholder() {
+      if (_wallpaperPlaceholder) { _wallpaperPlaceholder.dispose(); _wallpaperPlaceholder = null; }
     }
 
     function buildFaceTexturedMaterials(faceAxis, url, plainMatFactory, lm, h, isOuter) {
@@ -3146,7 +3152,7 @@ export const Home3DScene = (() => {
       wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true });
     });
 
-    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight };
+    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight, disposeWallpaperPlaceholder };
   }
 
   /**
@@ -3589,7 +3595,7 @@ export const Home3DScene = (() => {
     let furnitureModules = (furnitureItems.length && furnitureVisible)
       ? loadFurnitureModules(furnitureItems) : null;
 
-    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight } = buildScene(scene, quality);
+    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight, disposeWallpaperPlaceholder } = buildScene(scene, quality);
     {
       // The tier line, with what the tier actually built: light counts are
       // the per-pixel cost on a phone or tablet (every light, every fragment).
@@ -4234,6 +4240,10 @@ export const Home3DScene = (() => {
     // always resolves and resolves only once the house's programs exist. The
     // furniture waits on this (review nit 2), never on the raw compileAsync.
     let precompileDone = Promise.resolve();
+    // See the fallback timer and the context-restored listener below.
+    const READY_FALLBACK_MS = 10000;
+    let readyFallbackTimer = null;
+    let onGlContextRestored = null;
     function fireReady() {
       if (readyFired) return;
       readyFired = true;
@@ -4310,10 +4320,25 @@ export const Home3DScene = (() => {
       // the shadow map's), has the same program key -- the same trick the
       // furniture uses for its own casters (furniture.js, depthPrecompile).
       if (wantShadows) jobs.push(Promise.resolve().then(() => precompileShadowDepth()));
+      // Fallback (review nit 1212b378 #1): r160's compileAsync polls
+      // program.isReady() forever, so a context lost mid-compile leaves the
+      // promise pending and the gate shut -- a blank canvas for good (under
+      // ?preview=true there is no overlay to explain it). Open the gate
+      // anyway after READY_FALLBACK_MS; the first frame then compiles
+      // whatever is left, which is the old, slower-but-working behaviour.
+      readyFallbackTimer = setTimeout(() => {
+        readyFallbackTimer = null;
+        if (readyFired) return;
+        console.warn('[Home3DScene] shader precompile did not settle in ' +
+          READY_FALLBACK_MS + ' ms; drawing anyway.');
+        requestRender();
+        fireReady();
+      }, READY_FALLBACK_MS);
       precompileDone = Promise.all(jobs)
         .catch((e) => console.warn('[Home3DScene] shader precompile failed; ' +
           'falling back to compiling on first render.', e))
         .then(() => {
+          if (readyFallbackTimer !== null) { clearTimeout(readyFallbackTimer); readyFallbackTimer = null; }
           ren.shadowMap.enabled = shadowWasEnabled;
           // REQUIRED: this scene renders on demand, so without an explicit
           // repaint request nothing draws after the precompile resolves and
@@ -4339,7 +4364,19 @@ export const Home3DScene = (() => {
       fireReady();
     }
 
-    // ── Furniture (plan PR1b; src/furniture.js) ─────────────────────────────
+    // A restored context is a usable context: three rebuilds its programs on
+    // the next draw. If the gate is still shut because the precompile never
+    // settled (the context was lost mid-compile), open it now rather than
+    // waiting out the fallback timer. Removed in dispose().
+    onGlContextRestored = () => {
+      if (readyFired) return;
+      if (readyFallbackTimer !== null) { clearTimeout(readyFallbackTimer); readyFallbackTimer = null; }
+      requestRender();
+      fireReady();
+    };
+    ren.domElement.addEventListener('webglcontextrestored', onGlContextRestored);
+
+    // ── Furniture (plan PR1b; src/furniture.js)─────────────────────────────
     // Attached AFTER the house's own precompile, already compiled, one render
     // later -- it never delays onReady, and never adds a program that would
     // compile synchronously on a later draw (the multi-second stall in
@@ -4451,23 +4488,9 @@ export const Home3DScene = (() => {
     // Light state — one entry per room, one sub-entry per channel the profile
     // declares for it. A room with no 'main' channel still gets a main entry so
     // the controls panel and syncLights() can address every room uniformly.
+    // Geometry's channels plus every channel rooms.json binds (src/light-state.js).
     const ids = Object.keys(ROOMS);
-    const lightState = {};
-    const boundChannels = opts.boundChannels || {};
-    ids.forEach(id => {
-      const groups = LIGHTS[id] || {};
-      lightState[id] = { main: { on: false, bri: 100, temp: 4000 } };
-      const channels = Object.keys(groups);
-      (Array.isArray(boundChannels[id]) ? boundChannels[id] : []).forEach(ch => {
-        if (typeof ch === 'string' && channels.indexOf(ch) === -1) channels.push(ch);
-      });
-      channels.forEach(channel => {
-        if (channel === 'main') return;
-        // Accent channels default to a warm accent colour and a lower brightness;
-        // that is a display default, not a fact about the house.
-        lightState[id][channel] = { on: false, bri: 80, color: "#ff3300" };
-      });
-    });
+    const lightState = seedLightState(ROOMS, LIGHTS, opts.boundChannels);
 
     // Apply initial HA state if provided
     if (initialState) {
@@ -5629,6 +5652,15 @@ export const Home3DScene = (() => {
         if (furnitureResult) { disposeFurniture(furnitureResult); furnitureResult = null; }
         shadowDepthProbeMats.forEach(m => m.dispose());
         shadowDepthProbeMats.length = 0;
+        // The first-frame gate's fallback timer and context-restored listener:
+        // neither may fire into a disposed scene.
+        if (readyFallbackTimer !== null) { clearTimeout(readyFallbackTimer); readyFallbackTimer = null; }
+        if (onGlContextRestored) {
+          ren.domElement.removeEventListener('webglcontextrestored', onGlContextRestored);
+          onGlContextRestored = null;
+        }
+        // The shared wallpaper placeholder (see buildScene).
+        disposeWallpaperPlaceholder();
 
         cancelAnimationFrame(animId);
         handlers.forEach(([el, ev, fn, o]) => el.removeEventListener(ev, fn, o));
