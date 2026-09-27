@@ -57,70 +57,80 @@
 
 <script type="text/babel">
 /* =====================================================================
-   DINING SPEC — the kitchen dining set: round table, dining chair, and a
-   wall clock (two styles). Renders the REAL builders in src/furniture/
-   dining.js, not a re-implementation, so this page can never drift from
-   what a house profile actually gets.
+   DINING SPEC — a space-saving NESTING dining set: a round table on 4
+   splayed legs (no pedestal) plus 4 quadrant chairs whose curved backs, when
+   tucked in, form the black cylinder the white top overhangs like a lid.
+   Renders the REAL builders in src/furniture/dining.js, not a
+   re-implementation, so this page can never drift from what a house profile
+   actually gets.
 
-   Modelled from real kitchen photos of this house: a small round space-saving table
-   on a slim pedestal base with four low-back chairs tucked fully under the
-   rim, and a DIY wall clock (numerals/dots stuck straight on the wall
-   around a plain hands unit — no face disc).
+   Modelled from real (private, never committed) kitchen photos of this
+   house's dining set.
 
-   THE CLOCK IS LIVE. dining.js exports setClockTime(group, date), a pure
-   helper that rotates the hour/minute/second hand meshes for a given Date.
-   This page calls it every second (via requestAnimationFrame) so the second
-   hand is visibly moving while you tweak everything else. The live 3D scene
-   is expected to call the SAME helper about once a MINUTE instead — see the
-   helper's own doc comment in dining.js for why once-a-minute is enough
-   there and not wasted the way a per-frame call would be.
+   The wall clock that used to be tweakable here moved to its own page,
+   ClockSpec.html (item 89769f2b, 2026-09-26) -- it shared no geometry with
+   the table/chairs, just this page by coincidence of both being kitchen
+   photos.
+
+   NESTING MATH (shared by the "nested set" preset's live scene AND
+   scripts/test-dining.mjs's interpenetration checks -- see that file for the
+   proof this is exact): chair i (i=0..3) is tucked with its own local
+   origin -- the back-arc's centre -- placed at world
+   (radius*sin(theta_i), 0, radius*cos(theta_i)) for theta_i = i*90deg, then
+   rotated by theta_i + 180deg so its apex (front, pointing away from its own
+   back) converges on the shared centre. `pulledOut` (0..1) linearly scales
+   that radial placement distance from the tucked radius up to +45cm, so at
+   1 the chairs sit visibly apart from the nested cylinder.
    ===================================================================== */
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "preset": "custom",
+  "preset": "nested-set",
   "tableDiameter": 100,
   "tableHeight": 75,
-  "tableTopColor": "#f2f0eb",
-  "tableTopFinish": "gloss",
-  "tableBaseColor": "#1c1c1c",
-  "chairWidth": 45,
-  "chairDepth": 50,
-  "chairHeight": 75,
-  "chairSeatHeight": 45,
+  "tableTopColor": "#f5f5f2",
+  "tableFrameHeight": 22,
+  "legColor": "#1a1a1a",
+  "chairRadius": 45,
+  "chairBackSweep": 84,
+  "chairHeight": 71,
+  "chairSeatHeight": 46,
   "chairColor": "#1a1a1a",
-  "clockKind": "diy-numerals",
-  "clockDiameter": 30,
-  "clockDepth": 4,
-  "clockFaceColor": "#f5f2ea",
-  "clockRimColor": "#1a1a1a",
-  "clockNumeralColor": "#1a1a1a",
-  "clockHandColor": "#1a1a1a",
-  "clockLive": true
+  "pulledOut": 0,
+  "chairAlone": false,
+  "detail": "full"
 }/*EDITMODE-END*/;
 
 const CM = 0.01;
+const PULL_OUT_MAX_M = 0.45; // 45 cm, per the "pulled out" acceptance criterion
 
 // Presets: named combinations a reviewer can jump straight to, instead of
-// hand-dialling every slider back to a known-good state. "photo-match" is
-// the numbers actually read off this house's kitchen photos (a small round
-// 4-seat space-saving set); the others are ordinary alternate sizes.
+// hand-dialling every slider back to a known-good state. "nested-set" is the
+// numbers read off the real photos; "larger-table" is an alternate size;
+// "chair-alone" isolates one chair (no table, no other chairs) so its own
+// shape -- the wedge, the curved back, the leg/stretcher frame -- can be
+// checked without three others obscuring it (visual review round 1, item
+// 89769f2b, fix #7).
 const PRESETS = {
-  'photo-match': {
-    tableDiameter: 100, tableHeight: 75, tableTopColor: '#f2f0eb', tableTopFinish: 'gloss', tableBaseColor: '#1c1c1c',
-    chairWidth: 45, chairDepth: 50, chairHeight: 75, chairSeatHeight: 45, chairColor: '#1a1a1a',
-    clockKind: 'diy-numerals', clockDiameter: 30, clockDepth: 4,
-    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#1a1a1a', clockHandColor: '#1a1a1a'
+  'nested-set': {
+    tableDiameter: 100, tableHeight: 75, tableTopColor: '#f5f5f2', tableFrameHeight: 22, legColor: '#1a1a1a',
+    chairRadius: 45, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: false
+  },
+  'pulled-out': {
+    tableDiameter: 100, tableHeight: 75, tableTopColor: '#f5f5f2', tableFrameHeight: 22, legColor: '#1a1a1a',
+    chairRadius: 45, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 1, chairAlone: false
   },
   'larger-table': {
-    tableDiameter: 120, tableHeight: 76, tableTopColor: '#f2f0eb', tableTopFinish: 'gloss', tableBaseColor: '#1c1c1c',
-    chairWidth: 45, chairDepth: 50, chairHeight: 75, chairSeatHeight: 45, chairColor: '#1a1a1a',
-    clockKind: 'diy-numerals', clockDiameter: 30, clockDepth: 4,
-    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#1a1a1a', clockHandColor: '#1a1a1a'
+    // chairRadius scaled up with the table (50, not the DEFAULTS 45) --
+    // the table's own leg-top radius (tableRadius*0.78) grows with
+    // tableDiameter, so a bigger table needs a bigger nested chair ring to
+    // keep the legs inside it (round-3 code review, item 89769f2b: at
+    // chairRadius=45 this preset's leg tops sit just outside the chair
+    // arc, which is exactly what the collisionRisk() guard now catches).
+    tableDiameter: 120, tableHeight: 76, tableTopColor: '#f5f5f2', tableFrameHeight: 24, legColor: '#1a1a1a',
+    chairRadius: 50, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: false
   },
-  'framed-clock': {
-    tableDiameter: 100, tableHeight: 75, tableTopColor: '#f2f0eb', tableTopFinish: 'gloss', tableBaseColor: '#1c1c1c',
-    chairWidth: 45, chairDepth: 50, chairHeight: 75, chairSeatHeight: 45, chairColor: '#1a1a1a',
-    clockKind: 'framed', clockDiameter: 34, clockDepth: 5,
-    clockFaceColor: '#f5f2ea', clockRimColor: '#3a2f22', clockNumeralColor: '#1a1a1a', clockHandColor: '#1a1a1a'
+  'chair-alone': {
+    tableDiameter: 100, tableHeight: 75, tableTopColor: '#f5f5f2', tableFrameHeight: 22, legColor: '#1a1a1a',
+    chairRadius: 45, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: true
   }
 };
 
@@ -136,69 +146,106 @@ function useDiningModule() {
   return mod;
 }
 
-// ============== Build all three types into one scene ==============
+// ============== Slider guard: warn when sizes can recreate a collision ==============
+// dining.js's table leg placement (legTopRadius = tableRadius*0.78,
+// legFootRadius = tableRadius*0.97, legWidthTangential = 2cm) assumes its
+// companion chairs open a seam gap (backSweep < 90) wide enough for that
+// tangential width at the leg's own radius -- so an unusual COMBINATION
+// (backSweep too close to 90, or a table/chair pairing that pushes the leg
+// top outside the chair's own arc) can reopen a collision even though each
+// slider alone stays in its declared range.
+//
+// Round-2's version of this check warned on "legTopRadius < chairRadius+2",
+// a leftover from when the legs sat OUTSIDE the chair cylinder -- now that
+// they deliberately sit INSIDE it (in the seam), that condition fires on
+// every shipped preset and its "try a larger table" advice pushes the legs
+// back outside (round-3 code review, item 89769f2b, finding 1). The two
+// REAL risks are: (a) the seam gap at the leg's own radius is narrower than
+// the leg's tangential half-width plus a safety margin, and (b) the leg top
+// itself has drifted outside the chair's own arc radius (round 2's actual
+// defect class). The old "feet past the rim" check is dropped -- the foot
+// radius (tableR*0.97) can never exceed tableR, so it could never fire.
+function collisionRisk(t) {
+  const warnings = [];
+  const tableR = t.tableDiameter / 2;
+  const chairR = t.chairRadius;
+  const legTopRadius = tableR * 0.78;
+  const legWidthTangentialHalfCm = 1.0; // half of dining.js's 2cm legWidthTangential
+  const seamHalfGapDeg = (90 - t.chairBackSweep) / 2;
+  const legHalfAngleDeg = (Math.atan2(legWidthTangentialHalfCm, legTopRadius) * 180) / Math.PI;
+  const marginDeg = seamHalfGapDeg - legHalfAngleDeg;
+  if (marginDeg < 0.3) {
+    warnings.push('The seam gap (backSweep ' + t.chairBackSweep + '°, ' + seamHalfGapDeg.toFixed(1) + '° half-gap) is too narrow for the table leg (' + legHalfAngleDeg.toFixed(1) + '° half-width at its own radius) — lower the chair backSweep (try 84–86°) to open more room at each seam.');
+  }
+  if (legTopRadius > chairR) {
+    warnings.push('Table leg tops (~' + legTopRadius.toFixed(0) + 'cm from centre) fall OUTSIDE the chairs’ own arc (radius ' + chairR + 'cm) — try a larger chair radius or a smaller table diameter, so the legs stay inside the nested cylinder.');
+  }
+  const tableUndersideCm = t.tableHeight - 2.8;
+  if (t.chairHeight > tableUndersideCm - 1) {
+    warnings.push('Chair height (' + t.chairHeight + 'cm) leaves under 1cm clearance below the table underside (~' + tableUndersideCm.toFixed(1) + 'cm) — lower the chair height or raise the table.');
+  }
+  if (t.chairBackSweep * 4 >= 360) {
+    warnings.push('Chair backSweep (' + t.chairBackSweep + '°) leaves no seam gap at all for the table legs (4×' + t.chairBackSweep + ' ≥ 360°).');
+  }
+  return warnings;
+}
+
+// ============== Build the nested table + 4 chairs into one scene ==============
 function buildDiningScene(t, group, THREE, ctx) {
   const Dining = window.__dining;
   if (!Dining) return;
+  const detailOpt = { detail: t.detail === 'low' ? 'low' : 'full' };
+
+  // "chair-alone": isolate one chair, facing the camera, no table and no
+  // other chairs -- so its own shape can be checked without the other three
+  // obscuring it (fix #7).
+  if (t.chairAlone) {
+    const chair = Dining.TYPES['dining-chair'].build(THREE, {
+      radius: t.chairRadius, backSweep: t.chairBackSweep, height: t.chairHeight, seatHeight: t.chairSeatHeight,
+      seatColor: t.chairColor, seatFinish: 'matte', legColor: t.chairColor, legFinish: 'matte'
+    }, detailOpt);
+    // Rotate 180 so its front (the wedge's point) faces the default camera,
+    // the same "facing the viewer" convention every other single-item spec
+    // page uses.
+    chair.rotation.y = Math.PI;
+    group.add(chair);
+    return;
+  }
 
   const table = Dining.TYPES['dining-table'].build(THREE, {
     width: t.tableDiameter, depth: t.tableDiameter, height: t.tableHeight,
-    topColor: t.tableTopColor, topFinish: t.tableTopFinish,
-    baseColor: t.tableBaseColor, baseFinish: 'matte'
-  }, { detail: 'full' });
+    topColor: t.tableTopColor, topFinish: 'matte',
+    legColor: t.legColor, legFinish: 'matte', frameHeight: t.tableFrameHeight
+  }, detailOpt);
+  // By the builder contract the table's own local frame has its BACK at
+  // z=0 and its centre at z=+diameter/2 -- so placing the GROUP at the
+  // nesting centre (as the chairs below do) requires shifting it back by
+  // that radius, or the table renders half a diameter off the chair ring
+  // (code review + visual review round 1, item 89769f2b, fix #3).
+  table.position.z = -(t.tableDiameter / 2) * CM;
   group.add(table);
 
-  // Four chairs, tucked under the table rim at 90 degrees apart, facing in --
-  // this is a preview of the LOOK, not an authored placement (placement is
-  // out of this spec's scope; the house profile decides real `at`/`rotation`).
-  const chairDefaults = {
-    width: t.chairWidth, depth: t.chairDepth, height: t.chairHeight, seatHeight: t.chairSeatHeight,
-    seatColor: t.chairColor, seatFinish: 'matte', legColor: t.chairColor, legFinish: 'matte'
-  };
-  const tableR = t.tableDiameter / 2;
-  // How far out from the table centre the chair's BACK (its local z = 0,
-  // per the builder contract) should sit -- far enough that the chair's own
-  // depth carries its seat in under the rim, matching the photo's fully
-  // tucked-under look.
-  const backDist = (tableR - t.chairDepth * 0.15) * CM;
+  // Four quadrant chairs, tucked at 90-degree rotations so their curved
+  // backs together form the cylinder the table top overhangs -- see the
+  // NESTING MATH note above the tweak defaults for the placement formula
+  // this shares with scripts/test-dining.mjs. Both the table above and the
+  // chairs here are centred on the SAME point (the group origin), so
+  // `pulledOut` -- which only moves `placeDist`, the chairs' own radial
+  // distance from that shared origin -- is already radial from the table's
+  // true centre (fix #3's other half: keep this centre shared, not
+  // re-derive a second one for the slider).
+  const chairRadiusM = t.chairRadius / 100;
+  const placeDist = chairRadiusM + t.pulledOut * PULL_OUT_MAX_M;
   for (let i = 0; i < 4; i++) {
-    const angle = (i / 4) * Math.PI * 2;
-    const chair = Dining.TYPES['dining-chair'].build(THREE, chairDefaults, { detail: 'full' });
-    // The chair's own frame has its BACK at local z = 0 and its front at
-    // +depth (facing +z, per the builder contract) -- so placing the GROUP
-    // at the back point and rotating it to face the table centre is what
-    // "tucks the seat under the rim" rather than centring the whole chair
-    // on the ring, which would only tuck HALF of it in.
-    chair.position.set(Math.sin(angle) * backDist, 0, Math.cos(angle) * backDist);
-    chair.rotation.y = angle + Math.PI;
+    const theta = (i * Math.PI) / 2;
+    const chair = Dining.TYPES['dining-chair'].build(THREE, {
+      radius: t.chairRadius, backSweep: t.chairBackSweep, height: t.chairHeight, seatHeight: t.chairSeatHeight,
+      seatColor: t.chairColor, seatFinish: 'matte', legColor: t.chairColor, legFinish: 'matte'
+    }, detailOpt);
+    chair.position.set(placeDist * Math.sin(theta), 0, placeDist * Math.cos(theta));
+    chair.rotation.y = theta + Math.PI;
     group.add(chair);
   }
-
-  // Wall clock, mounted on a small backing wall behind the scene so "on the
-  // wall" reads clearly rather than floating in space.
-  const wallSpan = 3, wallHeight = 2.6;
-  const wall = new THREE.Mesh(
-    new THREE.BoxGeometry(wallSpan, wallHeight, 0.1),
-    new THREE.MeshStandardMaterial({ color: 0xece8e0, roughness: 0.95 })
-  );
-  wall.position.set(0, wallHeight / 2, -(tableR * CM) - 1.2);
-  wall.receiveShadow = true;
-  group.add(wall);
-
-  const clock = Dining.TYPES['wall-clock'].build(THREE, {
-    width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
-    kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
-    numeralColor: t.clockNumeralColor, handColor: t.clockHandColor, time: '10:10'
-  }, { detail: 'full' });
-  clock.position.set(0, 1.15, wall.position.z + 0.05 + 0.001);
-  group.add(clock);
-  ctx.clockGroup = clock;
-  ctx.Dining = Dining;
-}
-
-function animateDiningScene(t, ctx) {
-  if (!t.clockLive || !ctx.clockGroup || !ctx.Dining) return;
-  ctx.Dining.setClockTime(ctx.clockGroup, new Date());
 }
 
 // ============== Copy-JSON: the furniture[] entries this preset implies ==============
@@ -209,27 +256,18 @@ function furnitureJSON(t) {
       at: [0, 0], rotation: 0,
       params: {
         width: t.tableDiameter, depth: t.tableDiameter, height: t.tableHeight,
-        topColor: t.tableTopColor, topFinish: t.tableTopFinish, baseColor: t.tableBaseColor
-      }
+        topColor: t.tableTopColor, legColor: t.legColor, frameHeight: t.tableFrameHeight
+      },
+      notes: '`at` is this item\'s own LOCAL-FRAME origin (its back edge, per the builder contract), NOT its visual centre -- the table\'s round centre sits `diameter/2` in front of `at` along its own +z (unrotated: `at.y + diameter/2`). This spec page\'s own 3D view accounts for that offset when centring the table on the same point the 4 chairs ring; a house profile must do the same.'
     },
     {
       id: 'kitchen_dining_chair_1', room: 'kitchen', type: 'dining-chair',
       at: [0, 0], rotation: 0,
       params: {
-        width: t.chairWidth, depth: t.chairDepth, height: t.chairHeight,
+        radius: t.chairRadius, backSweep: t.chairBackSweep, height: t.chairHeight,
         seatHeight: t.chairSeatHeight, seatColor: t.chairColor, legColor: t.chairColor
       },
-      notes: 'Repeat with rotation 90/180/270 for the other three chairs; placement is out of this spec\'s scope.'
-    },
-    {
-      id: 'kitchen_wall_clock', room: 'kitchen', type: 'wall-clock',
-      wall: 0, centre: 0, offset: 0, elevation: 150,
-      params: {
-        width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
-        kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
-        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor
-      },
-      notes: 'wall/centre are placeholders -- set to the real wall id and position.'
+      notes: 'Tucked (pulledOut=0) placement: 4 copies at rotation 0/90/180/270, each with `at` (its own back-arc centre, per the builder contract) on the ring of radius `radius` around the SAME centre the table above is centred on -- see dining.js and this spec\'s NESTING MATH note. Placement is out of this spec\'s scope; the house profile decides real `at`.'
     }
   ];
   return JSON.stringify(items, null, 2);
@@ -261,11 +299,12 @@ function App() {
     if (!p) return;
     setTweak(Object.assign({ preset: name }, p));
   };
+  const warnings = t.chairAlone ? [] : collisionRisk(t);
 
   return (
     <>
       <h1>Dining Spec</h1>
-      <div className="sub">Round dining table, dining chair (×4, tucked under the rim) and a working wall clock -- modelled from this house's kitchen photos. Renders the REAL src/furniture/dining.js builders. Use the Tweaks panel, or jump to a preset below.</div>
+      <div className="sub">A space-saving NESTING dining set: a round table on 4 splayed legs (no pedestal) plus 4 quadrant chairs that, tucked in, form the cylinder the white top overhangs like a lid. Renders the REAL src/furniture/dining.js builders. Use the Tweaks panel, or jump to a preset below. (The wall clock has its own page, ClockSpec.)</div>
 
       <div className="row" style={{ marginBottom: 16 }}>
         {Object.keys(PRESETS).map(name => (
@@ -275,6 +314,19 @@ function App() {
         <CopyJSONButton t={t} />
       </div>
 
+      {t.chairAlone &&
+        <div className="legend" style={{ marginBottom: 16 }}>
+          <b>Chair-alone view</b> -- one dining-chair, no table, no other chairs. Turn off "Chair alone" in the Tweaks panel to see the nested set.
+        </div>}
+
+      {warnings.length > 0 &&
+        <div className="legend" style={{ marginBottom: 16, color: '#a1441a' }}>
+          <b>This size combination may recreate a collision:</b>
+          <ul style={{ marginLeft: 16, marginTop: 4 }}>
+            {warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        </div>}
+
       <div className="grid">
         <div className="card">
           <h2>Numbers</h2>
@@ -283,30 +335,30 @@ function App() {
               <tr><th>Feature</th><th className="num">value</th><th>Variability</th></tr>
               <tr><td>Table diameter</td><td className="num">{t.tableDiameter}</td><td>Round top + depth (kept equal)</td></tr>
               <tr><td>Table height</td><td className="num">{t.tableHeight}</td><td>Floor to tabletop</td></tr>
-              <tr><td>Chair W×D×H</td><td className="num">{t.chairWidth}×{t.chairDepth}×{t.chairHeight}</td><td>Per dining-chair DEFAULTS</td></tr>
+              <tr><td>Table frame height</td><td className="num">{t.tableFrameHeight}</td><td>Floor to the crossbar frame</td></tr>
+              <tr><td>Chair radius</td><td className="num">{t.chairRadius}</td><td>Arc radius == depth; drives the nested cylinder's size</td></tr>
+              <tr><td>Chair backSweep</td><td className="num">{t.chairBackSweep}&deg;</td><td><b>84 leaves seam gaps</b> for the table legs (4 &times; 84 = 336, a 6&deg; gap per seam)</td></tr>
               <tr><td>Chair seat height</td><td className="num">{t.chairSeatHeight}</td><td>Clamped below chair height</td></tr>
-              <tr><td>Clock kind</td><td className="num">{t.clockKind}</td><td><b>Variable</b> — framed or diy-numerals</td></tr>
-              <tr><td>Clock diameter × depth</td><td className="num">{t.clockDiameter}×{t.clockDepth}</td><td>Wall-mounted</td></tr>
-              <tr><td>Clock live</td><td className="num">{t.clockLive ? 'running' : 'stopped'}</td><td>setClockTime(group, date) every second here; the live scene calls it once a minute</td></tr>
+              <tr><td>Pulled out</td><td className="num">{(t.pulledOut * 45).toFixed(0)} cm</td><td>0 = tucked, 1 = +45cm radially</td></tr>
+              <tr><td>Detail</td><td className="num">{t.detail}</td><td>Full or low triangle budget</td></tr>
             </tbody>
           </table>
           <div className="legend">
-            <b>Copy JSON</b> copies the furniture[] entries this preset implies (table + one chair + the clock), ready to paste into a house profile and adjust placement for.
+            <b>Copy JSON</b> copies the furniture[] entries this preset implies (table + one chair; repeat the chair per the placement note), ready to paste into a house profile and adjust placement for.
           </div>
           <pre className="json">{furnitureJSON(t)}</pre>
         </div>
 
         <div className="card full">
-          <h2>3D — dining set</h2>
+          <h2>3D — {t.chairAlone ? 'chair alone' : 'nesting dining set'}</h2>
           {!diningReady && <div className="legend">Loading src/furniture/dining.js…</div>}
           {diningReady &&
             <ThreeView
               t={t}
               buildModel={buildDiningScene}
-              animate={animateDiningScene}
-              heightOf={tt => tt.tableHeight * CM}
+              heightOf={tt => (tt.chairAlone ? tt.chairHeight : tt.tableHeight) * CM}
             />}
-          <div className="legend">Drag to orbit, scroll to zoom. The clock's second hand is live (real time) while "Clock live" is on.</div>
+          <div className="legend">Drag to orbit, scroll to zoom. Use "Pulled out" to slide the 4 chairs out from the nested cylinder, or "Chair alone" to isolate one.</div>
         </div>
       </div>
 
@@ -315,6 +367,11 @@ function App() {
         <TweakSelect label="Preset" value={t.preset}
           options={['custom', ...Object.keys(PRESETS)]}
           onChange={v => (v === 'custom' ? setTweak('preset', v) : applyPreset(v))} />
+        <TweakToggle label="Chair alone" value={t.chairAlone}
+          onChange={v => setTweak('chairAlone', v)} />
+        <TweakRadio label="Detail" value={t.detail}
+          options={[{ value: 'full', label: 'Full' }, { value: 'low', label: 'Low' }]}
+          onChange={v => setTweak('detail', v)} />
 
         <TweakSection label="Table" />
         <TweakSlider label="Diameter" value={t.tableDiameter} min={70} max={160} step={2} unit="cm"
@@ -323,40 +380,24 @@ function App() {
           onChange={v => setTweak('tableHeight', v)} />
         <TweakColor label="Top colour" value={t.tableTopColor}
           onChange={v => setTweak('tableTopColor', v)} />
-        <TweakSelect label="Top finish" value={t.tableTopFinish}
-          options={['matte', 'gloss']} onChange={v => setTweak('tableTopFinish', v)} />
-        <TweakColor label="Base colour" value={t.tableBaseColor}
-          onChange={v => setTweak('tableBaseColor', v)} />
+        <TweakSlider label="Frame height" value={t.tableFrameHeight} min={10} max={35} step={1} unit="cm"
+          onChange={v => setTweak('tableFrameHeight', v)} />
+        <TweakColor label="Leg colour" value={t.legColor}
+          onChange={v => setTweak('legColor', v)} />
 
-        <TweakSection label="Chair (×4 shown)" />
-        <TweakSlider label="Width" value={t.chairWidth} min={35} max={55} step={1} unit="cm"
-          onChange={v => setTweak('chairWidth', v)} />
-        <TweakSlider label="Depth" value={t.chairDepth} min={40} max={60} step={1} unit="cm"
-          onChange={v => setTweak('chairDepth', v)} />
-        <TweakSlider label="Height" value={t.chairHeight} min={65} max={90} step={1} unit="cm"
+        <TweakSection label="Chairs (×4, nested)" />
+        <TweakSlider label="Radius" value={t.chairRadius} min={35} max={55} step={1} unit="cm"
+          onChange={v => setTweak('chairRadius', v)} />
+        <TweakSlider label="Back sweep" value={t.chairBackSweep} min={60} max={120} step={5} unit="deg"
+          onChange={v => setTweak('chairBackSweep', v)} />
+        <TweakSlider label="Height" value={t.chairHeight} min={55} max={71} step={1} unit="cm"
           onChange={v => setTweak('chairHeight', v)} />
-        <TweakSlider label="Seat height" value={t.chairSeatHeight} min={38} max={50} step={1} unit="cm"
+        <TweakSlider label="Seat height" value={t.chairSeatHeight} min={45} max={58} step={1} unit="cm"
           onChange={v => setTweak('chairSeatHeight', v)} />
         <TweakColor label="Colour" value={t.chairColor}
           onChange={v => setTweak('chairColor', v)} />
-
-        <TweakSection label="Wall clock" />
-        <TweakRadio label="Kind" value={t.clockKind}
-          options={['diy-numerals', 'framed']} onChange={v => setTweak('clockKind', v)} />
-        <TweakSlider label="Diameter" value={t.clockDiameter} min={20} max={45} step={1} unit="cm"
-          onChange={v => setTweak('clockDiameter', v)} />
-        <TweakSlider label="Depth" value={t.clockDepth} min={2} max={8} step={0.5} unit="cm"
-          onChange={v => setTweak('clockDepth', v)} />
-        <TweakColor label="Face colour" value={t.clockFaceColor}
-          onChange={v => setTweak('clockFaceColor', v)} />
-        <TweakColor label="Rim colour" value={t.clockRimColor}
-          onChange={v => setTweak('clockRimColor', v)} />
-        <TweakColor label="Numeral/dot colour" value={t.clockNumeralColor}
-          onChange={v => setTweak('clockNumeralColor', v)} />
-        <TweakColor label="Hand colour" value={t.clockHandColor}
-          onChange={v => setTweak('clockHandColor', v)} />
-        <TweakToggle label="Live (real time)" value={t.clockLive}
-          onChange={v => setTweak('clockLive', v)} />
+        <TweakSlider label="Pulled out" value={t.pulledOut} min={0} max={1} step={0.05} unit=""
+          onChange={v => setTweak('pulledOut', v)} />
       </TweaksPanel>
     </>
   );

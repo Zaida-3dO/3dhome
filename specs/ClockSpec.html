@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Clock Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  pre.json { font-size:10px; background:#f8f6f1; border:1px solid #e6e1d6; border-radius:4px; padding:10px;
+    max-height:180px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
+  .copied { color:#2a7a3f; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<!--
+  wall-clock.js is the REAL shipped builder module (pure ESM, THREE injected,
+  no side effects) -- this page renders exactly what the live scene renders,
+  not a re-implementation that could drift from it. It is loaded here via a
+  classic `type="module"` script (the only way an ES module reaches a page
+  built from classic `text/babel` scripts) and its exports are copied onto
+  `window` for the Babel script below to use. `window.THREE` above is the UMD
+  build of the SAME three.js revision wall-clock.js is tested against, so
+  passing it in as wall-clock.js's injected THREE is exactly what the live
+  scene does.
+-->
+<script type="module">
+  import * as WallClock from '../src/furniture/wall-clock.js';
+  window.__wallClock = WallClock;
+  window.dispatchEvent(new Event('__wall_clock_ready'));
+</script>
+
+<script type="text/babel">
+/* =====================================================================
+   CLOCK SPEC — a working wall clock, two styles. Renders the REAL builder
+   in src/furniture/wall-clock.js, not a re-implementation, so this page can
+   never drift from what a house profile actually gets.
+
+   Modelled from a DIY wall clock seen in the living room (numerals/dots
+   stuck straight on the wall around a plain hands unit — no face disc), plus
+   a conventional `framed` alternative (a round face + rim + hands).
+
+   Split out of DiningSpec.html (item 89769f2b, 2026-09-26) -- the clock
+   shared no geometry with the dining table/chairs, just a spec page by
+   coincidence of both being kitchen photos.
+
+   THE CLOCK IS LIVE. wall-clock.js exports setClockTime(group, date), a pure
+   helper that rotates the hour/minute/second hand meshes for a given Date.
+   This page calls it every second (via requestAnimationFrame) so the second
+   hand is visibly moving while you tweak everything else. The live 3D scene
+   is expected to call the SAME helper about once a MINUTE instead — see the
+   helper's own doc comment in wall-clock.js for why once-a-minute is enough
+   there and not wasted the way a per-frame call would be.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "preset": "custom",
+  "clockKind": "diy-numerals",
+  "clockDiameter": 30,
+  "clockDepth": 4,
+  "clockFaceColor": "#f5f2ea",
+  "clockRimColor": "#1a1a1a",
+  "clockNumeralColor": "#1a1a1a",
+  "clockHandColor": "#1a1a1a",
+  "clockLive": true
+}/*EDITMODE-END*/;
+
+const CM = 0.01;
+
+// Presets: named combinations a reviewer can jump straight to, instead of
+// hand-dialling every slider back to a known-good state. "photo-match" is
+// the numbers actually read off this house's living-room photo; "framed" is
+// the conventional alternative style.
+const PRESETS = {
+  'photo-match': {
+    clockKind: 'diy-numerals', clockDiameter: 30, clockDepth: 4,
+    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#1a1a1a', clockHandColor: '#1a1a1a'
+  },
+  'framed-clock': {
+    clockKind: 'framed', clockDiameter: 34, clockDepth: 5,
+    clockFaceColor: '#f5f2ea', clockRimColor: '#3a2f22', clockNumeralColor: '#1a1a1a', clockHandColor: '#1a1a1a'
+  }
+};
+
+// ============== Wait for wall-clock.js (ES module) to attach to window ==============
+function useWallClockModule() {
+  const [mod, setMod] = React.useState(window.__wallClock || null);
+  React.useEffect(() => {
+    if (mod) return;
+    const onReady = () => setMod(window.__wallClock);
+    window.addEventListener('__wall_clock_ready', onReady);
+    return () => window.removeEventListener('__wall_clock_ready', onReady);
+  }, [mod]);
+  return mod;
+}
+
+// ============== Build the clock into a scene ==============
+function buildClockScene(t, group, THREE, ctx) {
+  const WallClock = window.__wallClock;
+  if (!WallClock) return;
+
+  // A small backing wall behind the scene so "on the wall" reads clearly
+  // rather than floating in space.
+  const wallSpan = 2, wallHeight = 2.2;
+  const wall = new THREE.Mesh(
+    new THREE.BoxGeometry(wallSpan, wallHeight, 0.1),
+    new THREE.MeshStandardMaterial({ color: 0xece8e0, roughness: 0.95 })
+  );
+  wall.position.set(0, wallHeight / 2, -0.8);
+  wall.receiveShadow = true;
+  group.add(wall);
+
+  const clock = WallClock.build(THREE, {
+    width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
+    kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
+    numeralColor: t.clockNumeralColor, handColor: t.clockHandColor, time: '10:10'
+  }, { detail: 'full' });
+  clock.position.set(0, 1.15, wall.position.z + 0.05 + 0.001);
+  group.add(clock);
+  ctx.clockGroup = clock;
+  ctx.WallClock = WallClock;
+}
+
+function animateClockScene(t, ctx) {
+  if (!t.clockLive || !ctx.clockGroup || !ctx.WallClock) return;
+  ctx.WallClock.setClockTime(ctx.clockGroup, new Date());
+}
+
+// ============== Copy-JSON: the furniture[] entry this preset implies ==============
+function furnitureJSON(t) {
+  const items = [
+    {
+      id: 'kitchen_wall_clock', room: 'kitchen', type: 'wall-clock',
+      wall: 0, centre: 0, offset: 0, elevation: 150,
+      params: {
+        width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
+        kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
+        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor
+      },
+      notes: 'wall/centre are placeholders -- set to the real wall id and position.'
+    }
+  ];
+  return JSON.stringify(items, null, 2);
+}
+
+function CopyJSONButton({ t }) {
+  const [copied, setCopied] = React.useState(false);
+  const onClick = () => {
+    const json = furnitureJSON(t);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(json).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      });
+    }
+  };
+  return (
+    <button className="btn" onClick={onClick}>{copied ? 'Copied!' : 'Copy JSON'}</button>
+  );
+}
+
+// ============== App ==============
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const clockReady = useWallClockModule();
+
+  const applyPreset = (name) => {
+    const p = PRESETS[name];
+    if (!p) return;
+    setTweak(Object.assign({ preset: name }, p));
+  };
+
+  return (
+    <>
+      <h1>Clock Spec</h1>
+      <div className="sub">A working wall clock, `framed` or `diy-numerals` -- the latter modelled from this house's living-room photo. Renders the REAL src/furniture/wall-clock.js builder. Use the Tweaks panel, or jump to a preset below.</div>
+
+      <div className="row" style={{ marginBottom: 16 }}>
+        {Object.keys(PRESETS).map(name => (
+          <button key={name} className={'btn' + (t.preset === name ? ' active' : '')}
+            onClick={() => applyPreset(name)}>{name}</button>
+        ))}
+        <CopyJSONButton t={t} />
+      </div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">value</th><th>Variability</th></tr>
+              <tr><td>Clock kind</td><td className="num">{t.clockKind}</td><td><b>Variable</b> — framed or diy-numerals</td></tr>
+              <tr><td>Clock diameter × depth</td><td className="num">{t.clockDiameter}×{t.clockDepth}</td><td>Wall-mounted</td></tr>
+              <tr><td>Clock live</td><td className="num">{t.clockLive ? 'running' : 'stopped'}</td><td>setClockTime(group, date) every second here; the live scene calls it once a minute</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            <b>Copy JSON</b> copies the furniture[] entry this preset implies, ready to paste into a house profile and adjust placement for.
+          </div>
+          <pre className="json">{furnitureJSON(t)}</pre>
+        </div>
+
+        <div className="card full">
+          <h2>3D — wall clock</h2>
+          {!clockReady && <div className="legend">Loading src/furniture/wall-clock.js…</div>}
+          {clockReady &&
+            <ThreeView
+              t={t}
+              buildModel={buildClockScene}
+              animate={animateClockScene}
+              heightOf={() => 1.15 + (t.clockDiameter / 100) / 2}
+            />}
+          <div className="legend">Drag to orbit, scroll to zoom. The clock's second hand is live (real time) while "Clock live" is on.</div>
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Presets" />
+        <TweakSelect label="Preset" value={t.preset}
+          options={['custom', ...Object.keys(PRESETS)]}
+          onChange={v => (v === 'custom' ? setTweak('preset', v) : applyPreset(v))} />
+
+        <TweakSection label="Wall clock" />
+        <TweakRadio label="Kind" value={t.clockKind}
+          options={['diy-numerals', 'framed']} onChange={v => setTweak('clockKind', v)} />
+        <TweakSlider label="Diameter" value={t.clockDiameter} min={20} max={45} step={1} unit="cm"
+          onChange={v => setTweak('clockDiameter', v)} />
+        <TweakSlider label="Depth" value={t.clockDepth} min={2} max={8} step={0.5} unit="cm"
+          onChange={v => setTweak('clockDepth', v)} />
+        <TweakColor label="Face colour" value={t.clockFaceColor}
+          onChange={v => setTweak('clockFaceColor', v)} />
+        <TweakColor label="Rim colour" value={t.clockRimColor}
+          onChange={v => setTweak('clockRimColor', v)} />
+        <TweakColor label="Numeral/dot colour" value={t.clockNumeralColor}
+          onChange={v => setTweak('clockNumeralColor', v)} />
+        <TweakColor label="Hand colour" value={t.clockHandColor}
+          onChange={v => setTweak('clockHandColor', v)} />
+        <TweakToggle label="Live (real time)" value={t.clockLive}
+          onChange={v => setTweak('clockLive', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+// Standalone viewing (opened directly at a /w URL, no design-tool host):
+// the shared TweaksPanel stays closed until it receives __activate_edit_mode.
+// Self-post it so the panel is visible when there's no host driving it.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>

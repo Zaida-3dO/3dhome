@@ -83,7 +83,7 @@ export const REGISTRY = Object.freeze({
 
   'tv': { path: 'small-items.js', key: 'tv', spec: 'SmallItemsSpec' },
 
-  'wall-clock': { path: 'dining.js', key: 'wall-clock', spec: 'DiningSpec' },
+  'wall-clock': { path: 'wall-clock.js', key: null, spec: 'ClockSpec' },
 
   'wall-sconce': { path: 'wall-sconce.js', key: null, spec: 'WallDecorSpec' },
 
