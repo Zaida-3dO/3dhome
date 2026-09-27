@@ -1387,7 +1387,8 @@
                 "type": "object",
                 "description": "Makes this row a recessed light channel (the LED bedside tables): no front, set back 1.5 cm, wrapping the front and both sides (not the back), with an emissive strip in `color`. The front directly below gets a glow band along its top edge. Each channel has its own colour, so a later placement can bind each to its own light.",
                 "properties": {
-                  "color": { "$ref": "#/$defs/hexColor" }
+                  "color": { "$ref": "#/$defs/hexColor" },
+                  "led": { "type": "boolean", "default": true, "description": "false: the recess only, with no emissive strip and no glow band. Use it when the level is drawn as a room light strip fixture on its own channel that follows a Home Assistant light (docs/house-profile.md, \"Bedside table LED strips\"); left on, the static strip draws the line a second time in a colour that follows nothing." }
                 },
                 "additionalProperties": false
               },

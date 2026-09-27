@@ -85,6 +85,12 @@
  *   band along its top edge, part of its own front. Each channel has its own
  *   colour, so two strips on one table can differ (and be bound to two lights
  *   at placement).
+ *   `channel.led: false` builds the recess ONLY: no emissive strip and no
+ *   glow band. That is how a table is placed in a house whose strips follow
+ *   Home Assistant lights: the static strip here glows in a colour that
+ *   follows nothing, so the house draws each level as a room light `strip`
+ *   fixture on its own channel instead (docs/house-profile.md, "Bedside
+ *   table LED strips"), and the table leaves the line to it.
  *
  * OVERLAY FRONTS
  *   `overlayFronts: true` makes the fronts cover the carcass edges, as real
@@ -243,9 +249,13 @@ const CHANNEL_SETBACK = 0.015; // how far the channel's faces sit behind the fro
 const STRIP_PROUD = 0.002;     // the LED strip's face in front of the channel face
 const GLOW_SHARE = 0.35;       // the glow band: this much LED colour over the front's colour
 const GLOW_DIM = 1;            // ... at this brightness (the base white carries the rest)
+const STRIP_BACK_T = 0.006;    // the carcass back's thickness (full detail): side strips start 2 cm in front of it
 
 /** Is the fronts row a light channel? */
 function isChannel(row) { return !!(row && row.channel); }
+
+/** Does a light channel row draw its own (static) LED strip? `led: false` = recess only. */
+function channelLed(row) { return isChannel(row) && row.channel.led !== false; }
 
 /**
  * The plane every hinged/fixed front's face lies in: `depth` for a
@@ -821,7 +831,7 @@ function buildChannel(THREE, group, row, W, faceZ, backZ, y0, y1, fin, color, lo
   const xs = W / 2 - CHANNEL_SETBACK;
   const fillFront = faceZ - CHANNEL_SETBACK;
   slab(THREE, group, finish(THREE, fin, color), -xs, xs, y0, y1, backZ, fillFront, 'channelRecess');
-  if (low) return;
+  if (low || !channelLed(row)) return;
   const sh = Math.min(0.006, (y1 - y0) * 0.4);
   const cy = (y0 + y1) / 2;
   const ledMat = finish(THREE, 'emissive', ledColor);
@@ -835,6 +845,43 @@ function buildChannel(THREE, group, row, W, faceZ, backZ, y0, y1, fin, color, lo
     const b = sx < 0 ? -xs + 0.001 : xs + STRIP_PROUD;
     const side = slab(THREE, group, ledMat, a, b, cy - sh / 2, cy + sh / 2, backZ + 0.02, fillFront - 0.0015, 'channelStripSide');
     side.castShadow = false;
+  });
+}
+
+/**
+ * Where each light channel's LED strip is, in the cabinet's own frame and in
+ * CENTIMETRES: x centred on the width, y up from the cabinet's bottom, z from
+ * the back (0) to the front (+z). One entry per channel row, top row first:
+ *
+ *   { row, color, centre: [x, y, z], size: [x, y, z] }
+ *
+ * The box is the one the static strip fills (the front run and both side
+ * runs, 2 mm proud of the recess, never the back), so a house can draw each
+ * level as a room light `strip` fixture of exactly this size where the
+ * table stands, with the table placed at `led: false` (docs/house-profile.md,
+ * "Bedside table LED strips"). Its middle, hidden inside the recess block,
+ * is where that fixture's light sits.
+ */
+export function channelStripBoxes(params) {
+  const p = Object.assign({}, DEFAULTS, params);
+  if (p.columns) return [];
+  const plinth = p.plinth || { type: 'plinth', height: 0 };
+  const rows = normaliseFronts(p.fronts, p.width, plinth.height || 0);
+  const W = p.width * CM, D = p.depth * CM;
+  const faceZ = frontPlane(p, D);
+  const xs = W / 2 - CHANNEL_SETBACK;
+  const fillFront = faceZ - CHANNEL_SETBACK;
+  const z0 = STRIP_BACK_T + 0.02, z1 = fillFront + STRIP_PROUD;
+  const r = v => Math.round(v * 1000) / 10; // m -> cm, to 1 mm
+  return rows.filter(isChannel).map(row => {
+    const y0 = row.yBottom * CM, y1 = row.yTop * CM;
+    const sh = Math.min(0.006, (y1 - y0) * 0.4);
+    return {
+      row: rows.indexOf(row),
+      color: row.channel.color || '#dbe8ff',
+      centre: [0, r((y0 + y1) / 2), r((z0 + z1) / 2)],
+      size: [r(2 * (xs + STRIP_PROUD)), r(sh), r(z1 - z0)],
+    };
   });
 }
 
@@ -1058,7 +1105,7 @@ export function build(THREE, params, opts) {
   // Interior back panel. Skipped for an open-shelving unit at low detail
   // (nothing hides it anyway - every bay is open) and always skipped at low
   // detail for the fronted modes too, matching the previous behaviour.
-  const BACK_T = 0.006;
+  const BACK_T = STRIP_BACK_T;
   if (!low) {
     const back = new THREE.Mesh(box(THREE, W - CARC_T * 2, sideH, BACK_T), carcassMat);
     back.position.set(0, sideY0 + sideH / 2, BACK_T / 2);
@@ -1120,7 +1167,7 @@ export function build(THREE, params, opts) {
         return;
       }
       const above = rows[ri - 1];
-      const glow = isChannel(above) ? ((above.channel && above.channel.color) || '#dbe8ff') : null;
+      const glow = channelLed(above) ? (above.channel.color || '#dbe8ff') : null;
       let x = -W / 2;
       for (const cell of row.cells) {
         const cw = cell.width * CM;

@@ -277,13 +277,14 @@ const PRESETS = {
       width: 40, height: 60, depth: 45,
       // 3 stacked drawers, each the full 40cm width (implicit widths split
       // the row's own width evenly - a SINGLE cell per row, so each gets 40).
+      // Pink: the pink of the pink gaming chair (gaming-chair.js).
       fronts: [
         { height: 18, cells: [{ kind: 'drawer' }] },
         { height: 18, cells: [{ kind: 'drawer' }] },
         { height: 19, cells: [{ kind: 'drawer' }] }
       ],
       plinth: { type: 'wheels', height: 5 },
-      gloss: false, color: '#ffffff', topColor: '#ffffff'
+      gloss: false, color: '#e9a3ab', topColor: '#e9a3ab'
     }
   },
   openShelving2Columns: {
@@ -339,13 +340,86 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // transform rewrites a dynamic import() into a require() call, which does
 // not exist in a browser, so window.cabinetModuleReady / window.CabinetFurniture
 // are what this Babel-transpiled script reads instead.
-function buildCabinet(params) {
+function buildCabinet(params, levels) {
   return (t, group, THREE, ctx) => {
     if (!window.CabinetFurniture) return; // not loaded yet; App doesn't render until it is
-    const built = window.CabinetFurniture.build(THREE, params, { detail: 'full' });
+    const channels = channelRows(params);
+    // A level switched OFF is built with `led: false` (recess only, no glow):
+    // what the table looks like with that light off.
+    const built = window.CabinetFurniture.build(THREE,
+      channels.length ? withLevelsOff(params, levels) : params, { detail: 'full' });
     group.add(built);
     ctx.built = built;
+    if (channels.length) addLevelPreview(THREE, group, params, levels);
   };
+}
+
+// ============== Light-channel preview (PAGE-ONLY) ==============
+// The LED bedside tables have one light channel per drawer level (top first).
+// In a house each level is a REAL light: a room light `strip` fixture on its
+// own channel, bound to its own Home Assistant entity (docs/house-profile.md,
+// "Bedside table LED strips"). This preview shows the same thing here: a real
+// point light per level at the level's centre (where the house's strip
+// fixture puts its light), in the level's colour, with a floor and a wall
+// behind the table to see what it lights. Nothing here is part of the builder
+// or the house, and brightness is scaled for this page, not the house.
+const PREVIEW_MAX_INTENSITY = 3;
+const levelName = (i, n) => (n === 2 ? ['top', 'bottom'][i] : 'level ' + (i + 1));
+
+/** Indices (into params.fronts, top first) of the light channel rows. */
+function channelRows(params) {
+  return (params.fronts || []).map((r, i) => (r && r.channel ? i : -1)).filter(i => i >= 0);
+}
+
+/** A level's preview state (on, brightness 0-100), defaulting to on at 70%. */
+function levelState(levels, i) {
+  return Object.assign({ on: true, brightness: 70 }, levels[i] || {});
+}
+
+/** params with every OFF level's channel built as `led: false`. */
+function withLevelsOff(params, levels) {
+  const out = JSON.parse(JSON.stringify(params));
+  channelRows(out).forEach((ri, i) => {
+    if (!levelState(levels, i).on) out.fronts[ri].channel.led = false;
+  });
+  return out;
+}
+
+/** Centre height (m) of each channel row, from the rows below it and the plinth. */
+function channelCentres(params) {
+  const rows = params.fronts || [];
+  let y = (params.plinth && params.plinth.height) || 0;
+  const centre = {};
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const h = rows[i].height || 0;
+    if (rows[i].channel) centre[i] = (y + h / 2) / 100;
+    y += h;
+  }
+  return centre;
+}
+
+function addLevelPreview(THREE, group, params, levels) {
+  const room = new THREE.MeshStandardMaterial({ color: 0xcfc9bf, roughness: 0.9 });
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), room);
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(0, -0.001, 0.5);
+  floor.receiveShadow = true;
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(3, 2.4), room);
+  wall.position.set(0, 1.2, -0.01);
+  wall.receiveShadow = true;
+  group.add(floor, wall);
+  const centres = channelCentres(params);
+  const rows = channelRows(params);
+  rows.forEach((ri, i) => {
+    const st = levelState(levels, i);
+    if (!st.on) return;
+    const colour = params.fronts[ri].channel.color || '#dbe8ff';
+    const light = new THREE.PointLight(new THREE.Color(colour),
+      (st.brightness / 100) * PREVIEW_MAX_INTENSITY, 2.5, 2);
+    light.position.set(0, centres[ri], (params.depth || 0) / 200);
+    light.name = 'levelPreviewLight:' + levelName(i, rows.length);
+    group.add(light);
+  });
 }
 
 function heightOfParams(params) {
@@ -379,6 +453,25 @@ function App() {
   // ref mutation alone does not trigger the re-render either of them needs.
   const [params, setParams] = React.useState(preset.params);
   const [copyStatus, setCopyStatus] = React.useState('');
+  // Per-level light preview (page-only): [{ on, brightness }], top level first.
+  const [levels, setLevels] = React.useState([]);
+  const setLevel = (i, patch) => setLevels(prev => {
+    const next = prev.slice();
+    next[i] = Object.assign(levelState(prev, i), patch);
+    return next;
+  });
+  // A level's colour IS its channel's `color` param, so it edits the JSON.
+  const setLevelColour = (i, colour) => {
+    try {
+      const parsed = JSON.parse(paramsJson);
+      const ri = channelRows(parsed)[i];
+      if (ri == null) return;
+      parsed.fronts[ri].channel.color = colour;
+      setParamsJson(JSON.stringify(parsed, null, 2));
+    } catch (e) { /* mid-edit JSON: leave it alone */ }
+  };
+  // The 3D view rebuilds when `t` changes identity: the params or a level.
+  const viewT = React.useMemo(() => ({ params, levels }), [params, levels]);
   React.useEffect(() => {
     try {
       const parsed = JSON.parse(paramsJson);
@@ -412,6 +505,7 @@ function App() {
   };
 
   const p = params;
+  const levelRows = channelRows(p);
 
   // Picking a variant always re-seeds the editor, even when it is the preset
   // already selected (i.e. "reset my edits back to this variant").
@@ -457,11 +551,45 @@ function App() {
           </table>
         </div>
 
+        {levelRows.length > 0 && (
+          <div className="card full" id="levelPreview">
+            <h2>Light per level — preview</h2>
+            {levelRows.map((ri, i) => {
+              const st = levelState(levels, i);
+              const name = levelName(i, levelRows.length);
+              return (
+                <div className="row" key={ri} data-level={name} style={{ alignItems: 'center' }}>
+                  <span className="legend" style={{ marginTop: 0, minWidth: 60 }}>{name}</span>
+                  <button className={'btn' + (st.on ? ' active' : '')} onClick={() => setLevel(i, { on: !st.on })}>
+                    {st.on ? 'Light: on' : 'Light: off'}
+                  </button>
+                  <label className="legend" style={{ marginTop: 0 }}>colour{' '}
+                    <input type="color" value={p.fronts[ri].channel.color || '#dbe8ff'}
+                      onChange={e => setLevelColour(i, e.target.value)} />
+                  </label>
+                  <label className="legend" style={{ marginTop: 0 }}>brightness{' '}
+                    <input type="range" min="0" max="100" step="5" value={st.brightness}
+                      onChange={e => setLevel(i, { brightness: Number(e.target.value) })} />
+                    {' ' + st.brightness + '%'}
+                  </label>
+                </div>
+              );
+            })}
+            <div className="legend">
+              Each drawer level's strip is a real light: here, a point light at the level's centre in its colour.
+              In a house each level is a room light <code>strip</code> fixture on its own channel, bound to its
+              own Home Assistant light, and the table is placed with <code>led: false</code> on each channel so
+              the fixture draws the line (docs/house-profile.md, "Bedside table LED strips"). Brightness is
+              scaled for this page. The levels get no sidebar row: the room's one Ambient row switches them.
+            </div>
+          </div>
+        )}
+
         <div className="card full">
           <h2>3D — {preset.label}</h2>
           <ThreeView
-            t={params}
-            buildModel={buildCabinet(params)}
+            t={viewT}
+            buildModel={buildCabinet(params, levels)}
             heightOf={heightOfParams(params)}
           />
         </div>

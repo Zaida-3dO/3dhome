@@ -158,7 +158,7 @@ export const CABINET_PRESETS = {
         { height: 19, cells: [{ kind: 'drawer' }] }
       ],
       plinth: { type: 'wheels', height: 5 },
-      gloss: false, color: '#ffffff', topColor: '#ffffff'
+      gloss: false, color: '#e9a3ab', topColor: '#e9a3ab'
     }
   },
   openShelving2Columns: {

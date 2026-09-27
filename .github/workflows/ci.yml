@@ -352,6 +352,16 @@ jobs:
           # plinth runs floor-level.
           set -euo pipefail
           node scripts/test-kitchen-strip-channels.mjs
+      - name: Bedside table LED strips as room light channels
+        run: |
+          # Asserts that each drawer level of the two bedside tables, a strip
+          # channel bound to its own entity, is driven only by that entity and
+          # never by the ambience group; that the bedroom keeps ONE Ambient
+          # row with no ambient fixture; that its emitters are the four levels
+          # plus the cornice, each on its own entity; and that a level's
+          # fixture box from cabinet.channelStripBoxes() lands on its table.
+          set -euo pipefail
+          node scripts/test-bedside-strip-channels.mjs
       - name: Wall decor (framed sign + wall sconce, both kinds) builder contract
         run: |
           # Asserts the builder contract for src/furniture/wall-sign.js and

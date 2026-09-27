@@ -882,6 +882,75 @@ Object.keys(CABINET_PRESETS).forEach(k => {
   });
 }
 
+// 15k. A light channel with `led: false` is the recess only: no strip and no
+// glow band on the drawer below. It is how a bedside table is placed in a
+// house whose levels are real lights (room light `strip` fixtures, bound to
+// their own entities): the fixture draws the line, and a static strip here
+// would draw it a second time in a colour that follows nothing. Only the
+// level it is set on changes.
+['bedsideTableLedNarrow', 'bedsideTableLedWide'].forEach(k => {
+  const p = JSON.parse(JSON.stringify(CABINET_PRESETS[k].params));
+  const chans = p.fronts.filter(r => r.channel);
+  chans[0].channel.led = false;
+  const g = C.build(THREE, p, { detail: 'full' });
+  check(k + ' led:false on the top level: both recesses still built', meshesNamed(g, 'channelRecess').length === 2);
+  const fronts = meshesNamed(g, 'channelStripFront');
+  check(k + ' led:false on the top level: one front strip left, the bottom one',
+    fronts.length === 1 && fronts[0].material.color.getHexString() === new THREE.Color(chans[1].channel.color).getHexString(),
+    fronts.map(f => f.material.color.getHexString()));
+  check(k + ' led:false on the top level: its two side strips gone', meshesNamed(g, 'channelStripSide').length === 2);
+  check(k + ' led:false on the top level: one glow band left', meshesNamed(g, 'channelGlow').length === 1);
+  chans[1].channel.led = false;
+  const g2 = C.build(THREE, p, { detail: 'full' });
+  check(k + ' led:false on both levels: no strip and no glow at all',
+    meshesNamed(g2, 'channelStripFront').length + meshesNamed(g2, 'channelStripSide').length + meshesNamed(g2, 'channelGlow').length === 0);
+  let emissive = 0;
+  g2.traverse(o => { if (o.isMesh && o.material && o.material.userData && o.material.userData.finish === 'emissive') emissive++; });
+  check(k + ' led:false on both levels: nothing emissive left on the table', emissive === 0, emissive);
+  const b = bbox(g2), W = p.width / 100, D = p.depth / 100;
+  check(k + ' led:false on both levels: same envelope', near(b.max.x - b.min.x, W, 0.005) &&
+    near(b.max.y - b.min.y, p.height / 100, 0.005) && near(b.max.z - b.min.z, D, 0.005), b);
+});
+
+// 15m. channelStripBoxes() is where the built strips ARE: per channel, the
+// union of its front and side strip meshes (in cm, back at z = 0), so a house
+// fixture drawn from it lands exactly on the table's recess.
+['bedsideTableLedNarrow', 'bedsideTableLedWide'].forEach(k => {
+  const p = CABINET_PRESETS[k].params;
+  const boxes = C.channelStripBoxes(p);
+  check(k + ': one strip box per channel, top first', boxes.length === 2 && boxes[0].row < boxes[1].row &&
+    boxes[0].centre[1] > boxes[1].centre[1], boxes);
+  const g = C.build(THREE, p, { detail: 'full' });
+  const strips = meshesNamed(g, 'channelStripFront').concat(meshesNamed(g, 'channelStripSide'));
+  boxes.forEach((bx, i) => {
+    const u = new THREE.Box3();
+    strips.filter(s => Math.abs((mbox(s).min.y + mbox(s).max.y) / 2 * 100 - bx.centre[1]) < 0.5)
+      .forEach(s => u.union(mbox(s)));
+    const cm = v => Math.round(v * 1000) / 10;
+    const got = { centre: [cm((u.min.x + u.max.x) / 2), cm((u.min.y + u.max.y) / 2), cm((u.min.z + u.max.z) / 2)],
+      size: [cm(u.max.x - u.min.x), cm(u.max.y - u.min.y), cm(u.max.z - u.min.z)] };
+    const close = (a, b) => a.every((v, j) => Math.abs(v - b[j]) <= 0.1);
+    check(k + ' level ' + i + ': the strip box is the union of the built strips, to 1 mm',
+      close(got.centre, bx.centre) && close(got.size, bx.size), { got, want: bx });
+    check(k + ' level ' + i + ': carries its channel colour', bx.color === p.fronts[bx.row].channel.color);
+  });
+  check(k + ': no strip boxes for a cabinet with no channels', C.channelStripBoxes(CABINET_PRESETS.chestOfDrawers.params).length === 0);
+});
+
+// 15l. The mobile pedestal is pink: the pink gaming chair's pink.
+{
+  const p = CABINET_PRESETS.mobilePedestal.params;
+  const G = await imp('src/furniture/gaming-chair.js');
+  const chairPink = G.PRESETS.pink.primaryColor;
+  check('the mobile pedestal preset is #e9a3ab, carcass and top', p.color === '#e9a3ab' && p.topColor === '#e9a3ab', p);
+  check('...which is the pink of the pink gaming chair', chairPink === p.color, chairPink);
+  const g = C.build(THREE, p, { detail: 'full' });
+  const fronts = meshesNamed(g, 'drawerFront');
+  check('all three pedestal drawer fronts are pink', fronts.length === 3 &&
+    fronts.every(f => f.material.color.getHexString() === new THREE.Color('#e9a3ab').getHexString()),
+    fronts.map(f => f.material.color.getHexString()));
+}
+
 // 15j. The page and the test list agree: every preset on the Cabinet spec
 // page is in scripts/lib-cabinet-presets.mjs with the same params, so the
 // z-fighting, cap and contract checks above build what the page shows.
