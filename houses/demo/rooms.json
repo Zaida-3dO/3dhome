@@ -51,9 +51,6 @@
       "lounge_sheer": ["cover.demo_lounge_sheer"],
       "bedroom_curtain": ["cover.demo_bedroom_curtain"]
     },
-    "climate": {
-      "lounge_radiator": ["climate.demo_lounge_radiator"]
-    },
     "corniceLights": {
       "lounge_curtain": ["light.demo_lounge_cornice"],
       "bedroom_curtain": ["light.demo_bedroom_cornice"]

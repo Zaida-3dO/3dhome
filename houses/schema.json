@@ -3295,20 +3295,6 @@
                 "minItems": 1
               }
             },
-            "climate": {
-              "type": "object",
-              "description": "Furniture id -> the Home Assistant climate entities that object controls (typically a radiator). Tapping the rendered object opens a popover showing current and target temperature and setting the target via climate.set_temperature. The first entity is read; a set is sent to all. SPIKE: nothing on main renders furniture yet, so the binding is inert until radiators render with their furniture id.",
-              "propertyNames": {
-                "pattern": "^[a-z][a-z0-9_-]*$"
-              },
-              "additionalProperties": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/entityId"
-                },
-                "minItems": 1
-              }
-            },
             "corniceLights": {
               "type": "object",
               "description": "Curtain id -> the light entities of that curtain's cornice LED strip. The curtain MUST have a lit cornice in geometry (cornice not disabled, light not false). Bind the cornice's OWN entity here, and do not also list a 'curtain cornice' strip under the room's ambient channel in geometry.lights -- that would draw and drive the same strip twice. Several entities are OR-ed. Needs rooms schemaVersion 1.2.",

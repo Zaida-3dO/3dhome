@@ -131,3 +131,36 @@ what the sidebar does for lights. It is not live control and is not claimed as s
 ## Out of scope
 
 The sidebar, merging, deploying, the server-side real house profile, HA config, radiator models.
+
+## Round 2: compact redesign (implemented)
+
+This round implements the approved visual plan, taking its proposed answer on all six open questions.
+
+- **Yellow means reachable but not fully live.** That is either (a) the connection is polling or
+  syncing, which pulses, or (b) HA is up but this entity, or one curtain motor, is unavailable.
+  **Red** means no client, disconnected, auth failed or sync failed. Changes then only preview on
+  the model.
+- **Controls stay usable while yellow-connecting.** Commands go through the sidebar's senders and
+  are *sent*, not queued: polling uses REST, and syncing has an open socket. This is why the tooltip
+  says "Changes are still sent" rather than the plan's "will send once live". A curtain whose
+  availability was never heard still refuses to move, which is the sidebar's own rule.
+- **Tooltip:** tap the dot on touch (auto-hides after 4 s); hover on a mouse, gated by
+  `(hover: hover)`.
+- **Light names always carry the room:** `lightName()`.
+- **The door is a one-line chip.**
+- **Icons are MDI, inlined as SVG paths.**
+- **Heating vs idle comes from `hvac_action`, never `state`:** `climateActivity()`. `ha-client.js`
+  gained a read-only raw-state cache (`getRawState`) because `parseClimate` deliberately drops
+  `hvac_action`. Folding it into `parseClimate` would repaint the sidebar row on every heating flap.
+- **Placement:** above, then below, then right or left (whichever has room), and only then clamped.
+  The arrow points at the tap from whichever side the card is on.
+
+**Reconciled with sidebar v2 (#48):**
+- Climate is now `sensors.climate[room]`, a single entity per room. The furniture-keyed
+  `sensors.climate` from round 1 is gone.
+- Door state comes from the sidebar's `doorStatus` map.
+- Curtain and climate writes go through the sidebar's `curtainSender` / `climateSender`, so drag
+  locks, dedupe and availability guards are shared.
+
+**Climate is still not tappable.** Furniture renders merged into house-wide buckets, so a radiator
+mesh carries no identity. Resolving a hit point to an item's footprint remains the follow-up.

@@ -482,6 +482,19 @@ export const HAClient = (() => {
       });
     }
 
+    // Last raw { state, attributes } of every bound light / climate entity.
+    // Read-only side cache for the tap popovers (src/tap-popovers.js), which
+    // need what the folded readings deliberately drop: a light's
+    // 'unavailable', and a thermostat's hvac_action (heating vs idle -- kept
+    // OUT of parseClimate so its flapping never repaints the sidebar row).
+    // Fires nothing; recording here changes no existing behaviour.
+    const rawStates = new Map();
+    function noteRaw(st) {
+      if (!st || !st.entity_id) return;
+      if (!entityIndex.has(st.entity_id) && !climateIndex.has(st.entity_id)) return;
+      rawStates.set(st.entity_id, { state: st.state, attributes: st.attributes || {} });
+    }
+
     /**
      * Fold one climate entity into every room it is bound to. Notifies only
      * when the parsed reading changed -- hvac_action flapping, or any
@@ -642,6 +655,7 @@ export const HAClient = (() => {
         } else if (msg.type === 'result' && msg.id === getStatesId) {
           if (msg.success && Array.isArray(msg.result)) {
             msg.result.forEach(state => {
+              noteRaw(state);
               if (entityIndex.has(state.entity_id)) processStateUpdate(state.entity_id, state, true);
               // Sensors are folded in from the SAME get_states snapshot, so a
               // room that is already occupied (or a door already open) is
@@ -659,6 +673,7 @@ export const HAClient = (() => {
         } else if (msg.type === 'event' && msg.event?.event_type === 'state_changed') {
           const { entity_id, new_state } = msg.event.data;
           if (!new_state) return;
+          noteRaw(new_state);
           if (entityIndex.has(entity_id)) processStateUpdate(entity_id, new_state, false);
           else if (sensorIndex.has(entity_id)) processSensorUpdate(entity_id, new_state);
           if (fittingIndex.has(entity_id)) processFittingUpdate(entity_id, new_state);
@@ -720,6 +735,7 @@ export const HAClient = (() => {
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const states = await resp.json();
         states.forEach(state => {
+          noteRaw(state);
           if (entityIndex.has(state.entity_id)) {
             processStateUpdate(state.entity_id, state, false);
           } else if (sensorIndex.has(state.entity_id)) {
@@ -839,6 +855,9 @@ export const HAClient = (() => {
         return r ? r.reading : null;
       },
       climateEntityFor(roomId) { return climateByRoom.get(roomId) || null; },
+      // Raw { state, attributes } last seen for a bound light / climate
+      // entity, or null before it has reported. See rawStates above.
+      getRawState(entityId) { return rawStates.get(entityId) || null; },
       onStatusChange(cb) { statusCallbacks.push(cb); },
       // Test/diagnostic seam: drive a sensor without a live HA socket. Returns
       // true if the resolved boolean changed (and callbacks fired).

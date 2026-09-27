@@ -1904,26 +1904,24 @@
 
       // ---- Tap-an-object popovers (src/tap-popovers.js) ----
       // An ADDITIONAL control path beside the sidebar: tap a bound light,
-      // curtain, door (or, once radiators render, radiator) and a popover
-      // controls its entity. Bindings are rooms.json's; the popover writes the
-      // same state the sidebar reads and then repaints it.
+      // curtain or door and a compact popover controls its entity. It READS
+      // the sidebar's own state maps and WRITES through the sidebar's own
+      // senders (curtainSender / climateSender share their drag lock, dedupe
+      // and availability guards), then repaints the sidebar.
       if (!isPreview) attachTapPopovers({
         THREE, home, container, Home3DScene, house,
         rooms: rooms || {}, sensors: sensors || {},
         getHa: () => ha, HAClient,
         sendLight: (roomId, channel, state, debounceMs) => sendToHA(roomId, channel, state, debounceMs),
-        getDoorReading: id => (doorSensorOpen.has(id) ? doorSensorOpen.get(id) : null),
-        // One-shot raw read, used where ha-client's folded state is not enough
-        // (a door's 'unavailable'; a radiator's current temperature).
-        fetchEntityState: async (entityId) => {
-          if (!ha || !haToken) return null;
-          try {
-            const r = await fetch((ha.activeUrl || haConfig.url) + '/api/states/' + encodeURIComponent(entityId), {
-              headers: { 'Authorization': 'Bearer ' + haToken }, signal: AbortSignal.timeout(3000)
-            });
-            return r.ok ? await r.json() : null;
-          } catch (e) { return null; }
+        state: {
+          doorStatus: id => (doorStatus.has(id) ? doorStatus.get(id) : null),
+          curtainAvailable: id => (curtainAvailableState.has(id) ? curtainAvailableState.get(id) : null),
+          curtainPct: id => curtainShownPct(id),
+          curtainLocal: (id, pct) => { home.setCurtainOpen(id, pct, null); curtainTarget.set(id, pct); },
+          climate: roomId => climateReading.get(roomId) || null,
+          climateEntity: roomId => climateEntityForRoom(roomId),
         },
+        curtainSender, climateSender,
         onChange: () => renderPanel(),
         debug: params.get('debug') === '1',
       });
