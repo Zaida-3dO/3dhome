@@ -673,10 +673,12 @@ function sampleResult() {
   });
   check('no compileAsync -> attaches anyway', att === 1);
   // The scene hands scheduleFurnitureAttach the precompile chain AFTER its
-  // catch/restore (nit 2), not the raw compileAsync promise.
+  // catch/restore (nit 2), not the raw compileAsync promise. Since the
+  // cold-start fix it is Promise.all(jobs) -- the scene's programs plus the
+  // shadow depth program -- still followed by the same catch/restore.
   const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
   check('nit 2: precompileDone is the caught/restored chain',
-    /precompileDone = Promise\.resolve\(ren\.compileAsync\(scene, cam\)\)\s*\n\s*\.catch\(/.test(src) &&
+    /precompileDone = Promise\.(resolve\(ren\.compileAsync\(scene, cam\)\)|all\(jobs\))\s*\n\s*\.catch\(/.test(src) &&
     /\.then\(\(\) => \{\s*\n\s*ren\.shadowMap\.enabled = shadowWasEnabled;/.test(src));
 }
 

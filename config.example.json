@@ -16,6 +16,6 @@
     "token": "A Home Assistant long-lived access token. WARNING: this is served to every browser that can load the page. Only deploy behind authentication. Prefer supplying it via the HOME3D_HA_TOKEN environment variable so it is never written into a file in the repo.",
     "house": "Which profile under houses/ to render. Lowercase letters, digits, _ and -.",
     "wsReconnectMs": "Delay in milliseconds before retrying a dropped websocket.",
-    "pollIntervalMs": "REST poll interval in milliseconds, used when the websocket is unavailable."
+    "pollIntervalMs": "Ignored: the app talks to Home Assistant over its WebSocket only, with no REST polling. Still accepted so existing configs keep working."
   }
 }

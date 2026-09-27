@@ -762,7 +762,7 @@
       const isEmbed = params.get('embed') === '1' || params.get('embed') === 'true';
       // ?haUrl=<absolute-url> — HA URL override, passed by an embedder
       //   (e.g. the HA dashboard button-card injects location.origin).
-      //   When set, ha-client uses ONLY this URL for fetchInitialState + WS;
+      //   When set, ha-client uses ONLY this URL for its WebSocket;
       //   when unset, the configured url + fallbackUrl pair is used
       //   (race-to-connect). Required for the embedded modes
       //   (?preview=true / ?embed=1) because the configured URLs may not be
@@ -984,7 +984,6 @@
       let ha = null;
       let haConfig = null;
       let haToken = null;
-      let initialState = null;
 
       // ---- Door sensor binding state ----
       //
@@ -1054,18 +1053,12 @@
           pollIntervalMs: cfg.pollIntervalMs
         };
         haToken = cfg.token;
-
-        try {
-          initialState = await HAClient.fetchInitialState(
-            haConfig.url,
-            haToken,
-            haConfig.rooms,
-            haConfig.fallbackUrl
-          );
-        } catch (e) {
-          console.warn('[home3d] Home Assistant initial state fetch failed (' +
-            e.message + '); rendering with default light state.');
-        }
+        // No initial-state fetch here. The first snapshot is the WebSocket's
+        // own get_states, sent the moment the client below authenticates --
+        // there used to be a REST GET /api/states here as well, and it was
+        // blocked by CORS on every cross-origin deployment (the console
+        // error this app showed on each load) while holding up the house
+        // load. See "Transport" in src/ha-client.js.
       }
 
       // ---- Load the house profile ----
@@ -1240,7 +1233,6 @@
         interactive: !isPreview,
         autoRotate: isPreview,
         rotateSpeed: rotateSpeed,
-        initialState: initialState,
         shadows: shadows,
         tier: tierParam,
         furniture: furnitureOn,

@@ -45,7 +45,7 @@
  *      (0ms, on release) for the SAME value must reach HA exactly once, not
  *      twice ~200ms apart. This is the literal mechanism the slider's
  *      input+change pair relies on, so it is tested directly against
- *      HAClient.create() + callServiceDebounced with a mocked fetch, one
+ *      HAClient.create() + callServiceDebounced over a fake HA WebSocket, one
  *      level below the DOM entirely.
  */
 import path from 'node:path';
@@ -53,6 +53,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const imp = rel => import(pathToFileURL(path.join(root, rel)).href);
+const { installFakeHA } = await import(pathToFileURL(path.join(root, 'scripts/fake-ha-websocket.mjs')).href);
 const { HAClient } = await imp('src/ha-client.js');
 
 let failures = 0, passes = 0;
@@ -218,17 +219,14 @@ function check(name, cond, detail) {
 // 4. callServiceDebounced: no double-send on input(debounced) + change(now)
 // ---------------------------------------------------------------------------
 {
-  // ha.connect() is never called, so `ws` stays null and callService() always
-  // takes the REST fallback below -- no fake WebSocket needed to exercise the
-  // exact bug the review found.
-  const calls = [];
-  const realFetch = global.fetch;
-  global.fetch = async (url, opts) => {
-    calls.push({ url, body: JSON.parse(opts.body) });
-    return { ok: true, json: async () => ({}) };
-  };
+  // Commands go over a fake WebSocket (scripts/fake-ha-websocket.mjs):
+  // ha-client has no REST path any more, so there is no fetch to mock.
+  const fake = installFakeHA();
+  const calls = fake.calls;
   try {
     const ha = HAClient.create({ url: 'http://ha.invalid', token: 'x', rooms: {}, sensors: {} });
+    ha.connect();
+    await fake.whenConnected(ha);
 
     // Simulate the slider's own sequence: a debounced 'input' send, then an
     // immediate 'change' send for the SAME value shortly after (this is
@@ -259,7 +257,7 @@ function check(name, cond, detail) {
     check('a fresh debounced call after an immediate send still fires once',
       calls.length === 1 && calls[0].body.position === 10, calls);
   } finally {
-    global.fetch = realFetch;
+    fake.restore();
   }
 }
 
