@@ -498,18 +498,67 @@ const WORD_LEFT_R = 1.22;   // left edge of the panel, past the ring's own left 
 const WORD_RIGHT_R = 2.1;   // right edge -- covers the words' own reach (see DIY_WORDS_DEFAULTS.width)
 const Y_MARGIN_R = 1.3;     // top/bottom edge, past the "12"/"6" numerals' ink+shadow
 
+// Round 3 (item 059873ed, round-2 review): neither "Segoe UI" (no true 500
+// face -- it has only Regular/Semibold/Bold, so a canvas asking for 500
+// silently resolves to Semibold/600, confirmed by the reviewer via a pixel-
+// hash comparison) nor "Arial Rounded MT Bold" (Chrome does not resolve it
+// as a family name at all, even when the file is installed) actually gave a
+// medium-weight rounded numeral on Windows. Nunito genuinely ships a 500
+// weight as its own font file (not a synthesized weight), and is a rounded
+// geometric sans close to the reference photos' soft-terminal look.
+// Loaded from @fontsource via jsdelivr -- an allowed CDN already used
+// elsewhere in this repo for third-party libraries (see docs/deployment.md)
+// -- rather than bundled, per the item's own "web-safe or bundled open-
+// licence font... unless [fetched] from an allowed CDN" rule.
+const NUMERAL_FONT_FAMILY = 'Nunito';
+const NUMERAL_FONT_CSS_URL = 'https://cdn.jsdelivr.net/npm/@fontsource/nunito@5.0.8/500.css';
+let numeralFontLoadStarted = false;
+
+/**
+ * Kick off loading the real Nunito 500 face, once per page, and call
+ * `onReady` (which should redraw and re-upload every diy-words texture
+ * currently on screen) once it resolves. Safe to call from Node (no-op,
+ * `onReady` never fires) and safe to call repeatedly (only the first call
+ * actually starts a fetch; every call still gets its own onReady once the
+ * shared load settles, since `document.fonts.load` itself is idempotent
+ * and cheap to call again for an already-loaded face).
+ *
+ * Uses `<link rel="stylesheet">` (not the CSS Font Loading API's `FontFace`
+ * constructor with a hand-written @font-face) because @fontsource's own
+ * CSS already declares the unicode-range-split @font-face rules its files
+ * need -- re-deriving that here would be a second copy to keep in sync with
+ * an upstream package this module does not otherwise depend on.
+ */
+function loadNumeralFont(onReady) {
+  if (typeof document === 'undefined' || typeof document.fonts === 'undefined') return; // Node: no-op
+  if (!numeralFontLoadStarted) {
+    numeralFontLoadStarted = true;
+    if (!document.querySelector('link[data-wall-clock-numeral-font]')) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = NUMERAL_FONT_CSS_URL;
+      link.setAttribute('data-wall-clock-numeral-font', '1');
+      document.head.appendChild(link);
+    }
+  }
+  // document.fonts.load() resolves once the named face is usable -- it
+  // triggers (or joins) the actual network fetch the <link> above declared,
+  // and resolves even if some OTHER caller already loaded it first.
+  document.fonts.load('500 48px "' + NUMERAL_FONT_FAMILY + '"').then(
+    (faces) => { if (faces && faces.length && typeof onReady === 'function') onReady(); },
+    () => { /* CDN unreachable or blocked -- the fallback stack stays, no crash */ }
+  );
+}
+
 /**
  * Draw "12"/"9"/"6" (big bold numerals, at their ring positions) and
  * "One".."Five" (a thin script, to the right of the 1-5 ring positions,
- * "Three" largest) onto a transparent canvas, and return a THREE.CanvasTexture,
- * or null if no canvas factory is available (plain Node, no DOM/polyfill) --
- * same optional-texture fallback as wall-sign.js's buildTextTexture.
+ * "Three" largest) onto an ALREADY-SIZED canvas 2D context. Split out from
+ * buildWordsTexture so the SAME canvas/texture can be redrawn once the real
+ * numeral font finishes loading (see startDiyWordsFontRedraw below) without
+ * re-deriving the layout math a second time.
  */
-function buildWordsTexture(THREE, wPx, hPx, numeralColor, createCanvas) {
-  if (!createCanvas) return null;
-  const canvas = createCanvas(wPx, hPx);
-  const ctx = canvas.getContext && canvas.getContext('2d');
-  if (!ctx) return null;
+function drawWordsCanvas(ctx, wPx, hPx, numeralColor, numeralFontFamily) {
   ctx.clearRect(0, 0, wPx, hPx); // transparent background -- only the marks are opaque
   ctx.fillStyle = numeralColor;
   ctx.textAlign = 'center';
@@ -523,8 +572,7 @@ function buildWordsTexture(THREE, wPx, hPx, numeralColor, createCanvas) {
   const pxPerR = wPx / spanX;
   const toPx = (xR, yR) => [(xR + WORD_LEFT_R) * pxPerR, hPx / 2 - yR * pxPerR];
 
-  // Numerals: 12, 9, 6 -- big, bold, rounded sans. Arial Rounded MT Bold is
-  // a common web-safe rounded face; sans-serif is the universal fallback.
+  // Numerals: 12, 9, 6 -- big, bold, rounded sans.
   //
   // Both owner reference photos show a slight drop shadow on the numerals --
   // a real physical effect of the acrylic pieces standing a few mm off the
@@ -540,19 +588,15 @@ function buildWordsTexture(THREE, wPx, hPx, numeralColor, createCanvas) {
   // relative to the dial too. This is also what made the clipping fix
   // above (WORD_LEFT_R/Y_MARGIN_R) tractable without an oversized canvas:
   // a smaller, lighter glyph needs less margin to clear.
-  // Round 3 (item 059873ed, visual review): "Arial Rounded MT Bold" has
-  // only a BOLD face -- a CSS weight of 500 on a single-weight font file is
-  // ignored (or synthesized inconsistently) by the browser, so the numerals
-  // still rendered bold regardless of the weight number here. Led instead
-  // with "Segoe UI" / "system-ui", both of which carry REAL Regular/Medium/
-  // Semibold weights on the platforms that have them (Windows and most
-  // desktop browsers respectively), so weight 500 actually renders medium
-  // rather than being silently ignored. "Arial Rounded MT Bold" is kept
-  // LAST as a rounded-look fallback for a browser with neither -- it will
-  // still render bold there, but that is strictly better than every
-  // browser rendering bold, which is what the font-first order did.
+  // Round 3 (item 059873ed, round-2 review): the FIRST draw always happens
+  // with `numeralFontFamily` set to the fallback stack (Nunito's CDN fetch
+  // is async and must never block first paint); `startDiyWordsFontRedraw`
+  // below calls this function again with the real "Nunito" family once
+  // document.fonts.load resolves, so the panel upgrades from Segoe UI
+  // Semibold to a genuine medium weight the moment it is ready, without a
+  // second envelope/layout computation.
   const numeralSize = Math.round(pxPerR * 0.5);
-  ctx.font = `500 ${numeralSize}px "Segoe UI", system-ui, "Arial Rounded MT Bold", sans-serif`;
+  ctx.font = `500 ${numeralSize}px "${numeralFontFamily}", "Segoe UI", system-ui, sans-serif`;
   ctx.shadowColor = 'rgba(0,0,0,0.35)';
   ctx.shadowBlur = pxPerR * 0.05;
   ctx.shadowOffsetX = pxPerR * 0.025;
@@ -599,6 +643,23 @@ function buildWordsTexture(THREE, wPx, hPx, numeralColor, createCanvas) {
     ctx.font = `400 ${Math.round(baseWordSize * scale)}px "Segoe Script", "Bradley Hand", cursive`;
     ctx.fillText(label, x, y);
   });
+}
+
+/**
+ * Draw "12"/"9"/"6" and "One".."Five" onto a transparent canvas, and return
+ * a THREE.CanvasTexture, or null if no canvas factory is available (plain
+ * Node, no DOM/polyfill) -- same optional-texture fallback as wall-sign.js's
+ * buildTextTexture. The numerals are drawn with the FALLBACK font stack
+ * synchronously (Nunito's CDN fetch is async); the caller wires up
+ * startDiyWordsFontRedraw separately to upgrade this same texture once the
+ * real font is ready.
+ */
+function buildWordsTexture(THREE, wPx, hPx, numeralColor, createCanvas) {
+  if (!createCanvas) return null;
+  const canvas = createCanvas(wPx, hPx);
+  const ctx = canvas.getContext && canvas.getContext('2d');
+  if (!ctx) return null;
+  drawWordsCanvas(ctx, wPx, hPx, numeralColor, 'Segoe UI'); // fallback stack -- see drawWordsCanvas's own font line
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace || texture.colorSpace;
@@ -683,7 +744,8 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
   const panelCenterX = RING_OFFSET_X + (r * (WORD_RIGHT_R - WORD_LEFT_R)) / 2;
   const createCanvas = resolveCreateCanvas(opts);
   const texPx = detail ? 512 : 1024;
-  const texture = buildWordsTexture(THREE, texPx, Math.round(texPx * (panelH / panelW)), p.numeralColor, createCanvas);
+  const texHeightPx = Math.round(texPx * (panelH / panelW));
+  const texture = buildWordsTexture(THREE, texPx, texHeightPx, p.numeralColor, createCanvas);
   const panelMat = new THREE.MeshStandardMaterial(Object.assign(
     { roughness: 0.8, metalness: 0, transparent: true, alphaTest: 0.1 },
     texture ? { map: texture } : { color: p.numeralColor, opacity: 0 }
@@ -698,6 +760,21 @@ function buildDiyWordsClock(THREE, p, detail, totalDepth, opts) {
   panel.userData.finish = 'matte';
   panel.userData.keep = true;
   group.add(panel);
+
+  // Round 3 (item 059873ed, round-2 review): once the real Nunito 500 face
+  // finishes loading (async -- see loadNumeralFont's own doc comment), redraw
+  // this SAME canvas with the real family and re-upload the texture. This
+  // must not run in Node (texture is null there -- buildWordsTexture already
+  // returned null with no canvas factory) or fire more than once per group.
+  if (texture) {
+    loadNumeralFont(() => {
+      const canvas = texture.image;
+      const ctx = canvas && canvas.getContext && canvas.getContext('2d');
+      if (!ctx) return;
+      drawWordsCanvas(ctx, texPx, texHeightPx, p.numeralColor, NUMERAL_FONT_FAMILY);
+      texture.needsUpdate = true;
+    });
+  }
 
   // ---- Centre disc: a low-poly black cylinder covering the hands' pivot.
   // Both owner reference photos show a LARGE disc, roughly a fifth of the

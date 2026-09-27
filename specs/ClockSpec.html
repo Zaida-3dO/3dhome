@@ -85,8 +85,9 @@
    continuously for the orbit camera regardless of the clock, so calling
    setClockTime once a second here costs nothing extra; the live HOUSE scene
    (render-on-demand) is the case startLiveClock's onTick hook exists for --
-   see wall-clock.js's own KNOWN GAP note for why that integration is not
-   yet wired up in src/home3d-scene.js.
+   src/home3d-scene.js's attachFurniture starts one per placed wall-clock
+   item and requests a single repaint per tick, exactly as this page does,
+   just without a continuously-running orbit loop underneath it.
    ===================================================================== */
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "preset": "photo-match-words",
@@ -206,33 +207,65 @@ function animateClockScene() {
 }
 
 // ============== Copy-JSON: the furniture[] entry this preset implies ==============
+//
+// Round 2 review (item 059873ed, code_review 01ba013f HIGH): this function
+// used to reference a bare `WallClock` -- that identifier is a LOCAL const
+// inside buildClockScene() (the scene-builder closure above), not a global,
+// so calling furnitureJSON() from anywhere else threw a ReferenceError.
+// React calls furnitureJSON() during render for the Copy JSON <pre>, so this
+// crashed the WHOLE PAGE on the default diy-words preset -- confirmed blank
+// at every viewport by both reviewers. Fixed the same way buildClockScene()
+// itself already reads the module: window.__wallClock, with a null guard
+// (App can render before the '__wall_clock_ready' event fires, exactly the
+// race useWallClockModule() above exists to handle -- see its own doc
+// comment). When the module is not yet loaded, this returns a short
+// placeholder string instead of JSON, rather than throwing.
+//
+// F5 residual (same code_review, low): a fixed 49.8x39 (the 30cm-diameter
+// envelope) was itself wrong at any OTHER diameter -- the Diameter slider
+// runs 20-45cm, and at 45cm the builder draws ~74.7x58.5. Re-deriving the
+// layout formula here would be a second copy of WORD_LEFT_R/WORD_RIGHT_R/
+// Y_MARGIN_R to keep in sync (they are private to wall-clock.js, not
+// exported); instead this BUILDS the real diy-words clock at the chosen
+// diameter with the actual builder and reads its own bounding box, so the
+// emitted width/height can never drift from what build() actually draws,
+// at any diameter.
 function furnitureJSON(t) {
-  // Code review, item 059873ed (finding F5): the comment below used to say
-  // "diy-words derives its own (wider) width/height from `diameter`" -- that
-  // is FALSE on the real house-loading path. furniture.js merges builder.DEFAULTS
-  // (the module's plain 30x30 DEFAULTS, not DIY_WORDS_DEFAULTS) onto
-  // item.params BEFORE build() ever runs (furniture.js ~line 259), so a
-  // params object with no width/height declares 30x30 while the builder
-  // actually draws DIY_WORDS_DEFAULTS' wider envelope -- measured by the
-  // reviewer as the placed clock's bottom landing 4.5cm below its declared
-  // y=0. Fixed HERE (this PR's own Copy JSON output) by emitting the real
-  // DIY_WORDS_DEFAULTS width/height explicitly, so a profile built from
-  // this JSON declares the envelope it actually draws. The systemic fix
-  // (make furniture.js itself pick the right kind-specific DEFAULTS before
-  // merging, the same gap wall-sconce.js has for its own second kind) is
-  // tracked separately as item 7c056b3e-b470-429c-876d-e803bd92425f -- out
-  // of this PR's territory (src/furniture/wall-clock.js, specs/ClockSpec.html).
-  const params = t.clockKind === 'diy-words'
-    ? {
-        width: WallClock.DIY_WORDS_DEFAULTS.width, height: WallClock.DIY_WORDS_DEFAULTS.height,
-        diameter: t.clockDiameter, depth: t.clockDepth, kind: t.clockKind,
-        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor, secondHandColor: t.clockSecondHandColor
-      }
-    : {
-        width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
-        kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
-        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor
-      };
+  const mod = window.__wallClock;
+  const THREE = window.THREE;
+  let params;
+  if (t.clockKind === 'diy-words') {
+    let width = t.clockDiameter, height = t.clockDiameter; // placeholder until the real build below
+    if (mod && THREE) {
+      // 'low' detail: this measures the envelope only, never rendered, so
+      // the cheaper geometry is enough and keeps the per-render cost small.
+      // React calls this on every render (it is inlined in JSX, not memoed),
+      // so the probe group's geometries/materials are disposed immediately
+      // after reading its bbox -- otherwise this would leak a full set of
+      // clock meshes on every keystroke in the Tweaks panel.
+      const probe = mod.build(THREE, Object.assign({}, mod.DIY_WORDS_DEFAULTS, { diameter: t.clockDiameter }), { detail: 'low' });
+      const box = new THREE.Box3().setFromObject(probe);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      width = Math.round(size.x * 100 * 100) / 100;  // metres -> cm, 2 decimal places
+      height = Math.round(size.y * 100 * 100) / 100;
+      probe.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+      });
+    }
+    params = {
+      width, height,
+      diameter: t.clockDiameter, depth: t.clockDepth, kind: t.clockKind,
+      numeralColor: t.clockNumeralColor, handColor: t.clockHandColor, secondHandColor: t.clockSecondHandColor
+    };
+  } else {
+    params = {
+      width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
+      kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
+      numeralColor: t.clockNumeralColor, handColor: t.clockHandColor
+    };
+  }
   const items = [
     {
       id: 'kitchen_wall_clock', room: 'kitchen', type: 'wall-clock',

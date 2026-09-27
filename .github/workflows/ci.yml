@@ -484,6 +484,22 @@ jobs:
         run: node scripts/test-light-collapse.mjs
       - name: Tap popovers -- target resolution, nearest-visible occlusion, placement
         run: node scripts/test-tap-popovers.mjs
+      - name: Spec pages don't reference a module-scope import alias out of scope
+        run: |
+          # Item 059873ed, round-2 review: ClockSpec.html's furnitureJSON()
+          # referenced a bare `WallClock`, which is a `const` local to a
+          # DIFFERENT top-level function (the module import lives in a
+          # separate <script type="module"> scope entirely) -- a
+          # ReferenceError during React's render that unmounted the WHOLE
+          # PAGE, blank at every viewport. No existing job renders a spec
+          # page (they are static HTML + Babel, not modules under test), so
+          # nothing caught it before a live browser review did. This is a
+          # static, per-function scope check across all specs/*.html (not a
+          # real render/mount smoke test -- this repo has no headless
+          # browser in its toolchain to run one; see the script's own header
+          # for exactly what it does and does not catch).
+          set -euo pipefail
+          node scripts/test-spec-module-scope.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

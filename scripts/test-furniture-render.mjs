@@ -1426,30 +1426,36 @@ const buildFixture = (quality, opts) => quietly(() => F.buildFurnitureSync(THREE
     /dynamicByItemId/.test(src));
   check('a tick requests a single repaint (requestRender), not a sustained wake()',
     /onTick:\s*\(\)\s*=>\s*requestRender\(\)/.test(src));
-  // F3 (code review, item 059873ed): /stopLiveClocks\(\)/ alone also matches
-  // the function DEFINITION ("function stopLiveClocks() {"), so deleting the
-  // actual CALL from dispose() left this passing -- that call is the only
-  // thing that stops a leaked 1s interval (which holds the disposed scene
-  // alive and calls requestRender) after dispose. Requires the call
-  // STATEMENT (a bare `stopLiveClocks();`, not the function's own opening
-  // line) to appear inside dispose(), immediately before the existing
-  // disposeFurniture(furnitureResult) call -- matching the reviewer's own
-  // suggested pattern.
-  check('the scene calls stopLiveClocks() (not just defines it) immediately before disposeFurniture in dispose()',
-    /stopLiveClocks\(\);\s*\n\s*if \(furnitureResult\) \{ disposeFurniture/.test(src), src.includes('stopLiveClocks();'));
+  // F3 (code review, item 059873ed, round 2): the round-3 fix for this was
+  // itself not anchored to the start of the line, so `// stopLiveClocks();`
+  // and `if (false) stopLiveClocks();` both still matched the "call
+  // statement" half of the pattern (the text `stopLiveClocks();\n...` is
+  // present as a SUBSTRING of both mutations) -- verified by the round-2
+  // reviewer's own mutation probes. Anchored with `^\s*` (multiline mode)
+  // so the call must be the first non-whitespace content on its own line;
+  // neither a leading `//` nor a leading `if (false) ` can satisfy that.
+  check('the scene calls stopLiveClocks() as its own statement (not commented out or gated on a constant false) immediately before disposeFurniture in dispose()',
+    /^\s*stopLiveClocks\(\);\s*\n\s*if \(furnitureResult\) \{ disposeFurniture/m.test(src), src.includes('stopLiveClocks();'));
   check('stopLiveClocks is still defined (both facts matter: it exists AND it is called)',
     /function stopLiveClocks\(\)/.test(src) && /liveClockStops/.test(src));
 }
 
-// ---- 10e. Behavioural stop-on-dispose test (item 059873ed, code review F3) ------------
-//      home3d-scene.js needs a real DOM canvas to instantiate (no test in this
-//      file does), so this cannot call the scene's own dispose() directly.
-//      Instead it re-enacts the EXACT closure shape home3d-scene.js uses --
-//      a liveClockStops Map plus a stopLiveClocks() that drains it, calling
-//      the REAL startLiveClock/disposeFurniture this module imports -- and
-//      proves BEHAVIOURALLY that calling it (as dispose() does) halts a
-//      ticking clock's timer, and that OMITTING it (the F3 mutation)
-//      leaves the timer running after the scene's furniture is disposed.
+// ---- 10e. startLiveClock's stop() actually halts ticking (item 059873ed, ------------
+//      code review F3, round 2 correction) -------------------------------------------
+//      NAMING, per the round-2 reviewer: this does NOT reach into
+//      home3d-scene.js and cannot fail if that file's own dispose() stops
+//      calling stopLiveClocks() -- it only re-implements the SAME
+//      Map/closure shape locally, so it tests startLiveClock's own stop()
+//      contract, not the scene's wiring to it (that wiring is what 10c's
+//      anchored source-pattern check above covers, on the real file).
+//      home3d-scene.js needs a real DOM canvas to instantiate (no test in
+//      this file does), so calling its actual dispose() is not available
+//      here at all. Second half renamed too: "a never-stopped timer keeps
+//      ticking" is definitionally true of any setInterval and was flagged
+//      as tautological -- kept only as a sanity check that startLiveClock
+//      really does return an independent, callable stop() per instance
+//      (two clocks, two stops, stopping one must not affect the other),
+//      which IS a real fact worth checking, just not "leak detection".
 {
   const WC = await imp('src/furniture/wall-clock.js');
   const h = compile([{ id: 'clk3', room: 'r', type: 'wall-clock', wall: 1, centre: 200, params: { kind: 'diy-words' } }]);
@@ -1477,34 +1483,37 @@ const buildFixture = (quality, opts) => quietly(() => F.buildFurnitureSync(THREE
     };
   }
 
-  // BEHAVIOURAL, correct wiring: dispose() calls stopLiveClocks() first.
+  // startLiveClock's own stop() contract: calling it actually halts that
+  // instance's ticking.
   const correct = sceneDisposeShape(true);
   await new Promise(res => setTimeout(res, 1150));
   const ticksBeforeDispose = correct.getTicks();
   correct.dispose();
   await new Promise(res => setTimeout(res, 1150));
-  check('behavioural: with stopLiveClocks() wired (the real fix), ticking actually stops after dispose',
+  check('startLiveClock: calling the returned stop() actually halts that instance\'s ticking',
     correct.getTicks() === ticksBeforeDispose, { before: ticksBeforeDispose, after: correct.getTicks() });
 
-  // BEHAVIOURAL, the F3 mutation: dispose() does NOT call stopLiveClocks().
-  // This is the exact defect the reviewer named: the interval leaks and
-  // keeps ticking (and would keep calling requestRender on a disposed
-  // scene) after "dispose".
+  // Two INDEPENDENT clocks: stopping one's timer must not affect the
+  // other's. This is the real fact a "stop() per instance" contract needs
+  // (as opposed to a shared/global timer some future refactor could
+  // accidentally introduce) -- not "a timer nobody stopped keeps ticking",
+  // which is true of any setInterval and proves nothing about this module.
   const h2 = compile([{ id: 'clk4', room: 'r', type: 'wall-clock', wall: 1, centre: 300, params: { kind: 'diy-words' } }]);
   const r2 = build(h2, ULTRA, { 'wall-clock': WC });
   const dyn2 = r2.dynamicByItemId.clk4;
-  const liveClockStops2 = new Map();
-  let ticks2 = 0;
-  const stop2 = WC.startLiveClock(dyn2.group, { doc: { hidden: false, addEventListener(){}, removeEventListener(){} },
-    onTick: () => { ticks2++; } });
-  liveClockStops2.set('clk4', stop2);
+  let ticksA = 0, ticksB = 0;
+  const stopA = WC.startLiveClock(dyn.group, { doc: { hidden: false, addEventListener(){}, removeEventListener(){} },
+    onTick: () => { ticksA++; } });
+  const stopB = WC.startLiveClock(dyn2.group, { doc: { hidden: false, addEventListener(){}, removeEventListener(){} },
+    onTick: () => { ticksB++; } });
   await new Promise(res => setTimeout(res, 1150));
-  const ticks2BeforeDispose = ticks2;
-  F.disposeFurniture(r2); // the F3 mutation: no stopLiveClocks() call at all
+  stopA();
+  const ticksAAfterStop = ticksA;
   await new Promise(res => setTimeout(res, 1150));
-  check('behavioural: WITHOUT stopLiveClocks() (the F3 mutation), the timer leaks and keeps ticking after dispose',
-    ticks2 > ticks2BeforeDispose, { before: ticks2BeforeDispose, after: ticks2 });
-  stop2(); // clean up the leaked interval so it does not outlive this test file
+  check('startLiveClock: stopping clock A does not stop clock B (independent timers, not a shared one)',
+    ticksA === ticksAAfterStop && ticksB > 0, { ticksA, ticksAAfterStop, ticksB });
+  stopB(); // clean up so this timer does not outlive the test file
+  F.disposeFurniture(r2);
 }
 
 // ---- 10d. Dynamic parts join the wall fade (item 059873ed, code review F1) -----------
