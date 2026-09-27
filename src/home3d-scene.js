@@ -31,6 +31,7 @@ import {
   disposeFurniture
 } from './furniture.js';
 import { startLiveClock } from './furniture/wall-clock.js';
+import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import {
   FINISH_TYPES, makeFinishTexture, alongToMetres, finishRectOnBox, createFinishBatch, addLongFace,
@@ -2522,8 +2523,25 @@ export const Home3DScene = (() => {
 
       // Linear LED run. `size` is the emitter's [length, height, depth] in cm,
       // straight from the profile, so a 2 m cornice reads as a line not a point.
-      const addStrip = (px, py, pz, size, meshes, lights, tint) => {
+      // `pos.drawn === false`: the light only, no emitter mesh -- a furniture
+      // item draws the strip itself and follows the same channel (a bedside
+      // table level, cabinet.js `channel.light`). `pos.reachCm`: the light's
+      // cut-off distance (default 2.5 m), short for a light tucked into
+      // furniture so it lights what is round it and not the room.
+      // `pos.aim`: a plan direction [dx, dy] -- the light becomes a SpotLight
+      // (no shadow) pointing that way, lighting only within `pos.spreadDeg`
+      // (default 90: the whole half-space in front). A bedside level's light faces out of the table,
+      // so it washes the fronts beside it and the floor in front, but never
+      // reaches straight up or down to the OTHER level's channel.
+      const addStrip = (px, py, pz, size, meshes, lights, tint, pos) => {
         const [sl, sh, sd] = size;
+        const reach = pos && pos.reachCm > 0 ? pos.reachCm / 100 : 2.5;
+        const aimed = pos && Array.isArray(pos.aim) && pos.aim.length === 2 && (pos.aim[0] || pos.aim[1])
+          ? { aim: [pos.aim[0], pos.aim[1]], spread: pos.spreadDeg > 0 ? Math.min(90, pos.spreadDeg) : 90 } : {};
+        if (pos && pos.drawn === false) {
+          lights.push(Object.assign({ x: px, y: py, z: pz, intensity: 1, distance: reach, decay: 2 }, aimed));
+          return;
+        }
         const m = new THREE.Mesh(
           new THREE.BoxGeometry(sl / 100, sh / 100, sd / 100),
           new THREE.MeshStandardMaterial({
@@ -2535,7 +2553,7 @@ export const Home3DScene = (() => {
         m.userData = { roomId: id, clickable: true };
         scene.add(m);
         meshes.push(m);
-        lights.push({ x: px, y: py, z: pz, intensity: 1, distance: 2.5, decay: 2 });
+        lights.push(Object.assign({ x: px, y: py, z: pz, intensity: 1, distance: reach, decay: 2 }, aimed));
       };
 
       /**
@@ -2583,7 +2601,7 @@ export const Home3DScene = (() => {
               addBulb(px, pos.heightCm != null ? FY + pos.heightCm / 100 : FY + WH * 0.7, pz, ms, ls, tint);
               break;
             case 'strip':
-              addStrip(px, fixtureY(pos, 0.06), pz, pos.size || [Math.max(w, d) * 70, 2.5, 2.5], ms, ls, tint);
+              addStrip(px, fixtureY(pos, 0.06), pz, pos.size || [Math.max(w, d) * 70, 2.5, 2.5], ms, ls, tint, pos);
               break;
             case 'projector':
               // A special-effect emitter (e.g. a star projector). It gets NO
@@ -2618,7 +2636,17 @@ export const Home3DScene = (() => {
             minX: tx(HOUSE.footprint.minX), maxX: tx(HOUSE.footprint.maxX),
             minZ: tz(HOUSE.footprint.minY), maxZ: tz(HOUSE.footprint.maxY) } : null })
           .forEach(m => {
-            const pl = new THREE.PointLight(tint, 0.6, m.distance, m.decay);
+            let pl;
+            if (m.aim) {
+              // Plan x east / y south map to world +x / +z (tx, tz).
+              const len = Math.hypot(m.aim[0], m.aim[1]);
+              pl = new THREE.SpotLight(tint, 0.6, m.distance, m.spread * Math.PI / 180, 0.3, m.decay);
+              pl.castShadow = false;
+              pl.target.position.set(m.x + m.aim[0] / len, m.y, m.z + m.aim[1] / len);
+              scene.add(pl.target);
+            } else {
+              pl = new THREE.PointLight(tint, 0.6, m.distance, m.decay);
+            }
             pl.position.set(m.x, m.y, m.z);
             pl.userData.gain = m.intensity;
             pl.userData.fixtures = m.count;
@@ -4405,6 +4433,19 @@ export const Home3DScene = (() => {
       });
       furnitureTimeline.attachedAt = performance.now();
       furnitureTimeline.stats = result.stats;
+      // Light-following parts (a bedside table's level strip and glow band):
+      // index them by the item's room and their channel, then pose them.
+      Object.keys(furnitureLightParts).forEach(k => delete furnitureLightParts[k]);
+      Object.keys(result.dynamicByItemId || {}).forEach(itemId => {
+        const dyn = result.dynamicByItemId[itemId], info = result.byId[itemId];
+        if (!dyn || !info) return;
+        dyn.group.traverse(o => {
+          if (!o.isMesh || !isLightPart(o)) return;
+          const byCh = furnitureLightParts[info.room] || (furnitureLightParts[info.room] = {});
+          (byCh[o.userData.lightChannel] || (byCh[o.userData.lightChannel] = [])).push(o);
+        });
+      });
+      if (Object.keys(furnitureLightParts).length) syncLights();
       // Start a live clock for every placed wall-clock. onTick asks for a
       // single repaint (requestRender, not wake()) -- a one-shot redraw per
       // second-boundary tick, never a sustained render loop; see the
@@ -4503,6 +4544,11 @@ export const Home3DScene = (() => {
     // A merged room light stands for several fixtures (buildScene); any other
     // light stands for one.
     const lightGain = l => (l.userData && l.userData.gain > 0 ? l.userData.gain : 1);
+    // Furniture parts that follow a room light channel (src/furniture/
+    // light-parts.js): roomId -> channel -> [mesh]. Filled when the furniture
+    // attaches (attachFurniture); posed here from the same channel state as
+    // the channel's real light.
+    const furnitureLightParts = {};
     function syncLights() {
       ids.forEach(id => {
         const s = lightState[id];
@@ -4532,6 +4578,10 @@ export const Home3DScene = (() => {
         Object.keys(s).forEach(channel => {
           if (channel === 'main' || channel === 'ambient') return;
           applyAccent(s[channel], (extraLights[id] || {})[channel], (extraMeshes[id] || {})[channel]);
+        });
+        const parts = furnitureLightParts[id];
+        if (parts) Object.keys(parts).forEach(channel => {
+          if (s[channel]) parts[channel].forEach(m => applyLightPart(m, s[channel]));
         });
       });
       // Light state changed → repaint (matters when idle/on-demand) AND

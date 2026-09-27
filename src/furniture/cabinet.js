@@ -85,6 +85,16 @@
  *   band along its top edge, part of its own front. Each channel has its own
  *   colour, so two strips on one table can differ (and be bound to two lights
  *   at placement).
+ *   `channel.light: '<channel>'` makes the level FOLLOW a room light
+ *   channel: its strip and the glow band below it become dynamic parts
+ *   (userData.dynamic, lightChannel, lightRole -- see light-parts.js) that
+ *   the scene poses from that channel's state -- the strip shows in the
+ *   light's colour when on and is hidden when off (just the recess); the
+ *   band washes the drawer front in the light's colour, by brightness. The
+ *   channel's real light is a room light fixture on the same channel
+ *   (docs/house-profile.md, "Bedside table LED strips").
+ *   `channel.led: false` builds the recess ONLY: no emissive strip and no
+ *   glow band (a level with no LED, or one drawn entirely elsewhere).
  *
  * OVERLAY FRONTS
  *   `overlayFronts: true` makes the fronts cover the carcass edges, as real
@@ -243,9 +253,31 @@ const CHANNEL_SETBACK = 0.015; // how far the channel's faces sit behind the fro
 const STRIP_PROUD = 0.002;     // the LED strip's face in front of the channel face
 const GLOW_SHARE = 0.35;       // the glow band: this much LED colour over the front's colour
 const GLOW_DIM = 1;            // ... at this brightness (the base white carries the rest)
+// A level that follows a light (channel.light) washes the drawer front below
+// it in WASH_WEIGHTS.length bands over the top WASH_SHARE of that front (at
+// most WASH_MAX_H), strongest at the channel.
+const WASH_WEIGHTS = Object.freeze([1, 0.6, 0.33, 0.15]);
+const WASH_SHARE = 0.45;
+const WASH_MAX_H = 0.08;
+const STRIP_BACK_T = 0.006;    // the carcass back's thickness (full detail): side strips start 2 cm in front of it
 
 /** Is the fronts row a light channel? */
 function isChannel(row) { return !!(row && row.channel); }
+
+/**
+ * Mark a mesh as a part that follows room light channel `channel` (see
+ * light-parts.js): dynamic (never merged, posed live by the scene), with
+ * its OWN material so posing it never recolours another part.
+ */
+function tagLightPart(mesh, channel, role) {
+  mesh.material = mesh.material.clone();
+  mesh.userData.dynamic = true;
+  mesh.userData.lightChannel = String(channel);
+  mesh.userData.lightRole = role;
+}
+
+/** Does a light channel row draw its own (static) LED strip? `led: false` = recess only. */
+function channelLed(row) { return isChannel(row) && row.channel.led !== false; }
 
 /**
  * The plane every hinged/fixed front's face lies in: `depth` for a
@@ -376,7 +408,24 @@ function leafRect(x0, x1, yBot, yTop, revealY, edges) {
 }
 
 /** A leaf, optionally with a glow band along its top edge (below a light channel). */
-function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor) {
+function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor, glowLight) {
+  if (glowColor && glowLight) {
+    // A level that FOLLOWS a light washes the front below it: WASH_WEIGHTS
+    // bands, top down, each a slice of the same front in the same plane,
+    // fading from the channel (light-parts.js scales each by its weight).
+    const base = /^#[0-9a-fA-F]{6}$/.test(baseColor) ? baseColor : '#ffffff';
+    const washH = Math.min(WASH_MAX_H, (r.ly1 - r.ly0) * WASH_SHARE);
+    const step = washH / WASH_WEIGHTS.length;
+    WASH_WEIGHTS.forEach((w, i) => {
+      const band = slab(THREE, group, finish(THREE, 'emissive', glowTint(glowColor, baseColor)),
+        r.lx0, r.lx1, r.ly1 - step * (i + 1), r.ly1 - step * i, faceZ - T, faceZ, 'channelGlow');
+      band.castShadow = false;
+      tagLightPart(band, glowLight, 'glow');
+      band.userData.baseColor = base;
+      band.userData.glowWeight = w;
+    });
+    return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1 - washH, faceZ - T, faceZ, name);
+  }
   if (glowColor) {
     // The glow band is part of the leaf -- the top slice of the same front,
     // in the same plane -- not a plate stuck on in front of it.
@@ -404,7 +453,7 @@ function buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, color
   const T = frontThickness(depth);
   const mat = finish(THREE, fin, color);
   const r = leafRect(x0, x1, yBot, yTop, 0.01, ctx && ctx.edges);
-  addLeaf(THREE, group, r, faceZ, T, mat, 'cabinetDoor', ctx && ctx.glow, color);
+  addLeaf(THREE, group, r, faceZ, T, mat, 'cabinetDoor', ctx && ctx.glow, color, ctx && ctx.glowLight);
   if (handles !== false && cell.handle !== false) {
     addHandle(THREE, group, x1 - Math.min(0.04, (x1 - x0) * 0.08), (yBot + yTop) / 2, faceZ);
   }
@@ -419,7 +468,7 @@ function buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, col
   const T = frontThickness(depth);
   const mat = finish(THREE, fin, color);
   const r = leafRect(x0, x1, yBot, yTop, 0.03, ctx && ctx.edges);
-  addLeaf(THREE, group, r, faceZ, T, mat, 'drawerFront', ctx && ctx.glow, color);
+  addLeaf(THREE, group, r, faceZ, T, mat, 'drawerFront', ctx && ctx.glow, color, ctx && ctx.glowLight);
   const showHandle = handles !== false && cell.handle !== false;
   if (showHandle) {
     const maxY = ctx && ctx.handleMaxY != null ? ctx.handleMaxY : Infinity;
@@ -617,7 +666,8 @@ function buildStackCell(THREE, group, cell, x0, x1, rowYBottomCm, rowYTopCm, dep
     const e = (ctx && ctx.edges) || {};
     const subCtx = Object.assign({}, ctx, {
       edges: { l: e.l, r: e.r, t: e.t && i === 0, b: e.b && i === subCells.length - 1 },
-      glow: i === 0 ? ctx && ctx.glow : null
+      glow: i === 0 ? ctx && ctx.glow : null,
+      glowLight: i === 0 ? ctx && ctx.glowLight : null
     });
     buildFrontCell(THREE, group, sub, x0, x1, yBotCm * CM, yTopCm * CM, depth, fin, color, p, low, subCtx);
     yTopCm = yBotCm;
@@ -821,13 +871,15 @@ function buildChannel(THREE, group, row, W, faceZ, backZ, y0, y1, fin, color, lo
   const xs = W / 2 - CHANNEL_SETBACK;
   const fillFront = faceZ - CHANNEL_SETBACK;
   slab(THREE, group, finish(THREE, fin, color), -xs, xs, y0, y1, backZ, fillFront, 'channelRecess');
-  if (low) return;
+  if (low || !channelLed(row)) return;
   const sh = Math.min(0.006, (y1 - y0) * 0.4);
   const cy = (y0 + y1) / 2;
   const ledMat = finish(THREE, 'emissive', ledColor);
   const front = slab(THREE, group, ledMat, -xs - STRIP_PROUD, xs + STRIP_PROUD, cy - sh / 2, cy + sh / 2,
     fillFront - 0.003, fillFront + STRIP_PROUD, 'channelStripFront');
   front.castShadow = false;
+  const follow = row.channel && row.channel.light;
+  if (follow) tagLightPart(front, follow, 'strip');
   [-1, 1].forEach(sx => {
     // Each side strip ends INSIDE the front strip, so no end face lies in
     // the front strip's plane; it runs back to 2 cm off the wall.
@@ -835,6 +887,53 @@ function buildChannel(THREE, group, row, W, faceZ, backZ, y0, y1, fin, color, lo
     const b = sx < 0 ? -xs + 0.001 : xs + STRIP_PROUD;
     const side = slab(THREE, group, ledMat, a, b, cy - sh / 2, cy + sh / 2, backZ + 0.02, fillFront - 0.0015, 'channelStripSide');
     side.castShadow = false;
+    if (follow) tagLightPart(side, follow, 'strip');
+  });
+}
+
+/**
+ * Where each light channel's LED strip is, in the cabinet's own frame and in
+ * CENTIMETRES: x centred on the width, y up from the cabinet's bottom, z from
+ * the back (0) to the front (+z). One entry per channel row, top row first:
+ *
+ *   { row, color, centre: [x, y, z], size: [x, y, z], lightAt: [x, y, z] }
+ *
+ * The box is the one the table's own strip fills (the front run and both
+ * side runs, 2 mm proud of the recess, never the back). `lightAt` is where
+ * that level's real light goes: a room light `strip` fixture on the level's
+ * channel, aimed out of the table, at the channel's height in the plane of
+ * the drawer fronts' back faces (docs/house-profile.md, "Bedside table LED
+ * strips").
+ */
+export function channelStripBoxes(params) {
+  const p = Object.assign({}, DEFAULTS, params);
+  if (p.columns) return [];
+  const plinth = p.plinth || { type: 'plinth', height: 0 };
+  const rows = normaliseFronts(p.fronts, p.width, plinth.height || 0);
+  const W = p.width * CM, D = p.depth * CM;
+  const faceZ = frontPlane(p, D);
+  const xs = W / 2 - CHANNEL_SETBACK;
+  const fillFront = faceZ - CHANNEL_SETBACK;
+  const z0 = STRIP_BACK_T + 0.02, z1 = fillFront + STRIP_PROUD;
+  const r = v => Math.round(v * 1000) / 10; // m -> cm, to 1 mm
+  return rows.filter(isChannel).map(row => {
+    const y0 = row.yBottom * CM, y1 = row.yTop * CM;
+    const sh = Math.min(0.006, (y1 - y0) * 0.4);
+    return {
+      row: rows.indexOf(row),
+      color: row.channel.color || '#dbe8ff',
+      centre: [0, r((y0 + y1) / 2), r((z0 + z1) / 2)],
+      size: [r(2 * (xs + STRIP_PROUD)), r(sh), r(z1 - z0)],
+      // Where the level's real light belongs: at the channel's height, in
+      // the plane of the drawer fronts' BACK faces. Aimed out of the table
+      // (a spot with a 90 degree half-angle, see home3d-scene.js addStrip
+      // `aim`), it lights the channel it sits in, the floor in front and
+      // the bed beside the table -- and nothing of the OTHER level's channel,
+      // whose faces all lie behind or on that plane, so an off level stays
+      // dark with no shadow map. The drawer front below is washed by the
+      // level's glow band, which follows the same channel (light-parts.js).
+      lightAt: [0, r((y0 + y1) / 2), r(faceZ - frontThickness(D))],
+    };
   });
 }
 
@@ -1058,7 +1157,7 @@ export function build(THREE, params, opts) {
   // Interior back panel. Skipped for an open-shelving unit at low detail
   // (nothing hides it anyway - every bay is open) and always skipped at low
   // detail for the fronted modes too, matching the previous behaviour.
-  const BACK_T = 0.006;
+  const BACK_T = STRIP_BACK_T;
   if (!low) {
     const back = new THREE.Mesh(box(THREE, W - CARC_T * 2, sideH, BACK_T), carcassMat);
     back.position.set(0, sideY0 + sideH / 2, BACK_T / 2);
@@ -1120,7 +1219,7 @@ export function build(THREE, params, opts) {
         return;
       }
       const above = rows[ri - 1];
-      const glow = isChannel(above) ? ((above.channel && above.channel.color) || '#dbe8ff') : null;
+      const glow = channelLed(above) ? (above.channel.color || '#dbe8ff') : null;
       let x = -W / 2;
       for (const cell of row.cells) {
         const cw = cell.width * CM;
@@ -1128,7 +1227,7 @@ export function build(THREE, params, opts) {
         const edges = overlay
           ? { l: x0 <= -W / 2 + 1e-6, r: x1 >= W / 2 - 1e-6, t: ri === 0, b: ri === rows.length - 1 }
           : null;
-        const ctx = { edges, glow, interior: interiorCtx, handleMaxY };
+        const ctx = { edges, glow, glowLight: glow ? above.channel.light || null : null, interior: interiorCtx, handleMaxY };
         if (cell.kind === 'stack') {
           buildStackCell(THREE, frontsGroup, cell, x0, x1, row.yBottom, row.yTop, D, fin, color, p, low, ctx);
         } else {

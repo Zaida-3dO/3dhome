@@ -128,8 +128,11 @@ export function collapseEmitters(emitters, roomBox, opts) {
   const list = (emitters || []).filter(e => e && isFinite(e.x) && isFinite(e.y) && isFinite(e.z));
   if (!list.length) return [];
   const o = opts || {};
-  const single = i => ({ x: list[i].x, y: list[i].y, z: list[i].z, intensity: list[i].intensity,
-    distance: list[i].distance, decay: list[i].decay, count: 1, members: [i] });
+  // A lone emitter keeps its `aim` (an aimed strip light, see home3d-scene.js
+  // addStrip); a merged light never has one.
+  const single = i => Object.assign({ x: list[i].x, y: list[i].y, z: list[i].z, intensity: list[i].intensity,
+    distance: list[i].distance, decay: list[i].decay, count: 1, members: [i] },
+    list[i].aim ? { aim: list[i].aim, spread: list[i].spread } : {});
   const idx = list.map((e, i) => i);
   if (o.merge === false) return idx.map(single);
   const spreadM = o.spreadM != null ? o.spreadM : SPREAD_M;
