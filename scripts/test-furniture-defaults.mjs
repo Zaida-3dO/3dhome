@@ -32,6 +32,11 @@
  *   5. scripts/validate-house.py finds registry types with a regex. Every
  *      entry must match it, or the validator would call a real type
  *      "unregistered".
+ *   6. A module exporting defaultsFor(params) (per-kind DEFAULTS, item
+ *      7c056b3e): for every kind in the schema's `kind` enum, the schema
+ *      defaults overlaid with the block's `x-kindDefaults[kind]` give the
+ *      same width/depth/height as defaultsFor({kind}). That is what
+ *      validate-house.py sizes a kind's footprint from.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -129,6 +134,35 @@ for (const t of types) {
       check(t + ': schema default for ' + k + ' is a DEFAULTS key', Object.prototype.hasOwnProperty.call(D, k));
     }
   });
+
+  // Rule 6: per-kind envelopes. A module exporting defaultsFor(params)
+  // starts a house item of that kind from the kind's own DEFAULTS
+  // (src/furniture.js, item 7c056b3e); the validator reads the same numbers
+  // from the block's `x-kindDefaults` (it cannot run JavaScript). For every
+  // kind in the schema's enum, the schema defaults overlaid with
+  // x-kindDefaults[kind] must give the width/depth/height defaultsFor does.
+  const perKind = block['x-kindDefaults'] || {};
+  const kindEnum = (props.kind && Array.isArray(props.kind.enum)) ? props.kind.enum : [];
+  Object.keys(perKind).forEach(kind => {
+    check(t + ': x-kindDefaults.' + kind + ' is a kind in the enum', kindEnum.includes(kind), kindEnum);
+    Object.keys(perKind[kind] || {}).forEach(k => check(t + ': x-kindDefaults.' + kind + '.' + k + ' is width/depth/height',
+      ['width', 'depth', 'height'].includes(k)));
+  });
+  if (Object.keys(perKind).length) {
+    check(t + ': has x-kindDefaults, so the module must export defaultsFor()', typeof impl.defaultsFor === 'function');
+  }
+  if (typeof impl.defaultsFor === 'function') {
+    kindEnum.forEach(kind => {
+      const want = impl.defaultsFor({ kind });
+      const schemaDims = {};
+      ['width', 'depth', 'height'].forEach(k => {
+        schemaDims[k] = perKind[kind] && Object.prototype.hasOwnProperty.call(perKind[kind], k)
+          ? perKind[kind][k] : (props[k] && props[k].default);
+      });
+      ['width', 'depth', 'height'].forEach(k => check(t + ' kind ' + kind + ': schema ' + k +
+        ' (with x-kindDefaults) equals defaultsFor', schemaDims[k] === want[k], { schema: schemaDims[k], defaultsFor: want[k] }));
+    });
+  }
 }
 
 // ---- 5. the validator's regex finds every registry entry -----------------------

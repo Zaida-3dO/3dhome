@@ -714,11 +714,25 @@ def load_registry():
     return dict(REGISTRY_LINE_RE.findall(text))
 
 
-def schema_param_defaults(schema, ftype):
-    """The `default` of every param in $defs/furnitureParams_<type>."""
+def schema_param_defaults(schema, ftype, kind=None):
+    """The `default` of every param in $defs/furnitureParams_<type>.
+
+    With `kind`, the block's `x-kindDefaults[kind]` overrides are laid on top:
+    a type whose kinds differ in envelope (wall-clock 'diy-words', wall-sconce
+    'up-down') starts from THAT kind's defaults on the house path
+    (src/furniture.js + the builder's defaultsFor, item 7c056b3e), so the
+    footprint checks must too. scripts/test-furniture-defaults.mjs keeps
+    x-kindDefaults equal to each builder's defaultsFor({kind}).
+    """
     block = ((schema or {}).get("$defs") or {}).get(f"furnitureParams_{ftype}") or {}
     props = block.get("properties") or {}
-    return {k: v["default"] for k, v in props.items() if isinstance(v, dict) and "default" in v}
+    out = {k: v["default"] for k, v in props.items() if isinstance(v, dict) and "default" in v}
+    per_kind = block.get("x-kindDefaults") or {}
+    if kind is None:
+        kind = out.get("kind")
+    if isinstance(kind, str) and isinstance(per_kind.get(kind), dict):
+        out.update(per_kind[kind])
+    return out
 
 
 def _front(rot):
@@ -871,9 +885,10 @@ def check_furniture(geo, wall_ids, rooms_by_id, report, schema):
             continue
 
         # The footprint checks need a width, depth and height: authored in
-        # params, or the type's schema defaults (kept equal to the builder's
-        # DEFAULTS by scripts/test-furniture-defaults.mjs).
-        dims = dict(schema_param_defaults(schema, ftype))
+        # params, or the type's schema defaults for the item's kind (kept
+        # equal to the builder's DEFAULTS / defaultsFor by
+        # scripts/test-furniture-defaults.mjs).
+        dims = dict(schema_param_defaults(schema, ftype, (item.get("params") or {}).get("kind")))
         dims.update(item.get("params") or {})
         w, d, h = dims.get("width"), dims.get("depth"), dims.get("height")
         if not all(isinstance(v, (int, float)) for v in (w, d, h)):

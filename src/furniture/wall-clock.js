@@ -114,6 +114,18 @@ export const DIY_WORDS_DEFAULTS = Object.freeze(Object.assign({}, DEFAULTS, {
 }));
 
 /**
+ * The DEFAULTS a house item of this `kind` starts from, BEFORE its own
+ * params are applied (src/furniture.js calls this when present, item
+ * 7c056b3e). Without it the house path filled width/height from the generic
+ * DEFAULTS (30x30), so an item giving only `{ kind: 'diy-words' }` declared a
+ * 30x30 envelope while build() drew the 49.8x39 words clock -- and lifted it
+ * by the wrong half-height, sinking its bottom 4.5 cm below y = 0.
+ */
+export function defaultsFor(params) {
+  return (params && params.kind) === 'diy-words' ? DIY_WORDS_DEFAULTS : DEFAULTS;
+}
+
+/**
  * "HH:MM" -> hour/minute/second hand angles, radians clockwise from 12
  * o'clock. Seconds are not encoded in "HH:MM" so they default to 0 -- this is
  * only ever used to lay out the STARTING pose at build time; a live scene

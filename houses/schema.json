@@ -3701,7 +3701,10 @@
 
     "furnitureParams_wall-clock": {
       "type": "object",
-      "description": "Params for `wall-clock` (src/furniture/wall-clock.js): a working wall clock in three styles -- `framed` (a round face + rim + hands), `diy-numerals` (numerals/dots stuck straight on the wall around a plain hands unit, matching a photo of a real DIY wall clock), or `diy-words` (a frameless stick-on clock -- big numerals at 12/9/6, dots at 7/8/10/11, the words \"One\" to \"Five\" to the right of the 1-5 ring positions, a centre disc, tapered hands and a red second hand -- matching the owner's actual kitchen clock, item 059873ed). `time` only sets the hands' pose at BUILD time; a live scene re-poses them continuously via wall-clock.js's exported setClockTime(group, date) helper. Each `default` equals wall-clock.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs) -- `diy-words`'s OWN defaults (wider width/height, to include the words) live in the module's separately-exported DIY_WORDS_DEFAULTS, the same two-defaults-objects pattern wall-sconce.js uses for its own second kind.",
+      "x-kindDefaults": {
+        "diy-words": { "width": 49.8, "height": 39 }
+      },
+      "description": "Params for `wall-clock` (src/furniture/wall-clock.js): a working wall clock in three styles -- `framed` (a round face + rim + hands), `diy-numerals` (numerals/dots stuck straight on the wall around a plain hands unit, matching a photo of a real DIY wall clock), or `diy-words` (a frameless stick-on clock -- big numerals at 12/9/6, dots at 7/8/10/11, the words \"One\" to \"Five\" to the right of the 1-5 ring positions, a centre disc, tapered hands and a red second hand -- matching the owner's actual kitchen clock, item 059873ed). `time` only sets the hands' pose at BUILD time; a live scene re-poses them continuously via wall-clock.js's exported setClockTime(group, date) helper. Each `default` equals wall-clock.js's DEFAULTS for this key (enforced by scripts/test-furniture-defaults.mjs) -- `diy-words`'s OWN defaults (wider width/height, to include the words) live in the module's separately-exported DIY_WORDS_DEFAULTS, the same two-defaults-objects pattern wall-sconce.js uses for its own second kind. `x-kindDefaults` carries diy-words' width/height for scripts/validate-house.py, and a diy-words item starts from them on the house path (wall-clock.js defaultsFor; scripts/test-furniture-defaults.mjs keeps them equal).",
       "properties": {
         "width": {
           "type": "number",
@@ -3766,7 +3769,10 @@
 
     "furnitureParams_wall-sconce": {
       "type": "object",
-      "description": "Params for `wall-sconce` (src/furniture/wall-sconce.js): ONE registered type covering two visual kinds selected by `kind`. `default`s below are the 'swing-arm-globe' kind's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs, which only checks the module's single DEFAULTS export). The 'up-down' kind's own fields (bodyWidth, bodyHeight, bodyDepth, plateThickness, lensDiameter, lensProtrusion) are listed too, with no `default` of their own, so an 'up-down' item can set them without additionalProperties rejecting it; wall-sconce.js's own UP_DOWN_DEFAULTS is the source of truth for their values when `kind` is 'up-down'.",
+      "x-kindDefaults": {
+        "up-down": { "width": 12, "height": 20, "depth": 6 }
+      },
+      "description": "Params for `wall-sconce` (src/furniture/wall-sconce.js): ONE registered type covering two visual kinds selected by `kind`. `default`s below are the 'swing-arm-globe' kind's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs); `x-kindDefaults` gives the 'up-down' kind's own envelope, which an item of that kind starts from (wall-sconce.js defaultsFor; the same test keeps the two equal). The 'up-down' kind's own fields (bodyWidth, bodyHeight, bodyDepth, plateThickness, lensDiameter, lensProtrusion) are listed too, with no `default` of their own, so an 'up-down' item can set them without additionalProperties rejecting it; wall-sconce.js's own UP_DOWN_DEFAULTS is the source of truth for their values when `kind` is 'up-down'.",
       "properties": {
         "kind": {
           "type": "string",

@@ -53,7 +53,12 @@ const DEG = Math.PI / 180;
  * authored pipeDrop still wins.
  */
 export function itemParams(item, builder) {
-  const params = Object.assign({}, builder.DEFAULTS, item.params || {});
+  // A builder with more than one kind whose envelopes differ exports
+  // defaultsFor(params) (wall-clock diy-words, wall-sconce up-down): the
+  // kind's own DEFAULTS, so width/height/depth left unset come from the
+  // kind actually drawn, not the module's default kind (item 7c056b3e).
+  const base = typeof builder.defaultsFor === 'function' ? builder.defaultsFor(item.params || {}) : builder.DEFAULTS;
+  const params = Object.assign({}, base, item.params || {});
   if (item.type === 'radiator' && !(item.params && item.params.pipeDrop !== undefined)) {
     params.pipeDrop = Math.max(0, Number(item.elevation) || 0);
   }
