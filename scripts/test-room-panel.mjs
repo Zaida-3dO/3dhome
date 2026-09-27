@@ -28,6 +28,11 @@
  *      HAClient.callServiceDebounced over a fake HA WebSocket.
  *   7. index.html actually wires it that way (pointerup ends the drag, no
  *      door slider left, both senders cleared on a full re-render).
+ *   8. Sidebar polish: each section header has the popover's icon and a
+ *      sentence-case title; the ambience row has ONE colour square inline
+ *      with its slider (no swatch grid, no colour bar, no strip list);
+ *      curtain Open / Close are icon buttons; the thermometer is orange
+ *      while heating.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -254,7 +259,66 @@ const onReading = (over = {}) => HAClient.parseClimate({
   check('door row: name shown only when asked', !/Store cupboard/.test(door) &&
     /Store cupboard/.test(RP.doorRowHtml({ id: 'store_door', name: 'Store cupboard' }, 'off', true)));
   check('motion row: tag text', /Motion detected/.test(RP.motionRowHtml('on')) && /No motion/.test(RP.motionRowHtml('off')));
-  check('row markup escapes profile text', /&lt;B&gt;/.test(RP.curtainRowHtml({ id: 'x', label: '<b>' }, 0, true)));
+  check('row markup escapes profile text', /&lt;b&gt;/.test(RP.curtainRowHtml({ id: 'x', label: '<b>' }, 0, true)));
+}
+
+// ---------------------------------------------------------------------------
+// 5b. Sidebar polish: popover icons, sentence case, colour square, no strips
+// ---------------------------------------------------------------------------
+{
+  const { ICONS } = await imp('src/ui-icons.js');
+  const has = (html, p) => html.indexOf('d="' + p + '"') !== -1;
+  const label = html => (html.match(/<span class="control-label">([^<]*)<\/span>/) || [])[1];
+  const lightOn = { on: true, bri: 17, temp: 3000, color: '#00CCFF' };
+  const lightOff = { on: false, bri: 17, temp: 3000, color: '#00ccff' };
+
+  const main = RP.mainLightRowHtml(lightOn, false);
+  check('main light: bulb icon (lit), sentence-case title', has(main, ICONS.bulb) && /row-ico light-on/.test(main) && label(main) === 'Main light', main);
+  check('main light off: the off bulb', has(RP.mainLightRowHtml(lightOff, false), ICONS.bulbOff));
+
+  const amb = RP.ambientRowHtml(lightOn, 'Office Ambience', false);
+  check('ambience: bulb icon, sentence-case title (never ALL CAPS)', has(amb, ICONS.bulb) && label(amb) === 'Office ambience', label(amb));
+  check('ambience: ONE colour square showing the current colour',
+    (amb.match(/type="color"/g) || []).length === 1 && /class="color-square" value="#00ccff"/.test(amb), amb);
+  check('ambience: the 10-swatch grid and long colour bar are gone',
+    !/color-swatch/.test(amb) && !/color-input/.test(amb) && RP.AMBIENT_SWATCHES === undefined);
+  check('ambience: square INLINE with the slider and its value -- [square] slider 17%',
+    /<div class="slider-row inline-row">\s*<input type="color"[^>]*>\s*<input type="range"[^>]*data-action="bri-ambient"[^>]*>\s*<span class="inline-val">17%<\/span>/.test(amb), amb);
+  check('ambience: square is labelled and sends through data-action', /data-action="color-ambient" aria-label="Colour"/.test(amb));
+  check('ambience: unknown colour -> the default, never an invalid value', /value="#ff3300"/.test(RP.ambientRowHtml({ on: true, bri: 50 }, 'A', false)));
+  const wOnly = RP.ambientRowHtml(lightOn, 'A', false, false);
+  check('ambience, white-only entity: slider + value, no colour square', !/type="color"/.test(wOnly) && /data-action="bri-ambient"/.test(wOnly) && /17%/.test(wOnly));
+  check('ambience off: no square, no slider', !/type="color"|type="range"/.test(RP.ambientRowHtml(lightOff, 'A', false)));
+
+  check('galaxy: bulb icon, sentence case', label(RP.galaxyRowHtml(lightOn, false)) === 'Galaxy projector');
+
+  const cu = RP.curtainRowHtml({ id: 'lounge_curtain', label: 'Lounge Curtain' }, 40, true, false);
+  check('curtain: curtain icon + sentence-case title', has(cu, ICONS.curtains) && label(cu) === 'Lounge curtain', label(cu));
+  check('curtain closed: the closed-curtain icon', has(RP.curtainRowHtml({ id: 'c', label: 'C' }, 0, true, false), ICONS.curtainsClosed));
+  check('curtain: Open / Close are ICON buttons (no text), with hover labels + aria-labels',
+    /<button class="row-ib" data-action="curtain-cmd" data-cmd="close"[^>]*aria-label="Close curtain" title="Close"[^>]*><svg/.test(cu)
+    && /<button class="row-ib" data-action="curtain-cmd" data-cmd="open"[^>]*aria-label="Open curtain" title="Open"[^>]*><svg/.test(cu)
+    && has(cu, ICONS.cOpen) && has(cu, ICONS.cClose) && !/>Open<|>Close</.test(cu), cu);
+
+  const heat = RP.climateRowHtml(onReading(), false, true), idle = RP.climateRowHtml(onReading(), false, false);
+  check('temperature: thermometer icon, sentence case', has(idle, ICONS.thermometer) && label(idle) === 'Temperature');
+  check('temperature: thermometer orange while heating', /row-ico heat/.test(heat) && !/row-ico heat/.test(idle));
+
+  const mo = RP.motionRowHtml('on');
+  check('motion: motion icon, "Motion" (not MOTION)', has(mo, ICONS.motion) && label(mo) === 'Motion' && !/MOTION/.test(mo));
+  check('door: door icon by state', has(RP.doorRowHtml({ id: 'd' }, 'on'), ICONS.doorOpen) && has(RP.doorRowHtml({ id: 'd' }, 'off'), ICONS.doorClosed));
+
+  const all = [main, amb, cu, heat, mo, RP.galaxyRowHtml(lightOn, false)].join('');
+  check('no ALL-CAPS section headers left', !/control-label">[A-Z ]{4,}</.test(all));
+
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  check('index.html: "Strip positions" list is gone (markup, builder and CSS)',
+    !/Strip positions/.test(html) && !/stripInfoHtml/.test(html) && !/\.strip-info/.test(html));
+  check('index.html: colour square handler does not repaint the row under an open picker',
+    /if \(action === 'color-ambient'\) onWrite\(el, 'input', e => \{\s*s\.ambient\.color = e\.target\.value; home\.updateLights\(\); sendToHA\(rid, 'ambient', s\.ambient, 200, true\);\s*\}\);/.test(html));
+  check('index.html: brightness value sits after the slider', /el\.nextElementSibling\.textContent = `\$\{s\.ambient\.bri\}%`;/.test(html));
+  const src = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
+  check('icons are shared, not copied: tap-popovers has no inline MDI paths', /from '\.\/ui-icons\.js'/.test(src) && !/M12,2A7,7 0 0,0 5,9/.test(src));
 }
 
 // ---------------------------------------------------------------------------

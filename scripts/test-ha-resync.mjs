@@ -152,7 +152,7 @@ async function until(pred, ms = 2000) {
   const light = { on: true, bri: 60, temp: 3000, color: '#ff3300' };
   const rows = offline => ({
     main: RP.mainLightRowHtml(light, offline),
-    ambient: RP.ambientRowHtml(light, 'Ambience', '', offline),
+    ambient: RP.ambientRowHtml(light, 'Ambience', offline),
     galaxy: RP.galaxyRowHtml(light, offline),
     curtain: RP.curtainRowHtml({ id: 'lounge_curtain', label: 'Lounge Curtain' }, 100, true, offline),
     climate: RP.climateRowHtml(HAClient.parseClimate(trvState(21)), offline),
@@ -311,16 +311,16 @@ await quiet(async () => {
   check('wireRoomControls found', wire.length > 200);
   check('onWrite gates on haOffline', /const onWrite = \(el, type, fn\) => el\.addEventListener\(type, e => \{ if \(!haOffline\(ha\)\) fn\(e\); \}\)/.test(wire));
   const writes = wire.match(/onWrite\(el, '(click|input)'/g) || [];
-  check('every light / ambience / curtain / climate write handler is gated (12)', writes.length === 12, writes.length);
+  check('every light / ambience / curtain / climate write handler is gated (11)', writes.length === 11, writes.length);
   check('no ungated click/input handler left', !/el\.addEventListener\('(click|input)'/.test(wire));
   check('lock-release handlers stay ungated', (wire.match(/el\.addEventListener\('(pointerup|pointercancel|blur)'/g) || []).length === 6);
   check('sendToHA refuses while offline', /function sendToHA\([^)]*\) \{\s*if \(!ha \|\| !haConfig \|\| haOffline\(ha\)\) return;/.test(html));
   check('both senders are writable-gated', (html.match(/writable: \(\) => !haOffline\(ha\),/g) || []).length === 2);
   check('status change repaints the open room', /haStatusText\.textContent = labels\[status\] \|\| 'HA';[\s\S]{0,400}if \(selectedRoom && panelReady\) renderPanel\(\);/.test(html));
   check('room rows get the offline flag', /curtainRowHtml\(cu, pct, curtainIsAvailable\(cu\.id\), offline\)/.test(html)
-    && /climateRowHtml\(climateReading\.get\(rid\) \|\| null, offline\)/.test(html)
     && /mainLightRowHtml\(s\.main, offline\)/.test(html) && /galaxyRowHtml\(s\.galaxy, offline\)/.test(html)
-    && /ambientRowHtml\(s\.ambient, ambientRowLabel\(lc\.ambient, rm && rm\.name\), stripInfoHtml\(lc\.ambient\), offline\)/.test(html));
+    && /ambientRowHtml\(s\.ambient, ambientRowLabel\(lc\.ambient, rm && rm\.name\), offline, ambientColorable\(rid\)\)/.test(html)
+    && /climateRowHtml\(climateReading\.get\(rid\) \|\| null, offline, climateHeating\(rid\)\)/.test(html));
   check('offline note is the first room row', /if \(haOffline\(ha\)\) keys\.push\('ha-offline'\);\s*if \(s\.main\)/.test(html));
 }
 
@@ -342,6 +342,7 @@ await quiet(async () => {
   const dot = k => '<button class="tp-status" type="button" data-a="status" data-st="' + k + '"></button>';
   const models = haOff => ({
     light: { status: haOff ? 'haOffline' : 'ok', na: false, haOff, on: true, bri: 60, name: 'Lounge main' },
+    ambient: { status: haOff ? 'haOffline' : 'ok', na: false, haOff, on: true, bri: 60, colorable: true, color: '#00ccff', name: 'Lounge ambience' },
     curtain: { status: haOff ? 'haOffline' : 'ok', na: false, haOff, pct: 100, name: 'Lounge curtain' },
     climate: { status: haOff ? 'haOffline' : 'ok', na: false, mock: false, off: false, haOff, current: 20.4, target: 21,
       min: 7, max: 30, step: 0.5, activity: 'idle', name: 'Lounge radiator' },
@@ -349,8 +350,9 @@ await quiet(async () => {
   // Every control in a card except the status dot sends a command.
   const controls = html => (html.match(/<(?:button|input)\b[^>]*data-a="[^"]+"[^>]*>/g) || []).filter(c => !/data-a="status"/.test(c));
   const on = models(false), off = models(true);
-  for (const k of ['light', 'curtain', 'climate']) {
-    const hOn = TP.popoverHtml[k](on[k], dot), hOff = TP.popoverHtml[k](off[k], dot);
+  for (const k of ['light', 'ambient', 'curtain', 'climate']) {
+    const view = k === 'ambient' ? 'light' : k;
+    const hOn = TP.popoverHtml[view](on[k], dot), hOff = TP.popoverHtml[view](off[k], dot);
     const cOn = controls(hOn), cOff = controls(hOff);
     check('popover ' + k + ': renders its controls in both states', cOn.length > 0 && cOn.length === cOff.length, { on: cOn.length, off: cOff.length });
     check('popover ' + k + ': every control ENABLED while connected', cOn.every(c => !/\sdisabled\b/.test(c)), cOn.filter(c => /\sdisabled\b/.test(c)));
@@ -370,9 +372,10 @@ await quiet(async () => {
     /r\.addEventListener\('input', \(\) => \{\s*if \(writeBlocked\(\)\) return;\s*ctl\.dragging = true;\s*const pct/, // curtain slider
     /const press = cmd => \{\s*if \(writeBlocked\(\)\) return;/,                                          // curtain open/close
     /const apply = \(v, how\) => \{\s*if \(writeBlocked\(\)\) return;/,                                   // climate slider + steps
+    /cp\.addEventListener\('input', \(\) => \{\s*if \(writeBlocked\(\)\) return;/,                      // accent colour square
   ];
-  guards.forEach((re, i) => check('popover write handler ' + (i + 1) + '/5 returns first while HA offline (no preview)', re.test(src)));
-  check('popover guard count: exactly the 5 write paths', (src.match(/if \(writeBlocked\(\)\) return;/g) || []).length === 5);
+  guards.forEach((re, i) => check('popover write handler ' + (i + 1) + '/' + guards.length + ' returns first while HA offline (no preview)', re.test(src)));
+  check('popover guard count: exactly the 6 write paths', (src.match(/if \(writeBlocked\(\)\) return;/g) || []).length === 6);
   check('popover climate samples only with no HA configured', /if \(c == null && !reading\) \{/.test(src) && !/offlineConn/.test(src));
   check('popover status table has no polling entry', !/\n  polling: \[/.test(src) && /\n  haOffline: \['bad', 'HA offline'/.test(src));
   const html = read('index.html');

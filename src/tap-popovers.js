@@ -33,6 +33,9 @@
  * are unit-tested in scripts/test-tap-popovers.mjs.
  */
 
+import { ICONS, svgIcon } from './ui-icons.js';
+import { isColorChannel, supportsColor, swatchColor } from './light-color.js';
+
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
 export const FUZZ_PX = 24;           // finger tolerance for tiny light fixtures
@@ -283,6 +286,11 @@ export function climateActivity(hvacAction, off) {
  * becomes "{Room} light", and a label lacking the room gets it prefixed
  * ("Cove" -> "Lounge cove"). Sentence case: Capitalised words after the
  * first are lowered, ALL-CAPS words (TV, LED) are kept.
+ *
+ * The prefix never repeats a word the label already starts with: a label
+ * that begins with the END of the room name overlaps it rather than being
+ * glued on after it ("Home office" + "Office ambience" -> "Home office
+ * ambience", not "Home office office ambience").
  */
 export function lightName(roomName, channel, label) {
   const room = String(roomName || '').trim();
@@ -290,8 +298,57 @@ export function lightName(roomName, channel, label) {
   if (!base || base.toLowerCase() === room.toLowerCase()) {
     base = channel === 'main' ? 'light' : channel === 'ambient' ? 'ambient light' : String(channel || 'light');
   }
-  const full = room && base.toLowerCase().indexOf(room.toLowerCase()) === -1 ? room + ' ' + base : base;
-  return sentenceCase(full);
+  return sentenceCase(room ? joinRoomName(room, base) : base);
+}
+
+/**
+ * Prefix `room` to `label` unless the label already names the room, merging
+ * the longest run of words that ends the room name and starts the label.
+ * Case-insensitive; whole words only ("Hall" does not overlap "Hallway").
+ */
+export function joinRoomName(room, label) {
+  const r = String(room || '').trim(), l = String(label || '').trim();
+  if (!r) return l;
+  if (!l) return r;
+  const rw = r.split(/\s+/), lw = l.split(/\s+/);
+  const low = a => a.map(w => w.toLowerCase());
+  const rl = low(rw), ll = low(lw);
+  // Already contains the whole room name as consecutive words: keep as is.
+  for (let i = 0; i + rl.length <= ll.length; i++) {
+    if (rl.every((w, k) => ll[i + k] === w)) return l;
+  }
+  for (let n = Math.min(rl.length, ll.length); n > 0; n--) {
+    const tail = rl.slice(rl.length - n), head = ll.slice(0, n);
+    if (tail.every((w, k) => w === head[k])) return rw.concat(lw.slice(n)).join(' ');
+  }
+  return r + ' ' + l;
+}
+
+/**
+ * The popover title's marquee, decided from measured widths (CSS px):
+ *   fit     the name fits: it does not move
+ *   wrap    it overflows and the user prefers reduced motion: wrap to two
+ *           lines instead of scrolling
+ *   scroll  it overflows: pause, slide left by `distance` to reveal the
+ *           end, pause, slide back, repeat. `duration` is one full cycle
+ *           (ms); `offsets` are the Web Animations keyframe offsets of
+ *           [start, end of first pause, end of slide, end of second pause,
+ *           back home].
+ * A 1px tolerance absorbs sub-pixel rounding so a name that just fits
+ * never twitches.
+ */
+export function marqueePlan(textW, boxW, opts) {
+  const o = opts || {};
+  const pause = o.pauseMs == null ? 1500 : o.pauseMs;
+  const speed = o.pxPerSec == null ? 30 : o.pxPerSec;
+  const over = Math.ceil((+textW || 0) - (+boxW || 0));
+  if (!(over > 1)) return { mode: 'fit', distance: 0 };
+  if (o.reducedMotion) return { mode: 'wrap', distance: 0 };
+  const slide = Math.max(400, Math.round(over / speed * 1000));
+  const duration = 2 * pause + 2 * slide;
+  const r = v => Math.round(v / duration * 1e4) / 1e4;
+  return { mode: 'scroll', distance: over, duration,
+    offsets: [0, r(pause), r(pause + slide), r(2 * pause + slide), 1] };
 }
 
 /** "Living Room Radiator" -> "Living room radiator"; ALL-CAPS words kept. */
@@ -306,22 +363,9 @@ export function sentenceCase(text) {
 // Runtime (browser)
 // ---------------------------------------------------------------------------
 
-// MDI icon paths (@mdi/svg 7.4.47, Apache-2.0), inlined: no font, no fetch.
-const I = {
-  bulb: 'M12,2A7,7 0 0,0 5,9C5,11.38 6.19,13.47 8,14.74V17A1,1 0 0,0 9,18H15A1,1 0 0,0 16,17V14.74C17.81,13.47 19,11.38 19,9A7,7 0 0,0 12,2M9,21A1,1 0 0,0 10,22H14A1,1 0 0,0 15,21V20H9V21Z',
-  bulbOff: 'M12,2A7,7 0 0,1 19,9C19,11.38 17.81,13.47 16,14.74V17A1,1 0 0,1 15,18H9A1,1 0 0,1 8,17V14.74C6.19,13.47 5,11.38 5,9A7,7 0 0,1 12,2M9,21V20H15V21A1,1 0 0,1 14,22H10A1,1 0 0,1 9,21M12,4A5,5 0 0,0 7,9C7,11.05 8.23,12.81 10,13.58V16H14V13.58C15.77,12.81 17,11.05 17,9A5,5 0 0,0 12,4Z',
-  curtains: 'M23 3H1V1H23V3M2 22H6C6 19 4 17 4 17C10 13 11 4 11 4H2V22M22 4H13C13 4 14 13 20 17C20 17 18 19 18 22H22V4Z',
-  curtainsClosed: 'M23 3H1V1H23V3M2 22H11V4H2V22M22 4H13V22H22V4Z',
-  cOpen: 'M18,16V13H15V22H13V2H15V11H18V8L22,12L18,16M2,12L6,16V13H9V22H11V2H9V11H6V8L2,12Z',
-  cClose: 'M13,20V4H15.03V20H13M10,20V4H12.03V20H10M5,8L9.03,12L5,16V13H2V11H5V8M20,16L16,12L20,8V11H23V13H20V16Z',
-  doorOpen: 'M12,3C10.89,3 10,3.89 10,5H3V19H2V21H22V19H21V5C21,3.89 20.11,3 19,3H12M12,5H19V19H12V5M5,11H7V13H5V11Z',
-  doorClosed: 'M16,11H18V13H16V11M12,3H19C20.11,3 21,3.89 21,5V19H22V21H2V19H10V5C10,3.89 10.89,3 12,3M12,5V19H19V5H12Z',
-  radiator: 'M7.95,3L6.53,5.19L7.95,7.4H7.94L5.95,10.5L4.22,9.6L5.64,7.39L4.22,5.19L6.22,2.09L7.95,3M13.95,2.89L12.53,5.1L13.95,7.3L13.94,7.31L11.95,10.4L10.22,9.5L11.64,7.3L10.22,5.1L12.22,2L13.95,2.89M20,2.89L18.56,5.1L20,7.3V7.31L18,10.4L16.25,9.5L17.67,7.3L16.25,5.1L18.25,2L20,2.89M2,22V14A2,2 0 0,1 4,12H20A2,2 0 0,1 22,14V22H20V20H4V22H2M6,14A1,1 0 0,0 5,15V17A1,1 0 0,0 6,18A1,1 0 0,0 7,17V15A1,1 0 0,0 6,14M10,14A1,1 0 0,0 9,15V17A1,1 0 0,0 10,18A1,1 0 0,0 11,17V15A1,1 0 0,0 10,14M14,14A1,1 0 0,0 13,15V17A1,1 0 0,0 14,18A1,1 0 0,0 15,17V15A1,1 0 0,0 14,14M18,14A1,1 0 0,0 17,15V17A1,1 0 0,0 18,18A1,1 0 0,0 19,17V15A1,1 0 0,0 18,14Z',
-  radiatorIdle: 'M20,12H4A2,2 0 0,0 2,14V22H4V20H20V22H22V14A2,2 0 0,0 20,12M7,17A1,1 0 0,1 6,18A1,1 0 0,1 5,17V15A1,1 0 0,1 6,14A1,1 0 0,1 7,15V17M11,17A1,1 0 0,1 10,18A1,1 0 0,1 9,17V15A1,1 0 0,1 10,14A1,1 0 0,1 11,15V17M15,17A1,1 0 0,1 14,18A1,1 0 0,1 13,17V15A1,1 0 0,1 14,14A1,1 0 0,1 15,15V17M19,17A1,1 0 0,1 18,18A1,1 0 0,1 17,17V15A1,1 0 0,1 18,14A1,1 0 0,1 19,15V17Z',
-  minus: 'M19,13H5V11H19V13Z',
-  plus: 'M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z',
-};
-const svg = (p, cls) => '<svg class="' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true"><path d="' + p + '"/></svg>';
+// MDI icon paths: shared with the sidebar (src/ui-icons.js).
+const I = ICONS;
+const svg = svgIcon;
 const ico = (p, cls) => svg(p, 'tp-ico ' + (cls || ''));
 
 const STATUS = {
@@ -360,6 +404,7 @@ export function hitOverlapPx(g) {
 // (pointer: coarse), and under .tp-force-coarse for the ?debug=1 seam, since
 // a desktop browser cannot be made to report a coarse pointer.
 const GC = GEOM.coarse, GF = GEOM.fine;
+const MARQ_PAD = 6;   // px the marquee's fade reaches past the title box
 const COARSE = '--w:216px;--ib-w:38px;--ib-h:' + GC.ibH + 'px;--sw-w:40px;--sw-h:' + GC.swH + 'px;--thumb:20px;';
 const coarseRules = sel => `
 ${sel} .tp-pop { ${COARSE} }
@@ -368,6 +413,9 @@ ${sel} .tp-btns { gap: 6px; }
 ${sel} .tp-ib::after { inset: -${GC.ibHitY}px -3px; }
 ${sel} .tp-sw::after { inset: -${GC.swHitY}px -2px; }
 ${sel} .tp-range { height: ${GC.rangeH}px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 10)}px; }
+${sel} .tp-crow { gap: 12px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 10)}px; }
+${sel} .tp-crow .tp-range { margin: 0; }
+${sel} .tp-color { --sq: 20px; --pad: 12px; }
 ${sel} .tp-pop.chip { padding: 10px 12px; }`;
 
 const STYLE = `
@@ -392,7 +440,17 @@ const STYLE = `
 .tp-ico.d-open { fill: var(--door-open); }
 .tp-ico.d-closed { fill: var(--ok); }
 .tp-ico.dim { fill: rgba(255,255,255,0.4); }
-.tp-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tp-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; }
+.tp-name-in { display: inline-block; white-space: nowrap; will-change: transform; }
+/* Overflowing title (see fitTitle): the box reaches ${MARQ_PAD}px into the gaps on
+   either side so the edge fades fall on empty space while the text is at
+   rest, and on the text only as it slides through. Never an ellipsis. */
+.tp-name.marq { margin: 0 -${MARQ_PAD}px; padding: 0 ${MARQ_PAD}px;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 ${MARQ_PAD}px, #000 calc(100% - ${MARQ_PAD}px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 ${MARQ_PAD}px, #000 calc(100% - ${MARQ_PAD}px), transparent 100%); }
+/* Reduced motion: no marquee -- wrap onto a second line instead. */
+.tp-name.wrap { white-space: normal; line-height: 1.25; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.tp-name.wrap .tp-name-in { display: inline; white-space: normal; }
 .tp-status { position: relative; flex: none; width: 16px; height: 16px; margin-right: -4px; display: grid; place-items: center;
   border: 0; background: none; cursor: help; padding: 0; }
 .tp-status::after { content: ''; position: absolute; inset: -8px; border-radius: 50%; }
@@ -456,6 +514,18 @@ const STYLE = `
   background: #fff; margin-top: calc(2px - var(--thumb) / 2); box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
 .tp-range::-moz-range-thumb { width: var(--thumb); height: var(--thumb); border-radius: 50%; background: #fff; border: 0; }
 .tp-range.temp { --fill: var(--heat); }
+/* Accent light: colour square inline with the brightness slider. The input's
+   box is the hit area; its padding insets the visible swatch, and matching
+   negative margins keep the layout at the swatch's size. */
+.tp-crow { display: flex; align-items: center; gap: 8px; margin: ${GF.rangeGap}px 0 -2px; }
+.tp-crow .tp-range { flex: 1 1 auto; width: auto; min-width: 0; margin: 0; }
+.tp-color { --sq: 18px; --pad: 4px; flex: none; width: calc(var(--sq) + 2 * var(--pad)); height: calc(var(--sq) + 2 * var(--pad));
+  margin: calc(-1 * var(--pad)); padding: 0; border: 0; background: none; cursor: pointer; -webkit-appearance: none; appearance: none; }
+.tp-color::-webkit-color-swatch-wrapper { padding: var(--pad); }
+.tp-color::-webkit-color-swatch { border: 1px solid rgba(255,255,255,0.35); border-radius: 5px; }
+.tp-color::-moz-color-swatch { border: 1px solid rgba(255,255,255,0.35); border-radius: 5px; }
+.tp-color:disabled { opacity: 0.35; cursor: not-allowed; }
+.tp-color:focus-visible { outline: 2px solid #a5b4fc; outline-offset: -2px; }
 .tp-range.off { --fill: rgba(255,255,255,0.4); }
 .tp-pop.chip { width: auto; max-width: 240px; padding: 8px 10px; border-radius: 999px; }
 .tp-pop.chip .tp-name { flex: 0 1 auto; }
@@ -477,19 +547,28 @@ const fillPct = r => ((+r.value - +r.min) / ((+r.max - +r.min) || 1) * 100) + '%
 // given model and check which controls are disabled. `dot` renders the
 // status dot (it reads the card's tooltip state, so the caller supplies it).
 const offlineLine = m => (m.haOff ? '<div class="tp-offline" data-offline>HA offline</div>' : '');
+// The title sits in two spans: .tp-name clips (and fades its edges while it
+// scrolls), .tp-name-in is what the marquee moves (see fitTitle).
+const nameHtml = name => '<span class="tp-name"><span class="tp-name-in">' + esc(name) + '</span></span>';
 const shellWith = dot => (icon, name, st, body) =>
-  '<div class="tp-head">' + icon + '<span class="tp-name">' + esc(name) + '</span>' + dot(st) + '</div>' + body;
+  '<div class="tp-head">' + icon + nameHtml(name) + dot(st) + '</div>' + body;
 export const popoverHtml = {
   light(m, dot) {
     const shell = shellWith(dot);
     const on = m.on && !m.na;
     const val = m.na ? '<span class="tp-val muted"><b>Unavailable</b></span>'
       : '<span class="tp-val" data-v><b>' + (m.on ? 'On' : 'Off') + '</b>' + (m.on ? ' · ' + m.bri + '%' : '') + '</span>';
+    const range = '<input class="tp-range' + (m.on ? '' : ' off') + '" data-a="bri" type="range" min="5" max="100" value="' +
+      m.bri + '" aria-label="Brightness"' + (m.haOff ? ' disabled' : '') + '>';
+    // Accent channels: the colour square sits inline, left of the slider.
+    const colour = m.colorable
+      ? '<input class="tp-color" data-a="color" type="color" value="' + esc(swatchColor(m.color)) +
+        '" aria-label="Colour" title="Colour"' + (m.haOff ? ' disabled' : '') + '>'
+      : '';
     return shell(ico(on ? I.bulb : I.bulbOff, on ? 'light-on' : (m.na ? 'dim' : '')), m.name, m.status,
       '<div class="tp-row">' + val + '<button class="tp-sw' + (m.on ? ' on' : '') + '" data-a="power" role="switch" aria-checked="' +
       m.on + '" aria-label="Power"' + (m.na || m.haOff ? ' disabled' : '') + '><i></i></button></div>' +
-      (m.na ? '' : '<input class="tp-range' + (m.on ? '' : ' off') + '" data-a="bri" type="range" min="5" max="100" value="' +
-        m.bri + '" aria-label="Brightness"' + (m.haOff ? ' disabled' : '') + '>') + offlineLine(m));
+      (m.na ? '' : colour ? '<div class="tp-crow">' + colour + range + '</div>' : range) + offlineLine(m));
   },
   curtain(m, dot) {
     const shell = shellWith(dot);
@@ -532,7 +611,10 @@ export const popoverHtml = {
  * @param o.rooms           rooms.json `rooms` (room -> channel -> entities)
  * @param o.sensors         rooms.json `sensors`
  * @param o.getHa           () => HAClient instance or null
- * @param o.sendLight       (roomId, channel, state, debounceMs) -- index.html's sendToHA
+ * @param o.sendLight       (roomId, channel, state, debounceMs, withColor) -- index.html's sendToHA
+ * @param o.onObjectTap     (target) => void -- called when a tap lands on a
+ *                          target, BEFORE its card opens (the page closes an
+ *                          unpinned sidebar here; the card still opens)
  * @param o.state           accessors onto the sidebar's own maps:
  *   doorStatus(id) 'on'|'off'|'unavailable'|null, curtainAvailable(id) bool|null,
  *   curtainPct(id), curtainLocal(id, pct), climate(roomId) parseClimate reading|null,
@@ -657,6 +739,10 @@ export function attachTapPopovers(o) {
         const na = lightUnavailable(c, r);
         const lc = ((Home3DScene.LIGHTS || {})[t.roomId] || {})[t.channel];
         return { status: statusKey('light', c, na), na, haOff: haOfflineConn(c), on: !!st.on, bri: st.bri != null ? st.bri : 100,
+          // A colour square only for an accent channel whose entity can take
+          // a colour (supported_color_modes; unknown counts as yes).
+          colorable: isColorChannel(t.channel) && supportsColor(r && r.attributes),
+          color: isColorChannel(t.channel) ? swatchColor(st.color) : undefined,
           name: lightName(roomName(t.roomId), t.channel, lc && lc.name) };
       },
       html(m) { return popoverHtml.light(m, dot); },
@@ -692,6 +778,27 @@ export function attachTapPopovers(o) {
           r.addEventListener('change', finish);
           const end = () => setTimeout(finish, 0);
           r.addEventListener('pointerup', end); r.addEventListener('pointercancel', end);
+        }
+        // Colour square (accent channels): the native picker. 'input' fires
+        // as the user moves through the picker -- debounced through the same
+        // sendLight path as the slider; the card is held still meanwhile
+        // (ctl.dragging) so a rebuild never replaces the input under an open
+        // picker. 'change' / blur end it.
+        const cp = el.querySelector('[data-a=color]');
+        if (cp) {
+          cp.addEventListener('input', () => {
+            if (writeBlocked()) return;
+            const st = s(); if (!st) return;
+            ctl.dragging = true;
+            st.color = cp.value; st.on = true; if (!st.bri) st.bri = 100;
+            home.updateLights(); o.sendLight(t.roomId, t.channel, st, 200, true);
+            if (r) r.classList.remove('off');
+            const v = el.querySelector('[data-v]'); if (v) v.innerHTML = '<b>On</b> · ' + st.bri + '%';
+            if (sw) { sw.classList.add('on'); sw.setAttribute('aria-checked', 'true'); }
+          });
+          const done = () => { if (ctl.dragging) { ctl.dragging = false; onChange(); ctl.refresh(); } };
+          cp.addEventListener('change', done);
+          cp.addEventListener('blur', done);
         }
       },
     },
@@ -812,7 +919,7 @@ export function attachTapPopovers(o) {
       html(m) {
         const map = { open: [I.doorOpen, 'd-open', 'Open'], closed: [I.doorClosed, 'd-closed', 'Closed'], na: [I.doorClosed, 'dim', 'Unavailable'],
           unknown: [I.doorClosed, 'dim', 'Unknown'] }[m.state];
-        return '<div class="tp-head">' + ico(map[0], map[1]) + '<span class="tp-name">' + esc(m.name) + '</span><span class="sep">·</span>' +
+        return '<div class="tp-head">' + ico(map[0], map[1]) + nameHtml(m.name) + '<span class="sep">·</span>' +
           '<span class="st ' + m.state + '">' + map[2] + '</span>' + dot(m.status) + '</div>';
       },
       bind() {},
@@ -828,6 +935,7 @@ export function attachTapPopovers(o) {
     if (!pop) return;
     const p = pop;
     clearInterval(p.timer); clearTimeout(tipTimer); tipOpen = false;
+    if (p.marq) { p.marq.cancel(); p.marq = null; }
     const hadFocus = p.el.contains(document.activeElement);
     if (p.el.parentNode) p.el.parentNode.removeChild(p.el);
     pop = null;
@@ -853,6 +961,9 @@ export function attachTapPopovers(o) {
   function sidebarRect() {
     const sb = o.sidebar;
     if (!sb || !sb.getBoundingClientRect) return null;
+    // Closing: it is sliding off (0.25 s transition) and about to be gone --
+    // the card must not dodge a panel that is leaving.
+    if (sb.classList && !sb.classList.contains('open')) return null;
     const r = sb.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0 || r.left >= window.innerWidth || r.right <= 0) return null;
     return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
@@ -902,11 +1013,39 @@ export function attachTapPopovers(o) {
     pop.el.setAttribute('aria-label', m.name);
     pop.el.querySelectorAll('.tp-range').forEach(r => r.style.setProperty('--p', fillPct(r)));
     v.bind(pop.target, pop.el, pop.ctl);
+    fitTitle(pop);
     position();
     if (refocus !== null) {
       const c = refocus && pop.el.querySelector('[data-a="' + refocus + '"]');
       (c && !c.disabled ? c : pop.el).focus({ preventScroll: true });
     }
+  }
+
+  // ---- title marquee ------------------------------------------------------
+  // A name too long for the card slides (marqueePlan): it never changes the
+  // card's width and never ellipsises. Paused while the pointer is over the
+  // card or a slider is held; reduced motion wraps it to two lines instead.
+  const reducedMotion = () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function syncMarq(p) {
+    if (!p || !p.marq) return;
+    if (p.hover || p.hold || p.ctl.dragging) p.marq.pause(); else p.marq.play();
+  }
+  function fitTitle(p) {
+    if (p.marq) { p.marq.cancel(); p.marq = null; }
+    const box = p.el.querySelector('.tp-name');
+    const inner = box && box.querySelector('.tp-name-in');
+    if (!inner) return;
+    box.classList.remove('marq', 'wrap');
+    const plan = marqueePlan(inner.scrollWidth, box.clientWidth, { reducedMotion: reducedMotion() });
+    box.dataset.marquee = plan.mode;
+    if (plan.mode === 'wrap') { box.classList.add('wrap'); return; }
+    if (plan.mode !== 'scroll' || typeof inner.animate !== 'function') return;
+    box.classList.add('marq');
+    const at = (px, offset, easing) => ({ transform: 'translateX(' + px + 'px)', offset, easing: easing || 'linear' });
+    const d = -plan.distance, f = plan.offsets;
+    p.marq = inner.animate([at(0, f[0]), at(0, f[1], 'ease-in-out'), at(d, f[2]), at(d, f[3], 'ease-in-out'), at(0, f[4])],
+      { duration: plan.duration, iterations: Infinity });
+    syncMarq(p);
   }
 
   function open(target, x, y) {
@@ -921,6 +1060,14 @@ export function attachTapPopovers(o) {
     document.body.appendChild(el);
     pop = { el, target, x, y, camSnap: camSnapshot(), sig: null, ctl: { dragging: false }, returnTo };
     pop.ctl.refresh = f => render(!!f);
+    const p0 = pop;
+    // Mouse hover pauses the title marquee; so does holding a slider (the
+    // window-level pointerup below releases it, wherever the drag ends).
+    el.addEventListener('pointerenter', e => { if (e.pointerType === 'mouse') { p0.hover = true; syncMarq(p0); } });
+    el.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { p0.hover = false; syncMarq(p0); } });
+    el.addEventListener('pointerdown', e => {
+      if (e.target.closest && e.target.closest('.tp-range, .tp-color')) { p0.hold = true; syncMarq(p0); }
+    });
     // Status dot: tap toggles its tooltip (touch; auto-hides after 4 s),
     // mouse gets it on hover through CSS. Delegated, so it survives rebuilds.
     el.addEventListener('click', e => {
@@ -965,7 +1112,10 @@ export function attachTapPopovers(o) {
     if (pointers.size === 1) { downX = e.clientX; downY = e.clientY; multi = false; }
     else multi = true;
   };
-  const onPointerEnd = e => { pointers.delete(e.pointerId); };
+  const onPointerEnd = e => {
+    pointers.delete(e.pointerId);
+    if (pop && pop.hold) { pop.hold = false; setTimeout(() => syncMarq(pop), 0); }
+  };
   const onClick = e => {
     if (!inCanvas(e)) return;
     if (multi) return;
@@ -973,6 +1123,14 @@ export function attachTapPopovers(o) {
     const res = pickAt(e.clientX, e.clientY);
     if (res && res.target) {
       e.stopPropagation();   // this tap is ours: no room selection underneath
+      // Tell the page first (an unpinned sidebar closes on an object tap),
+      // THEN open. The sidebar-toggle rule below ("opening or closing the
+      // sidebar closes the card") must not kill the card this same tap is
+      // opening, so the class flip the hook just made is absorbed here.
+      if (typeof o.onObjectTap === 'function') {
+        try { o.onObjectTap(res.target); } catch (err) { /* the page's hook must not cost the tap */ }
+        syncSidebarOpen();
+      }
       open(res.target, e.clientX, e.clientY);
     }
   };
@@ -996,6 +1154,10 @@ export function attachTapPopovers(o) {
     if (now !== sidebarOpen) { sidebarOpen = now; close(); }
   }) : null;
   if (sidebarObs) sidebarObs.observe(o.sidebar, { attributes: true, attributeFilter: ['class'] });
+  function syncSidebarOpen() {
+    if (sidebarObs) sidebarObs.takeRecords();   // drop the pending mutation: it is accounted for
+    if (o.sidebar && o.sidebar.classList) sidebarOpen = o.sidebar.classList.contains('open');
+  }
 
   const unsub = home.onRender(() => {
     if (!pop) return;
