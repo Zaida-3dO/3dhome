@@ -21,6 +21,7 @@ import {
 } from './wall-fittings.js';
 import {
   loadFurnitureModules, buildFurnitureSliced, scheduleFurnitureAttach, fadeRegistrations,
+  wallFadeTarget, wallFadeDepthWrite,
   disposeFurniture
 } from './furniture.js';
 
@@ -3896,12 +3897,13 @@ export const Home3DScene = (() => {
       result.root.visible = furnitureVisible;
       scene.add(result.root);
       // Fade buckets join the wall fade with their host wall's DERIVED outward
-      // normal, exactly as window and curtain fittings do. Glass is never
-      // registered (plan A3): fadeRegistrations() leaves it out.
-      fadeRegistrations(result).forEach(({ mesh, wallId }) => {
+      // normal, exactly as window and curtain fittings do. Each is registered
+      // with the opacity it returns to (task f7324d3f: glass fades WITH its
+      // item, from and back to its own 0.25, never to 1).
+      fadeRegistrations(result).forEach(({ mesh, wallId, baseOpacity, baseDepthWrite }) => {
         const host = wallEntryById[wallId];
         if (!host || !host.outer) return;
-        wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true });
+        wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true, base: baseOpacity, baseDepthWrite });
       });
       furnitureTimeline.attachedAt = performance.now();
       furnitureTimeline.stats = result.stats;
@@ -4408,8 +4410,13 @@ export const Home3DScene = (() => {
       // still moving so the loop knows to keep rendering until it settles.
       let animating = false;
       const camDir = new THREE.Vector3().subVectors(orb.tgt, cam.position).normalize();
-      wallMeshes.forEach(({ mesh, nx, nz, outer }) => {
+      wallMeshes.forEach(({ mesh, nx, nz, outer, base, baseDepthWrite }) => {
         if (!outer) return;
+        // `base`: the opacity this mesh is drawn at when its wall is solid.
+        // 1 for walls, fittings and opaque furniture; a furniture glass or
+        // translucent bucket's own (task f7324d3f), so it fades with its
+        // wall and comes back to 0.25, not to 1.
+        const b = base == null ? 1 : base;
         const dot = nx * camDir.x + nz * camDir.z;
         // `camDir` runs FROM the camera INTO the screen, and (nx,nz) is the wall's
         // OUTWARD normal — guaranteed outward by the derivation pass at the end of
@@ -4423,7 +4430,7 @@ export const Home3DScene = (() => {
         // Fade those; leave the far side solid so the house still reads as a
         // building rather than an open shell. Walls seen edge-on sit at dot ~= 0
         // and stay solid, which is what keeps the side walls from popping.
-        const targetOpacity = dot < -0.3 ? 0.05 : 1.0; // more see-through shell (was 0.12) — design intent: exterior walls fainter when facing camera
+        const targetOpacity = wallFadeTarget(dot, b); // 0.05 x base facing the camera (was 0.12) — design intent: exterior walls fainter when facing camera
         mesh.material.opacity += (targetOpacity - mesh.material.opacity) * 0.12;
         // BLACK-HALF FIX (scout-blackhalf): the living-room acoustic slat panel
         // meshes are a stack of coplanar transparent boxes registered here —
@@ -4431,7 +4438,9 @@ export const Home3DScene = (() => {
         // stack (kills the half-solid-black artifact), and stop writing depth
         // once faded so the panel still reads see-through with its exterior wall.
         // Plain single-box walls are unaffected (harmless: they read as opaque).
-        mesh.material.depthWrite = mesh.material.opacity > 0.98;
+        // A translucent furniture bucket keeps its own depthWrite (glass:
+        // off) while solid, and never writes depth once fading.
+        mesh.material.depthWrite = wallFadeDepthWrite(mesh.material.opacity, b, baseDepthWrite);
         if (Math.abs(targetOpacity - mesh.material.opacity) > 0.004) animating = true;
       });
       // Ceilings — see-through while the camera is above the house, solid once

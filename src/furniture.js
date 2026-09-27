@@ -27,12 +27,12 @@
  */
 import { loadBuilders } from './furniture/registry.js';
 import { resolvePlacement, footprintRect, pickFadeWall } from './furniture/place.js';
-import { flattenGroup, groupBuckets, buildBucketMesh, createMaterialSet, concatGeometries, neverFades } from './furniture/merge.js';
+import { flattenGroup, groupBuckets, buildBucketMesh, createMaterialSet, concatGeometries, isTranslucent } from './furniture/merge.js';
 
 /** An item casts (through its room's proxy) when it stands on the floor and is tall enough to matter. */
 export const CASTER_MAX_ELEVATION = 30;   // cm: elevation must be BELOW this
 export const CASTER_MIN_HEIGHT = 40;      // cm: height must be AT LEAST this
-/** `fade: "auto"` only considers an item whose top is above this (cm). */
+/** `fade: "auto"` only considers a FREE item whose top is above this (cm); a wall-anchored one always fades with its exterior host wall. */
 export const FADE_MIN_TOP = 100;
 /** Proxy triangle caps (plan A1). */
 export const PROXY_ROOM_TRI_CAP = 15000;
@@ -52,10 +52,13 @@ export function isCaster(item, params) {
  *
  *   fade: "never"     -> null
  *   fade: {wall: id}  -> id (an explicit override, either anchor form)
- *   fade: "auto"      -> only when elevation + height > FADE_MIN_TOP:
- *                        a wall-anchored item fades with its host wall if that
- *                        wall is exterior; a free item with pickFadeWall() over
- *                        its footprint.
+ *   fade: "auto"      -> a WALL-ANCHORED item fades with its host wall if
+ *                        that wall is exterior, WHATEVER its height (task
+ *                        f7324d3f: a floating shelf 84 cm up, top 89, stayed
+ *                        standing when its wall faded while the two above it
+ *                        went with it -- and so would a 90 cm base run).
+ *                        A FREE item only when elevation + height >
+ *                        FADE_MIN_TOP, with pickFadeWall() over its footprint.
  *
  * A corner unit belongs to the run that owns the corner and so fades with
  * that run's host wall -- which is exactly what the wall anchor gives it.
@@ -63,9 +66,10 @@ export function isCaster(item, params) {
 export function resolveFadeWall(item, params, placement, walls) {
   if (item.fade === 'never') return null;
   if (item.fade && typeof item.fade === 'object' && item.fade.wall != null) return item.fade.wall;
+  // Mounted on the wall: it goes exactly when the wall goes. No height gate.
+  if (item.origin === 'back') return item.exterior ? item.hostWallId : null;
   const top = (item.elevation || 0) + (params && typeof params.height === 'number' ? params.height : 0);
   if (!(top > FADE_MIN_TOP)) return null;
-  if (item.origin === 'back') return item.exterior ? item.hostWallId : null;
   const w = params && typeof params.width === 'number' ? params.width : 0;
   const d = params && typeof params.depth === 'number' ? params.depth : 0;
   if (!(w > 0 && d > 0)) return null;
@@ -283,7 +287,7 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
   if (wantProxies && casters.size) {
     // Glass and other translucent parts (a beam cone, a globe) cast no
     // opaque shadow.
-    const castParts = parts => parts.filter(p => !neverFades(p));
+    const castParts = parts => parts.filter(p => !isTranslucent(p));
     const triCount = parts => parts.reduce((s, p) => s + p.triangles, 0);
     const rooms = [];
     casters.forEach((entries, room) => {
@@ -450,22 +454,49 @@ export async function buildFurniture(THREE, items, opts) {
 
 /**
  * The fade registrations the scene should make: every beauty bucket with a
- * fade wall, EXCEPT glass and anything translucent (plan A3 -- the fade loop
- * would drive them to opacity 1). merge.js already never gives glass a fade wall; this is the
- * second lock, at the point of registration.
- * @returns {Array<{mesh, wallId}>}
+ * fade wall, glass and translucent ones included (task f7324d3f: everything
+ * mounted on a wall goes with it). Each carries the opacity and depthWrite
+ * the fade returns to (`baseOpacity`, `baseDepthWrite`, recorded by merge.js's
+ * forFade clone). The lock that replaces plan A3's: a glass or translucent
+ * mesh WITHOUT a recorded base opacity is refused, since the loop would drive
+ * it back to 1.0 and turn it solid.
+ * @returns {Array<{mesh, wallId, baseOpacity, baseDepthWrite}>}
  */
 export function fadeRegistrations(result) {
   const out = [];
   (result && result.beauty || []).forEach(mesh => {
     const wallId = mesh.userData.fadeWallId;
     if (wallId == null) return;
-    if (mesh.userData.finish === 'glass') return;
-    if (mesh.userData.translucent) return;
-    if (mesh.material && mesh.material.userData && mesh.material.userData.finish === 'glass') return;
-    out.push({ mesh, wallId });
+    const mud = (mesh.material && mesh.material.userData) || {};
+    const see = mesh.userData.finish === 'glass' || !!mesh.userData.translucent || mud.finish === 'glass';
+    const recorded = typeof mud.baseOpacity === 'number';
+    if (see && !recorded) return;
+    out.push({ mesh, wallId, baseOpacity: recorded ? mud.baseOpacity : 1, baseDepthWrite: mud.baseDepthWrite !== false });
   });
   return out;
+}
+
+/**
+ * The opacity a registered wall-fade mesh eases toward: 0.05 of its base
+ * when its wall faces the camera (dot of the wall's outward normal with the
+ * view direction below -0.3), its base otherwise. `base` is 1 for walls,
+ * fittings and opaque furniture, and a translucent bucket's own opacity.
+ */
+export function wallFadeTarget(dot, base) {
+  const b = base == null ? 1 : base;
+  return (dot < -0.3 ? 0.05 : 1.0) * b;
+}
+
+/**
+ * Whether a registered wall-fade mesh writes depth at `opacity`. An opaque
+ * one writes only while effectively solid (the acoustic-slat black-half fix);
+ * a translucent one keeps its builder's depthWrite at its base and never
+ * writes while fading.
+ */
+export function wallFadeDepthWrite(opacity, base, baseDepthWrite) {
+  const b = base == null ? 1 : base;
+  if (b < 1) return baseDepthWrite !== false && opacity > b * 0.98;
+  return opacity > 0.98;
 }
 
 /**
