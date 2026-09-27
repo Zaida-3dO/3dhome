@@ -119,8 +119,14 @@ const PRESETS = {
     chairRadius: 45, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 1, chairAlone: false
   },
   'larger-table': {
+    // chairRadius scaled up with the table (50, not the DEFAULTS 45) --
+    // the table's own leg-top radius (tableRadius*0.78) grows with
+    // tableDiameter, so a bigger table needs a bigger nested chair ring to
+    // keep the legs inside it (round-3 code review, item 89769f2b: at
+    // chairRadius=45 this preset's leg tops sit just outside the chair
+    // arc, which is exactly what the collisionRisk() guard now catches).
     tableDiameter: 120, tableHeight: 76, tableTopColor: '#f5f5f2', tableFrameHeight: 24, legColor: '#1a1a1a',
-    chairRadius: 45, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: false
+    chairRadius: 50, chairBackSweep: 84, chairHeight: 71, chairSeatHeight: 46, chairColor: '#1a1a1a', pulledOut: 0, chairAlone: false
   },
   'chair-alone': {
     tableDiameter: 100, tableHeight: 75, tableTopColor: '#f5f5f2', tableFrameHeight: 22, legColor: '#1a1a1a',
@@ -142,32 +148,44 @@ function useDiningModule() {
 
 // ============== Slider guard: warn when sizes can recreate a collision ==============
 // dining.js's table leg placement (legTopRadius = tableRadius*0.78,
-// legFootRadius = tableRadius*0.97) and its seam gap (backSweep=84 assumed)
-// are constants inside buildDiningTable, independent of whatever chair
-// radius/backSweep/height a caller passes here -- so an unusual COMBINATION
-// (a small table with large chairs, or a tall chair under a short table)
-// can reopen the exact collisions round 1/2 fixed, even though each slider
-// alone stays in its declared range (round-2 code review LOW, item
-// 89769f2b, fix #4a). This mirrors dining.js's own leg-placement and
-// CHAIR_DEFAULTS.height comments so the two never silently disagree.
+// legFootRadius = tableRadius*0.97, legWidthTangential = 2cm) assumes its
+// companion chairs open a seam gap (backSweep < 90) wide enough for that
+// tangential width at the leg's own radius -- so an unusual COMBINATION
+// (backSweep too close to 90, or a table/chair pairing that pushes the leg
+// top outside the chair's own arc) can reopen a collision even though each
+// slider alone stays in its declared range.
+//
+// Round-2's version of this check warned on "legTopRadius < chairRadius+2",
+// a leftover from when the legs sat OUTSIDE the chair cylinder -- now that
+// they deliberately sit INSIDE it (in the seam), that condition fires on
+// every shipped preset and its "try a larger table" advice pushes the legs
+// back outside (round-3 code review, item 89769f2b, finding 1). The two
+// REAL risks are: (a) the seam gap at the leg's own radius is narrower than
+// the leg's tangential half-width plus a safety margin, and (b) the leg top
+// itself has drifted outside the chair's own arc radius (round 2's actual
+// defect class). The old "feet past the rim" check is dropped -- the foot
+// radius (tableR*0.97) can never exceed tableR, so it could never fire.
 function collisionRisk(t) {
   const warnings = [];
   const tableR = t.tableDiameter / 2;
   const chairR = t.chairRadius;
   const legTopRadius = tableR * 0.78;
-  const legFootRadius = tableR * 0.97;
-  if (legTopRadius < chairR + 2) {
-    warnings.push('Table legs (top radius ~' + legTopRadius.toFixed(0) + 'cm) may sit inside the chairs’ own arc (radius ' + chairR + 'cm) — try a larger table diameter or a smaller chair radius.');
+  const legWidthTangentialHalfCm = 1.0; // half of dining.js's 2cm legWidthTangential
+  const seamHalfGapDeg = (90 - t.chairBackSweep) / 2;
+  const legHalfAngleDeg = (Math.atan2(legWidthTangentialHalfCm, legTopRadius) * 180) / Math.PI;
+  const marginDeg = seamHalfGapDeg - legHalfAngleDeg;
+  if (marginDeg < 0.3) {
+    warnings.push('The seam gap (backSweep ' + t.chairBackSweep + '°, ' + seamHalfGapDeg.toFixed(1) + '° half-gap) is too narrow for the table leg (' + legHalfAngleDeg.toFixed(1) + '° half-width at its own radius) — lower the chair backSweep (try 84–86°) to open more room at each seam.');
   }
-  if (legFootRadius > tableR + 1) {
-    warnings.push('Table leg feet (~' + legFootRadius.toFixed(0) + 'cm) land past the table’s own rim (' + tableR.toFixed(0) + 'cm).');
+  if (legTopRadius > chairR) {
+    warnings.push('Table leg tops (~' + legTopRadius.toFixed(0) + 'cm from centre) fall OUTSIDE the chairs’ own arc (radius ' + chairR + 'cm) — try a larger chair radius or a smaller table diameter, so the legs stay inside the nested cylinder.');
   }
   const tableUndersideCm = t.tableHeight - 2.8;
   if (t.chairHeight > tableUndersideCm - 1) {
     warnings.push('Chair height (' + t.chairHeight + 'cm) leaves under 1cm clearance below the table underside (~' + tableUndersideCm.toFixed(1) + 'cm) — lower the chair height or raise the table.');
   }
   if (t.chairBackSweep * 4 >= 360) {
-    warnings.push('Chair backSweep (' + t.chairBackSweep + '°) leaves no seam gap for the table legs (4×' + t.chairBackSweep + ' ≥ 360°).');
+    warnings.push('Chair backSweep (' + t.chairBackSweep + '°) leaves no seam gap at all for the table legs (4×' + t.chairBackSweep + ' ≥ 360°).');
   }
   return warnings;
 }

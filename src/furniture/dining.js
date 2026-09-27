@@ -177,15 +177,17 @@ function buildDiningTable(THREE, params, opts) {
   // companion chair's backSweep or radius can reopen a collision, which is
   // exactly what the round-2 slider-guard fix (LOW) checks for on the spec
   // page.
-  // A 6-degree seam (SEAM_ASSUMED_BACK_SWEEP=84) subtends only about 2 cm at
-  // a 0.4 m radius, so a fully SQUARE 3.2cm leg leaves almost no angular
-  // margin once its own corners are accounted for (round-2 code review found
-  // it still clips chair1 by ~0.3deg at backSweep=84's exact 3deg half-gap).
-  // The cross-section is therefore NARROWER across the seam (tangential,
-  // `legWidthTangential`) than along it (radial, `legDepthRadial`) -- still
-  // reads as a slim square leg from the front/side (the dominant viewing
-  // angles), and gives a real angular margin verified in the "legs clear the
-  // nested chairs" test below.
+  // A 6-degree seam (SEAM_ASSUMED_BACK_SWEEP=84, so a 3-degree half-gap)
+  // subtends about 4.2 cm at a 0.4 m radius -- room for a leg, but not much
+  // once a full 3.2cm SQUARE cross-section's own angular half-width (about
+  // 2.3deg at that radius) is weighed against the 3deg half-gap: only a
+  // fraction of a degree of margin either side, tight enough that an
+  // earlier development pass (before narrowing the leg) measured a real
+  // collision at this exact seam. The cross-section is therefore NARROWER
+  // across the seam (tangential, `legWidthTangential`) than along it
+  // (radial, `legDepthRadial`) -- still reads as a slim square leg from the
+  // front/side (the dominant viewing angles), and gives a real angular
+  // margin verified in the "legs clear the nested chairs" test below.
   const legWidthTangential = 0.020;
   const legDepthRadial = 0.032;
   // Leg TOP radius (under the tabletop) and FOOT radius (near the floor):

@@ -37,16 +37,24 @@
  *   5. detail: 'low' produces no more triangles than 'full', for both types.
  *   6. NESTING (the "nested set" concept a spec-page preset renders): four
  *      dining-chairs tucked at 90-degree rotations around a common centre,
- *      apex pointing inward, have adjacent wedges that do NOT angularly
- *      overlap (they meet edge-to-edge, at most) -- checked as the general
- *      claim "sum of 4 chairs' backSweep must not exceed 360 degrees" (the
- *      DEFAULTS case is the equality boundary, 4*90=360) plus a direct
- *      wedge-vs-wedge bbox-corner check at the DEFAULTS backSweep. Also: the
- *      chair's own arc radius must not exceed the table top's radius (the
- *      table is allowed to overhang the nested cylinder, never the reverse),
- *      and the table's own splayed legs (which the drift/core tests confirm
- *      sit at the diagonals, i.e. the 45/135/225/315-degree gaps between
- *      chairs tucked at 0/90/180/270) clear the chairs' arc radius.
+ *      apex pointing inward, DEFAULTS backSweep=84 (not a full 90) leaves a
+ *      real 6-degree gap centred on each of the 4 seams (45/135/225/315
+ *      degrees, always -- the seam midpoint never moves regardless of the
+ *      exact backSweep). Checked with a real triangle-triangle intersection
+ *      test (separating-axis, including the in-plane axes a textbook basis
+ *      misses for coplanar triangles) covering the table's legs/crossbars/
+ *      top against every chair's seat/back/legs/stretchers, AND chair vs
+ *      chair, plus a dedicated assertion that the table's own legs stay
+ *      inside the chairs' arc radius (a leg can clear every collision check
+ *      via the seam gap alone while its TOP has still drifted outside the
+ *      cylinder -- the round-2 defect class -- so this is checked
+ *      separately, not inferred from "no collision"). Also: the chair's own
+ *      arc radius must not exceed the table top's radius (the table may
+ *      overhang the nested cylinder, never the reverse), and the spec
+ *      page's own slider-guard warning logic (collisionRisk() in
+ *      DiningSpec.html) is duplicated here and checked against every
+ *      shipped preset (none should warn) and a known-colliding combination
+ *      (backSweep >= 88, which should).
  *
  * THREE is loaded from the vendored ESM build so this exercises the same
  * geometry code the app and the spec page run, not a copy of it.
@@ -503,18 +511,22 @@ check('TYPES has no wall-clock (moved to wall-clock.js)', !Dining.TYPES['wall-cl
     }
     if (normalA.lengthSq() > 1e-14) edgesA.forEach(e => axes.push(new THREE.Vector3().crossVectors(e, normalA)));
     if (normalB.lengthSq() > 1e-14) edgesB.forEach(e => axes.push(new THREE.Vector3().crossVectors(e, normalB)));
-    // TOUCH_MARGIN_M: two tucked chairs' apexes meet EXACTLY at the shared
-    // table centre by construction (both wedges' front points converge on
-    // one point -- see the NESTING MATH note), which is a single shared
-    // vertex, not material overlap; round-2 visual review found the same
-    // thing directly ("coincident faces... not visible when tucked, and
-    // clear at pulledOut=0.05" -- graded INFO, not a defect). A raw SAT with
-    // zero tolerance calls point/edge CONTACT "intersecting" (mathematically
-    // correct, since they do share a point), which would fail this test on
-    // an accepted, harmless design property rather than a real collision.
-    // 1mm of real separation margin (normalised per-axis, since the SAT
-    // axes here are not unit vectors) distinguishes "touching only" from
-    // genuine overlap -- round-1's real collisions were centimetres deep.
+    // TOUCH_MARGIN_M makes this SAT MORE conservative, not less (round-3
+    // code review, item 89769f2b, finding 4 -- an earlier comment here
+    // claimed the opposite). Two projections only count as separated on an
+    // axis when their gap EXCEEDS this margin (`- TOUCH_MARGIN_M` on the
+    // right-hand side of the comparison), so anything closer than 1mm --
+    // including a near-miss with no real contact at all -- is treated as
+    // NOT separated, i.e. still reported as intersecting on that axis. It
+    // does not suppress or "look past" a point/edge touch (such as two
+    // tucked chairs' apexes meeting exactly at the shared table centre by
+    // construction -- see the NESTING MATH note -- which round-2 visual
+    // review separately accepted as harmless, "not visible when tucked").
+    // A round-3 fuzz of 200k random triangle pairs against an independent
+    // exact edge-triangle test found this margin masks 0 real
+    // intersections; it only adds a few thousand extra "hit" reports for
+    // pairs within 1mm of each other that a zero-tolerance SAT would call
+    // clear -- the safe direction for a collision gate to err in.
     const TOUCH_MARGIN_M = 0.001;
     for (const axis of axes) {
       const axisLen = axis.length();
@@ -697,6 +709,115 @@ check('TYPES has no wall-clock (moved to wall-clock.js)', !Dining.TYPES['wall-cl
     check('nesting mutation-probe: the PRE-FIX chair height (75) DOES violate the table clearance (real geometry)',
       badClearance < 0, { badClearance });
   }
+
+  // ---- The leg tops stay inside the chairs' own arc radius, measured from
+  // the REAL BUILT GEOMETRY (round-3 code review, item 89769f2b, fix #2:
+  // mutating legTopRadius from 0.78r to 0.93r puts the leg tops at 46.5cm,
+  // OUTSIDE the 45cm chair cylinder -- the exact round-2 defect class -- yet
+  // the seam gap alone kept the triangle-collision test green, so nothing
+  // caught it. This is a dedicated assertion on the leg's OWN radius, not a
+  // collision test, precisely so a leg drifting outside the cylinder is
+  // caught even when it happens not to touch a chair). Also asserts the
+  // foot lands at or inside the table's own rim. ----
+  {
+    const g = Table.build(THREE, {}, { detail: 'full' });
+    let minLegRadius = Infinity, maxLegRadius = -Infinity;
+    g.traverse(o => {
+      if (!o.isMesh || !/^leg\d+$/.test(o.name)) return;
+      const posAttr = o.geometry.attributes.position;
+      const v = new THREE.Vector3();
+      for (let i = 0; i < posAttr.count; i++) {
+        v.fromBufferAttribute(posAttr, i).applyMatrix4(o.matrixWorld);
+        const rFromCentre = Math.hypot(v.x, v.z - tableR);
+        minLegRadius = Math.min(minLegRadius, rFromCentre);
+        maxLegRadius = Math.max(maxLegRadius, rFromCentre);
+      }
+    });
+    check('nesting: leg tops stay inside the chairs’ own arc radius (DEFAULTS)',
+      minLegRadius <= radius + 0.001, { minLegRadius, chairRadius: radius });
+    check('nesting: leg feet land at or inside the table’s own rim',
+      maxLegRadius <= tableR + 0.001, { maxLegRadius, tableR });
+  }
+
+  // ---- Mutation-probe: legTopRadius pushed from 0.78r to 0.95r (the same
+  // defect class the round-3 reviewer reproduced at 0.93r -- pushed a
+  // little further here so the assertion below, which measures the leg's
+  // real minimum radius across its own narrow cross-section rather than its
+  // nominal centreline, clears the chair radius with an unambiguous
+  // margin) DOES violate the leg-inside-chair-radius assertion above, even
+  // though it still passes the triangle-collision test (the seam gap alone
+  // keeps it clear of contact). Proves the new assertion is not redundant
+  // with the collision test. ----
+  {
+    const h = Table.DEFAULTS.height / 100, topThickness = 0.028;
+    const legTopRadiusBad = tableR * 0.95;
+    const legFootRadiusBad = tableR * 0.97;
+    const splayAngleBad = Math.atan2(legFootRadiusBad - legTopRadiusBad, h - topThickness);
+    const legLenBad = Math.hypot(legFootRadiusBad - legTopRadiusBad, h - topThickness);
+    const legGeoBad = new THREE.BoxGeometry(0.02, legLenBad, 0.032);
+    legGeoBad.translate(0, -legLenBad / 2, 0);
+    const seamAnglesBad = [Math.PI / 4, (3 * Math.PI) / 4, (5 * Math.PI) / 4, (7 * Math.PI) / 4];
+    const badLegsGroup = new THREE.Group();
+    seamAnglesBad.forEach((theta, i) => {
+      const leg = new THREE.Mesh(legGeoBad.clone());
+      leg.name = 'leg' + i;
+      const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), theta);
+      const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -splayAngleBad);
+      leg.quaternion.copy(yaw).multiply(tilt);
+      const radialDir = new THREE.Vector2(Math.sin(theta), Math.cos(theta));
+      leg.position.set(radialDir.x * legTopRadiusBad, h - topThickness, radialDir.y * legTopRadiusBad + tableR);
+      badLegsGroup.add(leg);
+    });
+    badLegsGroup.updateMatrixWorld(true);
+    let minLegRadiusBad = Infinity;
+    badLegsGroup.traverse(o => {
+      if (!o.isMesh) return;
+      const posAttr = o.geometry.attributes.position;
+      const v = new THREE.Vector3();
+      for (let i = 0; i < posAttr.count; i++) {
+        v.fromBufferAttribute(posAttr, i).applyMatrix4(o.matrixWorld);
+        minLegRadiusBad = Math.min(minLegRadiusBad, Math.hypot(v.x, v.z - tableR));
+      }
+    });
+    check('nesting mutation-probe: legTopRadius 0.93r DOES put the leg tops outside the chair radius (proves the new assertion is not redundant)',
+      minLegRadiusBad > radius, { minLegRadiusBad, chairRadius: radius });
+  }
+
+  // ---- Slider guard (specs/DiningSpec.html's collisionRisk()): duplicated
+  // here in plain JS since the page's own logic lives in embedded JSX a
+  // Node script cannot import -- this MUST be kept in sync with
+  // DiningSpec.html's own collisionRisk() function (round-3 code review,
+  // item 89769f2b, fix #1: the round-2 version warned on every shipped
+  // preset because its check was a leftover from when the legs sat outside
+  // the cylinder; this is the corrected version's own logic, asserted here
+  // so a future edit to one that forgets the other is caught). ----
+  function collisionRisk(t) {
+    const warnings = [];
+    const tableRisk = t.tableDiameter / 2;
+    const chairR = t.chairRadius;
+    const legTopRadiusRisk = tableRisk * 0.78;
+    const legWidthTangentialHalfCm = 1.0;
+    const seamHalfGapDeg = (90 - t.chairBackSweep) / 2;
+    const legHalfAngleDeg = (Math.atan2(legWidthTangentialHalfCm, legTopRadiusRisk) * 180) / Math.PI;
+    const marginDeg = seamHalfGapDeg - legHalfAngleDeg;
+    if (marginDeg < 0.3) warnings.push('seam-gap');
+    if (legTopRadiusRisk > chairR) warnings.push('leg-outside-chair');
+    const tableUndersideCm = t.tableHeight - 2.8;
+    if (t.chairHeight > tableUndersideCm - 1) warnings.push('height-clearance');
+    if (t.chairBackSweep * 4 >= 360) warnings.push('no-gap-at-all');
+    return warnings;
+  }
+  const shippedPresets = {
+    'nested-set': { tableDiameter: 100, tableHeight: 75, chairRadius: 45, chairBackSweep: 84, chairHeight: 71 },
+    'pulled-out': { tableDiameter: 100, tableHeight: 75, chairRadius: 45, chairBackSweep: 84, chairHeight: 71 },
+    'larger-table': { tableDiameter: 120, tableHeight: 76, chairRadius: 50, chairBackSweep: 84, chairHeight: 71 }
+  };
+  Object.entries(shippedPresets).forEach(([name, preset]) => {
+    check('slider guard: shipped preset "' + name + '" triggers no collision warning',
+      collisionRisk(preset).length === 0, { preset, warnings: collisionRisk(preset) });
+  });
+  check('slider guard mutation-probe: backSweep 88 (a real colliding combination) DOES trigger a warning',
+    collisionRisk({ tableDiameter: 100, tableHeight: 75, chairRadius: 45, chairBackSweep: 88, chairHeight: 71 }).length > 0);
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
