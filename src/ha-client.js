@@ -14,6 +14,7 @@
  */
 
 import { colorFromAttributes, DEFAULT_ACCENT_COLOR } from './light-color.js';
+import { normaliseVacuumBindings, parseVacuum, vacuumCommand, vacuumSegmentCommand } from './vacuum-control.js';
 
 /**
  * Slider value -> a `cover.set_cover_position` call, fanned out to every
@@ -278,6 +279,20 @@ export const HAClient = (() => {
         (climateIndex.get(eid) || climateIndex.set(eid, []).get(eid)).push(roomId);
       });
     }
+
+    // ---- Robot vacuums (sensors.vacuums, keyed by furniture item id) ----
+    // vacuumIndex: entityId -> [itemId] for the vacuum AND its battery
+    // sensor (a reading needs both). vacuumState: entityId -> last raw
+    // state. vacuumResolved: itemId -> { reading, key } last dispatched.
+    const vacuumBindings = normaliseVacuumBindings(sensors && sensors.vacuums);
+    const vacuumIndex = new Map();
+    const vacuumState = new Map();
+    const vacuumResolved = new Map();
+    const vacuumCallbacks = [];
+    vacuumBindings.forEach(b => {
+      [b.entity, b.battery].filter(Boolean).forEach(eid =>
+        (vacuumIndex.get(eid) || vacuumIndex.set(eid, []).get(eid)).push(b.itemId));
+    });
 
     if (sensors) {
       const indexKind = (kind, map) => {
@@ -545,6 +560,36 @@ export const HAClient = (() => {
       return fired;
     }
 
+    /**
+     * Fold a vacuum (or its battery sensor) into every robot it serves.
+     * Notifies only when the parsed reading changed -- the Dreame
+     * integration republishes dozens of attributes (cleaning time, brush
+     * life) that the card does not show, and each must not be a repaint.
+     */
+    function processVacuumUpdate(entityId, haState) {
+      const itemIds = vacuumIndex.get(entityId);
+      if (!itemIds) return false;
+      vacuumState.set(entityId, haState);
+      let fired = false;
+      itemIds.forEach(itemId => { if (resolveVacuum(itemId)) fired = true; });
+      return fired;
+    }
+    function resolveVacuum(itemId) {
+      const b = vacuumBindings.get(itemId);
+      const main = b && vacuumState.get(b.entity);
+      if (!main) return false;   // the battery arrived first: wait for the robot
+      const reading = parseVacuum(main, b.battery ? vacuumState.get(b.battery) : null);
+      const key = JSON.stringify(reading);
+      const prev = vacuumResolved.get(itemId);
+      if (prev && prev.key === key) return false;
+      vacuumResolved.set(itemId, { reading, key });
+      markFired('vacuum:' + itemId);
+      vacuumCallbacks.forEach(cb => {
+        try { cb(itemId, reading); } catch (e) { console.warn('HAClient vacuumCb:', e); }
+      });
+      return true;
+    }
+
     // ---- Full resync on every (re)connect ----
     //
     // Every path above notifies only on a CHANGE of its resolved value, which
@@ -593,6 +638,10 @@ export const HAClient = (() => {
       climateResolved.forEach(({ reading }, roomId) => {
         if (fired.has('climate:' + roomId)) return;
         emit(climateCallbacks, [roomId, reading], 'climateCb');
+      });
+      vacuumResolved.forEach(({ reading }, itemId) => {
+        if (fired.has('vacuum:' + itemId)) return;
+        emit(vacuumCallbacks, [itemId, reading], 'vacuumCb');
       });
     }
 
@@ -753,7 +802,12 @@ export const HAClient = (() => {
                 else if (sensorIndex.has(state.entity_id)) processSensorUpdate(state.entity_id, state);
                 if (fittingIndex.has(state.entity_id)) processFittingUpdate(state.entity_id, state);
                 if (climateIndex.has(state.entity_id)) processClimateUpdate(state.entity_id, state);
+                // Vacuums: record only, and resolve once after the loop, so a
+                // robot listed before its battery sensor is not reported
+                // first with no battery and then again with it.
+                if (vacuumIndex.has(state.entity_id)) vacuumState.set(state.entity_id, state);
               });
+              vacuumBindings.forEach(b => resolveVacuum(b.itemId));
             } finally { snapshotFired = null; }
             // Full resync: re-apply every target the snapshot did not
             // already fire, BEFORE 'connected' re-enables the controls.
@@ -771,6 +825,7 @@ export const HAClient = (() => {
           else if (sensorIndex.has(entity_id)) processSensorUpdate(entity_id, new_state);
           if (fittingIndex.has(entity_id)) processFittingUpdate(entity_id, new_state);
           if (climateIndex.has(entity_id)) processClimateUpdate(entity_id, new_state);
+          if (vacuumIndex.has(entity_id)) processVacuumUpdate(entity_id, new_state);
         }
       };
       ws.onclose = () => {
@@ -919,6 +974,15 @@ export const HAClient = (() => {
         return r ? r.reading : null;
       },
       climateEntityFor(roomId) { return climateByRoom.get(roomId) || null; },
+      // cb(itemId, reading) with reading from parseVacuum(). Fired only on a
+      // real change of the parsed reading (and once more on a reconnect).
+      onVacuumChange(cb) { vacuumCallbacks.push(cb); },
+      getVacuum(itemId) {
+        const r = vacuumResolved.get(itemId);
+        return r ? r.reading : null;
+      },
+      // The normalised binding for one robot (see vacuum-control.js), or null.
+      vacuumBinding(itemId) { return vacuumBindings.get(itemId) || null; },
       // Raw { state, attributes } last seen for a bound light / climate
       // entity, or null before it has reported. See rawStates above.
       getRawState(entityId) { return rawStates.get(entityId) || null; },
@@ -941,6 +1005,11 @@ export const HAClient = (() => {
       _injectClimateState(entityId, haState) {
         return processClimateUpdate(entityId, haState);
       },
+      // Same seam for a vacuum or its battery sensor: true if a vacuum
+      // callback fired.
+      _injectVacuumState(entityId, haState) {
+        return processVacuumUpdate(entityId, haState);
+      },
       // Same seam for a room LIGHT entity (rooms.json rooms.<id>.<channel>):
       // full HA state object in; the onStateChange callbacks fire exactly as
       // they would for a live update (echo suppression bypassed).
@@ -962,6 +1031,9 @@ export const HAClient = (() => {
     coverOpenCloseCommand,
     parseClimate,
     climateTargetCommand,
-    reduceBinarySensorStates
+    reduceBinarySensorStates,
+    parseVacuum,
+    vacuumCommand,
+    vacuumSegmentCommand
   };
 })();
