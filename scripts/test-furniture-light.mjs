@@ -212,8 +212,50 @@ const hex = c => '#' + c.getHexString();
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   check('index.html creates the scene with boundChannels from rooms.json', /boundChannels:\s*boundLightChannels\(rooms\)/.test(html));
   check('index.html gates the ambient row on hasAmbientRow', /hasAmbientRow\(rooms,\s*rid,/.test(html));
+  check('index.html routes onFurnitureLightChange into the scene',
+    /ha\.onFurnitureLightChange\(\(itemId, st\) => home\.setFurnitureLight\(itemId, st\)\)/.test(html));
+  check('index.html tells the scene which items are light-bound',
+    /furnitureLightIds:\s*Object\.keys\(\(sensors && sensors\.furnitureLights\)/.test(html));
   const scene = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
   check('the scene seeds lightState from opts.boundChannels', /const boundChannels = opts\.boundChannels \|\| \{\};/.test(scene) && /boundChannels\[id\]\)\s*\?\s*boundChannels\[id\]/.test(scene));
+}
+
+// ---- 6. the renderer keeps a BOUND strip live, and merges an unbound one ---
+{
+  const F = await imp('src/furniture.js');
+  const { HouseLoader } = await imp('src/house-loader.js');
+  const geo = {
+    kind: 'geometry', schemaVersion: '1.2', id: 't', name: 't', units: 'cm',
+    coordinateTransform: { originX: 0, originY: 0, scale: 0.01 },
+    defaults: { wallHeight: 250, wallThickness: 10 },
+    walls: { segments: [
+      { id: 1, start: [95, 95], end: [505, 95] }, { id: 2, start: [95, 405], end: [505, 405] },
+      { id: 3, start: [95, 95], end: [95, 405] }, { id: 4, start: [505, 95], end: [505, 405] }] },
+    rooms: [{ id: 'r', label: 'R', polygon: [[100, 100], [500, 100], [500, 400], [100, 400]] }],
+    furniture: [
+      { id: 'desk_a', room: 'r', type: 'standing-desk', at: [200, 200], params: { ledStrip: true } },
+      { id: 'desk_b', room: 'r', type: 'standing-desk', at: [350, 200], params: { ledStrip: true } }
+    ]
+  };
+  const log = console.log, warn = console.warn; console.log = () => {}; console.warn = () => {};
+  let h;
+  try { h = HouseLoader.compile(geo, ''); } finally { console.log = log; console.warn = warn; }
+  const builders = new Map([['standing-desk', Desk]]);
+  const res = F.buildFurnitureSync(THREE, h.furniture, builders, {
+    tx: x => x * 0.01, tz: y => y * 0.01, quality: { tier: 'ultra' }, walls: h.walls,
+    lightItemIds: new Set(['desk_a'])
+  });
+  const dyn = res.dynamicByItemId || {};
+  const names = dyn.desk_a ? dyn.desk_a.group.children.map(c => c.name).sort() : [];
+  check('a bound desk keeps its strip as live meshes', names.join() === 'ledStripFront,ledStripLeft,ledStripRight', names);
+  check('...and only its strip (the control-panel display still merges)', names.indexOf('controlPanelDisplay') === -1);
+  check('an unbound desk strip is NOT live (it merges into the static glow bucket)', !dyn.desk_b, Object.keys(dyn));
+  if (dyn.desk_a) {
+    const m = dyn.desk_a.group.children[0];
+    check('the live strip is painted by the same mapping', FL.applyLightLook(dyn.desk_a.group.children, FL.lightLook({ on: false }, '#ff9a45')) &&
+      hex(m.material.emissive) === '#000000', hex(m.material.emissive));
+  }
+  F.disposeFurniture(res);
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

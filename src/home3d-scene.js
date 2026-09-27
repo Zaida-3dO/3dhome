@@ -24,6 +24,7 @@ import {
   disposeFurniture
 } from './furniture.js';
 import { startLiveClock } from './furniture/wall-clock.js';
+import { lightLook, applyLightLook } from './furniture-light.js';
 
 export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------
@@ -3129,6 +3130,10 @@ export const Home3DScene = (() => {
       //   reading for a profile with no HA wiring, and a safe default because
       //   it never claims a door is open on no evidence.
       sensorBoundDoorIds = null,
+      // Furniture item ids rooms.json binds to a light
+      // (sensors.furnitureLights): their glowing parts are built as live
+      // meshes that setFurnitureLight() recolours.
+      furnitureLightIds = null,
     } = opts;
     // Bound BEFORE buildScene() below, which is where the rest pose is baked in.
     DOOR_SENSOR_BOUND_IDS = new Set(sensorBoundDoorIds || []);
@@ -3860,9 +3865,31 @@ export const Home3DScene = (() => {
         const stop = startLiveClock(dyn.group, { onTick: () => requestRender() });
         liveClockStops.set(itemId, stop);
       });
+      // Light-bound furniture: remember each bound item's authored colour
+      // (its rest look), then paint any state that arrived before the build.
+      Object.keys(result.dynamicByItemId || {}).forEach(itemId => {
+        const g = result.dynamicByItemId[itemId].group;
+        const m = g.children.find(c => c.isMesh && c.material && c.material.color);
+        if (m) g.userData.restColor = '#' + m.material.color.getHexString();
+        if (furnitureLightState.has(itemId)) paintFurnitureLight(itemId);
+      });
       // MOVES GEOMETRY (new casters) -> shadows must refresh once.
       invalidateShadows();
       requestRender();
+    }
+    // Furniture light state: itemId -> { on, bri, color } (last reading).
+    // Kept here, not on the meshes, so a reading that lands before the
+    // furniture has attached is applied the moment it does.
+    const furnitureLightState = new Map();
+    function furnitureLightMeshes(itemId) {
+      const dyn = furnitureResult && furnitureResult.dynamicByItemId && furnitureResult.dynamicByItemId[itemId];
+      return dyn ? dyn.group.children.filter(c => c.isMesh) : [];
+    }
+    function paintFurnitureLight(itemId) {
+      const meshes = furnitureLightMeshes(itemId);
+      if (!meshes.length) return false;
+      const rest = meshes[0].parent.userData.restColor;
+      return applyLightLook(meshes, lightLook(furnitureLightState.get(itemId) || null, rest));
     }
     function startFurniture() {
       if (furnitureStarted || !furnitureItems.length) return;
@@ -3880,7 +3907,8 @@ export const Home3DScene = (() => {
         build: builders => {
           furnitureTimeline.buildStart = performance.now();
           return buildFurnitureSliced(THREE, furnitureItems, builders, {
-            tx, tz, quality, walls: WALLS, isCancelled: () => _disposed
+            tx, tz, quality, walls: WALLS, isCancelled: () => _disposed,
+            lightItemIds: new Set(furnitureLightIds || [])
           }).then(result => {
             furnitureTimeline.buildEnd = performance.now();
             return result;
@@ -4858,6 +4886,32 @@ export const Home3DScene = (() => {
         }
       },
       getFurnitureVisible() { return furnitureVisible; },
+      /**
+       * Drive a light-bound furniture item (rooms.json
+       * sensors.furnitureLights) -- a desk's LED strip. state: { on, bri
+       * (0..100), color ('#rrggbb' or null = its authored colour) }, the
+       * shape ha-client's onFurnitureLightChange delivers. Emissive only: no
+       * real light is added. Requests a frame only on a real change.
+       */
+      setFurnitureLight(itemId, state) {
+        const st = { on: !!(state && state.on), bri: state && state.bri != null ? +state.bri : 100,
+          color: (state && state.color) || null };
+        const prev = furnitureLightState.get(itemId);
+        if (prev && prev.on === st.on && prev.bri === st.bri && prev.color === st.color) return;
+        furnitureLightState.set(itemId, st);
+        if (paintFurnitureLight(itemId)) requestRender();
+      },
+      // What a light-bound item is ACTUALLY showing (the canvas cannot be read
+      // back): its last state and each live part's colours.
+      getFurnitureLightDebug(itemId) {
+        const meshes = furnitureLightMeshes(itemId);
+        return {
+          state: furnitureLightState.get(itemId) || null,
+          parts: meshes.map(m => ({ name: m.name, color: '#' + m.material.color.getHexString(),
+            emissive: m.material.emissive ? '#' + m.material.emissive.getHexString() : null,
+            emissiveIntensity: m.material.emissiveIntensity, visible: m.visible }))
+        };
+      },
       // Diagnostics for the perf measurement and the visual review: what was
       // built (draws, triangles, which rooms' proxies dropped to low detail)
       // and when it attached, on the performance.now() clock.

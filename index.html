@@ -1241,6 +1241,8 @@
         // Every light channel rooms.json binds gets a light state (and so a
         // sidebar row and an HA state target) even with no geometry fixture.
         boundChannels: boundLightChannels(rooms),
+        // Furniture whose glowing parts follow a light (a desk's LED strip).
+        furnitureLightIds: Object.keys((sensors && sensors.furnitureLights) || {}),
         interactive: !isPreview,
         autoRotate: isPreview,
         rotateSpeed: rotateSpeed,
@@ -1321,6 +1323,12 @@
           home.setCorniceLight(curtainId, { on: !!on, bri: bri != null ? bri : 100, color: color || null }),
         getCurtainOpen: curtainId => home.getCurtainOpen(curtainId),
         getCornice: curtainId => home.getCorniceLight(curtainId),
+        // A light-bound furniture item (rooms.json sensors.furnitureLights),
+        // through the same entry point onFurnitureLightChange calls:
+        //   __home3dSensors.furnitureLight('study_desk', true, 60, '#00ff66')
+        furnitureLight: (itemId, on, bri, color) =>
+          home.setFurnitureLight(itemId, { on: !!on, bri: bri != null ? bri : 100, color: color || null }),
+        getFurnitureLight: itemId => home.getFurnitureLightDebug(itemId),
         // Sidebar slider availability -- this is PANEL state (curtainAvailableState),
         // not scene state, since "can this slider send a command" depends on
         // whether ha exists and has a reading, not on the 3D curtain itself.
@@ -1901,6 +1909,8 @@
         ha.onCorniceChange((curtainId, st) => {
           home.setCorniceLight(curtainId, st);
         });
+        // A furniture item's own light (a desk's LED strip) -> its glowing parts.
+        ha.onFurnitureLightChange((itemId, st) => home.setFurnitureLight(itemId, st));
         ha.onCurtainAvailabilityChange((curtainId, available) => applyCurtainAvailable(curtainId, available));
 
         ha.connect();

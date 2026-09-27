@@ -27,6 +27,7 @@
  */
 import { loadBuilders } from './furniture/registry.js';
 import { resolvePlacement, footprintRect, pickFadeWall } from './furniture/place.js';
+import { boundParts } from './furniture-light.js';
 import { flattenGroup, groupBuckets, buildBucketMesh, createMaterialSet, concatGeometries, neverFades } from './furniture/merge.js';
 
 /** An item casts (through its room's proxy) when it stands on the floor and is tall enough to matter. */
@@ -229,6 +230,16 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
   function buildPlaced(item, builder, params, placement, det) {
     const group = builder.build(THREE, params, { detail: det });
     if (!group || !group.isObject3D) throw new Error('build() did not return a THREE.Object3D');
+    // An item bound to a Home Assistant light (opts.lightItemIds, from
+    // rooms.json sensors.furnitureLights) keeps its glowing parts as live,
+    // recolourable meshes: tag them dynamic so the merge leaves them out of
+    // the static glow bucket. An UNBOUND strip still merges -- it never
+    // changes, so it costs no draw of its own.
+    if (o.lightItemIds && o.lightItemIds.has(item.id)) {
+      const meshes = [];
+      group.traverse(m => { if (m.isMesh) meshes.push(m); });
+      boundParts(meshes).forEach(m => { m.userData.dynamic = true; });
+    }
     placeGroup(group, placement, o.tx, o.tz);
     const flat = flattenGroup(THREE, group, { label: 'furniture "' + item.id + '" (' + item.type + ')' });
     let dynamicGroup = null;
