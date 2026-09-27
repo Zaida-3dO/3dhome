@@ -575,6 +575,8 @@ jobs:
         run: node scripts/test-wallpaper-face.mjs
       - name: Wall finishes (schema, brick spec-page parity, one face only, bands and spans, fade)
         run: node scripts/test-wall-finishes.mjs
+      - name: Living-room slat panel span comes from wall 1's slats field
+        run: node scripts/test-wall-slats.mjs
       - name: Furniture drift (registry, schema params blocks, builder DEFAULTS)
         run: node scripts/test-furniture-defaults.mjs
       - name: Spec pages -- one page per family, every type on one page, one object/variant picker

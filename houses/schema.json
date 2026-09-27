@@ -370,6 +370,25 @@
             "$ref": "#/$defs/wallFinish"
           }
         },
+        "slats": {
+          "type": "object",
+          "description": "OPTIONAL: where the living-room acoustic slat panel runs on this wall. Read on wall 1 only, by the living-room panel builder (wall 1's room face plus the short step return onto wall 3, at the span's south end). Omit it and the builder keeps its old fixed span, y 353.4 to 707.8. An older engine ignores it.",
+          "properties": {
+            "along": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "[start, end]: the span the panel covers, in plan cm on the wall's long axis -- the same convention as a finish's `along`. The step return is drawn at the higher end."
+            }
+          },
+          "required": [
+            "along"
+          ],
+          "additionalProperties": false
+        },
         "notes": {
           "type": "string"
         }

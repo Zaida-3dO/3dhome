@@ -811,8 +811,9 @@ export const Home3DScene = (() => {
    * (`{id:3, x1:x2:307.4, thickness:15.8}`) are both vertical-in-plan and
    * near-parallel — #3 is thicker and widened room-ward so its east face sits
    * 12cm further into the living room than #1's, producing a real step at the
-   * point #3 begins (y=707.8). The panel covers #1's face (north stop y=353.4,
-   * south to the step y=707.8) plus that short 12cm perpendicular return. It
+   * point #3 begins (y=707.8). The panel covers #1's face (north stop from
+   * wall 1's `slats.along` in the house, y 353.4 when absent; south to the
+   * step y=707.8) plus that short 12cm perpendicular return. It
    * does NOT continue onto wall #3's own wide face (visual review
    * 2026-07-09 locked this "shorter reading"). Living room sits east (+x) of
    * both walls — this is the house's west EXTERIOR wall, so slats protrude +x
@@ -836,6 +837,9 @@ export const Home3DScene = (() => {
    * Standalone group — reads only #1/#3's published geometry, never touches
    * WALL_EXT, the wall loop, or either wall's own box material.
    */
+  // The panel's span on wall #1 when the house does not give one: the
+  // original hardcoded stops (north y 353.4, the wall #3 step y 707.8).
+  const SLAT_PANEL_DEFAULT_ALONG = [353.4, 707.8];
   function buildAcousticPanelLivingRoomWall1Wall3(scene, wallMeshes) {
     const wall1 = WALLS.find(w => w.id === 1);
     const wall3 = WALLS.find(w => w.id === 3);
@@ -844,10 +848,15 @@ export const Home3DScene = (() => {
     const wall3ThicknessM = (wall3.thickness != null ? wall3.thickness : WT_CM) * S;
     const wall1FaceX = tx(wall1.x1) + wall1ThicknessM / 2;  // wall #1's room-facing (east) face
     const wall3FaceX = tx(wall3.x1) + wall3ThicknessM / 2;  // wall #3's room-facing (east) face — used only to size the step return
-    const stepZ = tz(707.8);                    // wall #1 -> wall #3 transition (wall #3's north end); panel's south end
+    // The span along wall #1 comes from the house (`walls[].slats.along` on
+    // wall 1, resolved by the loader); without it, the old fixed span. A
+    // house sets the north stop where its kitchen worktop ends, as the real
+    // panel runs right up to it.
+    const span = (wall1.slats && wall1.slats.along) || SLAT_PANEL_DEFAULT_ALONG;
+    const stepZ = tz(span[1]);                  // wall #1 -> wall #3 transition (wall #3's north end); panel's south end
 
     const stepLen = wall3FaceX - wall1FaceX;    // step-face run: ~12.0cm
-    const seg1NorthZ = tz(353.4);               // fixed north stop (locked, inside living_room y:303-749)
+    const seg1NorthZ = tz(span[0]);             // north stop
     const seg1Len = stepZ - seg1NorthZ;         // wall #1 face run, north stop to the step
 
     const slatW = 0.056, slatD = 0.012, backingD = 0.009;
@@ -3042,16 +3051,17 @@ export const Home3DScene = (() => {
     // fade-from-outside behaviour via ceilingMesh.material.opacity in the loop.)
 
     // Living-room black-oak acoustic slat panel on wall #1's room-facing (east)
-    // face + the 12cm step-return where wall #3 begins (y=707.8). North stop
-    // y=353.4, south end at the step y=707.8; does NOT continue onto wall #3's
+    // face + the 12cm step-return where wall #3 begins (y=707.8). The span is
+    // wall 1's `slats.along` (default north stop y=353.4, south end at the
+    // step y=707.8); does NOT continue onto wall #3's
     // own wide face (visual review 2026-07-09). Ported from experimental
     // (buildAcousticPanelLivingRoomWall1Wall3) WITH the black-half depthWrite
     // fix (see scout-blackhalf report + the render-loop fade block). wallMeshes
     // is passed so the panel meshes register into the SAME exterior-fade loop as
     // wall #1 (#1 is outer:1, so the panel DOES fade see-through from outside).
     // Decorative slat panelling. This is bespoke geometry keyed to specific wall
-    // ids of the house it was modelled for, and there is no schema field for it —
-    // it is furniture, not building fabric. It is therefore OPT-IN: a house asks
+    // ids of the house it was modelled for; the only schema field for it is
+    // wall 1's optional `slats` span. It is therefore OPT-IN: a house asks
     // for it by passing `decor: ['acoustic-panels']` to create(). Every house that
     // does not ask (the demo house included) simply skips it, and the functions
     // themselves no-op when the wall ids they need are absent, so an opt-in from a
