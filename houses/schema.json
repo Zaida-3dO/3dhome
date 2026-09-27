@@ -844,9 +844,7 @@
 
         { "if": { "properties": { "type": { "const": "wall-sconce" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-sconce" } } } },
 
-        { "if": { "properties": { "type": { "const": "wall-sign" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-sign" } } } },
-
-        { "if": { "properties": { "type": { "const": "wire-shelf" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wire-shelf" } } } }
+        { "if": { "properties": { "type": { "const": "wall-sign" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-sign" } } } }
       ]
     },
     "furnitureFade": {
@@ -1076,12 +1074,20 @@
         },
         "fronts": {
           "type": "array",
-          "description": "Row-based front, top to bottom: { height, cells: [ {kind, width, ...} ] }. Each row's cells must span the cabinet's width, and a row's own height is the space it takes ABOVE the plinth (rows sum to height - plinth.height). Cell kind is one of door|drawer|glass|mirror|sliding|open|stack. Mutually exclusive with `columns` - if both are set, `columns` wins.",
+          "description": "Row-based front, top to bottom: { height, cells: [ {kind, width, ...} ] }, or a light-channel row { height, channel: { color } } with no cells. Each row's cells must span the cabinet's width, and a row's own height is the space it takes ABOVE the plinth (rows sum to height - plinth.height). Cell kind is one of door|drawer|glass|mirror|sliding|open|stack. Mutually exclusive with `columns` - if both are set, `columns` wins.",
           "items": {
             "type": "object",
             "properties": {
               "height": { "type": "number", "exclusiveMinimum": 0 },
               "ledGapBelow": { "type": "boolean" },
+              "channel": {
+                "type": "object",
+                "description": "Makes this row a recessed light channel (the LED bedside tables): no front, set back 1.5 cm, wrapping the front and both sides (not the back), with an emissive strip in `color`. The front directly below gets a glow band along its top edge. Each channel has its own colour, so a later placement can bind each to its own light.",
+                "properties": {
+                  "color": { "$ref": "#/$defs/hexColor" }
+                },
+                "additionalProperties": false
+              },
               "cells": {
                 "type": "array",
                 "items": {
@@ -1101,13 +1107,28 @@
                       "type": "array",
                       "description": "Only for kind:'stack' - this column's own vertical sub-stack of ordinary cells (not itself nesting a stack), { kind, height, ... }, heights summing to the parent row's height.",
                       "items": { "type": "object" }
+                    },
+                    "interior": {
+                      "type": "object",
+                      "description": "Only for kind:'glass' - the display section behind the glass: `lining` (hex: back, inner walls and ceiling; the floor stays the carcass colour), `shelves` (cm above the section floor, clear glass), `ledStrip` ({ color }: a vertical emissive strip at the back corner on the divider side) and `contents` (low-poly display proxies, full detail only).",
+                      "properties": {
+                        "lining": { "$ref": "#/$defs/hexColor" },
+                        "shelves": { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 } },
+                        "ledStrip": {
+                          "type": "object",
+                          "properties": { "color": { "$ref": "#/$defs/hexColor" } },
+                          "additionalProperties": false
+                        },
+                        "contents": { "type": "string", "enum": ["none", "books-games", "console"] }
+                      },
+                      "additionalProperties": false
                     }
                   },
                   "required": ["kind"]
                 }
               }
             },
-            "required": ["height", "cells"]
+            "required": ["height"]
           },
           "default": [
             { "height": 228, "cells": [
@@ -1139,7 +1160,8 @@
           "description": "The cabinet's base.",
           "properties": {
             "type": { "type": "string", "enum": ["plinth", "legs", "wheels"] },
-            "height": { "type": "number", "minimum": 0 }
+            "height": { "type": "number", "minimum": 0 },
+            "inset": { "type": "number", "minimum": 0, "description": "plinth only: cm the plinth is set back from the fronts' face and from each side (a shadow recess). Omitted: the original 3 cm side inset, centred in the depth (overlay fronts default to 3 cm behind the face)." }
           },
           "required": ["type", "height"],
           "default": { "type": "plinth", "height": 8 }
@@ -1147,7 +1169,18 @@
         "gloss": {
           "type": "boolean",
           "default": false,
-          "description": "Carcass/front finish: gloss instead of matte."
+          "description": "Carcass/front finish: gloss instead of matte. Ignored when `finish` is set."
+        },
+        "finish": {
+          "type": ["string", "null"],
+          "enum": ["matte", "satin", "gloss", null],
+          "default": null,
+          "description": "Carcass, doors, drawers, plinth and shelves: matte, satin or gloss. null (the default) follows `gloss`."
+        },
+        "overlayFronts": {
+          "type": "boolean",
+          "default": false,
+          "description": "true: the fronts cover the carcass edges (overlay doors) - every carcass and base part ends behind them and each front reaches the carcass outline, so no top or side stands proud of the doors. false: the carcass runs to `depth` with the fronts inside it."
         },
         "color": {
           "$ref": "#/$defs/hexColor",
@@ -2771,6 +2804,8 @@
         "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
         "kind": { "type": "string", "enum": ["wall-trapezoid", "floor-standing", "ceiling", "centre"], "default": "wall-trapezoid" },
         "boxShape": { "type": "boolean", "default": false, "description": "wall-trapezoid only: swap the trapezoid plan for a plain box." },
+        "grille": { "type": "boolean", "default": true, "description": "wall-trapezoid, floor-standing and centre: a smoked see-through grille over the drivers, inside the front rim. false keeps the rim and shows the drivers bare." },
+        "port": { "type": "boolean", "default": true, "description": "wall-trapezoid and floor-standing: a round bass port on the baffle below the drivers." },
         "plinthWidth": { "type": "number", "exclusiveMinimum": 0, "default": 22, "description": "floor-standing only: the outrigger plinth footprint, capped to `width`/`depth`." },
         "plinthDepth": { "type": "number", "exclusiveMinimum": 0, "default": 30, "description": "floor-standing only." },
         "midDrivers": { "type": "integer", "minimum": 2, "maximum": 3, "default": 2, "description": "floor-standing only: bass/mid discs below the top tweeter." },
@@ -2864,13 +2899,15 @@
 
     "furnitureParams_subwoofer": {
       "type": "object",
-      "description": "Params for `subwoofer` (src/furniture/small-items.js, TYPES['subwoofer']): a simple cube. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `subwoofer` (src/furniture/small-items.js, TYPES['subwoofer']): a cube on four short feet with one front-firing woofer and a bass port behind a see-through grille in a front rim. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
         "width": { "type": "number", "exclusiveMinimum": 0, "default": 35, "description": "cm." },
         "height": { "type": "number", "exclusiveMinimum": 0, "default": 35, "description": "cm." },
         "depth": { "type": "number", "exclusiveMinimum": 0, "default": 35, "description": "cm." },
         "color": { "$ref": "#/$defs/hexColor", "default": "#f2f2f2" },
-        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" }
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "matte" },
+        "grille": { "type": "boolean", "default": true, "description": "A smoked see-through grille over the woofer and port, inside the front rim." },
+        "port": { "type": "boolean", "default": true, "description": "A round bass port below the woofer." }
       },
       "additionalProperties": false
     },
@@ -3279,19 +3316,6 @@
         "line1": { "type": "string", "default": "GIVE IT TO GOD", "description": "Serif caps line." },
         "line2": { "type": "string", "default": "and go to sleep", "description": "Script line." },
         "textColor": { "$ref": "#/$defs/hexColor", "default": "#1a1a1a" }
-      },
-      "additionalProperties": false
-    },
-
-    "furnitureParams_wire-shelf": {
-      "type": "object",
-      "description": "Params for `wire-shelf` (src/furniture/small-items.js, TYPES['wire-shelf']): a triangular white wire wall shelf (living room). Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
-      "properties": {
-        "width": { "type": "number", "exclusiveMinimum": 0, "default": 40, "description": "cm, the back edge." },
-        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 40, "description": "cm, back to the front point." },
-        "height": { "type": "number", "exclusiveMinimum": 0, "default": 3, "description": "cm." },
-        "color": { "$ref": "#/$defs/hexColor", "default": "#f4f4f4" },
-        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "metal" }
       },
       "additionalProperties": false
     },

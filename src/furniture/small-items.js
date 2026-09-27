@@ -3,7 +3,8 @@
  * across rooms: TVs, photo frames, speakers (wall,
  * floor-standing, ceiling and centre-channel), a subwoofer, a tube floor
  * lamp, a coat rack, mirrors, floating shelves (incl. a back-panel L-section
- * preset), monitors, a PC tower and a wire wall shelf.
+ * preset), monitors and a PC tower. (`wire-shelf`, a generic chrome wire rack,
+ * was removed: nothing in a house used it.)
  *
  * `wall-clock` is a SEPARATE type owned by a different crew, not built here.
  * `clock` (an earlier, different type name) and `wall-art` used to live in
@@ -45,6 +46,16 @@ function group(name) {
   g.name = name;
   return g;
 }
+
+// Z-FIGHTING. A screen, an image, a mirror pane or an LED strip laid over a
+// body must never share a plane with it: the depth buffer cannot order two
+// surfaces at the same depth, so which one wins flips per pixel as the camera
+// moves -- the diagonal dotted shimmer across a TV screen. Every overlay here
+// is separated from the surface behind it by at least OVERLAY_GAP (2 mm; the
+// depth buffer resolves well under 1 mm at room distances), and
+// scripts/test-coplanar-faces.mjs fails any two faces of one item that face
+// the same way within 1 mm of one plane and overlap.
+const OVERLAY_GAP = 0.002;
 
 // ============================================================================
 // tv - a wall TV. Two bezel styles:
@@ -105,50 +116,47 @@ function buildTv(THREE, params, opts) {
   }
   const h = Math.max(m(p.height) - panelBottom, 0.01);
 
-  const bodyMat = makeFinish(THREE, p.finish, p.color);
-  const body = box(THREE, w, d, h, bodyMat, 0, panelBottom + h / 2, d / 2);
-  g.add(body);
-
   const screenMat = makeFinish(THREE, 'emissive', p.screenColor);
-  // A thin bezel in both styles; the picture-frame style additionally gets
-  // the thicker wooden surround built below. The screen sits flush with the
-  // panel's own front face (z = d), not proud of it, so the group's overall
-  // depth stays exactly `depth`.
-  const thinBezel = Math.min(0.012, w * 0.012);
   const screenDepth = Math.min(Math.max(d * 0.3, 0.005), d * 0.5);
-  const screen = box(THREE, w - thinBezel * 2, screenDepth, h - thinBezel * 2, screenMat,
-    0, panelBottom + h / 2, d - screenDepth / 2);
+  const cy = panelBottom + h / 2;
+
+  if (!pictureFrame || o.detail === 'low') {
+    // 'thin' (and the low-detail picture frame, whose body simply takes the
+    // frame colour): the body stops OVERLAY_GAP short of the front, and the
+    // screen -- a bezel in from the edges -- stands that far proud of it,
+    // its own front at exactly z = d, so the overall depth is `depth`.
+    // (Screen and body used to share the plane z = d: the shimmer.)
+    const bodyMat = pictureFrame
+      ? makeFinish(THREE, 'matte', p.frameColor)
+      : makeFinish(THREE, p.finish, p.color);
+    g.add(box(THREE, w, d - OVERLAY_GAP, h, bodyMat, 0, cy, (d - OVERLAY_GAP) / 2));
+    const bezel = pictureFrame ? Math.min(m(p.frameWidth), w / 4, h / 4) : Math.min(0.012, w * 0.012);
+    const screen = box(THREE, w - bezel * 2, screenDepth, h - bezel * 2, screenMat, 0, cy, d - screenDepth / 2);
+    screen.userData.keep = true;
+    g.add(screen);
+    return g;
+  }
+
+  // Picture-frame bezel, full detail (Frame-TV look): four wooden bars the
+  // full depth, the screen INSIDE their opening and set back OVERLAY_GAP
+  // behind their fronts, and the dark panel body behind the screen tucked
+  // into the bars -- its edges run inside them, so none of its outer faces
+  // shares a plane with a bar's. Its back is OVERLAY_GAP off the wall for
+  // the same reason (the bars' backs are at z = 0).
+  const frameMat = makeFinish(THREE, 'matte', p.frameColor);
+  const fw = Math.min(m(p.frameWidth), w / 4, h / 4);
+  g.add(box(THREE, w, d, fw, frameMat, 0, panelBottom + h - fw / 2, d / 2));
+  g.add(box(THREE, w, d, fw, frameMat, 0, panelBottom + fw / 2, d / 2));
+  g.add(box(THREE, fw, d, h - fw * 2, frameMat, -w / 2 + fw / 2, cy, d / 2));
+  g.add(box(THREE, fw, d, h - fw * 2, frameMat, w / 2 - fw / 2, cy, d / 2));
+  const tuck = fw / 2;
+  const bodyMat = makeFinish(THREE, p.finish, p.color);
+  const bodyFront = d - OVERLAY_GAP - screenDepth;
+  g.add(box(THREE, w - (fw - tuck) * 2, bodyFront - OVERLAY_GAP, h - (fw - tuck) * 2, bodyMat,
+    0, cy, OVERLAY_GAP + (bodyFront - OVERLAY_GAP) / 2));
+  const screen = box(THREE, w - fw * 2, screenDepth, h - fw * 2, screenMat, 0, cy, bodyFront + screenDepth / 2);
   screen.userData.keep = true;
   g.add(screen);
-
-  if (pictureFrame) {
-    // A thin wooden picture-frame bezel around the whole panel (Frame-TV
-    // look). Four slim bars, `full` detail only -- `low` collapses to a
-    // single ring-ish box behind the screen plane, well under `full`'s tri
-    // count.
-    const frameMat = makeFinish(THREE, 'matte', p.frameColor);
-    const fw = m(p.frameWidth);
-    if (o.detail !== 'low') {
-      // box(THREE, width, depth, height, ...) -- depth is always `d` (the
-      // panel's own depth), never the bar's in-plane extent.
-      const top = box(THREE, w, d, fw, frameMat, 0, h - fw / 2, d / 2);
-      const bottom = box(THREE, w, d, fw, frameMat, 0, fw / 2, d / 2);
-      const left = box(THREE, fw, d, h - fw * 2, frameMat, -w / 2 + fw / 2, h / 2, d / 2);
-      const right = box(THREE, fw, d, h - fw * 2, frameMat, w / 2 - fw / 2, h / 2, d / 2);
-      g.add(top, bottom, left, right);
-    } else {
-      // box(THREE, width, depth, height, ...) -- the low-detail ring must
-      // use the SAME slot order as the full-detail bars above: depth is
-      // `d` (the panel's own depth), height is the panel's `h`. A previous
-      // version swapped these, making the ring 95.9cm (the TV's `height`)
-      // DEEP instead of tall -- it would have poked straight through the
-      // wall behind a wall-mounted TV. Depth is clamped to at most `d` so
-      // the ring can never extend past the panel's own front/back faces.
-      const ringDepth = Math.min(d * 0.6, d);
-      const ring = box(THREE, w, ringDepth, h, frameMat, 0, panelBottom + h / 2, d - ringDepth / 2);
-      g.add(ring);
-    }
-  }
   return g;
 }
 
@@ -203,16 +211,25 @@ function buildPhotoFrame(THREE, params, opts) {
   panelMat.userData.finish = tex ? 'matte' : p.finish;
   if (tex) panelMat.userData.keep = true;
 
-  // The face panel sits flush with the frame's own front face (z = d), not
-  // proud of it, so the group's overall depth stays exactly `depth`.
-  const panelDepth = Math.min(Math.max(d * 0.3, 0.004), d * 0.5);
+  // Each frame is a moulding of four bars the full depth, and the picture
+  // fills the opening between them, its face set back PICTURE_RECESS behind
+  // the moulding's front -- as a real framed print sits. (It used to be a
+  // panel whose face shared the plane z = d with a solid frame box behind
+  // it: the same shimmer as the TV screen.) The picture runs from the back
+  // (z = 0) so there is no hole to see through; its edges butt against the
+  // bars' inner faces, which face the other way and so cannot fight.
+  const PICTURE_RECESS = Math.min(Math.max(OVERLAY_GAP * 2, d * 0.15), d * 0.5);
+  const fwc = Math.min(fw, panelW / 3, h / 3);
   for (let i = 0; i < n; i++) {
     const cx = -totalW / 2 + panelW / 2 + i * (panelW + gap);
-    const frame = box(THREE, panelW, d, h, frameMat, cx, h / 2, d / 2);
-    g.add(frame);
-    const innerW = Math.max(panelW - fw * 2, 0.01);
-    const innerH = Math.max(h - fw * 2, 0.01);
-    const panel = box(THREE, innerW, panelDepth, innerH, panelMat, cx, h / 2, d - panelDepth / 2);
+    g.add(box(THREE, panelW, d, fwc, frameMat, cx, h - fwc / 2, d / 2));
+    g.add(box(THREE, panelW, d, fwc, frameMat, cx, fwc / 2, d / 2));
+    g.add(box(THREE, fwc, d, h - fwc * 2, frameMat, cx - panelW / 2 + fwc / 2, h / 2, d / 2));
+    g.add(box(THREE, fwc, d, h - fwc * 2, frameMat, cx + panelW / 2 - fwc / 2, h / 2, d / 2));
+    const innerW = Math.max(panelW - fwc * 2, 0.005);
+    const innerH = Math.max(h - fwc * 2, 0.005);
+    const pd = d - PICTURE_RECESS;
+    const panel = box(THREE, innerW, pd, innerH, panelMat, cx, h / 2, pd / 2);
     if (tex) panel.userData.keep = true;
     g.add(panel);
   }
@@ -228,6 +245,15 @@ function buildPhotoFrame(THREE, params, opts) {
 //   'ceiling'                   a small box/pod for a ceiling mount (Dolby
 //                               Atmos style) -- see the placement note below.
 //   'centre'                    a low wide box for a console.
+//
+// THE FRONT (wall-trapezoid, floor-standing, centre, and the subwoofer): the
+// cabinet stops a grille-depth short of the front; on its baffle sit real
+// drivers (a rubber surround ring, a cone and a dust cap; a tweeter dome on
+// a faceplate) and a round bass port; a frame rim runs round the front edge
+// (the cabinet's edge detail); and a smoked, see-through grille fills the
+// rim, so the drivers show through it. `grille: false` drops the grille
+// panel (the rim stays); `port: false` drops the port. 'low' detail is the
+// cabinet and rim only. Everything stays inside width x depth x height.
 //
 // Every kind still follows the shared frame: y=0 is the item's bottom,
 // back at z=0, front at +z, x centred -- INCLUDING 'ceiling'. A ceiling
@@ -249,6 +275,10 @@ const SPEAKER_DEFAULTS = Object.freeze({
   finish: 'matte',
   kind: 'wall-trapezoid', // 'wall-trapezoid' | 'floor-standing' | 'ceiling' | 'centre'
   boxShape: false,         // wall-trapezoid only: swap the trapezoid for a box
+  // A see-through smoked grille over the drivers, and a round bass port on
+  // the baffle (every kind with a front baffle).
+  grille: true,
+  port: true,
   // floor-standing only. Real reference (a real household's own measurement): a
   // 16.5 x 24 x 90 cabinet on a small outrigger plinth; set width/depth/
   // height to those for that preset, and plinthWidth/plinthDepth to a size
@@ -268,10 +298,128 @@ const SPEAKER_DEFAULTS = Object.freeze({
   firing: 'down'
 });
 
-function buildSpeakerCone(THREE, mat, radius, cx, cy, cz) {
-  const cone = new THREE.Mesh(new THREE.CircleGeometry(radius, 16), mat);
-  cone.position.set(cx, cy, cz);
-  return cone;
+const DRIVER_COLORS = Object.freeze({ surround: '#161616', cone: '#2c2c2e', cap: '#111111', plate: '#1d1d1f' });
+const GRILLE_COLOR = '#2a2c30';
+const PORT_COLOR = '#0c0c0c';
+
+/** How deep the grille zone in front of the baffle is, for a cabinet `d` deep. */
+function grilleDepth(d) { return Math.min(0.016, Math.max(d * 0.2, 0.008)); }
+
+/**
+ * One driver on a baffle whose front face is the plane z = zFace, facing +z,
+ * everything proud of that plane (never behind it: a driver behind the baffle
+ * is invisible -- which is what the old CircleGeometry cones, set 1 mm INSIDE
+ * the cabinet, were). `kind` 'woofer' is a rubber surround ring, a shallow
+ * cone and a dust-cap dome; 'tweeter' is a dome on a round faceplate. `r` is
+ * the driver's outer radius. Nothing stands more than `maxProud` in front
+ * of the baffle (domes flatten to fit), so a driver never pokes through the
+ * grille or past the envelope.
+ */
+function addDriver(THREE, g, mats, kind, r, cx, cy, zFace, segs, maxProud) {
+  const toFront = geo => { geo.rotateX(Math.PI / 2); return geo; }; // +y axis -> +z
+  if (kind === 'tweeter') {
+    const plateT = Math.min(0.003, r * 0.3, maxProud / 3);
+    const plate = new THREE.Mesh(toFront(new THREE.CylinderGeometry(r * 1.45, r * 1.45, plateT, segs)), mats.plate);
+    plate.position.set(cx, cy, zFace + plateT / 2);
+    plate.name = 'tweeterPlate';
+    const dome = new THREE.Mesh(toFront(new THREE.SphereGeometry(r, segs, Math.max(2, segs / 4), 0, Math.PI * 2, 0, Math.PI / 2)), mats.cap);
+    dome.scale.set(1, 1, Math.min(1, (maxProud - plateT) / r));
+    dome.position.set(cx, cy, zFace + plateT);
+    dome.name = 'tweeterDome';
+    g.add(plate, dome);
+    return;
+  }
+  const tube = Math.min(r * 0.1, maxProud);
+  const surround = new THREE.Mesh(new THREE.TorusGeometry(r - tube, tube, 4, segs), mats.surround);
+  surround.position.set(cx, cy, zFace);
+  surround.name = 'driverSurround';
+  const coneH = Math.min(r * 0.12, 0.008, maxProud / 2);
+  const cone = new THREE.Mesh(toFront(new THREE.CylinderGeometry(r * 0.3, r - tube * 1.6, coneH, segs)), mats.cone);
+  cone.position.set(cx, cy, zFace + coneH / 2);
+  cone.name = 'driverCone';
+  const capR = r * 0.3;
+  const cap = new THREE.Mesh(toFront(new THREE.SphereGeometry(capR, segs, Math.max(2, segs / 4), 0, Math.PI * 2, 0, Math.PI / 2)), mats.cap);
+  cap.scale.set(1, 1, Math.min(0.5, (maxProud - coneH) / capR)); // a flattened dome
+  cap.position.set(cx, cy, zFace + coneH);
+  cap.name = 'driverCap';
+  g.add(surround, cone, cap);
+}
+
+/** A round bass port on the baffle: a flared ring and its dark mouth. */
+function addPort(THREE, g, mats, r, cx, cy, zFace, segs, maxProud) {
+  const tube = Math.min(r * 0.22, maxProud);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(r, tube, 4, segs), mats.surround);
+  ring.position.set(cx, cy, zFace);
+  ring.name = 'portRing';
+  // The mouth: a dark disc OVERLAY_GAP off the baffle, inside the ring.
+  const mouth = new THREE.Mesh(new THREE.CircleGeometry(r, segs), mats.port);
+  mouth.position.set(cx, cy, zFace + OVERLAY_GAP);
+  mouth.name = 'portMouth';
+  g.add(ring, mouth);
+}
+
+/**
+ * The front of a speaker cabinet: rim, drivers, port and grille, over the
+ * rectangle x in [-fw/2, fw/2], y in [y0, y1], between the baffle plane
+ * z = zb and the front z = zf. `layout` is { drivers: [{kind, r, x, y}],
+ * port: {r, x, y} | null }. Low detail: the rim only.
+ */
+function addSpeakerFront(THREE, g, p, opts, fw, y0, y1, zb, zf, layout) {
+  const low = opts && opts.detail === 'low';
+  const segs = low ? 8 : 16;
+  const rimMat = makeFinish(THREE, p.finish, p.color);
+  const rt = rimThickness(fw, y1 - y0);
+  const rd = zf - zb;
+  const cy = (y0 + y1) / 2, fh = y1 - y0;
+  // The rim: four bars round the front edge, the full grille depth.
+  [box(THREE, fw, rd, rt, rimMat, 0, y1 - rt / 2, zb + rd / 2),
+    box(THREE, fw, rd, rt, rimMat, 0, y0 + rt / 2, zb + rd / 2),
+    box(THREE, rt, rd, fh - rt * 2, rimMat, -fw / 2 + rt / 2, cy, zb + rd / 2),
+    box(THREE, rt, rd, fh - rt * 2, rimMat, fw / 2 - rt / 2, cy, zb + rd / 2)
+  ].forEach(bar => { bar.name = 'speakerRim'; g.add(bar); });
+  if (low) return;
+  const mats = {
+    surround: makeFinish(THREE, 'matte', DRIVER_COLORS.surround),
+    cone: makeFinish(THREE, 'matte', DRIVER_COLORS.cone),
+    cap: makeFinish(THREE, 'gloss', DRIVER_COLORS.cap),
+    plate: makeFinish(THREE, 'matte', DRIVER_COLORS.plate),
+    port: makeFinish(THREE, 'matte', PORT_COLOR)
+  };
+  // Drivers and the port stay clear of the grille panel by OVERLAY_GAP.
+  const gt = Math.min(0.002, rd / 4);
+  const maxProud = rd - gt - OVERLAY_GAP;
+  layout.drivers.forEach(dv => addDriver(THREE, g, mats, dv.kind, dv.r, dv.x, dv.y, zb, segs, maxProud));
+  if (layout.port && p.port !== false) addPort(THREE, g, mats, layout.port.r, layout.port.x, layout.port.y, zb, segs, maxProud);
+  if (p.grille !== false) {
+    // The grille: a thin smoked panel inside the rim, its face at the front.
+    const grille = box(THREE, fw - rt * 2, gt, fh - rt * 2, makeFinish(THREE, 'glass', GRILLE_COLOR), 0, cy, zf - gt / 2);
+    grille.userData.keep = true;
+    grille.name = 'speakerGrille';
+    g.add(grille);
+  }
+}
+
+function rimThickness(fw, fh) { return Math.min(0.012, fw * 0.07, fh * 0.07); }
+
+/**
+ * A vertical column of drivers for a front `fw` wide spanning [y0, y1]:
+ * a port at the bottom (when on), `mids` woofers above it, a tweeter on
+ * top. Radii are fitted to the space, so any sane size builds.
+ */
+function columnLayout(p, fw, y0, y1, mids) {
+  const rt = rimThickness(fw, y1 - y0);
+  const innerW = fw - rt * 2, top = y1 - rt, bottom = y0 + rt;
+  const hasPort = p.port !== false;
+  const portR = hasPort ? Math.min(0.022, innerW * 0.14, (top - bottom) * 0.07) : 0;
+  const portY = bottom + portR * 1.3 + 0.006;
+  const floor = hasPort ? portY + portR * 1.3 + 0.006 : bottom + 0.006;
+  const tweeterR = Math.min(0.014, innerW * 0.1);
+  const tweeterY = top - tweeterR * 1.45 - 0.008;
+  const avail = (tweeterY - tweeterR * 1.45 - 0.006) - floor;
+  const r = Math.max(0.01, Math.min(innerW / 2 * 0.86, avail / mids / 2 * 0.92));
+  const drivers = [{ kind: 'tweeter', r: tweeterR, x: 0, y: tweeterY }];
+  for (let i = 0; i < mids; i++) drivers.push({ kind: 'woofer', r, x: 0, y: floor + (avail / mids) * (i + 0.5) });
+  return { drivers, port: hasPort ? { r: portR, x: 0, y: portY } : null };
 }
 
 function buildSpeakerWallTrapezoid(THREE, p, opts) {
@@ -280,40 +428,43 @@ function buildSpeakerWallTrapezoid(THREE, p, opts) {
   const h = m(p.height), d = m(p.depth);
   const backW = m(p.width);
   const frontW = m(Math.min(p.frontWidth, p.width));
+  // The cabinet stops a grille-depth short of the front; see THE FRONT.
+  const gd = grilleDepth(d);
+  const zb = d - gd;
+  // The trapezoid's width at the baffle plane z = zb (it tapers towards
+  // frontW at z = d, so the baffle is a little wider than the rim).
+  const baffleW = p.boxShape ? backW : frontW + (backW - frontW) * (gd / d);
 
   if (p.boxShape) {
-    g.add(box(THREE, backW, d, h, mat, 0, h / 2, d / 2));
+    g.add(Object.assign(box(THREE, backW, zb, h, mat, 0, h / 2, zb / 2), { name: 'speakerCabinet' }));
   } else {
     // Trapezoid in plan: back (z=0) is `width` wide (the widest edge, per
-    // the bbox contract), front (z=d) is the narrower `frontWidth`.
+    // the bbox contract), narrowing towards the front.
     //
     // ExtrudeGeometry extrudes the shape's local XY plane (x, shape-y) along
     // +Z (world height) by `depth` (here, `h`). Rotating -90 about X maps
-    // shape-y=0 to world z=+d and shape-y=d to world z=0 (VERIFIED: this is
+    // shape-y=0 to world z=+zb and shape-y=zb to world z=0 (VERIFIED: this is
     // an inversion, not a straight relabelling -- rotating -90 about X sends
     // +Y to +Z, but the geometry's own vertices at shape-y=0 land at the
     // FAR end post-translate, confirmed by sampling vertex positions). So
     // the shape is authored with the NARROW edge at shape-y=0 (which becomes
-    // the FAR face, world z=d) and the WIDE edge at shape-y=d (which becomes
+    // the FAR face, world z=zb) and the WIDE edge at shape-y=zb (which becomes
     // world z=0, the back) -- the opposite of what reads naturally from the
     // frame's own name. Do not "simplify" this without re-verifying against
     // built geometry; a previous attempt got exactly this backwards.
     const shape = new THREE.Shape();
-    shape.moveTo(-frontW / 2, 0);
-    shape.lineTo(frontW / 2, 0);
-    shape.lineTo(backW / 2, d);
-    shape.lineTo(-backW / 2, d);
-    shape.lineTo(-frontW / 2, 0);
+    shape.moveTo(-baffleW / 2, 0);
+    shape.lineTo(baffleW / 2, 0);
+    shape.lineTo(backW / 2, zb);
+    shape.lineTo(-backW / 2, zb);
+    shape.lineTo(-baffleW / 2, 0);
     const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false, curveSegments: 1 });
     geo.rotateX(-Math.PI / 2);
-    geo.translate(0, 0, d);
-    g.add(new THREE.Mesh(geo, mat));
+    geo.translate(0, 0, zb);
+    g.add(Object.assign(new THREE.Mesh(geo, mat), { name: 'speakerCabinet' }));
   }
-  if (opts && opts.detail !== 'low') {
-    const coneMat = makeFinish(THREE, 'matte', '#222222');
-    const coneR = Math.min(frontW, h) * 0.32;
-    g.add(buildSpeakerCone(THREE, coneMat, coneR, 0, h / 2, d - 0.001));
-  }
+  const fw = p.boxShape ? backW : frontW;
+  addSpeakerFront(THREE, g, p, opts, fw, 0, h, zb, d, columnLayout(p, fw, 0, h, 1));
   return g;
 }
 
@@ -334,20 +485,10 @@ function buildSpeakerFloorStanding(THREE, p, opts) {
   const plinthW = Math.min(m(p.plinthWidth), w);
   const plinthD = Math.min(m(p.plinthDepth), d);
   g.add(box(THREE, plinthW, plinthD, plinthH, plinthMat, 0, plinthH / 2, plinthD / 2));
-  g.add(box(THREE, w, d, h - plinthH, mat, 0, plinthH + (h - plinthH) / 2, d / 2));
-  if (opts && opts.detail !== 'low') {
-    // Tweeter at the top, 2-3 bass/mid discs below it.
-    const coneMat = makeFinish(THREE, 'matte', '#181818');
-    const tweeterMat = makeFinish(THREE, 'matte', '#333333');
-    const cabinetH = h - plinthH;
-    const midCount = Math.max(2, Math.min(3, Math.round(p.midDrivers)));
-    const tweeterY = plinthH + cabinetH * 0.9;
-    g.add(buildSpeakerCone(THREE, tweeterMat, Math.min(w, h) * 0.12, 0, tweeterY, d - 0.001));
-    for (let i = 0; i < midCount; i++) {
-      const cy = plinthH + cabinetH * (0.15 + 0.55 * (i / Math.max(1, midCount - 1)));
-      g.add(buildSpeakerCone(THREE, coneMat, Math.min(w, h / (midCount + 1)) * 0.4, 0, cy, d - 0.001));
-    }
-  }
+  const gd = grilleDepth(d), zb = d - gd;
+  g.add(Object.assign(box(THREE, w, zb, h - plinthH, mat, 0, plinthH + (h - plinthH) / 2, zb / 2), { name: 'speakerCabinet' }));
+  const midCount = Math.max(2, Math.min(3, Math.round(p.midDrivers)));
+  addSpeakerFront(THREE, g, p, opts, w, plinthH, h, zb, d, columnLayout(p, w, plinthH, h, midCount));
   return g;
 }
 
@@ -363,25 +504,33 @@ function buildSpeakerCeiling(THREE, p, opts) {
   //            speaker mounted near the ceiling but firing across the room.
   //   'up'     the driver is on TOP (y = height) -- rare, kept only so an
   //            unrecognised or unset `firing` still builds something.
+  // The box stops OVERLAY_GAP short of the driver's face and the driver
+  // disc sits ON that face of the envelope, so it is visible (it used to be
+  // 1 mm inside the box).
   const g = new THREE.Group();
   const mat = makeFinish(THREE, p.finish, p.color);
   const w = m(p.width), d = m(p.depth), h = m(p.height);
-  g.add(box(THREE, w, d, h, mat, 0, h / 2, d / 2));
-  if (!(opts && opts.detail === 'low')) {
+  const low = opts && opts.detail === 'low';
+  const gap = low ? 0 : OVERLAY_GAP;
+  const down = p.firing === 'down', angled = p.firing === 'angled';
+  const bodyD = angled ? d - gap : d;
+  const bodyY0 = down ? gap : 0, bodyY1 = (!down && !angled) ? h - gap : h;
+  g.add(Object.assign(box(THREE, w, bodyD, bodyY1 - bodyY0, mat, 0, (bodyY0 + bodyY1) / 2, bodyD / 2), { name: 'speakerCabinet' }));
+  if (!low) {
     const driverMat = makeFinish(THREE, 'matte', '#181818');
     const r = Math.min(w, d) * 0.32;
-    if (p.firing === 'down') {
-      const driver = buildSpeakerCone(THREE, driverMat, r, 0, 0.001, d / 2);
+    const driver = new THREE.Mesh(new THREE.CircleGeometry(r, 16), driverMat);
+    driver.name = 'driverCone';
+    if (down) {
       driver.rotation.x = Math.PI / 2;
-      g.add(driver);
-    } else if (p.firing === 'angled') {
-      const driver = buildSpeakerCone(THREE, driverMat, r, 0, h * 0.7, d - 0.001);
-      g.add(driver);
+      driver.position.set(0, 0, d / 2);
+    } else if (angled) {
+      driver.position.set(0, h * 0.7, d);
     } else {
-      const driver = buildSpeakerCone(THREE, driverMat, r, 0, h - 0.001, d / 2);
       driver.rotation.x = -Math.PI / 2;
-      g.add(driver);
+      driver.position.set(0, h, d / 2);
     }
+    g.add(driver);
   }
   return g;
 }
@@ -391,17 +540,20 @@ function buildSpeakerCentre(THREE, p, opts) {
   const g = new THREE.Group();
   const mat = makeFinish(THREE, p.finish, p.color);
   const w = m(p.width), d = m(p.depth), h = m(p.height);
-  g.add(box(THREE, w, d, h, mat, 0, h / 2, d / 2));
-  if (opts && opts.detail !== 'low') {
-    const midMat = makeFinish(THREE, 'matte', '#222222');
-    const tweeterMat = makeFinish(THREE, 'matte', '#333333');
-    const midR = m(p.midDriverDiameter) / 2;
-    const tweeterR = m(p.tweeterDiameter) / 2;
-    const gap = w * 0.24;
-    g.add(buildSpeakerCone(THREE, midMat, midR, -gap, h / 2, d - 0.001));
-    g.add(buildSpeakerCone(THREE, tweeterMat, tweeterR, 0, h / 2, d - 0.001));
-    g.add(buildSpeakerCone(THREE, midMat, midR, gap, h / 2, d - 0.001));
-  }
+  const gd = grilleDepth(d), zb = d - gd;
+  g.add(Object.assign(box(THREE, w, zb, h, mat, 0, h / 2, zb / 2), { name: 'speakerCabinet' }));
+  const innerH = h - rimThickness(w, h) * 2;
+  const midR = Math.min(m(p.midDriverDiameter) / 2, innerH / 2 * 0.9);
+  const tweeterR = Math.min(m(p.tweeterDiameter) / 2, innerH / 2 * 0.5);
+  const gap = w * 0.24;
+  addSpeakerFront(THREE, g, p, opts, w, 0, h, zb, d, {
+    drivers: [
+      { kind: 'woofer', r: midR, x: -gap, y: h / 2 },
+      { kind: 'tweeter', r: tweeterR, x: 0, y: h / 2 },
+      { kind: 'woofer', r: midR, x: gap, y: h / 2 }
+    ],
+    port: null
+  });
   return g;
 }
 
@@ -419,27 +571,59 @@ function buildSpeaker(THREE, params, opts) {
 }
 
 // ============================================================================
-// subwoofer - a simple cube, white
+// subwoofer - a white cube on four short feet: one big front-firing woofer
+// and a bass port behind a see-through grille, inside a front rim (see THE
+// FRONT under `speaker`).
 // ============================================================================
 const SUBWOOFER_DEFAULTS = Object.freeze({
   width: 35,
   height: 35,
   depth: 35,
   color: '#f2f2f2',
-  finish: 'matte'
+  finish: 'matte',
+  grille: true,
+  port: true
 });
 
-function buildSubwoofer(THREE, params) {
+function buildSubwoofer(THREE, params, opts) {
   const p = Object.assign({}, SUBWOOFER_DEFAULTS, params || {});
+  const w = m(p.width), h = m(p.height), d = m(p.depth);
+  const low = opts && opts.detail === 'low';
   const mat = makeFinish(THREE, p.finish, p.color);
   const g = new THREE.Group();
   g.name = 'furniture:subwoofer';
-  g.add(box(THREE, m(p.width), m(p.depth), m(p.height), mat, 0, m(p.height) / 2, m(p.depth) / 2));
+  const gd = grilleDepth(d), zb = d - gd;
+  // Four short feet; the cabinet sits on them.
+  const footH = Math.min(0.015, h * 0.06);
+  if (!low) {
+    const footMat = makeFinish(THREE, 'matte', '#1a1a1a');
+    const fr = Math.min(0.02, w * 0.08, d * 0.08);
+    const ix = w / 2 - fr * 1.6, zs = [fr * 1.6, zb - fr * 1.6];
+    [-ix, ix].forEach(x => zs.forEach(z => {
+      const geo = new THREE.CylinderGeometry(fr, fr, footH, 12);
+      geo.translate(x, footH / 2, z);
+      g.add(new THREE.Mesh(geo, footMat));
+    }));
+  }
+  const y0 = low ? 0 : footH;
+  g.add(Object.assign(box(THREE, w, zb, h - y0, mat, 0, y0 + (h - y0) / 2, zb / 2), { name: 'speakerCabinet' }));
+  // One big woofer above a port, fitted to the front.
+  const rt = rimThickness(w, h - y0);
+  const innerW = w - rt * 2, bottom = y0 + rt, top = h - rt;
+  const hasPort = p.port !== false;
+  const portR = hasPort ? Math.min(0.026, innerW * 0.08) : 0;
+  const portY = bottom + portR * 1.3 + 0.006;
+  const floor = hasPort ? portY + portR * 1.3 + 0.008 : bottom + 0.008;
+  const r = Math.max(0.02, Math.min(innerW / 2 * 0.86, (top - 0.008 - floor) / 2));
+  addSpeakerFront(THREE, g, p, opts, w, y0, h, zb, d, {
+    drivers: [{ kind: 'woofer', r, x: 0, y: floor + r }],
+    port: hasPort ? { r: portR, x: 0, y: portY } : null
+  });
   return g;
 }
 
 // ============================================================================
-// tube-floor-lamp - a thin emissive light tube rising from a small base
+// tube-floor-lamp - a thin emissive light tube rising from a round base
 // ============================================================================
 const TUBE_FLOOR_LAMP_DEFAULTS = Object.freeze({
   // width/depth are the OVERALL footprint, per the shared bbox contract --
@@ -456,39 +640,67 @@ const TUBE_FLOOR_LAMP_DEFAULTS = Object.freeze({
   oneSidedGlow: false
 });
 
+const LAMP_TRIM_COLOR = '#b9bcc0';
+
 function buildTubeFloorLamp(THREE, params, opts) {
   const p = Object.assign({}, TUBE_FLOOR_LAMP_DEFAULTS, params || {});
   const g = new THREE.Group();
   g.name = 'furniture:tube-floor-lamp';
-
+  const low = opts && opts.detail === 'low';
+  const segs = low ? 8 : 24;
   const baseMat = makeFinish(THREE, p.baseFinish, p.baseColor);
-  const baseH = m(p.baseHeight);
+  const trimMat = makeFinish(THREE, 'metal', LAMP_TRIM_COLOR);
+  const H = m(p.height);
+  const baseH = Math.min(m(p.baseHeight), H * 0.5);
   const baseR = Math.min(m(p.width), m(p.depth)) / 2;
-  const segs = opts && opts.detail === 'low' ? 8 : 24;
-  const baseGeo = new THREE.CylinderGeometry(baseR, baseR, baseH, segs);
-  baseGeo.translate(0, baseH / 2, baseR);
-  const base = new THREE.Mesh(baseGeo, baseMat);
-  g.add(base);
+  const tubeR = Math.min(m(p.tubeDiameter) / 2, baseR * 0.4);
+  const cz = baseR; // everything is centred over the base's own centre
+  const cyl = (rTop, rBot, hgt, y0, mat) => {
+    const geo = new THREE.CylinderGeometry(rTop, rBot, hgt, segs);
+    geo.translate(0, y0 + hgt / 2, cz);
+    const mesh = new THREE.Mesh(geo, mat);
+    g.add(mesh);
+    return mesh;
+  };
 
+  // THE BASE: a weighted foot disc with a chamfered top edge, a tapered
+  // collar rising from it to the tube, and a metal trim ring where the tube
+  // enters. Each part sits on the one below (touching faces point opposite
+  // ways, so none of them can z-fight).
+  const footH = Math.min(0.025, baseH * 0.25);
+  const chamfer = Math.min(footH * 0.4, 0.008);
+  cyl(baseR, baseR, footH - chamfer, 0, baseMat);
+  cyl(baseR - chamfer, baseR, chamfer, footH - chamfer, baseMat);
+  const trimH = low ? 0 : Math.min(0.012, baseH * 0.1);
+  const collarH = baseH - footH - trimH;
+  cyl(tubeR * 1.5, Math.max(baseR * 0.42, tubeR * 1.6), collarH, footH, baseMat);
+  if (!low) cyl(tubeR * 1.3, tubeR * 1.3, trimH, baseH - trimH, trimMat);
+
+  // THE TUBE, with a metal end cap on top.
+  const capH = low ? 0 : Math.min(0.012, H * 0.02);
+  const tubeH = H - baseH - capH;
   const tubeMat = makeFinish(THREE, p.finish, p.color);
-  const tubeH = m(p.height) - baseH;
-  const tubeR = m(p.tubeDiameter) / 2;
-  // A one-sided glow: a thin half-cylinder-ish tube (an open arc) rather
-  // than a full cylinder, so the tube reads as glowing from one side only.
-  // Still emissive/keep either way, per the contract.
-  let tubeGeo;
   if (p.oneSidedGlow) {
-    tubeGeo = new THREE.CylinderGeometry(tubeR, tubeR, tubeH, segs, 1, true, 0, Math.PI);
+    // One-sided glow: the half facing the room (+z) glows; the half facing
+    // the wall is the lamp's body, in the base's finish, so the tube is
+    // still a whole tube from behind or the side. (It used to be an open
+    // half-cylinder alone -- invisible from the back.) CylinderGeometry
+    // puts theta = 0 on +z, so the glowing half is theta -PI/2..+PI/2.
+    const glowGeo = new THREE.CylinderGeometry(tubeR, tubeR, tubeH, segs, 1, true, -Math.PI / 2, Math.PI);
+    glowGeo.translate(0, baseH + tubeH / 2, cz);
+    const glow = new THREE.Mesh(glowGeo, tubeMat);
+    glow.name = 'lampTube';
+    glow.userData.keep = true;
+    g.add(glow);
+    const backGeo = new THREE.CylinderGeometry(tubeR, tubeR, tubeH, segs, 1, true, Math.PI / 2, Math.PI);
+    backGeo.translate(0, baseH + tubeH / 2, cz);
+    g.add(Object.assign(new THREE.Mesh(backGeo, baseMat), { name: 'lampTubeBack' }));
   } else {
-    tubeGeo = new THREE.CylinderGeometry(tubeR, tubeR, tubeH, segs);
+    const tube = cyl(tubeR, tubeR, tubeH, baseH, tubeMat);
+    tube.name = 'lampTube';
+    tube.userData.keep = true;
   }
-  // Centred over the base's own centre (z = baseR), not at z = tubeR, so
-  // the thin tube sits above the middle of the base rather than at its
-  // own tiny footprint's back edge.
-  tubeGeo.translate(0, baseH + tubeH / 2, baseR);
-  const tube = new THREE.Mesh(tubeGeo, tubeMat);
-  tube.userData.keep = true;
-  g.add(tube);
+  if (!low) cyl(tubeR * 1.12, tubeR * 1.12, capH, H - capH, trimMat);
   return g;
 }
 
@@ -630,7 +842,9 @@ function buildMirror(THREE, params, opts) {
 
   const frameMat = makeFinish(THREE, p.frameFinish, p.frameColor);
   const outerShape = mirrorPlanShape(THREE, p.shape, w, h);
-  const frameGeo = new THREE.ExtrudeGeometry(outerShape, { depth: d, bevelEnabled: false, curveSegments: opts && opts.detail === 'low' ? 8 : 24 });
+  // The frame (a backer plate the full outline) stops OVERLAY_GAP short of
+  // the front, so the glass's face at z = d never shares its plane.
+  const frameGeo = new THREE.ExtrudeGeometry(outerShape, { depth: d - OVERLAY_GAP, bevelEnabled: false, curveSegments: opts && opts.detail === 'low' ? 8 : 24 });
   frameGeo.rotateX(0); // shape is already in the x/y (width/height) plane
   // The extrude axis is +Z here, which is our world depth axis already
   // (shape x -> width, shape y -> height, extrude -> depth). No rotation
@@ -641,7 +855,7 @@ function buildMirror(THREE, params, opts) {
   g.add(frameMesh);
 
   // Mirror glass: a slightly inset, slightly thinner copy of the same
-  // outline, sitting just in front of the frame's face.
+  // outline, its face at z = d, OVERLAY_GAP proud of the frame's face.
   const innerShape = mirrorPlanShape(THREE, p.shape, Math.max(w - fw * 2, 0.02), Math.max(h - fw * 2, 0.02));
   const glassMat = makeFinish(THREE, 'mirror', '#d8dadc');
   const glassGeo = new THREE.ExtrudeGeometry(innerShape, { depth: Math.max(d * 0.2, 0.005), bevelEnabled: false, curveSegments: opts && opts.detail === 'low' ? 8 : 24 });
@@ -692,17 +906,20 @@ const SHELF_DEFAULTS = Object.freeze({
 function buildOneShelf(THREE, w, d, thickness, color, finish, led, ledColor, detail) {
   const g = new THREE.Group();
   const mat = makeFinish(THREE, finish, color);
-  g.add(box(THREE, w, d, thickness, mat, 0, thickness / 2, d / 2));
+  // With an LED edge the slab stops OVERLAY_GAP short of the front and the
+  // strip's face is at z = d, proud of it; the strip used to share the
+  // slab's front plane and shimmer against it.
+  const slabD = led ? d - OVERLAY_GAP : d;
+  g.add(box(THREE, w, slabD, thickness, mat, 0, thickness / 2, slabD / 2));
   if (led) {
-    // Flush with the slab's own front edge (z = d), not proud of it, so the
-    // group's overall depth stays exactly `depth`. Flush with the slab's own
-    // UNDERSIDE too: the strip's top face touches the slab's bottom face
-    // (y = 0) exactly, not a gap below it.
+    // Along the bottom of the slab's front edge, its face at z = d.
     const stripDepth = Math.max(thickness * 0.15, 0.003);
-    const stripH = Math.min(Math.max(thickness * 0.4, 0.004), thickness);
+    // OVERLAY_GAP above the slab's underside, so its own underside is not
+    // in the slab's plane.
+    const stripH = Math.min(Math.max(thickness * 0.4, 0.004), thickness - OVERLAY_GAP * 2);
     const ledMat = makeFinish(THREE, 'emissive', ledColor);
     const strip = box(THREE, w * 0.96, stripDepth, stripH,
-      ledMat, 0, stripH / 2, d - stripDepth / 2);
+      ledMat, 0, OVERLAY_GAP + stripH / 2, d - stripDepth / 2);
     strip.userData.keep = true;
     g.add(strip);
   }
@@ -715,23 +932,27 @@ function buildOneShelf(THREE, w, d, thickness, color, finish, led, ledColor, det
  * rises the full backPanelHeight from y=0 against the wall. */
 function buildShelfWithBackPanel(THREE, w, d, totalH, shelfThickness, p, detail) {
   const g = new THREE.Group();
-  const backH = Math.min(m(p.backPanelHeight), totalH);
   const backMat = makeFinish(THREE, 'matte', p.backPanelColor);
   const backThickness = Math.min(0.02, d * 0.15);
-  g.add(box(THREE, w, backThickness, backH, backMat, 0, backH / 2, backThickness / 2));
-
   const shelfMat = makeFinish(THREE, p.finish, p.shelfColor);
   const shelfY = Math.max(totalH - shelfThickness, backThickness);
-  g.add(box(THREE, w, d, shelfThickness, shelfMat, 0, shelfY + shelfThickness / 2, d / 2));
+  // The back panel stops at the slab's underside. Running it on up through
+  // the slab (as it did) put its top and back faces in the slab's own
+  // planes, in two different colours -- a shimmering strip along the back of
+  // the shelf top.
+  const backH = Math.min(m(p.backPanelHeight), totalH, shelfY);
+  g.add(box(THREE, w, backThickness, backH, backMat, 0, backH / 2, backThickness / 2));
+  const slabD = p.led ? d - OVERLAY_GAP : d;
+  g.add(box(THREE, w, slabD, shelfThickness, shelfMat, 0, shelfY + shelfThickness / 2, slabD / 2));
 
   if (p.led) {
     // Flush with the shelf slab's own underside: the strip's bottom face
     // touches the slab's own bottom face (y = shelfY) exactly.
     const stripDepth = Math.max(shelfThickness * 0.15, 0.003);
-    const stripH = Math.min(Math.max(shelfThickness * 0.4, 0.004), shelfThickness);
+    const stripH = Math.min(Math.max(shelfThickness * 0.4, 0.004), shelfThickness - OVERLAY_GAP * 2);
     const ledMat = makeFinish(THREE, 'emissive', p.ledColor);
     const strip = box(THREE, w * 0.96, stripDepth, stripH,
-      ledMat, 0, shelfY + stripH / 2, d - stripDepth / 2);
+      ledMat, 0, shelfY + OVERLAY_GAP + stripH / 2, d - stripDepth / 2);
     strip.userData.keep = true;
     g.add(strip);
   }
@@ -825,9 +1046,10 @@ function buildMonitor(THREE, params, opts) {
   const h = Math.max(m(p.height) - panelBottom, 0.01);
   const screenDepth = Math.min(Math.max(d * 0.3, 0.004), d * 0.5);
   if (!p.curved) {
-    g.add(box(THREE, w, d, h, bodyMat, 0, panelBottom + h / 2, d / 2));
-    // The screen sits flush with the panel's own front face (z = d), not
-    // proud of it, so the group's overall depth stays exactly `depth`.
+    // The body stops OVERLAY_GAP short of the front and the screen stands
+    // that far proud, its face at z = d (see OVERLAY_GAP: they used to
+    // share the plane z = d).
+    g.add(box(THREE, w, d - OVERLAY_GAP, h, bodyMat, 0, panelBottom + h / 2, (d - OVERLAY_GAP) / 2));
     const screen = box(THREE, w * 0.97, screenDepth, h * 0.94, screenMat,
       0, panelBottom + h / 2, d - screenDepth / 2);
     screen.userData.keep = true;
@@ -845,6 +1067,7 @@ function buildMonitor(THREE, params, opts) {
     const totalAngle = w / radius; // arc length ~= chord for a shallow bend
     const segW = w / segCount;
     const bowMax = Math.min(d * 0.15, d - screenDepth); // never exceeds depth
+    const CURVED_GAP = 0.006;
     // Segment centres are placed by ANGLE (for the bow), but then rescaled
     // in x so the outermost segment edges land exactly on +-w/2 -- the
     // angle-based sin() spacing alone undershoots the declared width.
@@ -861,8 +1084,13 @@ function buildMonitor(THREE, params, opts) {
       const x = rawXs[i] * xScale;
       const zBow = Math.max(0, Math.min(radius - Math.cos(angle) * radius, bowMax));
       const segZ = Math.max(screenDepth / 2, d - screenDepth / 2 - zBow);
-      const seg = box(THREE, segW * 1.02, Math.max(d - zBow, screenDepth), h, bodyMat, 0, 0, 0);
-      seg.position.set(x, panelBottom + h / 2, Math.max(d - zBow, screenDepth) / 2);
+      // The body segment stops CURVED_GAP short of its screen segment's
+      // face. More than OVERLAY_GAP: the screen segment is turned about y
+      // by up to ~0.14 rad, so its edges swing ~4.5 mm either way of its
+      // centre plane and must stay in front of the body all the same.
+      const segD = Math.max(d - zBow - CURVED_GAP, screenDepth);
+      const seg = box(THREE, segW * 1.02, segD, h, bodyMat, 0, 0, 0);
+      seg.position.set(x, panelBottom + h / 2, segD / 2);
       g.add(seg);
       const screenSeg = box(THREE, segW * 0.98, screenDepth, h * 0.94, screenMat, 0, 0, 0);
       screenSeg.position.set(x, panelBottom + h / 2, segZ);
@@ -903,54 +1131,6 @@ function buildPcTower(THREE, params) {
   return g;
 }
 
-// ============================================================================
-// wire-shelf - a triangular white wire wall shelf (living room). Optional.
-// ============================================================================
-const WIRE_SHELF_DEFAULTS = Object.freeze({
-  width: 40,
-  depth: 40,
-  height: 3,
-  color: '#f4f4f4',
-  finish: 'metal'
-});
-
-function buildWireShelf(THREE, params, opts) {
-  const p = Object.assign({}, WIRE_SHELF_DEFAULTS, params || {});
-  const w = m(p.width), d = m(p.depth), h = m(p.height);
-  const g = new THREE.Group();
-  g.name = 'furniture:wire-shelf';
-  const mat = makeFinish(THREE, p.finish, p.color);
-
-  // Triangular plan: back edge (z=0) spans the full width, tapering to a
-  // point at z=d. As with the wall-trapezoid speaker, rotating -90 about X
-  // inverts shape-y against world-z: shape-y=0 becomes the FAR face
-  // (world z=d) and shape-y=d becomes the back (world z=0) -- VERIFIED by
-  // sampling built vertex positions, not assumed. So the shape is authored
-  // with the point at shape-y=0 and the wide edge at shape-y=d.
-  const shape = new THREE.Shape();
-  shape.moveTo(0, 0);
-  shape.lineTo(w / 2, d);
-  shape.lineTo(-w / 2, d);
-  shape.lineTo(0, 0);
-  const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false, curveSegments: 1 });
-  geo.rotateX(-Math.PI / 2);
-  geo.translate(0, 0, d);
-  const mesh = new THREE.Mesh(geo, mat);
-  g.add(mesh);
-
-  if (!(opts && opts.detail === 'low')) {
-    // A couple of thin wire rails for visual texture at full detail.
-    const railMat = makeFinish(THREE, p.finish, p.color);
-    for (let i = 1; i <= 2; i++) {
-      const z = (d * i) / 3;
-      const railW = w * (1 - z / d) * 0.95;
-      const rail = box(THREE, railW, h * 0.6, 0.004, railMat, 0, h * 0.8, z);
-      g.add(rail);
-    }
-  }
-  return g;
-}
-
 export const TYPES = {
   'tv': { TYPE: 'tv', DEFAULTS: TV_DEFAULTS, build: buildTv },
   'photo-frame': { TYPE: 'photo-frame', DEFAULTS: PHOTO_FRAME_DEFAULTS, build: buildPhotoFrame },
@@ -961,6 +1141,5 @@ export const TYPES = {
   'mirror': { TYPE: 'mirror', DEFAULTS: MIRROR_DEFAULTS, build: buildMirror },
   'shelf': { TYPE: 'shelf', DEFAULTS: SHELF_DEFAULTS, build: buildShelf },
   'monitor': { TYPE: 'monitor', DEFAULTS: MONITOR_DEFAULTS, build: buildMonitor },
-  'pc-tower': { TYPE: 'pc-tower', DEFAULTS: PC_TOWER_DEFAULTS, build: buildPcTower },
-  'wire-shelf': { TYPE: 'wire-shelf', DEFAULTS: WIRE_SHELF_DEFAULTS, build: buildWireShelf }
+  'pc-tower': { TYPE: 'pc-tower', DEFAULTS: PC_TOWER_DEFAULTS, build: buildPcTower }
 };

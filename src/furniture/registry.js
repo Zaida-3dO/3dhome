@@ -105,8 +105,6 @@ export const REGISTRY = Object.freeze({
 
   'wall-sign': { path: 'wall-sign.js', key: null, spec: 'WallDecorSpec' },
 
-  'wire-shelf': { path: 'small-items.js', key: 'wire-shelf', spec: 'SmallItemsSpec' },
-
 });
 
 /** The registry entry for `type`, or null. */
