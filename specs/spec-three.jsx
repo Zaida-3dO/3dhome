@@ -127,11 +127,6 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
     const key = new THREE.DirectionalLight(0xffffff, 1.1);
     key.position.set(2, 4, 3);
     key.castShadow = true; key.shadow.mapSize.set(1024, 1024);
-    // Without a bias every lit flat face shadows itself in a moire of diagonal
-    // stripes ("shadow acne") -- on a white cabinet front it read as
-    // pixelation. normalBias pushes the lookup off the surface along its
-    // normal; the small depth bias mops up what is left at grazing angles.
-    key.shadow.normalBias = 0.02; key.shadow.bias = -0.0005;
     scene.add(key);
     const fill = new THREE.DirectionalLight(0xb8c8ff, 0.3);
     fill.position.set(-2, 1, -2);

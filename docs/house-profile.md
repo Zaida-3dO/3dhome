@@ -1194,12 +1194,14 @@ make one level:
   one unlit quad just off the drawer face whose alpha falls smoothly from the
   channel down. When the level is on, the strip shows in the light's colour
   and the top of the drawer front below is washed in it, more strongly the
-  brighter it is. When it is off, the strip and the wash are hidden and the
+  brighter it is (brightness moves the wash's colour between the front's and
+  the light's; its opacity stays fixed, so a wall fade can own it). When it is off, the strip and the wash are hidden and the
   front is plain: just the recess.
 - **White reads white with `gain`.** A `#ffffff` body renders light grey
   under the scene's tone mapping. The LED bedside presets set `gain: 1.5`,
-  which multiplies the matte/satin/gloss body colour (not the LEDs, glass or
-  metal).
+  which multiplies the body colour: carcass, fronts, top, plinth and channel
+  recesses (not the LEDs, glass, mirror, metal, door frames or a display
+  section's lining, wood and contents).
 - **A room light fixture gives the light.** Add a `strip` fixture on the same
   channel with `"drawn": false` (the light only, no line of its own, since the
   table draws it), a short `reachCm`, and `aim` pointing out of the table's

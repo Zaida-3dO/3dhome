@@ -1065,6 +1065,41 @@ Object.keys(CABINET_PRESETS).forEach(k => {
     ['drawerFront', 'carcassSide', 'carcassTop'].map(n => [r(lit, n), r(plain, n)]));
   check('...but not the emissive LED strips', meshesNamed(lit, 'channelStripFront').every((m, i) =>
     m.material.color.r === meshesNamed(plain, 'channelStripFront')[i].material.color.r));
+  // Only the BODY: every part outside it keeps its colour at gain 1.5 --
+  // mirror panes, glass (doors, side windows, shelves), metal handles and
+  // wheels, door frames, and a display section's lining, wood and contents.
+  const same = (params, names) => {
+    const a = C.build(THREE, Object.assign({}, params, { gain: 1.5 }), { detail: 'full' });
+    const b = C.build(THREE, Object.assign({}, params, { gain: 1 }), { detail: 'full' });
+    const bad = [];
+    const seen = new Set();
+    names.forEach(n => {
+      const ma = meshesNamed(a, n), mb = meshesNamed(b, n);
+      if (ma.length) seen.add(n);
+      ma.forEach((m, i) => { if (m.material.color.getHex() !== mb[i].material.color.getHex() || m.material.color.r > 1) bad.push(n); });
+    });
+    return { bad, seen: [...seen] };
+  };
+  const byFinish = (params, fins) => {
+    const a = C.build(THREE, Object.assign({}, params, { gain: 1.5 }), { detail: 'full' });
+    const b = C.build(THREE, Object.assign({}, params, { gain: 1 }), { detail: 'full' });
+    const ca = [], cb = [];
+    a.traverse(o => { if (o.isMesh && fins.includes(o.material.userData.finish)) ca.push(o.material.color.clone()); });
+    b.traverse(o => { if (o.isMesh && fins.includes(o.material.userData.finish)) cb.push(o.material.color.clone()); });
+    return ca.length > 0 && ca.length === cb.length && ca.every((c, i) => c.equals(cb[i]));
+  };
+  check('gain leaves glass, mirror and metal untouched (every such part of every preset)',
+    Object.keys(CABINET_PRESETS).every(k => byFinish(CABINET_PRESETS[k].params, ['glass', 'mirror', 'metal']) ||
+      !(() => { let n = 0; C.build(THREE, CABINET_PRESETS[k].params, { detail: 'full' }).traverse(o => {
+        if (o.isMesh && ['glass', 'mirror', 'metal'].includes(o.material.userData.finish)) n++; }); return n; })()));
+  const disp = same(CABINET_PRESETS.tallDisplayCabinet.params,
+    ['displaySideGlass', 'displaySideWood', 'interiorLining', 'interiorShelf', 'contentsStand', 'contentsBook', 'contentsBox', 'contentsGame', 'contentsConsole', 'contentsPicture']);
+  check('...and a display section: side glass, side wood, shelves, contents', disp.bad.length === 0 &&
+    ['displaySideGlass', 'displaySideWood', 'interiorShelf', 'interiorLining', 'contentsBook'].every(n => disp.seen.includes(n)), disp);
+  const slid = same(CABINET_PRESETS.slidingWardrobe4Panel.params, ['slidingFrame', 'slidingWhitePanel', 'slidingMirror', 'slidingRail']);
+  check('...and sliding-door frames, panels and rails', slid.bad.length === 0 && slid.seen.includes('slidingFrame'), slid);
+  const ped = same(CABINET_PRESETS.mobilePedestal.params, ['drawerHandle', 'wheel']);
+  check('...and metal handles and wheels', ped.bad.length === 0 && ped.seen.length === 2, ped);
   check('a build without gain is not lifted',
     Math.abs(r(C.build(THREE, CABINET_PRESETS.chestOfDrawers.params, { detail: 'full' }), 'drawerFront') - 1) < 1e-6);
 }

@@ -217,18 +217,26 @@ function levelFixtures(preset, centreY, side) {
   check('top ON: its strips show, in its colour, lit', of('bedside_north_top', 'strip').every(o =>
     o.visible && hex(o.material.color) === '#ff0000' && hex(o.material.emissive) === '#ff0000' && o.material.emissiveIntensity >= 0.99));
   const wash = of('bedside_north_top', 'glow')[0];
-  check('top ON: the drawer below is washed in its colour (one visible unlit quad, in red)', wash &&
-    wash.visible && wash.userData.wash === true && hex(wash.material.color) === '#ff0000' &&
-    Math.abs(wash.material.opacity - LP.WASH_MAX_OPACITY) < 1e-9, wash && [wash.visible, hex(wash.material.color), wash.material.opacity]);
+  const built = wash.material.opacity;
+  check('top ON: the drawer below is washed in its colour at 100% (one visible unlit quad, in red)', wash &&
+    wash.visible && wash.userData.wash === true && hex(wash.material.color) === '#ff0000',
+    wash && [wash.visible, hex(wash.material.color)]);
+  check('...at the build-time opacity, which posing never touches (the wall fade owns it)',
+    Math.abs(built - LP.WASH_OPACITY) < 1e-9, built);
   check('bottom OFF: its strips are hidden (just the recess)', of('bedside_north_bottom', 'strip').every(o => !o.visible));
   const offWash = of('bedside_north_bottom', 'glow');
   check('bottom OFF: its wash is hidden, leaving the plain front', offWash.length === 1 && offWash.every(o => !o.visible));
 
-  const fullOpacity = wash.material.opacity;
+  const fullG = wash.material.color.g;
   pose({ on: true, bri: 10, color: '#ff0000' }, { on: true, bri: 100, color: '#0000ff' });
-  check('top at 10%: the wash is fainter than at 100%, but still there',
-    wash.visible && wash.material.opacity < fullOpacity - 0.4 && wash.material.opacity >= LP.WASH_MAX_OPACITY * LP.WASH_MIN_SHARE - 1e-9,
-    [wash.material.opacity, fullOpacity]);
+  check('top at 10%: dimmed through its COLOUR, toward the white front (less red), still there',
+    wash.visible && wash.material.color.g > fullG + 0.3 && wash.material.color.g < 1 - 1e-6 &&
+    hex(wash.material.color) === LP.washColour('#ff0000', p.color, 0.1), hex(wash.material.color));
+  check('...and its opacity is still the build-time one', wash.material.opacity === built, wash.material.opacity);
+  wash.material.opacity = 0.3;   // a wall fade mid-way
+  pose({ on: true, bri: 60, color: '#ff0000' }, { on: true, bri: 100, color: '#0000ff' });
+  check('posing a light never overwrites a fade in progress', wash.material.opacity === 0.3, wash.material.opacity);
+  wash.material.opacity = built;
   check('bottom back ON: its wash shows again, in the new colour', offWash.every(o => o.visible && hex(o.material.color) === '#0000ff'));
   pose({ on: true, bri: 0, color: '#ff0000' }, { on: true, bri: 100, color: '#0000ff' });
   check('on at 0%: no wash', !wash.visible);

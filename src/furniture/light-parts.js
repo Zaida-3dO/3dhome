@@ -17,8 +17,8 @@
  *   userData.baseColor     'glow' only: the front's own colour ('#rrggbb')
  *   userData.wash          'glow' only, optional: the part is a WASH -- an
  *                          unlit, vertex-alpha gradient quad over the front
- *                          (cabinet.js addLeaf). On: the light's colour at
- *                          WASH_MAX_OPACITY x brightness; off: hidden.
+ *                          (cabinet.js addLeaf). On: washColour() by
+ *                          brightness, at the fixed WASH_OPACITY; off: hidden.
  *
  * The scene (home3d-scene.js syncLights) calls applyLightPart() for every
  * such part of an item in a room, with that room's channel state
@@ -30,10 +30,25 @@
 
 /** How much of the light's colour a lit glow band shows at full brightness. */
 export const GLOW_SHARE = 0.55;
-/** A lit wash's opacity at full brightness (its gradient fades it from there). */
-export const WASH_MAX_OPACITY = 0.85;
-/** ...and never below this share of it while on (a dimmed LED still washes). */
+/**
+ * A wash's opacity, set once when it is built (cabinet.js) and never posed:
+ * opacity belongs to the wall-fade loop, which eases a dynamic part's
+ * opacity back to its build-time value. Brightness dims the wash through its
+ * COLOUR instead -- see washColour().
+ */
+export const WASH_OPACITY = 0.8;
+/** A lit wash never shows less than this share of the light's colour (a dimmed LED still washes). */
 export const WASH_MIN_SHARE = 0.2;
+
+/**
+ * '#rrggbb' a lit wash is drawn in: the light's colour over the front's own
+ * colour, by brightness. At 100 % it is the light's colour; dimmed, it tends
+ * to the front's colour, so over the front the wash fades out -- with its
+ * opacity untouched.
+ */
+export function washColour(light, base, k) {
+  return glowColour(light, base, WASH_MIN_SHARE + (1 - WASH_MIN_SHARE) * Math.max(0, Math.min(1, k)));
+}
 /** A lit strip's emissive intensity never drops below this (a dimmed LED still reads as lit). */
 export const STRIP_MIN_INTENSITY = 0.25;
 
@@ -74,10 +89,7 @@ export function applyLightPart(mesh, state) {
   }
   if (mesh.userData.lightRole === 'glow' && mesh.userData.wash) {
     mesh.visible = on && k > 0;
-    if (mesh.visible) {
-      m.color.set(state.color);
-      m.opacity = WASH_MAX_OPACITY * (WASH_MIN_SHARE + (1 - WASH_MIN_SHARE) * k);
-    }
+    if (mesh.visible) m.color.set(washColour(state.color, mesh.userData.baseColor || '#ffffff', k));
     return true;
   }
   if (mesh.userData.lightRole === 'glow') {
