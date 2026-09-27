@@ -837,6 +837,7 @@ renders exactly as it did before — both features simply stay dark.
 | `doors` | **door id**, from the geometry's `doors[].id` | The door swings open while the contact reads open |
 | `curtains` | **curtain id**, from the geometry's `curtains[].id` | The curtain follows the `cover.*` entity's `current_position` (0 closed, 100 open), and the window's daylight with it |
 | `corniceLights` | **curtain id** | The curtain's cornice strip follows the light entity: on/off, brightness and colour |
+| `furnitureLights` | **furniture id**, from the geometry's `furniture[].id` | The item's glowing parts (a standing desk's `ledStrip`) follow the light entity: on/off, brightness and colour |
 | `climate` | **room id** | ONE `climate.*` entity (a string, not a list) for the room panel's temperature row |
 
 Several entities on one target are OR-ed: any one of them reading `on` means
@@ -908,6 +909,29 @@ that channel in `geometry.json`, so each light is drawn and driven exactly once.
 
 `curtains` and `corniceLights` need `schemaVersion` `"1.2"`: an engine older
 than that rejects the unknown keys, so upgrade the engine before the profile.
+
+#### Furniture lights
+
+```json
+"sensors": {
+  "furnitureLights": { "study_desk": ["light.example_desk_strip"] }
+}
+```
+
+A furniture item named here has its glowing parts follow the light: a standing
+desk with `ledStrip: true` lights its strip (left, front and right edges, under
+the desktop) in the entity's colour at its brightness, and shows a dim grey line
+when it is off. Several entities are OR-ed exactly as for a cornice light. The
+strip is **emissive only** -- it glows but adds no real light to the room -- and
+until a first reading arrives (Home Assistant off or not yet connected) it shows
+its authored `ledColor`.
+
+Bind the item's **own** entity, not the room's ambience group: the room's
+`ambient` channel already follows the group, and the sidebar's one Ambient row
+switches that group. A room's Ambient row comes from its `rooms.<id>.ambient`
+binding, not from a geometry fixture, so a room whose ambient light is only a
+lit cornice and a desk strip needs no `lights[]` ambient fixture at all -- and
+should not have one: a fixture with no `positions` is auto-placed in the room.
 
 #### Climate
 

@@ -202,6 +202,8 @@ const hex = c => '#' + c.getHexString();
   check('boundLightChannels lists every bound channel per room, skipping empty ones',
     JSON.stringify(bc) === '{"office":["main","ambient"],"hall":["main"],"den":["main"]}', bc);
   check('boundLightChannels(null) -> {}', JSON.stringify(RP.boundLightChannels(null)) === '{}');
+  check('row label: the geometry channel name when there is one', RP.ambientRowLabel({ name: 'Study Glow' }, 'Study') === 'Study Glow');
+  check('row label: "<Room> Ambience" with no geometry fixture', RP.ambientRowLabel(undefined, 'Home Office') === 'Home Office Ambience');
 
   // The page must actually use them: the scene is told the bound channels
   // (so lightState has an ambient entry without a fixture) and the row list

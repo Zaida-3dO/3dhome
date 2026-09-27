@@ -189,6 +189,16 @@ export function hasAmbientRow(rooms, roomId, hasGeometryChannel) {
 }
 
 /**
+ * The Ambient row's label: the geometry channel's own name when geometry
+ * draws one, else "<Room> Ambience" -- a room whose ambient light is only a
+ * cornice and a desk strip has no fixture to take a name from.
+ */
+export function ambientRowLabel(lightGroup, roomName) {
+  if (lightGroup && lightGroup.name) return lightGroup.name;
+  return (roomName ? roomName + ' ' : '') + 'Ambience';
+}
+
+/**
  * Curtain SLIDER value -> command, refusing while the curtain is not
  * confirmed available -- the same rule the Open / Close buttons follow.
  * `coverPositionCommand` is HAClient.coverPositionCommand, injected so this

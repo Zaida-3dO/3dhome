@@ -726,7 +726,7 @@
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
-             boundLightChannels, hasAmbientRow }
+             boundLightChannels, hasAmbientRow, ambientRowLabel }
                               from './src/room-panel.js?v=__VERSION__';
     // Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
     // Shift+D, or the Settings sidebar "Wall numbers" switch).
@@ -2258,6 +2258,7 @@
       function roomRowHtml(key, rid) {
         const s = home.lightState[rid];
         const lc = Home3DScene.LIGHTS[rid];
+        const rm = Home3DScene.ROOMS[rid];
         if (key === 'main') {
           let h = `<div class="control-group" data-row="main">
             <div class="control-header">
@@ -2283,7 +2284,7 @@
           // group, never a switch per fixture.
           let h = `<div class="control-group" data-row="ambient">
             <div class="control-header">
-              <span class="control-label">${esc(((lc && lc.ambient && lc.ambient.name) || 'Ambient').toUpperCase())}</span>
+              <span class="control-label">${esc(ambientRowLabel(lc && lc.ambient, rm && rm.name).toUpperCase())}</span>
               <button class="toggle ${s.ambient.on ? 'on' : ''}" data-action="toggle-ambient">
                 <div class="toggle-knob"></div>
               </button>
