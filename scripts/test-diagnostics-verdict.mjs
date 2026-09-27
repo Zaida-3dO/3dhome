@@ -239,6 +239,9 @@ const before = R.byteSize(doc);
 R.fitToSize(doc, 20000);
 check('fitToSize shrinks the document', R.byteSize(doc) < before);
 check('fitToSize drops series before anything else', doc.trimmed.length > 0 && doc.trimmed[0].startsWith('stages.'), doc.trimmed);
+check('fitToSize really removes each series it lists', doc.trimmed.filter(t => t.startsWith('stages.')).every(t =>
+  doc.stages.find(x => 'stages.' + x.id + '.series' === t).series === null), doc.trimmed.slice(0, 3));
+check('fitToSize gets under the cap', R.byteSize(doc) <= 20000, R.byteSize(doc));
 check('fitToSize keeps every stage summary', doc.stages.length === 41 && doc.stages.every(s => s.frames));
 check('fitToSize under the default cap is a no-op', (() => {
   const d2 = R.assembleResult({ app: { version: '1', houseId: 'x', house }, run: { mode: 'quick', startedAt: 'now' }, device: {},

@@ -54,6 +54,8 @@ export function headroomPct(costMs, budgetMs = TARGET.p95Ms) {
   return Math.round(100 * (1 - costMs / budgetMs));
 }
 
+const signed = x => (x >= 0 ? '+' : '') + x;
+
 function label(s) { return s.levelName + ' @' + s.dpr; }
 
 /** The strip-light cost block: each option against the strip group's +0 reference. */
@@ -82,8 +84,8 @@ export function stripVerdict(stages, target = TARGET) {
   });
   const lines = options.map(o => 'strip lights ' + o.label + ': ' +
     (o.compiled ? '' : 'SHADER DID NOT COMPILE; ') +
-    (o.deltaP95Ms != null ? '+' + o.deltaP95Ms + ' ms p95' : 'p95 n/a') +
-    (o.deltaCostMs != null ? ' (+' + o.deltaCostMs + ' ms ' + o.costBasis + ')' : '') +
+    (o.deltaP95Ms != null ? signed(o.deltaP95Ms) + ' ms p95' : 'p95 n/a') +
+    (o.deltaCostMs != null ? ' (' + signed(o.deltaCostMs) + ' ms ' + o.costBasis + ')' : '') +
     (at ? ' at ' + at.levelName + ' @' + at.dpr : '') + ' -- ' +
     (!o.valid ? 'not measured (' + o.invalidReason + ')' : o.tenable ? 'tenable' : 'NOT tenable'));
   const tenableBy = opt => { const xs = options.filter(o => o.option === opt && o.valid); return xs.length ? xs.every(o => o.tenable) : null; };
