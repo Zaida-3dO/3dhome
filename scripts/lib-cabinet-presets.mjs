@@ -129,7 +129,7 @@ export const CABINET_PRESETS = {
       ],
       plinth: { type: 'plinth', height: 2, inset: 1 },
       finish: 'satin', handles: false, overlayFronts: true,
-      color: '#ffffff', topColor: '#ffffff'
+      color: '#ffffff', topColor: '#ffffff', gain: 1.5
     }
   },
   bedsideTableLedWide: {
@@ -145,7 +145,7 @@ export const CABINET_PRESETS = {
       ],
       plinth: { type: 'plinth', height: 2, inset: 1 },
       finish: 'satin', handles: false, overlayFronts: true,
-      color: '#ffffff', topColor: '#ffffff'
+      color: '#ffffff', topColor: '#ffffff', gain: 1.5
     }
   },
   mobilePedestal: {

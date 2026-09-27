@@ -15,9 +15,11 @@
  *                                     colour, stronger with brightness; off,
  *                                     it is plain front again
  *   userData.baseColor     'glow' only: the front's own colour ('#rrggbb')
- *   userData.glowWeight    'glow' only, optional (default 1): how strongly
- *                          this band is washed, so a stack of bands fades
- *                          away from the strip
+ *   userData.wash          'glow' only, optional: the part is a WASH -- an
+ *                          unlit, vertex-alpha gradient quad over the front
+ *                          (cabinet.js addLeaf). On: the light's colour,
+ *                          its gradient scaled by brightness (setWashLevel);
+ *                          off: hidden. Its opacity is never posed.
  *
  * The scene (home3d-scene.js syncLights) calls applyLightPart() for every
  * such part of an item in a room, with that room's channel state
@@ -29,6 +31,30 @@
 
 /** How much of the light's colour a lit glow band shows at full brightness. */
 export const GLOW_SHARE = 0.55;
+/**
+ * A wash's opacity, set once when it is built (cabinet.js) and never posed:
+ * opacity belongs to the wall-fade loop, which eases a dynamic part's
+ * opacity back to its build-time value.
+ */
+export const WASH_OPACITY = 0.8;
+
+/**
+ * Brightness dims a wash through its VERTEX ALPHA: each vertex's alpha is its
+ * build-time gradient value (userData.washAlpha) times the brightness, so the
+ * wash's visible contribution over the front -- alpha x opacity x (light -
+ * front) -- falls in step with brightness and is nothing at 0, whatever the
+ * light's colour or the front's. The material's opacity (the wall fade)
+ * multiplies on top, so the two compose instead of fighting.
+ */
+export function setWashLevel(mesh, k) {
+  const col = mesh.geometry && mesh.geometry.attributes && mesh.geometry.attributes.color;
+  const base = mesh.userData.washAlpha;
+  if (!col || !Array.isArray(base) || col.itemSize !== 4) return false;
+  const level = Math.max(0, Math.min(1, k));
+  for (let v = 0; v < col.count; v++) col.setW(v, base[v] * level);
+  col.needsUpdate = true;
+  return true;
+}
 /** A lit strip's emissive intensity never drops below this (a dimmed LED still reads as lit). */
 export const STRIP_MIN_INTENSITY = 0.25;
 
@@ -67,14 +93,21 @@ export function applyLightPart(mesh, state) {
     }
     return true;
   }
+  if (mesh.userData.lightRole === 'glow' && mesh.userData.wash) {
+    mesh.visible = on && k > 0;
+    if (mesh.visible) {
+      m.color.set(state.color);
+      setWashLevel(mesh, k);
+    }
+    return true;
+  }
   if (mesh.userData.lightRole === 'glow') {
     const base = mesh.userData.baseColor || '#ffffff';
-    const w = mesh.userData.glowWeight > 0 ? Math.min(1, mesh.userData.glowWeight) : 1;
     if (on && k > 0) {
-      const c = glowColour(state.color, base, GLOW_SHARE * k * w);
+      const c = glowColour(state.color, base, GLOW_SHARE * k);
       m.color.set(c);
       m.emissive.set(c);
-      m.emissiveIntensity = (0.35 + 0.65 * k) * w;
+      m.emissiveIntensity = 0.35 + 0.65 * k;
     } else {
       m.color.set(base);
       m.emissive.set('#000000');

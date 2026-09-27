@@ -150,6 +150,7 @@
  * (no owner names): this is a public repo.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { WASH_OPACITY } from './light-parts.js';
 
 export const TYPE = 'cabinet';
 
@@ -186,6 +187,9 @@ export const DEFAULTS = Object.freeze({
   overlayFronts: false,
   color: '#f2f0ec',
   topColor: '#f2f0ec',
+  // Multiplies the colour of the matte/satin/gloss body (see BODY_GAIN): > 1
+  // lifts a white that the scene's tone mapping renders grey.
+  gain: 1,
   shelfLights: false,
   handles: true,
   // null: both carcass sides are plain (see the tall display cabinet preset
@@ -203,9 +207,27 @@ export function resolveFinish(p) {
   return p && p.gloss ? 'gloss' : 'matte';
 }
 
+// The body gain of the cabinet being built (params.gain, set by build() for
+// the duration of one synchronous build). bodyFinish() multiplies the colour
+// of the BODY -- the carcass, the fronts, the top, the plinth and the light
+// channels' recess, i.e. every part in the cabinet's own `color`/`topColor`
+// and body finish -- so a white can read WHITE under the scene's tone mapping
+// (#ffffff alone renders light grey there). Linear, may exceed 1, like
+// model.js's gain; merge.js carries such colours in its float vertex colours.
+// Every other part (glass, mirror, metal, emissive, door frames, a display
+// section's lining, wood and contents) goes through finish() and is left alone.
+let BODY_GAIN = 1;
+
 /** A material from the shared palette, with keep-flag bookkeeping left to the caller. */
 function finish(THREE, cls, color) {
   return makeFinish(THREE, cls, color);
+}
+
+/** A BODY material (see BODY_GAIN): finish() with the cabinet's gain applied. */
+function bodyFinish(THREE, cls, color) {
+  const m = makeFinish(THREE, cls, color);
+  if (BODY_GAIN !== 1) m.color.multiplyScalar(BODY_GAIN);
+  return m;
 }
 
 function tag(mesh, name) {
@@ -254,11 +276,14 @@ const STRIP_PROUD = 0.002;     // the LED strip's face in front of the channel f
 const GLOW_SHARE = 0.35;       // the glow band: this much LED colour over the front's colour
 const GLOW_DIM = 1;            // ... at this brightness (the base white carries the rest)
 // A level that follows a light (channel.light) washes the drawer front below
-// it in WASH_WEIGHTS.length bands over the top WASH_SHARE of that front (at
-// most WASH_MAX_H), strongest at the channel.
-const WASH_WEIGHTS = Object.freeze([1, 0.6, 0.33, 0.15]);
+// it: one unlit quad over the top WASH_SHARE of that front (at most
+// WASH_MAX_H), WASH_OFF in front of it, its alpha falling smoothly through
+// WASH_ALPHA's rows (top first) -- a soft glow that is strongest at the
+// channel, with no hard band edge and nothing coplanar with the front.
 const WASH_SHARE = 0.45;
 const WASH_MAX_H = 0.08;
+const WASH_OFF = 0.0006;
+const WASH_ALPHA = Object.freeze([1, 0.72, 0.42, 0.16, 0]);
 const STRIP_BACK_T = 0.006;    // the carcass back's thickness (full detail): side strips start 2 cm in front of it
 
 /** Is the fronts row a light channel? */
@@ -410,21 +435,42 @@ function leafRect(x0, x1, yBot, yTop, revealY, edges) {
 /** A leaf, optionally with a glow band along its top edge (below a light channel). */
 function addLeaf(THREE, group, r, faceZ, T, mat, name, glowColor, baseColor, glowLight) {
   if (glowColor && glowLight) {
-    // A level that FOLLOWS a light washes the front below it: WASH_WEIGHTS
-    // bands, top down, each a slice of the same front in the same plane,
-    // fading from the channel (light-parts.js scales each by its weight).
+    // A level that FOLLOWS a light washes the front below it: the leaf stays
+    // whole, and ONE unlit quad lies WASH_OFF in front of its top, fading
+    // smoothly (vertex alpha over WASH_ALPHA's rows) from the channel down
+    // over min(WASH_MAX_H, WASH_SHARE of the leaf), at the fixed WASH_OPACITY
+    // (which the wall-fade loop owns). light-parts.js colours it from the
+    // channel's state and scales its gradient by brightness (the vertex alpha,
+    // so it fades to nothing at 0), and hides it when the level is off.
     const base = /^#[0-9a-fA-F]{6}$/.test(baseColor) ? baseColor : '#ffffff';
     const washH = Math.min(WASH_MAX_H, (r.ly1 - r.ly0) * WASH_SHARE);
-    const step = washH / WASH_WEIGHTS.length;
-    WASH_WEIGHTS.forEach((w, i) => {
-      const band = slab(THREE, group, finish(THREE, 'emissive', glowTint(glowColor, baseColor)),
-        r.lx0, r.lx1, r.ly1 - step * (i + 1), r.ly1 - step * i, faceZ - T, faceZ, 'channelGlow');
-      band.castShadow = false;
-      tagLightPart(band, glowLight, 'glow');
-      band.userData.baseColor = base;
-      band.userData.glowWeight = w;
+    const w = r.lx1 - r.lx0;
+    const geo = new THREE.PlaneGeometry(w, washH, 1, WASH_ALPHA.length - 1);
+    const n = geo.attributes.position.count;           // 2 per row, top row first
+    const rgba = new Float32Array(n * 4);
+    for (let v = 0; v < n; v++) {
+      rgba.set([1, 1, 1, WASH_ALPHA[Math.floor(v / 2)]], v * 4);
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(rgba, 4));
+    const washMat = new THREE.MeshBasicMaterial({
+      color: glowColor, vertexColors: true, transparent: true, opacity: WASH_OPACITY,
+      depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
     });
-    return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1 - washH, faceZ - T, faceZ, name);
+    washMat.userData.finish = 'emissive';
+    const wash = new THREE.Mesh(geo, washMat);
+    wash.position.set((r.lx0 + r.lx1) / 2, r.ly1 - washH / 2, faceZ + WASH_OFF);
+    wash.name = 'channelGlow';
+    wash.userData.keep = true;
+    wash.castShadow = false;
+    wash.receiveShadow = false;
+    wash.renderOrder = 1;
+    group.add(wash);
+    tagLightPart(wash, glowLight, 'glow');
+    wash.userData.baseColor = base;
+    wash.userData.wash = true;
+    // The gradient as built, per vertex: light-parts.js scales it by brightness.
+    wash.userData.washAlpha = Array.from({ length: n }, (_, v) => WASH_ALPHA[Math.floor(v / 2)]);
+    return slab(THREE, group, mat, r.lx0, r.lx1, r.ly0, r.ly1, faceZ - T, faceZ, name);
   }
   if (glowColor) {
     // The glow band is part of the leaf -- the top slice of the same front,
@@ -451,7 +497,7 @@ function glowTint(led, base) {
 
 function buildDoorCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, color, handles, faceZ, ctx) {
   const T = frontThickness(depth);
-  const mat = finish(THREE, fin, color);
+  const mat = bodyFinish(THREE, fin, color);
   const r = leafRect(x0, x1, yBot, yTop, 0.01, ctx && ctx.edges);
   addLeaf(THREE, group, r, faceZ, T, mat, 'cabinetDoor', ctx && ctx.glow, color, ctx && ctx.glowLight);
   if (handles !== false && cell.handle !== false) {
@@ -466,7 +512,7 @@ function buildDrawerCell(THREE, group, cell, x0, x1, yBot, yTop, depth, fin, col
   const h = yTop - yBot;
   const cx = (x0 + x1) / 2;
   const T = frontThickness(depth);
-  const mat = finish(THREE, fin, color);
+  const mat = bodyFinish(THREE, fin, color);
   const r = leafRect(x0, x1, yBot, yTop, 0.03, ctx && ctx.edges);
   addLeaf(THREE, group, r, faceZ, T, mat, 'drawerFront', ctx && ctx.glow, color, ctx && ctx.glowLight);
   const showHandle = handles !== false && cell.handle !== false;
@@ -738,7 +784,7 @@ function buildBase(THREE, group, base, width, depth, fin, color, carcassFront, f
     return;
   }
   // plinth (default): a simple recessed toe-kick box.
-  const plinthMat = finish(THREE, fin, color);
+  const plinthMat = bodyFinish(THREE, fin, color);
   if (overlay || typeof base.inset === 'number') {
     const inset = (typeof base.inset === 'number' ? base.inset : 3) * CM;
     slab(THREE, group, plinthMat, -width / 2 + inset, width / 2 - inset, 0, h, 0, faceZ - inset, 'plinth');
@@ -790,7 +836,7 @@ function buildGlassSidePanel(THREE, group, gsp, sx, W, D, plinthH, CARC_T, sideH
   const share = implicitCount > 0 ? remaining / implicitCount : 0;
   const bands = gsp.bands.map(b => (typeof b.height === 'number' ? b : Object.assign({}, b, { height: share / CM })));
 
-  const carcassMat = finish(THREE, fin, color);
+  const carcassMat = bodyFinish(THREE, fin, color);
   const x = sx * (W / 2 - CARC_T / 2);
   let yTop = plinthH + CARC_T + sideH;
   const spans = [];
@@ -835,7 +881,7 @@ function buildGlassSidePanel(THREE, group, gsp, sx, W, D, plinthH, CARC_T, sideH
  */
 function buildColumn(THREE, group, col, yBottom, yTop, depth, panelT, fin, color, isLast) {
   const x0 = col.x0, x1 = col.x1;
-  const mat = finish(THREE, fin, color);
+  const mat = bodyFinish(THREE, fin, color);
   const rowCount = Math.max(1, Math.round(col.rows || 1));
   const clearH = (yTop - yBottom - panelT * (rowCount - 1)) / rowCount;
 
@@ -870,7 +916,7 @@ function buildChannel(THREE, group, row, W, faceZ, backZ, y0, y1, fin, color, lo
   const ledColor = (row.channel && row.channel.color) || '#dbe8ff';
   const xs = W / 2 - CHANNEL_SETBACK;
   const fillFront = faceZ - CHANNEL_SETBACK;
-  slab(THREE, group, finish(THREE, fin, color), -xs, xs, y0, y1, backZ, fillFront, 'channelRecess');
+  slab(THREE, group, bodyFinish(THREE, fin, color), -xs, xs, y0, y1, backZ, fillFront, 'channelRecess');
   if (low || !channelLed(row)) return;
   const sh = Math.min(0.006, (y1 - y0) * 0.4);
   const cy = (y0 + y1) / 2;
@@ -1092,6 +1138,16 @@ function buildContents(THREE, group, kind, b) {
  */
 export function build(THREE, params, opts) {
   const p = Object.assign({}, DEFAULTS, params);
+  const gain = typeof p.gain === 'number' && Number.isFinite(p.gain) && p.gain > 0 ? p.gain : 1;
+  BODY_GAIN = gain;
+  try {
+    return buildCabinet(THREE, p, opts);
+  } finally {
+    BODY_GAIN = 1;
+  }
+}
+
+function buildCabinet(THREE, p, opts) {
   const detail = (opts && opts.detail) || 'full';
   const low = detail === 'low';
 
@@ -1116,7 +1172,7 @@ export function build(THREE, params, opts) {
   const channels = rows.filter(isChannel).map(r => ({ row: r, y0: r.yBottom * CM, y1: r.yTop * CM }));
 
   // ---- carcass: back, two ends, top, bottom -----------------------------
-  const carcassMat = finish(THREE, fin, color);
+  const carcassMat = bodyFinish(THREE, fin, color);
   const CARC_T = p.columns ? (p.panelThickness || 2) * CM : 0.018;
 
   const bottom = new THREE.Mesh(box(THREE, W, CARC_T, CD), carcassMat);
@@ -1124,7 +1180,7 @@ export function build(THREE, params, opts) {
   tag(bottom, 'carcassBottom');
   group.add(bottom);
 
-  const top = new THREE.Mesh(box(THREE, W, CARC_T, CD), finish(THREE, fin, topColor));
+  const top = new THREE.Mesh(box(THREE, W, CARC_T, CD), bodyFinish(THREE, fin, topColor));
   top.position.set(0, H - CARC_T / 2, CD / 2);
   tag(top, 'carcassTop');
   group.add(top);

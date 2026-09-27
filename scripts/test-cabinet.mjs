@@ -994,28 +994,36 @@ Object.keys(CABINET_PRESETS).forEach(k => {
   ['demo_top', 'demo_bottom'].forEach(ch => {
     check(k + ' ' + ch + ': its three strip meshes follow it', of(ch, 'strip').length === 3 &&
       of(ch, 'strip').every(o => /^channelStrip/.test(o.name)), of(ch, 'strip').map(o => o.name));
-    const bands = of(ch, 'glow').slice().sort((a, b) => mbox(b).max.y - mbox(a).max.y);
-    check(k + ' ' + ch + ': the drawer below is washed by four bands following it, carrying the front colour',
-      bands.length === 4 && bands.every(b => b.name === 'channelGlow' && b.userData.baseColor === p.color), bands.length);
-    check(k + ' ' + ch + ': the wash fades away from the channel (weights 1 > 0.6 > 0.33 > 0.15, top down)',
-      JSON.stringify(bands.map(b => b.userData.glowWeight)) === JSON.stringify([1, 0.6, 0.33, 0.15]),
-      bands.map(b => b.userData.glowWeight));
-    // The bands sit edge to edge from the channel down, in the drawer's own
-    // plane, over min(8 cm, 45 % of the drawer's height).
-    const top = mbox(bands[0]).max.y, bot = mbox(bands[3]).min.y;
-    const leaf = meshesNamed(g, 'drawerFront').map(mbox).find(b => Math.abs(b.max.y - bot) < 1e-6);
-    const washH = leaf ? Math.min(0.08, (top - leaf.min.y) * 0.45) : -1;
-    // (the leaf's top is its reveal below the channel's bottom: under 1 cm)
-    const recess = meshesNamed(g, 'channelRecess').map(mbox).find(b => b.min.y >= top - 1e-4 && b.min.y - top < 0.01);
-    check(k + ' ' + ch + ': the wash starts right under its channel and spans min(8 cm, 45 % of the drawer)',
-      !!recess && Math.abs((top - bot) - washH) < 0.003 &&
-      bands.every((b, i) => i === 0 || Math.abs(mbox(b).max.y - mbox(bands[i - 1]).min.y) < 1e-6) &&
-      bands.every(b => Math.abs(mbox(b).max.z - p.depth / 100) < 1e-4), [top - bot, washH]);
+    const washes = of(ch, 'glow');
+    const w = washes[0];
+    check(k + ' ' + ch + ': the drawer below is washed by ONE quad following it (not stepped bands)',
+      washes.length === 1 && w.name === 'channelGlow' && w.userData.wash === true && w.userData.baseColor === p.color, washes.length);
+    // A smooth gradient: an unlit, transparent, vertex-alpha quad whose alpha
+    // falls monotonically from 1 at the channel to 0, with rows in between.
+    const col = w.geometry.attributes.color, pos = w.geometry.attributes.position;
+    const rows = [];
+    for (let v = 0; v < pos.count; v++) rows.push([pos.getY(v), col.getW(v)]);
+    rows.sort((a, b) => b[0] - a[0]);
+    const alphas = rows.map(r => r[1]);
+    check(k + ' ' + ch + ': its alpha falls smoothly from 1 at the channel to 0, over at least 5 rows',
+      col.itemSize === 4 && pos.count >= 10 && alphas[0] === 1 && alphas[alphas.length - 1] === 0 &&
+      alphas.every((a, n) => n === 0 || a <= alphas[n - 1]) && new Set(alphas).size >= 5, alphas);
+    check(k + ' ' + ch + ': unlit, blended, no depth write, pulled forward (no z-fighting with the front)',
+      w.material.isMeshBasicMaterial && w.material.vertexColors === true && w.material.transparent === true &&
+      w.material.depthWrite === false && w.material.polygonOffset === true && w.material.polygonOffsetFactor < 0);
+    // It lies just in front of the drawer face (never in its plane), from
+    // the leaf's top down over min(8 cm, 45 % of the leaf), across its width.
+    const wb = mbox(w);
+    const leaf = meshesNamed(g, 'drawerFront').map(mbox).find(b => Math.abs(b.max.y - wb.max.y) < 1e-6);
+    const faceZ = p.depth / 100;
+    check(k + ' ' + ch + ': it covers the top of the drawer below, min(8 cm, 45 %), full width, 0.6 mm off the face',
+      !!leaf && Math.abs((wb.max.y - wb.min.y) - Math.min(0.08, (leaf.max.y - leaf.min.y) * 0.45)) < 1e-6 &&
+      Math.abs(wb.min.x - leaf.min.x) < 1e-6 && Math.abs(wb.max.x - leaf.max.x) < 1e-6 &&
+      wb.min.z > faceZ && wb.min.z - faceZ < 0.001, [wb, leaf]);
   });
-  check(k + ': only the strips and bands are dynamic', parts.length === 14, parts.map(o => o.name));
-  const front = meshesNamed(g, 'drawerFront');
-  check(k + ': the drawer fronts still reach the channel tops (front + wash = the drawer)',
-    front.length === 3);
+  check(k + ': only the strips and the washes are dynamic', parts.length === 8, parts.map(o => o.name));
+  check(k + ': the drawer fronts are whole (the wash lies over them, it does not cut them)',
+    meshesNamed(g, 'drawerFront').length === 3 && meshesNamed(g, 'drawerFront').every(d => !d.userData.dynamic));
   const mats = new Set(parts.map(o => o.material));
   const statics = [];
   g.traverse(o => { if (o.isMesh && !o.userData.dynamic) statics.push(o.material); });
@@ -1040,6 +1048,62 @@ Object.keys(CABINET_PRESETS).forEach(k => {
   check('all three pedestal drawer fronts are pink', fronts.length === 3 &&
     fronts.every(f => f.material.color.getHexString() === new THREE.Color('#e9a3ab').getHexString()),
     fronts.map(f => f.material.color.getHexString()));
+}
+
+// 15o. `gain` lifts the body colour (matte/satin/gloss) and nothing else, and
+// the LED bedside tables use it so their white reads WHITE under the scene's
+// tone mapping (the owner: "not as white as I would have liked").
+{
+  const p = CABINET_PRESETS.bedsideTableLedNarrow.params;
+  check('the LED bedside tables are white satin with gain 1.5', ['bedsideTableLedNarrow', 'bedsideTableLedWide'].every(k =>
+    CABINET_PRESETS[k].params.gain === 1.5 && CABINET_PRESETS[k].params.color === '#ffffff' && CABINET_PRESETS[k].params.finish === 'satin'));
+  const lit = C.build(THREE, p, { detail: 'full' });
+  const plain = C.build(THREE, Object.assign({}, p, { gain: 1 }), { detail: 'full' });
+  const r = (g, name) => meshesNamed(g, name)[0].material.color.r;
+  const BODY = ['drawerFront', 'carcassSide', 'carcassTop', 'plinth', 'channelRecess'];
+  check('gain 1.5 multiplies the body -- fronts, carcass sides, top, plinth, channel recess -- by 1.5',
+    BODY.every(n => meshesNamed(lit, n).length > 0 && meshesNamed(lit, n).every((m, i) =>
+      Math.abs(m.material.color.r - 1.5 * meshesNamed(plain, n)[i].material.color.r) < 1e-6)),
+    BODY.map(n => [n, meshesNamed(lit, n).length, r(lit, n), r(plain, n)]));
+  check('...but not the emissive LED strips', meshesNamed(lit, 'channelStripFront').every((m, i) =>
+    m.material.color.r === meshesNamed(plain, 'channelStripFront')[i].material.color.r));
+  // Only the BODY: every part outside it keeps its colour at gain 1.5 --
+  // mirror panes, glass (doors, side windows, shelves), metal handles and
+  // wheels, door frames, and a display section's lining, wood and contents.
+  const same = (params, names) => {
+    const a = C.build(THREE, Object.assign({}, params, { gain: 1.5 }), { detail: 'full' });
+    const b = C.build(THREE, Object.assign({}, params, { gain: 1 }), { detail: 'full' });
+    const bad = [];
+    const seen = new Set();
+    names.forEach(n => {
+      const ma = meshesNamed(a, n), mb = meshesNamed(b, n);
+      if (ma.length) seen.add(n);
+      ma.forEach((m, i) => { if (m.material.color.getHex() !== mb[i].material.color.getHex() || m.material.color.r > 1) bad.push(n); });
+    });
+    return { bad, seen: [...seen] };
+  };
+  const byFinish = (params, fins) => {
+    const a = C.build(THREE, Object.assign({}, params, { gain: 1.5 }), { detail: 'full' });
+    const b = C.build(THREE, Object.assign({}, params, { gain: 1 }), { detail: 'full' });
+    const ca = [], cb = [];
+    a.traverse(o => { if (o.isMesh && fins.includes(o.material.userData.finish)) ca.push(o.material.color.clone()); });
+    b.traverse(o => { if (o.isMesh && fins.includes(o.material.userData.finish)) cb.push(o.material.color.clone()); });
+    return ca.length > 0 && ca.length === cb.length && ca.every((c, i) => c.equals(cb[i]));
+  };
+  check('gain leaves glass, mirror and metal untouched (every such part of every preset)',
+    Object.keys(CABINET_PRESETS).every(k => byFinish(CABINET_PRESETS[k].params, ['glass', 'mirror', 'metal']) ||
+      !(() => { let n = 0; C.build(THREE, CABINET_PRESETS[k].params, { detail: 'full' }).traverse(o => {
+        if (o.isMesh && ['glass', 'mirror', 'metal'].includes(o.material.userData.finish)) n++; }); return n; })()));
+  const disp = same(CABINET_PRESETS.tallDisplayCabinet.params,
+    ['displaySideGlass', 'displaySideWood', 'interiorLining', 'interiorShelf', 'contentsStand', 'contentsBook', 'contentsBox', 'contentsGame', 'contentsConsole', 'contentsPicture']);
+  check('...and a display section: side glass, side wood, shelves, contents', disp.bad.length === 0 &&
+    ['displaySideGlass', 'displaySideWood', 'interiorShelf', 'interiorLining', 'contentsBook'].every(n => disp.seen.includes(n)), disp);
+  const slid = same(CABINET_PRESETS.slidingWardrobe4Panel.params, ['slidingFrame', 'slidingWhitePanel', 'slidingMirror', 'slidingRail']);
+  check('...and sliding-door frames, panels and rails', slid.bad.length === 0 && slid.seen.includes('slidingFrame'), slid);
+  const ped = same(CABINET_PRESETS.mobilePedestal.params, ['drawerHandle', 'wheel']);
+  check('...and metal handles and wheels', ped.bad.length === 0 && ped.seen.length === 2, ped);
+  check('a build without gain is not lifted',
+    Math.abs(r(C.build(THREE, CABINET_PRESETS.chestOfDrawers.params, { detail: 'full' }), 'drawerFront') - 1) < 1e-6);
 }
 
 // 15j. The page and the test list agree: every preset on the Cabinet spec
