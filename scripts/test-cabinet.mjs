@@ -882,5 +882,22 @@ Object.keys(CABINET_PRESETS).forEach(k => {
   });
 }
 
+// 15j. The page and the test list agree: every preset on the Cabinet spec
+// page is in scripts/lib-cabinet-presets.mjs with the same params, so the
+// z-fighting, cap and contract checks above build what the page shows.
+{
+  const html = fs.readFileSync(path.join(root, 'specs/CabinetSpec.html'), 'utf8');
+  const m = html.match(/const PRESETS = (\{[\s\S]*?\n\});/);
+  check('CabinetSpec.html has a PRESETS block', !!m);
+  if (m) {
+    // eslint-disable-next-line no-new-func
+    const pagePresets = new Function('return (' + m[1] + ');')();
+    Object.keys(pagePresets).forEach(k => {
+      check('page preset ' + k + ' is in lib-cabinet-presets.mjs with the same params',
+        !!CABINET_PRESETS[k] && JSON.stringify(CABINET_PRESETS[k].params) === JSON.stringify(pagePresets[k].params));
+    });
+  }
+}
+
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
 process.exit(failures ? 1 : 0);

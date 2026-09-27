@@ -242,7 +242,7 @@ const GLASS_PANE_T = 0.006;
 const CHANNEL_SETBACK = 0.015; // how far the channel's faces sit behind the fronts / sides
 const STRIP_PROUD = 0.002;     // the LED strip's face in front of the channel face
 const GLOW_SHARE = 0.35;       // the glow band: this much LED colour over the front's colour
-const GLOW_DIM = 0.5;          // ... at this brightness (it is emissive: keep it low)
+const GLOW_DIM = 1;            // ... at this brightness (the base white carries the rest)
 
 /** Is the fronts row a light channel? */
 function isChannel(row) { return !!(row && row.channel); }
@@ -445,7 +445,9 @@ function buildGlassOrMirrorCell(THREE, group, kind, x0, x1, yBot, yTop, depth, f
   [[x0 + FRAME_INSET, x0 + FRAME_INSET + FT], [x1 - FRAME_INSET - FT, x1 - FRAME_INSET]].forEach(([a, b]) => {
     slab(THREE, group, frameMat, a, b, sy0, sy1, sFace - T, sFace, 'cabinetDoorFrame');
   });
-  const paneT = kind === 'glass' ? GLASS_PANE_T : MIRROR_PANE_T;
+  // Thin enough that its back stays 2 mm clear of the stiles' backs too (a
+  // shallow cabinet has thin leaves).
+  const paneT = Math.min(kind === 'glass' ? GLASS_PANE_T : MIRROR_PANE_T, T - PANE_RECESS - 0.002);
   const pFace = sFace - PANE_RECESS;
   // 2 mm shorter than the stiles at each end, so the pane's own top and
   // bottom faces never lie in a stile's.

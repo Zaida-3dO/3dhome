@@ -173,14 +173,22 @@ export const CABINET_PRESETS = {
       gloss: false, color: '#ffffff', topColor: '#ffffff'
     }
   },
-  // Not on the page: the two mirror cabinets a real bathroom profile uses
-  // (generic sizes), so the live house's own shape is covered.
-  bathroomMirrorCabinet3Door: {
-    label: '(test only) 3-door mirror cabinet, handleless',
+  // The bathroom mirror cabinets (the spec regroup moves them onto this
+  // page as mirrorCabinetParams(w, h, d, doors)).
+  mirrorCabinet3Door: {
+    label: 'Mirror cabinet, 3 doors',
     params: {
-      width: 120, height: 72, depth: 18, plinth: { type: 'plinth', height: 0 }, handles: false,
+      width: 120, height: 70, depth: 18, plinth: { type: 'plinth', height: 0 }, handles: false,
       color: '#f4f1ea', topColor: '#f4f1ea',
-      fronts: [{ height: 72, cells: [{ kind: 'mirror', width: 40 }, { kind: 'mirror', width: 40 }, { kind: 'mirror', width: 40 }] }]
+      fronts: [{ height: 70, cells: [{ kind: 'mirror', width: 40 }, { kind: 'mirror', width: 40 }, { kind: 'mirror', width: 40 }] }]
+    }
+  },
+  mirrorCabinet2Door: {
+    label: 'Mirror cabinet, 2 doors',
+    params: {
+      width: 80, height: 70, depth: 16, plinth: { type: 'plinth', height: 0 }, handles: false,
+      color: '#f4f1ea', topColor: '#f4f1ea',
+      fronts: [{ height: 70, cells: [{ kind: 'mirror', width: 40 }, { kind: 'mirror', width: 40 }] }]
     }
   }
 };
