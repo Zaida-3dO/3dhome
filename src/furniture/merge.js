@@ -154,6 +154,19 @@ const SIGNATURE_PROPS = [
 const COLOR_PROPS = ['color', 'emissive', 'specular', 'specularColor', 'sheenColor', 'attenuationColor'];
 
 /**
+ * A colour's part of a signature. getHexString() clamps each channel to 1,
+ * so two colours above 1 (a model's `gain`, a bright emissive) would read
+ * the same and their parts would share one material -- whichever came first.
+ * In-range colours keep the plain hex (so existing keys do not move); an
+ * out-of-range one adds its exact linear components.
+ */
+function colorKey(c) {
+  const hex = c.getHexString();
+  if (c.r <= 1 && c.g <= 1 && c.b <= 1) return hex;
+  return hex + '*' + [c.r, c.g, c.b].map(v => +v.toPrecision(6)).join(',');
+}
+
+/**
  * A string that is equal for two materials exactly when they would draw the
  * same. Kept parts are bucketed by it, so equivalent materials merge and any
  * difference -- a translucent beam against an opaque lens of the same colour,
@@ -168,7 +181,7 @@ export function materialSignature(mat) {
   });
   COLOR_PROPS.forEach(k => {
     const v = mat[k];
-    if (v && v.isColor) out.push(k + '=' + v.getHexString());
+    if (v && v.isColor) out.push(k + '=' + colorKey(v));
   });
   for (const k in mat) {
     const v = mat[k];
@@ -323,7 +336,7 @@ export function tintSignature(mat) {
   COLOR_PROPS.forEach(k => {
     if (k === 'color') return;
     const v = mat[k];
-    if (v && v.isColor) out.push(k + '=' + v.getHexString());
+    if (v && v.isColor) out.push(k + '=' + colorKey(v));
   });
   return out.join(';');
 }

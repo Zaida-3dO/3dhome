@@ -47,10 +47,13 @@
  * darken; gain is the one way to BRIGHTEN a file whose colours are too dark
  * -- typically a vendor model whose textures had studio lighting and
  * ambient occlusion baked in, so its "albedo" is near-black and the lit
- * scene darkens it a second time. It is the per-instance twin of
- * scripts/model-lod's --gain: same file, no re-export. It rides on the
- * material colour (linear, so > 1 is fine), which merge.js writes into the
- * bucket's float vertex colours, so it costs no draw and no program.
+ * scene darkens it a second time. It is like scripts/model-lod's --gain,
+ * per instance and with no re-export -- but model-lod clamps each baked
+ * channel at 1 and this does not. It rides on the material colour (linear,
+ * so > 1 is fine; on the `emissive` finish the emissive is scaled too): for
+ * a vertex-coloured part merge.js writes it into the palette bucket's float
+ * vertex colours (no draw, no program); a textured part's kept bucket is
+ * keyed by the unclamped colour, so different gains never share a material.
  *
  * LEVELS OF DETAIL. A root node named `low` is used for detail 'low'; every
  * other root node is the full model. A file with no `low` node serves both.
@@ -439,7 +442,12 @@ export function build(THREE, params, opts) {
     } else {
       mat = makeFinish(THREE, p.finish, override || hexFromLinear(THREE, q.baseColor));
     }
-    if (gain !== 1) mat.color.multiplyScalar(gain);
+    if (gain !== 1) {
+      mat.color.multiplyScalar(gain);
+      // makeFinish sets an emissive part's emissive to its colour, so the
+      // gain scales what it glows with too.
+      if (mat.userData.finish === 'emissive' && mat.emissive) mat.emissive.multiplyScalar(gain);
+    }
     if (!q.normal) g.computeVertexNormals();
     yawed.add(new THREE.Mesh(g, mat));
   });

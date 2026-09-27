@@ -314,6 +314,36 @@ try {
     check('gain adds no draw (still one palette bucket)', res.beauty.length === 1, res.beauty.map(m => m.userData.bucket));
   }
 
+  // ---- gain on a TEXTURED part: applied, and never shared across gains ----------
+  {
+    M.clearModelCache();
+    await M.prepare([item('tx')]);
+    const texMat = extra => {
+      const grp = M.build(THREE, Object.assign({}, M.DEFAULTS, { src: SRC }, extra), { assetBase: BASE });
+      let m = null;
+      grp.traverse(o => { if (o.isMesh && o.material.map) m = o.material; });
+      return m;
+    };
+    const t1 = texMat({}), t4 = texMat({ gain: 4 });
+    check('gain multiplies a textured part colour', !!t1 && !!t4 && near(t4.color.r, t1.color.r * 4) && near(t4.color.b, t1.color.b * 4),
+      t1 && t4 && [t1.color.toArray(), t4.color.toArray()]);
+    const e1 = texMat({ finish: 'emissive' }), e4 = texMat({ finish: 'emissive', gain: 4 });
+    check('on the emissive finish gain scales the emissive too', near(e4.emissive.r, e1.emissive.r * 4) && near(e4.emissive.g, e1.emissive.g * 4),
+      [e1.emissive.toArray(), e4.emissive.toArray()]);
+    // Two textured copies whose colours differ ONLY above 1 (the merge key used
+    // to clamp them to the same hex): they must not share one material.
+    const items = [item('bright', { gain: 4 }), item('brighter', { gain: 8 })];
+    const res = (await quietlyAsync(async () => {
+      const builders = await F.loadFurnitureModules(items);
+      return F.buildFurnitureSync(THREE, items, builders, { tx: x => x / 100, tz: y => y / 100, quality: { tier: 'ultra' } });
+    })).value;
+    const kept = res.beauty.filter(m => m.userData.cls === 'kept');
+    const reds = kept.map(m => +m.material.color.r.toFixed(4)).sort((a, b) => a - b);
+    check('two gains above 1 give two kept materials, each with its own colour',
+      kept.length === 2 && near(reds[1], reds[0] * 2, 1e-3), { n: kept.length, reds });
+    F.disposeFurniture(res);
+  }
+
   // ---- slow file: the per-file timeout ------------------------------------------
   {
     M.clearModelCache();
