@@ -11,8 +11,9 @@
  *      target is accepted even when its own material is nearly transparent.
  *   3. placePopover prefers above the tap, flips below at the top edge, and
  *      never leaves the bounds; boundsExcluding takes the open sidebar out.
- *   4. The status dot: polling is a steady green, only syncing pulses; entity
- *      and curtain-motor availability apply in every live mode.
+ *   4. The status dot: only syncing pulses; a configured HA that is not
+ *      connected is red "HA offline"; no 'polling' status exists (#58);
+ *      entity and curtain-motor availability apply in every live mode.
  *   5. The door chip says "Unknown" offline with no reading, "Unavailable"
  *      only when the sensor (or a live HA) says so.
  *   6. The coarse/fine hit areas of the row controls never overlap the slider.
@@ -130,59 +131,58 @@ console.log('placePopover');
 
 console.log('statusKey');
 {
-  ok(T.statusKey('light', null, false) === 'offline', 'no client -> red offline');
-  ok(T.statusKey('light', 'disconnected', false) === 'offline', 'disconnected -> red (the app pill paints it grey)');
-  ok(T.statusKey('light', 'auth_failed', false) === 'offline' && T.statusKey('light', 'sync_failed', false) === 'offline', 'auth/sync failed -> red');
-  ok(T.statusKey('climate', null, false, true) === 'offlineMock', 'offline climate with sample values -> offlineMock');
+  ok(T.statusKey('light', null, false) === 'offline', 'no client (demo) -> red offline (preview)');
+  ok(T.statusKey('light', 'disconnected', false) === 'haOffline', 'configured HA disconnected -> red HA offline');
+  ok(T.statusKey('light', 'auth_failed', false) === 'haOffline' && T.statusKey('light', 'sync_failed', false) === 'haOffline', 'auth/sync failed -> red HA offline');
+  ok(T.statusKey('climate', null, false, true) === 'offlineMock', 'no client, climate with sample values -> offlineMock');
   ok(T.statusKey('light', 'syncing', false) === 'connecting', 'syncing -> pulsing yellow');
   ok(T.statusKey('light', 'syncing', true) === 'connecting', 'syncing outranks entity-unavailable (no snapshot yet)');
-  ok(T.statusKey('light', 'polling', false) === 'polling', 'polling (steady REST fallback) -> its own key, not connecting');
+  ok(T.statusKey('light', 'polling', false) === 'haOffline', "'polling' is not a status any more (#58): not live");
   ok(T.statusKey('light', 'connected', false) === 'ok', 'connected + reporting -> green');
   ok(T.statusKey('light', 'connected', true) === 'na', 'connected, entity unavailable -> yellow na');
   ok(T.statusKey('curtain', 'connected', true) === 'motor', 'connected, curtain motor down -> yellow motor');
 }
 
-console.log('polling is live, not reconnecting');
+console.log('status table: no polling, syncing pulses');
 {
   const src = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
   // The dot class for each key is the first entry of STATUS[key]; read it
   // from source so the test pins the colour, not just the key name.
   const line = k => (src.match(new RegExp('\\n  ' + k + ": \\[[^\\n]*")) || [''])[0];
   const cls = k => (line(k).match(/\['([^']*)'/) || [])[1];
-  ok(cls('polling') === 'ok', 'polling dot is GREEN (class ok), steady');
+  ok(line('polling') === '', 'no polling entry in the status table');
   ok(cls('connecting') === 'warn pulse', 'only syncing/reconnecting pulses yellow');
-  ok(/every few seconds/.test(line('polling')), 'polling tooltip says updates every few seconds');
-  ok(T.isLive('connected') && T.isLive('polling') && T.isLive('syncing'), 'connected, polling and syncing are live');
-  ok(!T.isLive(null) && !T.isLive('disconnected') && !T.isLive('auth_failed') && !T.isLive('sync_failed'), 'everything else is offline');
-  ok(T.statusKey('curtain', 'polling', true) === 'motor', 'polling + curtain motor down -> yellow motor');
-  ok(T.statusKey('light', 'polling', true) === 'na', 'polling + light unavailable -> yellow na');
+  ok(cls('haOffline') === 'bad' && /disabled/.test(line('haOffline')), 'HA offline is red and says controls are disabled');
+  ok(/disabled/.test(line('connecting')), 'syncing tooltip says controls are disabled');
+  ok(T.isLive('connected') && T.isLive('syncing'), 'connected and syncing are live');
+  ok(!T.isLive('polling') && !T.isLive(null) && !T.isLive('disconnected') && !T.isLive('auth_failed') && !T.isLive('sync_failed'), 'everything else is not');
 }
 
 console.log('availability applies in every live mode');
 {
-  for (const c of ['connected', 'polling', 'syncing']) {
+  for (const c of ['connected', 'syncing']) {
     ok(T.curtainUnavailable(c, false) === true, c + ': curtain reported unavailable -> controls hidden');
     ok(T.curtainUnavailable(c, null) === true, c + ': curtain never heard from -> controls hidden (sidebar rule: must be TRUE)');
     ok(T.curtainUnavailable(c, true) === false, c + ': curtain available -> controls shown');
     ok(T.lightUnavailable(c, { state: 'unavailable' }) === true, c + ': light unavailable -> na');
     ok(T.lightUnavailable(c, { state: 'on' }) === false, c + ': light reporting -> usable');
   }
-  ok(T.curtainUnavailable('disconnected', false) === false && T.curtainUnavailable(null, null) === false, 'offline: curtain stays a preview on the model');
-  ok(T.lightUnavailable(null, null) === false, 'offline: light stays a preview');
-  ok(T.lightUnavailable('connected', { state: 'unknown' }) === true && T.lightUnavailable('polling', null) === true, 'unknown / no raw state -> na');
+  ok(T.curtainUnavailable('disconnected', false) === false && T.curtainUnavailable(null, null) === false, 'offline: availability says nothing (haOfflineConn disables instead)');
+  ok(T.lightUnavailable(null, null) === false, 'no client: light stays a preview');
+  ok(T.lightUnavailable('connected', { state: 'unknown' }) === true && T.lightUnavailable('connected', null) === true, 'unknown / no raw state -> na');
 }
 
 console.log('doorState');
 {
   ok(T.doorState(null, null) === 'unknown', 'no client, never reported -> Unknown (not Unavailable)');
   ok(T.doorState(null, 'disconnected') === 'unknown', 'disconnected, never reported -> Unknown');
-  ok(T.statusKey('door', 'disconnected', T.doorState(null, 'disconnected') === 'na') === 'offline', '...with the red dot');
+  ok(T.statusKey('door', 'disconnected', T.doorState(null, 'disconnected') === 'na') === 'haOffline', '...with the red HA offline dot');
   ok(T.doorState('unavailable', 'connected') === 'na', 'connected, sensor unavailable -> Unavailable');
   ok(T.statusKey('door', 'connected', T.doorState('unavailable', 'connected') === 'na') === 'na', '...with the yellow dot');
-  ok(T.doorState(null, 'connected') === 'na' && T.doorState(null, 'polling') === 'na', 'live but never reported -> Unavailable (the sidebar row agrees)');
+  ok(T.doorState(null, 'connected') === 'na' && T.doorState(null, 'syncing') === 'na', 'live but never reported -> Unavailable (the sidebar row agrees)');
   ok(T.doorState('on', 'disconnected') === 'open' && T.doorState('off', null) === 'closed', 'offline: last-known reading kept');
   ok(T.doorState('unavailable', 'disconnected') === 'na', 'offline: a last-known "unavailable" still reads Unavailable');
-  ok(T.doorState('on', 'connected') === 'open' && T.doorState('off', 'polling') === 'closed', 'live readings');
+  ok(T.doorState('on', 'connected') === 'open' && T.doorState('off', 'connected') === 'closed', 'live readings');
 }
 
 console.log('boundsExcluding (the sidebar is out of bounds)');

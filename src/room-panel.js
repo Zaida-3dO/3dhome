@@ -58,6 +58,37 @@ export function climateView(reading) {
   };
 }
 
+// ---- Home Assistant offline ------------------------------------------------
+
+/**
+ * True when there IS a Home Assistant client and it is not fully connected
+ * (disconnected, still authenticating, syncing its snapshot, auth or sync
+ * failed). Every control that sends a command is then DISABLED, and its
+ * handler does nothing -- no command (it would be dropped anyway) and, just
+ * as important, no optimistic change to the panel or the 3D model, because
+ * an optimistic change nobody sent is a lie the panel would keep telling.
+ *
+ * Only 'connected' counts: it is set after auth_ok AND the get_states
+ * snapshot (and the full resync that follows it), so the controls come back
+ * already showing Home Assistant's real values. 'syncing' is not enough --
+ * the race path sets it on auth_required, before authentication.
+ *
+ * No client at all (HA disabled / not configured -- the demo house) is NOT
+ * offline: there is nothing to be out of sync with, and the lights stay a
+ * local preview there, as they always have.
+ */
+export function haOffline(ha) {
+  return !!ha && ha.status !== 'connected';
+}
+
+export const HA_OFFLINE_TEXT = 'HA offline — controls are disabled until Home Assistant reconnects.';
+
+export function haOfflineRowHtml() {
+  return `<div class="control-group ha-offline-note" data-row="ha-offline" role="status">
+    <span class="ha-offline-dot"></span><span>${esc(HA_OFFLINE_TEXT)}</span>
+  </div>`;
+}
+
 // ---- Row markup ------------------------------------------------------------
 // Every row is one `.control-group` carrying `data-row="<key>"`, which is what
 // lets index.html repaint ONE row in place when its entity reports, instead of
@@ -84,9 +115,84 @@ export function motionRowHtml(status) {
   </div>`;
 }
 
-export function curtainRowHtml(cu, pct, available) {
+/**
+ * Light rows. `s` is home.lightState[room][channel]; `offline` (haOffline)
+ * disables every control in the row. The markup is otherwise what the
+ * sidebar has always drawn.
+ */
+export function mainLightRowHtml(s, offline) {
+  const dis = offline ? ' disabled' : '';
+  let h = `<div class="control-group" data-row="main">
+    <div class="control-header">
+      <span class="control-label">MAIN LIGHT</span>
+      <button class="toggle ${s.on ? 'on' : ''}" data-action="toggle-main"${dis}>
+        <div class="toggle-knob"></div>
+      </button>
+    </div>`;
+  if (s.on) {
+    const t = s.temp;
+    h += `<div class="slider-row">
+      <div class="slider-label">Brightness: ${s.bri}%</div>
+      <input type="range" class="slider" min="5" max="100" value="${s.bri}" data-action="bri-main"${dis}>
+    </div>
+    <div class="slider-row">
+      <div class="slider-label">Temperature: ${t}K ${t < 3200 ? 'Warm' : t > 5000 ? 'Cool' : 'Neutral'}</div>
+      <input type="range" class="slider temp" min="2700" max="6500" step="100" value="${t}" data-action="temp-main"${dis}>
+    </div>`;
+  }
+  return h + '</div>';
+}
+
+export const AMBIENT_SWATCHES = ['#ff3300', '#ff6600', '#ffaa00', '#ff0066', '#cc00ff', '#6600ff', '#0066ff', '#00ccff', '#00ff66', '#ffffff'];
+
+/** `name` is the ambient group's display name; `stripHtml` is pre-rendered. */
+export function ambientRowHtml(s, name, stripHtml, offline) {
+  const dis = offline ? ' disabled' : '';
+  let h = `<div class="control-group" data-row="ambient">
+    <div class="control-header">
+      <span class="control-label">${esc(String(name).toUpperCase())}</span>
+      <button class="toggle ${s.on ? 'on' : ''}" data-action="toggle-ambient"${dis}>
+        <div class="toggle-knob"></div>
+      </button>
+    </div>`;
+  if (s.on) {
+    h += `<div class="slider-row">
+      <div class="slider-label">Brightness: ${s.bri}%</div>
+      <input type="range" class="slider" min="5" max="100" value="${s.bri}" data-action="bri-ambient"${dis}>
+    </div>
+    <div class="slider-row">
+      <div class="slider-label">Color</div>
+      <div class="color-swatches">
+        ${AMBIENT_SWATCHES.map(c => `<button class="color-swatch ${s.color === c ? 'selected' : ''}" style="background:${c}" data-action="color-ambient" data-color="${c}"${dis}></button>`).join('')}
+      </div>
+      <input type="color" class="color-input" value="${esc(s.color)}" data-action="color-input-ambient"${dis}>
+    </div>
+    ${stripHtml || ''}`;
+  }
+  return h + '</div>';
+}
+
+export function galaxyRowHtml(s, offline) {
+  const dis = offline ? ' disabled' : '';
+  let h = `<div class="control-group" data-row="galaxy">
+    <div class="control-header">
+      <span class="control-label">GALAXY PROJECTOR</span>
+      <button class="toggle galaxy ${s.on ? 'on' : ''}" data-action="toggle-galaxy"${dis}>
+        <div class="toggle-knob"></div>
+      </button>
+    </div>`;
+  if (s.on) {
+    h += `<div class="slider-row">
+      <div class="slider-label">Brightness: ${s.bri}%</div>
+      <input type="range" class="slider" min="5" max="100" value="${s.bri}" data-action="bri-galaxy"${dis}>
+    </div>`;
+  }
+  return h + '</div>';
+}
+
+export function curtainRowHtml(cu, pct, available, offline) {
   const shown = Math.round(pct);
-  const dis = available ? '' : ' disabled';
+  const dis = (available && !offline) ? '' : ' disabled';
   return `<div class="control-group" data-row="curtain:${esc(cu.id)}">
     <div class="control-header">
       <span class="control-label">${esc(String(cu.label).toUpperCase())}</span>
@@ -103,7 +209,7 @@ export function curtainRowHtml(cu, pct, available) {
   </div>`;
 }
 
-export function climateRowHtml(reading) {
+export function climateRowHtml(reading, offline) {
   const v = climateView(reading);
   return `<div class="control-group" data-row="climate">
     <div class="control-header">
@@ -113,7 +219,7 @@ export function climateRowHtml(reading) {
     <div class="slider-row">
       <div class="slider-label">${v.status === 'Unavailable' ? 'Unavailable' : 'Target: ' + esc(v.target)}</div>
       <input type="range" class="slider" min="${v.min}" max="${v.max}" step="${v.step}" value="${v.value}"
-        data-action="climate-target"${v.disabled ? ' disabled' : ''}>
+        data-action="climate-target"${(v.disabled || offline) ? ' disabled' : ''}>
     </div>
   </div>`;
 }
@@ -150,6 +256,10 @@ export function climateRowHtml(reading) {
  *
  *   cancel(id)              (optional) ha.cancelDebounced for this id's key
  *   onRelease(id, wasDirty) (optional) called whenever a held lock releases
+ *   writable()              (optional) false while HA is offline (haOffline):
+ *                           input / commit / press then dispatch NOTHING, and
+ *                           commit still drops any pending send and releases
+ *                           the lock. A second gate behind the disabled DOM.
  */
 /**
  * Curtain SLIDER value -> command, refusing while the curtain is not
@@ -162,7 +272,8 @@ export function curtainSliderCommand(coverPositionCommand, pct, entities, availa
   return coverPositionCommand(pct, entities);
 }
 
-export function createDragSender({ build, dispatch, cancel, onRelease, debounceMs = 200 }) {
+export function createDragSender({ build, dispatch, cancel, onRelease, writable, debounceMs = 200 }) {
+  const canWrite = () => typeof writable !== 'function' || writable() === true;
   const dragging = new Set();
   const dirty = new Set();
   const lastSent = new Map();
@@ -192,6 +303,7 @@ export function createDragSender({ build, dispatch, cancel, onRelease, debounceM
   return {
     /** Slider 'input'. Starts a drag on the first one. */
     input(id, raw) {
+      if (!canWrite()) return null;
       if (!dragging.has(id)) {
         lastSent.delete(id);
         dragging.add(id);
@@ -203,7 +315,7 @@ export function createDragSender({ build, dispatch, cancel, onRelease, debounceM
      *  earlier input's queued send is cancelled rather than left to fire. */
     commit(id, raw) {
       let cmd = null;
-      if (build(id, raw)) cmd = send(id, raw, 0);
+      if (canWrite() && build(id, raw)) cmd = send(id, raw, 0);
       else dropPending(id);
       release(id);
       return cmd;
@@ -227,7 +339,7 @@ export function createDragSender({ build, dispatch, cancel, onRelease, debounceM
      * last slider value so a later drag back to it is not deduped away.
      */
     press(id, cmd) {
-      if (!cmd) return null;
+      if (!cmd || !canWrite()) return null;
       lastSent.delete(id);
       dispatch(cmd, id, 0);
       return cmd;

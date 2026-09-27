@@ -164,16 +164,16 @@ The sidebar, merging, deploying, the server-side real house profile, HA config, 
 
 This round implements the approved visual plan, taking its proposed answer on all six open questions.
 
-- **Green** means HA is live: connected over the websocket, or **polling** (the steady REST
-  fallback — tooltip "Connected (updates every few seconds)"). **Yellow** is either (a) syncing, the
-  first snapshot after a (re)connect, which pulses, or (b) HA is live but this entity, or one curtain
-  motor, is unavailable. Availability is checked in **every** live mode (connected, polling,
-  syncing), so an unavailable curtain hides its controls while polling too. **Red** means no client,
-  disconnected, auth failed or sync failed. Changes then only preview on the model.
-- **Controls stay usable while yellow-connecting.** Commands go through the sidebar's senders and
-  are *sent*, not queued: polling uses REST, and syncing has an open socket. This is why the tooltip
-  says "Changes are still sent" rather than the plan's "will send once live". A curtain whose
-  availability was never heard still refuses to move, which is the sidebar's own rule.
+- **Green** means HA is connected. **Yellow** is either (a) syncing, the snapshot after a
+  (re)connect, which pulses, or (b) HA is connected but this entity, or one curtain motor, is
+  unavailable. Availability is checked while syncing too, so an unavailable curtain hides its
+  controls. **Red** is either "HA offline" (a configured HA that is disconnected, or whose auth or
+  sync failed), or "Not connected" when no HA is configured at all (the demo house).
+- **Controls are disabled whenever a configured HA is not connected, syncing included** (#60, the
+  sidebar's rule). An "HA offline" line shows on the card, and a control does nothing: no command
+  and no preview on the model. When the connection returns, the client's full resync re-applies
+  every reading. Only with no HA configured do changes still preview locally on the model. There is
+  no 'polling' mode: since #58 the client talks to HA over the WebSocket only.
 - **Tooltip:** tap the dot on touch (auto-hides after 4 s); hover on a mouse, gated by
   `(hover: hover)`.
 - **Light names always carry the room:** `lightName()`.

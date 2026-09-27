@@ -248,6 +248,16 @@ jobs:
           # the console error every load used to show. See the script's header.
           set -euo pipefail
           node scripts/test-ha-client-transport.mjs
+      - name: HA offline disables every command control; reconnect is a full resync
+        run: |
+          # Against the fake HA WebSocket: while HA is not 'connected', every
+          # light / ambience / curtain / thermostat control renders disabled
+          # and a drag sends nothing and changes nothing; a send queued before
+          # the drop never replays; on reconnect EVERY target is re-applied
+          # even when HA's value did not change (so an unsent "Open: 30%" is
+          # erased), before the controls re-enable, with ZERO call_service.
+          set -euo pipefail
+          node scripts/test-ha-resync.mjs
       - name: Cold start compiles no shader inside a frame
         run: |
           # Source-level guard on the three fixes for the 1-3 s

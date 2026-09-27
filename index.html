@@ -206,6 +206,16 @@
     .row-btn:hover { background: rgba(255,255,255,0.12); }
     .row-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
+    /* HA offline: every control that sends a command is disabled (see
+       haOffline in src/room-panel.js), and this note says why. */
+    .toggle:disabled, .color-swatch:disabled, .color-input:disabled { opacity: 0.35; cursor: not-allowed; }
+    .ha-offline-note {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 14px;
+      padding: 8px 10px; border-radius: 8px; font-size: 11px; line-height: 1.35;
+      background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.35); color: #fecaca;
+    }
+    .ha-offline-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #ef4444; }
+
     /* Color swatches */
     .color-swatches { display: flex; gap: 5px; flex-wrap: wrap; }
     .color-swatch {
@@ -276,7 +286,6 @@
       background: #666;
     }
     .ha-status-dot.connected { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
-    .ha-status-dot.polling { background: #eab308; box-shadow: 0 0 6px #eab308; }
     .ha-status-dot.syncing { background: #eab308; box-shadow: 0 0 6px #eab308; }
     .ha-status-dot.disconnected { background: #666; }
     .ha-status-dot.auth_failed { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
@@ -725,7 +734,8 @@
     import { HouseLoader }    from './src/house-loader.js?v=__VERSION__';
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
-    import { createDragSender, curtainSliderCommand, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml }
+    import { createDragSender, curtainSliderCommand, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
+             haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml }
                               from './src/room-panel.js?v=__VERSION__';
     // Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
     // Shift+D, or the Settings sidebar "Wall numbers" switch).
@@ -1142,6 +1152,7 @@
             () => curtainIsAvailable(curtainId));
         },
         cancel: curtainId => { if (ha) ha.cancelDebounced('curtain-' + curtainId); },
+        writable: () => !haOffline(ha),
         // A reading held back by the drag lock is painted once it releases.
         // Deferred a tick: pointerup precedes the range input's 'change', and
         // replacing the element first could cost that event.
@@ -1215,6 +1226,7 @@
             () => climateCanTakeTarget(roomId));
         },
         cancel: roomId => { if (ha) ha.cancelDebounced('climate-' + roomId); },
+        writable: () => !haOffline(ha),
         onRelease: (roomId, wasDirty) => {
           if (wasDirty && selectedRoom === roomId) setTimeout(() => refreshRoomRow('climate'), 0);
         }
@@ -1840,12 +1852,16 @@
           const labels = {
             connected:    'HA Connected' + via,
             disconnected: 'HA Disconnected',
-            polling:      'HA Polling' + via,
             syncing:      'HA Syncing' + via,
             auth_failed:  'HA Auth Failed',
             sync_failed:  'HA Sync Failed'
           };
           haStatusText.textContent = labels[status] || 'HA';
+          // Offline <-> connected flips every command control in the open
+          // room between disabled and enabled (haOffline). 'connected' only
+          // arrives after the snapshot's full resync, so the re-enabled rows
+          // already show Home Assistant's real values.
+          if (selectedRoom && panelReady) renderPanel();
         });
 
         ha.onStateChange((roomId, group, state) => {
@@ -1926,7 +1942,7 @@
 
       // Phase 3: Send state from 3D controls → HA
       function sendToHA(roomId, group, state, debounceMs) {
-        if (!ha || !haConfig) return;
+        if (!ha || !haConfig || haOffline(ha)) return;
         const entities = haConfig.rooms[roomId]?.[group];
         if (!entities?.length) return;
 
@@ -2233,6 +2249,7 @@
       function roomRowKeys(rid) {
         const s = home.lightState[rid] || {};
         const keys = [];
+        if (haOffline(ha)) keys.push('ha-offline');
         if (s.main) keys.push('main');
         if (s.ambient) keys.push('ambient');
         if (s.galaxy) keys.push('galaxy');
@@ -2248,69 +2265,13 @@
       function roomRowHtml(key, rid) {
         const s = home.lightState[rid];
         const lc = Home3DScene.LIGHTS[rid];
-        if (key === 'main') {
-          let h = `<div class="control-group" data-row="main">
-            <div class="control-header">
-              <span class="control-label">MAIN LIGHT</span>
-              <button class="toggle ${s.main.on ? 'on' : ''}" data-action="toggle-main">
-                <div class="toggle-knob"></div>
-              </button>
-            </div>`;
-          if (s.main.on) {
-            h += `<div class="slider-row">
-              <div class="slider-label">Brightness: ${s.main.bri}%</div>
-              <input type="range" class="slider" min="5" max="100" value="${s.main.bri}" data-action="bri-main">
-            </div>
-            <div class="slider-row">
-              <div class="slider-label">Temperature: ${s.main.temp}K ${s.main.temp < 3200 ? 'Warm' : s.main.temp > 5000 ? 'Cool' : 'Neutral'}</div>
-              <input type="range" class="slider temp" min="2700" max="6500" step="100" value="${s.main.temp}" data-action="temp-main">
-            </div>`;
-          }
-          return h + '</div>';
-        }
-        if (key === 'ambient') {
-          // Exactly ONE ambience switch per room: the room's single ambient
-          // group, never a switch per fixture.
-          let h = `<div class="control-group" data-row="ambient">
-            <div class="control-header">
-              <span class="control-label">${esc(lc.ambient.name.toUpperCase())}</span>
-              <button class="toggle ${s.ambient.on ? 'on' : ''}" data-action="toggle-ambient">
-                <div class="toggle-knob"></div>
-              </button>
-            </div>`;
-          if (s.ambient.on) {
-            const colors = ["#ff3300","#ff6600","#ffaa00","#ff0066","#cc00ff","#6600ff","#0066ff","#00ccff","#00ff66","#ffffff"];
-            h += `<div class="slider-row">
-              <div class="slider-label">Brightness: ${s.ambient.bri}%</div>
-              <input type="range" class="slider" min="5" max="100" value="${s.ambient.bri}" data-action="bri-ambient">
-            </div>
-            <div class="slider-row">
-              <div class="slider-label">Color</div>
-              <div class="color-swatches">
-                ${colors.map(c => `<button class="color-swatch ${s.ambient.color === c ? 'selected' : ''}" style="background:${c}" data-action="color-ambient" data-color="${c}"></button>`).join('')}
-              </div>
-              <input type="color" class="color-input" value="${s.ambient.color}" data-action="color-input-ambient">
-            </div>
-            ${stripInfoHtml(lc.ambient)}`;
-          }
-          return h + '</div>';
-        }
-        if (key === 'galaxy') {
-          let h = `<div class="control-group" data-row="galaxy">
-            <div class="control-header">
-              <span class="control-label">GALAXY PROJECTOR</span>
-              <button class="toggle galaxy ${s.galaxy.on ? 'on' : ''}" data-action="toggle-galaxy">
-                <div class="toggle-knob"></div>
-              </button>
-            </div>`;
-          if (s.galaxy.on) {
-            h += `<div class="slider-row">
-              <div class="slider-label">Brightness: ${s.galaxy.bri}%</div>
-              <input type="range" class="slider" min="5" max="100" value="${s.galaxy.bri}" data-action="bri-galaxy">
-            </div>`;
-          }
-          return h + '</div>';
-        }
+        const offline = haOffline(ha);
+        if (key === 'ha-offline') return haOfflineRowHtml();
+        if (key === 'main') return mainLightRowHtml(s.main, offline);
+        // Exactly ONE ambience switch per room: the room's single ambient
+        // group, never a switch per fixture.
+        if (key === 'ambient') return ambientRowHtml(s.ambient, lc.ambient.name, stripInfoHtml(lc.ambient), offline);
+        if (key === 'galaxy') return galaxyRowHtml(s.galaxy, offline);
         if (key.startsWith('door:')) {
           const doors = roomDoorRows[rid] || [];
           const door = doors.find(d => 'door:' + d.id === key);
@@ -2325,9 +2286,9 @@
           if (!cu) return '';
           const pct = curtainShownPct(cu.id);
           if (pct === null || pct === undefined) return '';
-          return curtainRowHtml(cu, pct, curtainIsAvailable(cu.id));
+          return curtainRowHtml(cu, pct, curtainIsAvailable(cu.id), offline);
         }
-        if (key === 'climate') return climateRowHtml(climateReading.get(rid) || null);
+        if (key === 'climate') return climateRowHtml(climateReading.get(rid) || null, offline);
         return '';
       }
 
@@ -2351,42 +2312,51 @@
 
       // Wire every control inside `root` (the whole panel, or one repainted
       // row). Commands to HA are sent ONLY from these user-event handlers.
+      //
+      // Every handler that CHANGES something (a light, a curtain, a target)
+      // is attached through onWrite, which does nothing at all while HA is
+      // offline -- no command, and no optimistic change to the panel or the
+      // 3D model. The controls are disabled then too; this covers the window
+      // between the status flipping and the row repainting (a drag already
+      // under way). Lock-release handlers (pointerup / blur) are NOT gated:
+      // they must always run.
       function wireRoomControls(root, rid) {
         const s = home.lightState[rid];
+        const onWrite = (el, type, fn) => el.addEventListener(type, e => { if (!haOffline(ha)) fn(e); });
         root.querySelectorAll('[data-action]').forEach(el => {
           const action = el.dataset.action;
 
-          if (action === 'toggle-main') el.addEventListener('click', () => {
+          if (action === 'toggle-main') onWrite(el, 'click', () => {
             s.main.on = !s.main.on; home.updateLights(); sendToHA(rid, 'main', s.main, 0); refreshRoomRow('main');
           });
-          if (action === 'toggle-ambient') el.addEventListener('click', () => {
+          if (action === 'toggle-ambient') onWrite(el, 'click', () => {
             s.ambient.on = !s.ambient.on; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 0); refreshRoomRow('ambient');
           });
-          if (action === 'toggle-galaxy') el.addEventListener('click', () => {
+          if (action === 'toggle-galaxy') onWrite(el, 'click', () => {
             s.galaxy.on = !s.galaxy.on; home.updateLights(); sendToHA(rid, 'galaxy', s.galaxy, 0); refreshRoomRow('galaxy');
           });
-          if (action === 'bri-main') el.addEventListener('input', e => {
+          if (action === 'bri-main') onWrite(el, 'input', e => {
             s.main.bri = +e.target.value; home.updateLights();
             el.previousElementSibling.textContent = `Brightness: ${s.main.bri}%`;
             sendToHA(rid, 'main', s.main, 200);
           });
-          if (action === 'temp-main') el.addEventListener('input', e => {
+          if (action === 'temp-main') onWrite(el, 'input', e => {
             s.main.temp = +e.target.value; home.updateLights();
             const t = s.main.temp; el.previousElementSibling.textContent = `Temperature: ${t}K ${t<3200?'Warm':t>5000?'Cool':'Neutral'}`;
             sendToHA(rid, 'main', s.main, 200);
           });
-          if (action === 'bri-ambient') el.addEventListener('input', e => {
+          if (action === 'bri-ambient') onWrite(el, 'input', e => {
             s.ambient.bri = +e.target.value; home.updateLights();
             el.previousElementSibling.textContent = `Brightness: ${s.ambient.bri}%`;
             sendToHA(rid, 'ambient', s.ambient, 200);
           });
-          if (action === 'color-ambient') el.addEventListener('click', () => {
+          if (action === 'color-ambient') onWrite(el, 'click', () => {
             s.ambient.color = el.dataset.color; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 0); refreshRoomRow('ambient');
           });
-          if (action === 'color-input-ambient') el.addEventListener('input', e => {
+          if (action === 'color-input-ambient') onWrite(el, 'input', e => {
             s.ambient.color = e.target.value; home.updateLights(); sendToHA(rid, 'ambient', s.ambient, 200); refreshRoomRow('ambient');
           });
-          if (action === 'bri-galaxy') el.addEventListener('input', e => {
+          if (action === 'bri-galaxy') onWrite(el, 'input', e => {
             s.galaxy.bri = +e.target.value; home.updateLights();
             el.previousElementSibling.textContent = `Brightness: ${s.galaxy.bri}%`;
             sendToHA(rid, 'galaxy', s.galaxy, 200);
@@ -2400,7 +2370,7 @@
           // cover a drag that ends without either.
           if (action === 'curtain-open') {
             const curtainId = el.dataset.curtain;
-            el.addEventListener('input', e => {
+            onWrite(el, 'input', e => {
               const pct = +e.target.value;
               home.setCurtainOpen(curtainId, pct, null);
               curtainTarget.set(curtainId, pct);
@@ -2417,7 +2387,7 @@
           // bound motor. The 3D curtain then follows HA's own reports.
           if (action === 'curtain-cmd') {
             const curtainId = el.dataset.curtain;
-            el.addEventListener('click', () => {
+            onWrite(el, 'click', () => {
               if (!curtainIsAvailable(curtainId)) return; // belt-and-braces with `disabled`
               curtainSender.press(curtainId,
                 HAClient.coverOpenCloseCommand(el.dataset.cmd, curtainEntities.get(curtainId)));
@@ -2429,7 +2399,7 @@
           // nothing while the reading is unavailable, off, or null-target.
           if (action === 'climate-target') {
             const label = el.previousElementSibling;
-            el.addEventListener('input', e => {
+            onWrite(el, 'input', e => {
               const cmd = climateSender.input(rid, +e.target.value);
               const shown = cmd ? cmd.data.temperature : +e.target.value;
               if (label && isFinite(shown)) label.textContent = `Target: ${shown.toFixed(1)}°C`;
