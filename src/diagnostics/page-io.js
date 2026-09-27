@@ -111,3 +111,37 @@ export async function saveRun(win, url, doc) {
   const detail = body && body.error ? body.error : (MESSAGES[res.status] || 'unexpected response');
   return { ok: false, error: 'HTTP ' + res.status + ': ' + detail };
 }
+
+/**
+ * "Apply recommended level" (binding addition #1, optional part): write a
+ * level into the app's OWN adaptive-quality record for this device, in the
+ * app's own format (adaptive-quality.js saveState), so the NEXT load of the
+ * 3D view builds it. The previous raw value is returned so the page can show
+ * it and undo exactly. A block or ratio cap from the old record is dropped
+ * with it: they described the old level. The app keeps measuring afterwards
+ * and will step down again by itself if the device cannot hold it.
+ *
+ * @returns {{ok: boolean, previousRaw: ?string, error?: string}}
+ */
+export function applyStoredLevel(win, key, level) {
+  const s = storage(win);
+  if (!s || typeof key !== 'string' || key.indexOf('home3d.quality.v1|') !== 0 || !Number.isInteger(level)) {
+    return { ok: false, previousRaw: null, error: s ? 'bad key or level' : 'storage unavailable' };
+  }
+  let prev = null;
+  try { prev = s.getItem(key); } catch (e) { return { ok: false, previousRaw: null, error: 'storage unreadable' }; }
+  try {
+    s.setItem(key, JSON.stringify({ v: 1, level, blocked: null, dprCap: null, settled: null }));
+    return { ok: true, previousRaw: prev };
+  } catch (e) { return { ok: false, previousRaw: prev, error: 'storage refused the write' }; }
+}
+
+/** Undo applyStoredLevel: put the previous raw value back (or remove the key). */
+export function restoreStoredLevel(win, key, previousRaw) {
+  const s = storage(win);
+  try {
+    if (!s) return false;
+    if (previousRaw == null) s.removeItem(key); else s.setItem(key, previousRaw);
+    return true;
+  } catch (e) { return false; }
+}

@@ -205,6 +205,22 @@ try {
   check('njs: exports the save handler', /save: save/.test(njs));
   check('njs: nothing Node-only', !/\brequire\(|\bprocess\.|\bBuffer\.|\bawait\b|\basync\b|\bclass\b/.test(njs.replace(/\/\*[\s*][\s\S]*?\*\//g, '')));
 
+  // The page's inline module must PARSE: a syntax error there leaves the page
+  // stuck on "Loading configuration..." with no console error a tablet user
+  // could ever see (it happened once, from a stray apostrophe). CI's
+  // `node --check` pass only covers .js files, so check it here.
+  const page = read('diagnostics.html');
+  const inline = (page.match(/<script type="module">([\s\S]*?)<\/script>/) || [])[1];
+  check('diagnostics.html has an inline module', !!inline);
+  if (inline) {
+    const f = path.join(tmp, 'diagnostics-inline.mjs');
+    fs.writeFileSync(f, inline);
+    let parsed = true, err = '';
+    try { execFileSync(process.execPath, ['--check', f], { stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (e) { parsed = false; err = String(e.stderr || e.message).slice(0, 300); }
+    check('diagnostics.html inline module parses', parsed, err);
+  }
+
   // ---- C. the entrypoint, in a sandbox -------------------------------------------------------
   const posix = p => (process.platform === 'win32' ? p.replace(/^([A-Za-z]):/, (m, d) => '/' + d.toLowerCase()).replace(/\\/g, '/') : p);
   function sandbox() {

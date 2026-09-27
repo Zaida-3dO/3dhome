@@ -46,12 +46,20 @@ export function summarize(r) {
     (d.battery ? ' | battery ' + Math.round(d.battery.level * 100) + '%' + (d.battery.charging ? ' charging' : '') : '') +
     (d.embedding && d.embedding.inIframe ? ' | embedded' : ''));
   if (app && app.tier) {
-    lines.push('App decision: tier ' + app.tier + ' (compiles ' + app.compileTier + '), mobileGpu=' + app.mobileGpu +
-      ', default level ' + r.matrix.defaultLevelName + ' @' + r.matrix.defaultDpr);
+    lines.push('App decision: compiles ' + app.compileTier + ', mobileGpu=' + app.mobileGpu + ' (' + app.mobileReason + ')' +
+      ', max level ' + app.maxLevel + ', default ' + (app.defaultLevelName || app.defaultLevel) +
+      '; RUNNING level ' + (app.currentLevelName || '?') + ' (' + (app.currentLevelFrom || '?') + ') @' +
+      (app.currentDpr != null ? app.currentDpr : '?') + ', furniture ' +
+      (app.currentLevelConfig ? app.currentLevelConfig.furnitureDetail + ' detail' +
+        (app.currentLevelConfig.dropMinorFurniture ? ' without minor items' : '') : '?') +
+      ', shadows=' + (app.shadowsMode || 'auto'));
   }
   const v = r.verdict || {};
   if (v.summary) lines.push('Verdict: ' + v.summary + '.');
   else if (v.recommendation) lines.push('Verdict: ' + v.recommendation + '.');
+  (v.levelLines || []).forEach(l => lines.push(l));
+  if (v.furniture && v.furniture.line) lines.push(v.furniture.line);
+  if (v.stripLights) v.stripLights.lines.forEach(l => lines.push(l));
   if (v.perLightMs) {
     lines.push('Per extra light: ' + (v.perLightMs.gpu != null ? fmt(v.perLightMs.gpu, 3) + ' ms GPU' : 'no GPU timer') +
       ', ' + fmt(v.perLightMs.frame, 3) + ' ms frame' +
@@ -59,6 +67,7 @@ export function summarize(r) {
   }
   if (v.thermal) lines.push('Sustained: frame-time drift ' + fmt(v.thermal.driftPct) + '%' +
     (v.thermal.throttlingSuspected ? ' -- thermal throttling suspected' : ''));
+  if (r.run && r.run.adaptiveState) lines.push('App adaptive-quality record: ' + (r.run.adaptiveState.untouched ? 'untouched by this run' : 'CHANGED during the run' + (r.run.adaptiveState.restored ? ' and restored' : '')) + '.');
   const bad = r.stages.filter(s => !s.valid);
   if (bad.length) lines.push(bad.length + ' of ' + r.stages.length + ' stages invalid (' +
     bad.slice(0, 3).map(s => s.id + ': ' + s.invalidReason).join('; ') + (bad.length > 3 ? '; ...' : '') + ').');

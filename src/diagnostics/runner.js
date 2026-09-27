@@ -26,12 +26,26 @@ import { motionPose, MOTIONS } from './camera-motion.js';
 import { summarizeIntervals, summarizeSamples, histogram, downsampleMax, drift, HIST_EDGES, percentile } from './stats.js';
 import { createFrameRecorder, createGpuTimer, createCpuTimer, attachToScene, createLongTaskObserver, heapMB, rendererInfo } from './telemetry.js';
 import { collectDevice } from './device-info.js';
+import { computeVerdict } from './verdict.js';
+import { describeLevel } from './matrix.js';
+import { estimateLightVectors, measuredMaxUniformVectors } from './lights-budget.js';
+import { LEVELS } from '../adaptive-quality.js';
+
+/** The app's adaptive-quality records (read-only here; see snapshotAdaptive). */
+const ADAPTIVE_PREFIX = 'home3d.quality.v1|';
 import { assembleResult, fitToSize } from './result.js';
 import { rafThrottle } from '../adaptive-quality.js';
 
 const SERIES_POINTS = 240;
 const READY_TIMEOUT_MS = 90000;
 const FURNITURE_TIMEOUT_MS = 60000;
+/**
+ * A light-count change recompiles every lit material SYNCHRONOUSLY (no
+ * precompile path for it): measured 12-21 s on a desktop GPU for +10..+39
+ * PointLights on the demo house. A tablet may take far longer; give it room,
+ * and record the time as changeFrameMs.
+ */
+const CHANGE_TIMEOUT_MS = 180000;
 /** An interval this long mid-stage means the browser stopped delivering frames. */
 const GAP_INVALID_MS = 1000;
 
@@ -88,7 +102,12 @@ export async function runDiagnostics(o) {
   const check = () => { if (signal.aborted) throw new AbortedError(signal.reason || 'aborted by the user'); };
 
   progress({ phase: 'device', label: 'Reading device capabilities' });
-  const device = await collectDevice(window);
+  const shadowsMode = ['auto', 'low', 'off'].indexOf(o.shadows) !== -1 ? o.shadows : 'auto';
+  // The app's own adaptive-quality records, snapshotted BEFORE anything runs:
+  // the benchmark pins every build's level (adaptive off, nothing persisted),
+  // and this proves it -- compared after the run, restored if anything moved.
+  const adaptiveBefore = snapshotAdaptive();
+  const device = await collectDevice(window, { shadows: shadowsMode });
   const refresh = await measureRefresh(1000);
   device.refreshRateHz = refresh.hz;
   device.refreshCalibration = refresh;
@@ -100,12 +119,16 @@ export async function runDiagnostics(o) {
     document.removeEventListener('visibilitychange', onVis);
     throw new Error('WebGL is not available on this device, so there is nothing to benchmark.');
   }
-  const plan = buildPlan({ mode: o.mode, maxLevel: device.app.maxLevel, defaultLevel: device.app.defaultLevel,
-    mobile: device.app.mobileCaps === true, deviceDpr: window.devicePixelRatio || 1 });
+  const plan = buildPlan({ mode: o.mode, maxLevel: device.app.maxLevel, currentLevel: device.app.currentLevel,
+    currentDpr: device.app.currentDpr, mobile: device.app.mobileCaps === true, deviceDpr: window.devicePixelRatio || 1,
+    shadows: shadowsMode });
+  plan.currentLevelFrom = device.app.currentLevelFrom;
   const matrix = describePlan(plan);
   matrix.motions = MOTIONS;
   matrix.histogramEdgesMs = HIST_EDGES;
   matrix.sun = 'pinned to 12:00 local time on the run date, so every device lights the same scene';
+  matrix.maxFragmentUniformVectors = device.webgl && device.webgl.limits ? device.webgl.limits.MAX_FRAGMENT_UNIFORM_VECTORS : null;
+  const ctxInfo = { maxFragU: matrix.maxFragmentUniformVectors };
 
   const builds = [];
   const stages = [];
@@ -116,13 +139,27 @@ export async function runDiagnostics(o) {
 
   const eta = () => {
     const remaining = plan.builds.reduce((s, b) => s + b.stages.filter(st => !st._done)
-      .reduce((a, st) => a + st.warmupMs + st.measureMs + 300, 0) + (b._done ? 0 : 4000), 0);
+      .reduce((a, st) => a + st.warmupMs + st.measureMs + 800 + ((st.lights > 0 || (st.strip && st.strip.strips > 0)) ? 15000 : 0), 0) +
+      (b._done ? 0 : 4000), 0);
     return remaining;
   };
 
   try {
     for (const b of plan.builds) {
       check();
+      if (b.dynamic === 'recommended') {
+        // The strip-light group runs at the level/ratio the grid recommends,
+        // else the current one: decided now, from what has been measured.
+        const v = computeVerdict(stages, plan);
+        const lvl = v.best ? v.best.level : plan.currentLevel;
+        const dpr = v.best ? v.best.dpr : plan.currentDpr;
+        b.level = lvl; b.levelName = LEVELS[lvl].name;
+        b.config = describeLevel(lvl, { maxLevel: plan.maxLevel, mobile: device.app.mobileCaps === true, shadows: b.shadows });
+        b.chosenFrom = v.best ? 'grid recommendation' : 'current setting (nothing measured held the target)';
+        b.stages.forEach(st => { st.dpr = dpr; });
+        const mb = matrix.builds.find(x => x.id === b.id);
+        if (mb) { mb.level = lvl; mb.levelName = b.levelName; mb.config = b.config; mb.chosenFrom = b.chosenFrom; mb.dpr = dpr; }
+      }
       progress({ phase: 'build', label: 'Building the scene: ' + b.id + ' (level ' + b.levelName + ', shadows ' + b.shadows + ')',
         stageIndex: done, stageCount: total, etaMs: eta() });
       const built = await createBuild(o, b, device, check);
@@ -132,7 +169,7 @@ export async function runDiagnostics(o) {
           check();
           progress({ phase: 'stage', label: stageLabel(s, b), stageIndex: done + 1, stageCount: total, etaMs: eta(),
             measureMs: s.measureMs, warmupMs: s.warmupMs });
-          const res = await runStage(built, b, s, { check, isHidden: () => hiddenNow, hiddenSince: () => hiddenSince,
+          const res = await runStage(built, b, s, { check, ctxInfo, isHidden: () => hiddenNow, hiddenSince: () => hiddenSince,
             onTick: (frac) => progress({ phase: 'stage-tick', fraction: frac, stageIndex: done + 1, stageCount: total, etaMs: eta() }) });
           stages.push(res);
           s._done = true;
@@ -151,11 +188,17 @@ export async function runDiagnostics(o) {
     document.removeEventListener('visibilitychange', onVis);
   }
   spentMs = performance.now() - t0;
+  const adaptiveAfter = snapshotAdaptive();
+  const untouched = JSON.stringify(adaptiveBefore) === JSON.stringify(adaptiveAfter);
+  const restored = untouched ? false : restoreAdaptive(adaptiveBefore, adaptiveAfter);
 
   const result = assembleResult({
     app: { version: o.version, houseId: o.houseId, house: o.house },
     run: { mode: plan.mode, startedAt: startedAt.toISOString(), finishedAt: new Date().toISOString(),
-      durationMs: Math.round(spentMs), estimatedMs: plan.estimatedMs, aborted, abortReason, hiddenEvents },
+      durationMs: Math.round(spentMs), estimatedMs: plan.estimatedMs, aborted, abortReason, hiddenEvents,
+      shadows: shadowsMode,
+      adaptiveState: { untouched, restored, keysBefore: Object.keys(adaptiveBefore || {}).length,
+        note: adaptiveBefore === null ? 'localStorage unavailable: nothing to protect' : 'the app\'s home3d.quality.v1 records were compared before and after the run' } },
     device, matrix, plan, builds, stages
   });
   fitToSize(result);
@@ -163,10 +206,35 @@ export async function runDiagnostics(o) {
   return result;
 }
 
+/** Every adaptive-quality record, raw ({key: string}), or null without storage. */
+function snapshotAdaptive() {
+  try {
+    const ls = window.localStorage;
+    const out = {};
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k && k.indexOf(ADAPTIVE_PREFIX) === 0) out[k] = ls.getItem(k);
+    }
+    return out;
+  } catch (e) { return null; }
+}
+
+/** Put the records back exactly as they were. Returns whether it managed. */
+function restoreAdaptive(before, after) {
+  if (!before) return false;
+  try {
+    const ls = window.localStorage;
+    Object.keys(after || {}).forEach(k => { if (!(k in before)) ls.removeItem(k); });
+    Object.keys(before).forEach(k => ls.setItem(k, before[k]));
+    return true;
+  } catch (e) { return false; }
+}
+
 function stageLabel(s, b) {
   const bits = [b.levelName + ' @' + s.dpr];
   if (s.camera !== 'idle' || s.group === 'motion') bits.push('camera ' + s.camera);
   if (s.lights) bits.push('+' + s.lights + ' lights');
+  if (s.strip) bits.push(s.strip.label);
   if (!s.furniture) bits.push('no furniture');
   if (b.shadows !== 'auto') bits.push('shadows ' + b.shadows);
   if (s.group === 'sustained') bits.push('sustained ' + Math.round(s.measureMs / 1000) + ' s');
@@ -243,7 +311,7 @@ async function createBuild(o, b, device, check) {
         mobileMatches: q.mobileGpu === device.app.mobileGpu
       } : null
     };
-    return { inst, D, ren, info, teardown, shaderErrorCount: () => shaderErrors, lightsAdded: 0 };
+    return { inst, D, ren, info, teardown, shaderErrorCount: () => shaderErrors, lightsKey: 'none', lightsAdded: 0 };
   } catch (e) {
     teardown();
     throw e;
@@ -271,6 +339,43 @@ async function idleTicks(D, ms) {
   return { medianMs: Math.round(med * 100) / 100, fps: t.fps, throttled: t.throttled, ticks: d.length };
 }
 
+let rectAreaReady = null;
+/**
+ * RectAreaLight shades with LTC lookup tables that three keeps out of core:
+ * RectAreaLightUniformsLib.init() patches this THREE instance's UniformsLib
+ * once. Loaded lazily (~300 KB), only when a strip stage needs it.
+ */
+function ensureRectAreaLib() {
+  if (!rectAreaReady) {
+    rectAreaReady = import('../../vendor/three-r160/addons/lights/RectAreaLightUniformsLib.js')
+      .then(m => { m.RectAreaLightUniformsLib.init(); });
+  }
+  return rectAreaReady;
+}
+
+/**
+ * Light specs for n strips (binding addition #2). A strip is ~1 m x 2 cm on a
+ * wall, 0.9 m up, facing into the room. 'point': perStrip dim PointLights
+ * spread along the metre (reach 2.5 m, decay 2, total intensity per strip
+ * fixed so B is brightness-comparable with A). 'rect': one RectAreaLight.
+ */
+export function stripLightSpecs(anchors, strip) {
+  const out = [];
+  anchors.forEach(a => {
+    if (strip.kind === 'rect') {
+      out.push({ type: 'rect', position: a.position, lookAt: a.facing, intensity: 8, width: 1, height: 0.02, color: 0xffd9a0 });
+      return;
+    }
+    const k = Math.max(1, strip.perStrip | 0);
+    for (let i = 0; i < k; i++) {
+      const t = k === 1 ? 0 : (i + 0.5) / k - 0.5;
+      out.push({ type: 'point', position: [a.position[0] + a.along[0] * t, a.position[1], a.position[2] + a.along[2] * t],
+        intensity: 0.4 / k, distance: 2.5, decay: 2, color: 0xffd9a0 });
+    }
+  });
+  return out;
+}
+
 /** Run one stage on a live build. */
 async function runStage(built, b, s, ctx) {
   const { inst, D, ren } = built;
@@ -281,12 +386,20 @@ async function runStage(built, b, s, ctx) {
 
   // ---- apply ----
   const tApply = performance.now();
+  let changeTimedOut = false;
   const frames0 = inst.getFrameCount();
   D.setPixelRatio(s.dpr);
-  if (built.lightsAdded !== s.lights) {
+  const lightsKey = s.strip ? 'strip:' + s.id : 'n:' + s.lights;
+  if (built.lightsKey !== lightsKey) {
     D.clearPointLights();
-    if (s.lights > 0) D.addPointLights(s.lights);
-    built.lightsAdded = s.lights;
+    built.lightsAdded = 0;
+    if (s.strip && s.strip.strips > 0) {
+      if (s.strip.kind === 'rect') await ensureRectAreaLib();
+      built.lightsAdded = D.addLights(stripLightSpecs(D.stripAnchors(s.strip.strips), s.strip));
+    } else if (!s.strip && s.lights > 0) {
+      built.lightsAdded = D.addPointLights(s.lights);
+    }
+    built.lightsKey = lightsKey;
   }
   if (inst.getFurnitureVisible() !== s.furniture) inst.setFurnitureVisible(s.furniture);
   pose(0);
@@ -294,7 +407,7 @@ async function runStage(built, b, s, ctx) {
   while (inst.getFrameCount() < frames0 + 2) {
     ctx.check();
     await nextFrame();
-    if (performance.now() - tApply > READY_TIMEOUT_MS) break;
+    if (performance.now() - tApply > CHANGE_TIMEOUT_MS) { changeTimedOut = true; break; }
   }
   const changeFrameMs = Math.round((performance.now() - tApply) * 10) / 10;
 
@@ -361,7 +474,8 @@ async function runStage(built, b, s, ctx) {
     const maxGap = iv.length ? Math.max.apply(null, iv) : 0;
     const errors = built.shaderErrorCount() - errors0;
     let valid = true, invalidReason = null;
-    if (hidden) { valid = false; invalidReason = 'page was hidden during the stage (rAF throttled)'; }
+    if (changeTimedOut) { valid = false; invalidReason = 'the settings change had not reached the screen after ' + (CHANGE_TIMEOUT_MS / 1000) + ' s (shader recompile)'; }
+    else if (hidden) { valid = false; invalidReason = 'page was hidden during the stage (rAF throttled)'; }
     else if (!frames) { valid = false; invalidReason = 'no frames recorded'; }
     else if (maxGap > GAP_INVALID_MS) { valid = false; invalidReason = 'a ' + Math.round(maxGap) + ' ms gap: the browser stopped delivering frames'; }
     else if (idle.throttled) { valid = false; invalidReason = 'the browser throttles animation frames (idle ticks at ~' + idle.fps + ' fps): an occluded/background window or power saving'; }
@@ -371,10 +485,19 @@ async function runStage(built, b, s, ctx) {
       id: s.id, build: b.id, group: s.group, grid: !!s.grid,
       level: b.level, levelName: b.levelName, shadows: b.shadows,
       dpr: s.dpr, dprApplied: D.getPixelRatio(),
-      camera: s.camera, lightsAdded: s.lights, furniture: s.furniture,
+      camera: s.camera, lightsAdded: built.lightsAdded, furniture: s.furniture,
+      config: b.config ? { tier: b.config.tier, furnitureDetail: b.config.furnitureDetail, dropMinorFurniture: b.config.dropMinorFurniture,
+        sunShadow: b.config.sunShadow, roomShadowLights: b.config.roomShadowLights, shadowMapScale: b.config.shadowMapScale } : null,
+      strip: s.strip || null,
       warmupMs: s.warmupMs, measureMs: s.measureMs,
       valid, invalidReason,
       compileFailed: errors > 0, shaderErrors: errors,
+      uniforms: (s.group === 'strip' || s.group === 'lights' || s.group === 'baseline') ? {
+        lightVectorsEstimate: estimateLightVectors(D.lightCounts()),
+        measuredMaxVectors: measuredMaxUniformVectors(ren),
+        maxFragmentUniformVectors: ctx.ctxInfo ? ctx.ctxInfo.maxFragU : null,
+        note: 'estimate: lights only, three r160 structs (the number to compare with the limit, leaving room for material uniforms). measured: largest active-uniform footprint (vertex+fragment) among programs still alive at the end of the stage -- may include programs from the previous stage until three releases them'
+      } : null,
       changeFrameMs,
       idleTick: { medianMs: idle.medianMs, fps: idle.fps, throttled: idle.throttled, ticks: idle.ticks },
       frames,

@@ -21,13 +21,25 @@ reduced — and by how much?*
 
 ## Running it
 
-- **Full** (about 4 minutes) or **Quick** (about 1 minute).
-- Keep the screen on and the tab in front. The page holds a screen wake lock where the browser
-  supports it. A hidden page, or a browser that throttles animation frames (an occluded window,
-  power saving), invalidates the stage that was running — it is marked invalid with the reason
-  rather than recorded as slow.
+- **Full** (about 6-7 minutes) or **Quick** (about 3 minutes). Most of the time is not the
+  measuring: every change in the number of lights makes three.js recompile every lit material
+  **synchronously** (measured 12-21 s per change on a desktop GPU for the demo house), and the
+  light and strip stages each pay it once. A tablet will pay more; the ETA is an estimate.
+- **Benchmark as**: *the 3D page* (`shadows=auto`) or *the Home Assistant popup*
+  (`shadows=low`, what `?embed=1` uses). The two keep separate adaptive-quality records, so pick
+  the one this device really shows. `?shadows=low` or `?embed=1` on the URL preselects the popup;
+  `?mode=quick` preselects Quick.
+- Keep the screen on and the tab in front. The page asks for a screen wake lock where the browser
+  supports it (never waiting on the answer). A hidden page, or a browser that throttles animation
+  frames (an occluded window, power saving), invalidates the stage that was running — it is marked
+  invalid with the reason rather than recorded as slow.
 - The **device name** ("Wall tablet") is optional and remembered on the device.
 - **Abort** stops after the current frame and still produces a partial result.
+- **Apply recommended level** (on the done screen, only when the verdict recommends a level other
+  than the one the device runs): writes that level into the app's own adaptive-quality record for
+  this device and mode, for the next load of the 3D view, and shows the previous value with an
+  **Undo**. The app keeps measuring afterwards and steps down by itself if the device cannot hold
+  it. Nothing else in the benchmark writes that record (see *The app's own record* below).
 
 ### Locally
 
@@ -41,6 +53,18 @@ default. The dev server imports the same validation file nginx runs, so Save beh
 
 ## What it measures
 
+### What the device runs today
+
+Before anything runs, the device block records the app's **current decision** here, computed with
+the app's own functions (`quality-tier.js`, `adaptive-quality.js`) from the same inputs the scene
+reads: `compileTier`, `mobileGpu` and why, `maxLevel`, the default level, the adaptive-quality
+record for this GPU in **both** shadows modes (`storedAdaptiveState.auto` / `.low`, with their
+`storageKeys`), and from those the **level the device actually runs** (`currentLevel`,
+`currentLevelFrom`: `stored` or `default`), what that level builds (`currentLevelConfig`: tier,
+room shadows, minor-furniture drop, `furnitureDetail` — `low` only at tier `low`, see
+`furnitureBuildSteps` in `src/furniture.js`) and the ratio it runs at (`currentDpr`: where the
+record last settled at this level, else the app's start ratio — 1.5 on a mobile GPU).
+
 ### The matrix
 
 Not a cartesian product. Every structural knob (level, shadows) is a full shader recompile and
@@ -48,19 +72,26 @@ needs its own scene build, so the plan is:
 
 | Build | Stages |
 |---|---|
-| **base** — the app's own default level for this device, `shadows=auto`, furniture on | `baseline` (static, default ratio) · `dpr-*` (static at each of 1, 1.5, device max) · `motion-*` (idle, slow orbit, fast orbit, pan, zoom, swipe burst — at the app's interaction ratio) · `lights+10/25/50` (synthetic shadowless PointLights) · `furniture-none` · `sustained` (slow orbit, 60 s) |
-| **level-&lt;name&gt;** — every other *distinct* rung of the app's ladder the GPU compiles (`low`, `mid-lite`, `mid`, `ultra-lite`, `ultra`) | static at each pixel ratio |
-| **shadows-off**, **shadows-low** — the default level with the other shadow modes (skipped when identical to base) | static, default ratio |
+| **base** — the level the device runs **now** (stored, else default), the chosen shadows mode, furniture on | `baseline` (static, current ratio) · `dpr-*` (static at each of 1, 1.5, device max, and the current ratio) · `motion-*` (idle, slow orbit, fast orbit, pan, zoom, swipe burst — at the app's interaction ratio) · `lights+10/25/50` (synthetic shadowless PointLights) · `furniture-none` · `sustained` (slow orbit, 60 s) |
+| **level-&lt;name&gt;** — every other rung of the app's ladder the GPU compiles (`low`, `mid-lite`, `mid`, `ultra-lite`, `ultra`), each with furniture at the detail **that rung builds** | static at each pixel ratio |
+| **shadows-&lt;mode&gt;** — the current level in the other two shadows modes (skipped when identical to base) | static, current ratio |
+| **strip** — the strip-light cost group, at the level and ratio the grid **recommends** (else the current ones), decided at run time after the grid | `strip-0` (reference) · `strip-A13` (13 PointLights — today's approach) · `strip-B13x3` / `strip-B13x6` (13 strips × 3 or 6 dim PointLights, reach 2.5 m, decay 2) · `strip-C13` / `strip-C25` (RectAreaLights, 1 m × 2 cm) |
 
-Quick mode keeps the base build's baseline, two ratios, slow orbit, swipe burst, +10/+25 lights,
-furniture off and a 10 s sustained stage, plus the top level if it differs from the default.
+Quick mode keeps the base build's baseline, two ratios, slow orbit, swipe burst, +10 lights,
+furniture off and a 10 s sustained stage, **every rung at the current ratio**, and the strip
+group's reference, A13, B13x3 and C13.
 
 "Distinct" is decided by `levelConfig()` from `src/adaptive-quality.js`, so two rungs that build
-the same scene are not run twice. The **default level and pixel ratio** are the app's own
-decision (`quality-tier.js` + `adaptive-quality.js`): on a mobile GPU, `mid-lite` at 1.5; on a
-desktop, the top level the GPU compiles at `min(devicePixelRatio, 2)`.
+the same scene (ultra-lite and ultra under `shadows=low`) are not run twice.
 
-Motion stages run at the **interaction ratio** (`min(1, default)`) because the app drops to it
+Strips are placed by `instance.diagnostics.stripAnchors(n)`: spread along the house's walls,
+longest first, 0.9 m up and 5 cm off the wall, facing into the house. The RectAreaLight stages
+need three's LTC tables: `vendor/three-r160/addons/lights/RectAreaLightUniformsLib.js` is the
+unmodified file from the `three@0.160.0` npm tarball (sha256
+`08085bc942253cd54948bf936fecb66b54514a135872656e475a1cab09b55214`, the same file the strip-light
+branch vendors), loaded lazily only when a C stage runs.
+
+Motion stages run at the **interaction ratio** (`min(1, current)`) because the app drops to it
 while a finger is down; that is what a swipe really costs.
 
 Camera moves are functions of time only (`camera-motion.js`), so a slow device and a fast one
@@ -99,11 +130,11 @@ One JSON object, under ~200 KB (the save endpoint caps a body at 256 KB). Keys i
 |---|---|
 | `schema` | always `"home3d-diagnostics"` |
 | `schemaVersion` | `1` |
-| `summary` | array of plain-English lines: device, app decision, verdict, per-light cost, thermal, invalid stages |
+| `summary` | array of plain-English lines: device, what it runs today, verdict, every rung, furniture, strip lights, per-light cost, thermal, the adaptive record, invalid stages |
 | `app` | `version`, `houseId`, `house` (**counts only**: rooms, walls, doors, windows, curtains, furnitureItems), `page` |
-| `run` | `mode`, `startedAt`, `finishedAt`, `durationMs`, `estimatedMs`, `aborted`, `abortReason`, `hiddenEvents`, `stagesRun`, `stagesInvalid` |
+| `run` | `mode`, `shadows`, `startedAt`, `finishedAt`, `durationMs`, `estimatedMs`, `aborted`, `abortReason`, `hiddenEvents`, `stagesRun`, `stagesInvalid`, `adaptiveState` (`untouched`, `restored` — see below) |
 | `device` | the device block (below) |
-| `matrix` | the plan that ran: `mode`, `timing`, `defaultLevel`/`Name`, `defaultDpr`, `interactionDpr`, `dprs`, `levels`, `builds` (ids, level, shadows, what each builds, stage ids), `motions`, `histogramEdgesMs`, `sun`, `notes` |
+| `matrix` | the plan that ran: `mode`, `timing`, `shadows`, `currentLevel`/`Name`, `currentDpr`, `interactionDpr`, `dprs`, `levels`, `builds` (ids, level, shadows, what each builds incl. `furnitureDetail`, stage ids; the strip build's `chosenFrom`), `stripOptions`, `motions`, `histogramEdgesMs`, `sun`, `maxFragmentUniformVectors`, `notes` |
 | `builds` | per build: `compileMs`, `furnitureAttachMs`, `firstFrameMs`, `shaderErrors`, `quality` (the scene's own report), `renderer`, `lights`, `heap`, `crossCheck` |
 | `stages` | per stage (below) |
 | `verdict` | the on-device first answer (below) |
@@ -129,19 +160,24 @@ Every field is always present. An API the browser lacks, refuses or throws from 
 and more — `extensions`, `timerQuery`, `parallelShaderCompile`, `highpFragment`), `webgpu`
 (adapter info where exposed), and `app` — the app's own decision recomputed with its own
 functions: `mobileGpu`, `mobileReason`, `mobileCaps`, `compileTier`, `tier`, `maxLevel`,
-`defaultLevel`, `storedAdaptiveState` (what adaptive quality has learnt on this device, if
-anything).
+`defaultLevel`/`Name`, `shadowsMode`, `storageKeys` and `storedAdaptiveState` (per shadows mode:
+what adaptive quality has learnt on this device, if anything), `currentLevel`/`Name`,
+`currentLevelFrom`, `currentLevelConfig` (incl. `furnitureDetail`), `startDpr`, `currentDpr`,
+`currentDprFrom` — see *What the device runs today*.
 
 ### A stage
 
 | Field | Meaning |
 |---|---|
-| `id`, `build`, `group` | `group`: `baseline`, `dpr`, `motion`, `lights`, `furniture`, `sustained`, `grid`, `shadows` |
+| `id`, `build`, `group` | `group`: `baseline`, `dpr`, `motion`, `lights`, `furniture`, `sustained`, `grid`, `shadows`, `strip` |
 | `grid` | a settings point the verdict may choose (static, no extra lights, furniture on) |
 | `level`, `levelName`, `shadows`, `dpr`, `dprApplied`, `camera`, `lightsAdded`, `furniture` | the settings |
+| `config` | what the build builds: `tier`, `furnitureDetail`, `dropMinorFurniture`, `sunShadow`, `roomShadowLights`, `shadowMapScale` |
+| `strip` | strip stages: `option` (A/B/C/ref), `kind`, `strips`, `perStrip`, `label` |
+| `uniforms` | baseline, lights and strip stages: `lightVectorsEstimate` (lights only, three r160 structs), `measuredMaxVectors` (largest active-uniform footprint of the programs alive at the end of the stage, vertex+fragment), `maxFragmentUniformVectors` |
 | `valid`, `invalidReason` | never used by the verdict when invalid |
 | `compileFailed`, `shaderErrors` | a shader failed to compile (too many lights for the uniform budget) |
-| `changeFrameMs` | time for the settings change to reach the screen (compile hitch) |
+| `changeFrameMs` | time for the settings change to reach the screen (compile hitch; a light-count change is a full synchronous recompile). Over 180 s the stage is invalid |
 | `idleTick` | `{medianMs, fps, throttled}` — the browser-throttling check |
 | `frames` | `frames`, `durationMs`, `fpsMean`, `meanMs`, `p50Ms`, `p90Ms`, `p95Ms`, `p99Ms`, `maxMs`, `minMs`, `over33`, `over50`, `pctOver33`, `pctOver50`, `longestStallMs`, `jankFrames`, `jankPct` |
 | `histogram` | frame counts per bucket; edges in `matrix.histogramEdgesMs` (last bucket open) |
@@ -164,8 +200,11 @@ contiguous run of frames over 33.4 ms, summed.
 ### `verdict`
 
 - **Target:** a setting *holds* when valid, `p95 ≤ 33.4 ms` **and** `≤ 2 %` of frames over 50 ms.
-- `current` — the app's default for this device, with `holds`, `p95Ms`, `costMs`, `headroomPct`.
-- `best` — the highest grid point that holds, ranked by level, then pixel ratio.
+- `current` — the setting the device runs **today** (`levelFrom`: `stored` or `default`), with `holds`, `p95Ms`, `costMs`, `headroomPct`, `furnitureDetail`.
+- `best` — the highest sustainable grid point (holds the target), ranked by level, then pixel ratio; `recommendedLevel`/`Name` is its level.
+- `levels` / `levelLines` — every rung measured: its tier, furniture detail, minor-item drop, and the highest ratio it holds at (`holdsAtDpr`, null when it holds nowhere).
+- `furniture` — `currentDetail`, `currentDropsMinorItems`, `fullDetailAffordable` (a holding setting builds full-detail furniture), `allItemsFullDetailAffordable` (…and keeps the minor items), and a `line` in words.
+- `stripLights` — the strip group: the level/ratio it ran at, each option's `deltaP95Ms` and `deltaCostMs` against the +0 reference, uniform use, whether it `compiled`, `holds` and is `tenable` (valid, compiled, holds), `tenable` per option A/B/C, and `lines` in words.
 - `recommendation` — `raise`, `keep`, `reduce`, `reduce-below-lowest` or `unknown`; `summary` says it in words.
 - `basis` — `gpu` (GPU timer p95, maxed with CPU p95) or `frame` (frame-interval p95, which vsync
   floors at the refresh interval, so headroom is **understated**). Headroom is
@@ -175,6 +214,31 @@ contiguous run of frames over 33.4 ms, summed.
 - `thermal` — sustained-stage `driftPct`, `gpuDriftPct`, `throttlingSuspected` (> 15 %).
 
 The agent reading the result should re-derive from `stages`; the verdict is a first answer.
+
+### The app's own adaptive-quality record
+
+The 3D view keeps what adaptive quality has learnt per device in `localStorage`
+(`home3d.quality.v1|<GPU>|<uniform vectors>|<shadows mode>`). The benchmark must not disturb it:
+every build pins its level (`opts.level`), which turns adaptive quality off for that build, so
+nothing is read from or written to the record by the scene. The runner snapshots every
+`home3d.quality.v1|` key before the run and compares after; `run.adaptiveState.untouched` says
+whether anything moved, and if something did it is restored (`restored: true`). The only writer
+is the explicit **Apply recommended level** button, which the user presses, and which shows the
+previous value and offers Undo.
+
+### Scene hooks (`src/home3d-scene.js`)
+
+Additive and inert unless called; the app never calls them.
+
+- `create(..., { level })` — pins the structural level (0 `low` … 4 `ultra`, clamped to what
+  compiles) and turns adaptive quality off for that scene. Absent: unchanged behaviour.
+- `instance.diagnostics` — `renderer`, `scene`, `camera` (read-only handles for measurement),
+  `quality()`, `setPixelRatio(r|null)`, `setContinuous(bool)`, `addPointLights(n)`,
+  `addLights(specs)` (point or RectAreaLight), `stripAnchors(n)`, `clearPointLights()`,
+  `lightCounts()`, `getOrbit()`, `homeOrbit()`, `footprintMetres()`.
+
+`src/diagnostics/telemetry.js` (frame recorder, GPU timer query, CPU timer, long tasks,
+`renderer.info`) and `stats.js` are written to be reused by any other perf HUD.
 
 ## Privacy
 

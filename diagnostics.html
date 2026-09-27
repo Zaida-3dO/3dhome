@@ -80,9 +80,14 @@
     <p class="small">Keep this screen on and this tab in front while it runs. Plugged in is better: a hot or
        battery-saving device throttles, which the run will show.</p>
     <div class="modes" role="radiogroup" aria-label="Run length">
-      <label><input type="radio" name="mode" value="full" checked>Full (about 4 min)</label>
-      <label><input type="radio" name="mode" value="quick">Quick (about 1 min)</label>
+      <label><input type="radio" name="mode" value="full" checked>Full (about 6-7 min)</label>
+      <label><input type="radio" name="mode" value="quick">Quick (about 3 min)</label>
     </div>
+    <div class="modes" role="radiogroup" aria-label="Benchmark as" style="margin-top: 8px">
+      <label><input type="radio" name="shadows" value="auto" checked>As the 3D page</label>
+      <label><input type="radio" name="shadows" value="low">As the Home Assistant popup</label>
+    </div>
+    <p class="small">The popup (<code>?embed=1</code>) uses lighter shadows and keeps its own quality record, so pick the one this device really shows.</p>
     <div class="row">
       <label for="device-name">Device name</label>
       <input type="text" id="device-name" maxlength="60" placeholder="e.g. Wall tablet" autocomplete="off">
@@ -116,6 +121,11 @@
       <button id="again">Run again</button>
     </div>
     <p class="small" id="save-note"></p>
+    <div id="apply-box" class="hidden" style="border-top: 1px solid var(--line); padding-top: 10px; margin-top: 6px">
+      <p class="small" id="apply-text"></p>
+      <div class="row" style="margin: 8px 0 0"><button id="apply">Apply recommended level</button><button id="undo" class="hidden">Undo</button></div>
+      <p class="small" id="apply-status"></p>
+    </div>
     <div id="status" role="status"></div>
     <div id="fallback">
       <p class="small">Copying is blocked here (common inside an app's embedded view). Select the text below and copy it by hand.</p>
@@ -131,13 +141,18 @@
     import { Home3DScene }     from './src/home3d-scene.js?v=__VERSION__';
     import { runDiagnostics }  from './src/diagnostics/runner.js?v=__VERSION__';
     import { SCHEMA_VERSION }  from './src/diagnostics/result.js?v=__VERSION__';
-    import { getDeviceIdentity, setDeviceName, saveRun, copyText } from './src/diagnostics/page-io.js?v=__VERSION__';
+    import { getDeviceIdentity, setDeviceName, saveRun, copyText, applyStoredLevel, restoreStoredLevel } from './src/diagnostics/page-io.js?v=__VERSION__';
 
     const $ = id => document.getElementById(id);
     const show = (el, on) => el.classList.toggle('hidden', !on);
     let cfg = null, house = null, result = null, saveEnabled = false;
 
     const ident = getDeviceIdentity(window);
+    {
+      const q = new URLSearchParams(location.search);
+      if (q.get('shadows') === 'low' || q.get('embed') === '1') document.querySelector('input[name=shadows][value=low]').checked = true;
+      if (q.get('mode') === 'quick') document.querySelector('input[name=mode][value=quick]').checked = true;
+    }
     $('device-name').value = ident.deviceName || '';
     $('device-name').addEventListener('change', e => setDeviceName(window, e.target.value));
 
@@ -178,14 +193,17 @@
       running = true;
       signal = { aborted: false };
       const mode = document.querySelector('input[name=mode]:checked').value;
+      const shadows = document.querySelector('input[name=shadows]:checked').value;
       setDeviceName(window, $('device-name').value);
       show($('intro'), false); show($('done'), false); show($('running'), true);
       $('hidden-warn').classList.remove('show');
-      await lockScreen();
+      // Not awaited: a wake-lock request can hang (a permission prompt, a
+      // headless or embedded browser) and must never hold up the run.
+      lockScreen();
       let current = { stageIndex: 0, stageCount: 1 };
       try {
         result = await runDiagnostics({
-          container: $('scene'), Home3DScene, house, houseId: house.id, version: cfg.version, mode, signal,
+          container: $('scene'), Home3DScene, house, houseId: house.id, version: cfg.version, mode, shadows, signal,
           onProgress: p => {
             if (p.phase !== 'stage-tick') current = p;
             const idx = p.stageIndex || 0, n = p.stageCount || current.stageCount || 1;
@@ -214,12 +232,48 @@
       $('save').disabled = !saveEnabled;
       $('save-note').textContent = saveEnabled ? '' :
         'Saving is off on this server (the operator has not set HOME3D_DIAGNOSTICS_DIR). Use Copy result instead.';
+      setupApply(result);
       show($('done'), true);
       window.__home3dDiagnosticsResult = result;
     });
 
     $('abort').addEventListener('click', () => { if (signal) { signal.aborted = true; signal.reason = 'aborted by the user'; } $('stage-label').textContent = 'Stopping after this frame...'; });
     $('again').addEventListener('click', () => { show($('done'), false); show($('intro'), true); });
+
+    // ---- Apply recommended level (writes the app's OWN adaptive record) ----
+    let applied = null;
+    function setupApply(r) {
+      applied = null;
+      show($('undo'), false);
+      $('apply-status').textContent = '';
+      const v = r.verdict || {}, app = r.device && r.device.app;
+      const key = app && app.storageKeys ? app.storageKeys[app.shadowsMode] : null;
+      const rec = v.recommendedLevel;
+      const ok = !r.run.aborted && key && Number.isInteger(rec) && rec !== app.currentLevel;
+      show($('apply-box'), !!ok);
+      if (!ok) return;
+      $('apply-text').textContent = 'This device runs level ' + app.currentLevelName + ' (' + app.currentLevelFrom + '). ' +
+        'The highest level that held the target here is ' + v.recommendedLevelName + '. Applying writes it into the quality record the 3D view keeps ' +
+        'for this device (' + app.shadowsMode + ' shadows mode) for the next load; the app keeps measuring and ' +
+        'steps down by itself if it cannot hold it.';
+      $('apply').textContent = 'Apply recommended level: ' + v.recommendedLevelName + ' (was ' + app.currentLevelName + ')';
+      $('apply').disabled = false;
+      $('apply').onclick = () => {
+        const res = applyStoredLevel(window, key, rec);
+        if (!res.ok) { $('apply-status').textContent = 'Could not apply: ' + res.error; return; }
+        applied = { key, previousRaw: res.previousRaw };
+        $('apply').disabled = true;
+        show($('undo'), true);
+        $('apply-status').textContent = 'Applied level ' + v.recommendedLevelName + ' for the next load. Previous value: ' +
+          (res.previousRaw == null ? 'nothing stored (the app default)' : res.previousRaw);
+      };
+      $('undo').onclick = () => {
+        if (!applied) return;
+        const ok2 = restoreStoredLevel(window, applied.key, applied.previousRaw);
+        $('apply-status').textContent = ok2 ? 'Undone: the previous value is back.' : 'Undo failed: storage refused the write.';
+        if (ok2) { applied = null; show($('undo'), false); $('apply').disabled = false; }
+      };
+    }
 
     function status(text, kind) { $('status').textContent = text; $('status').className = kind || ''; }
 

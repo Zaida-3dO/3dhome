@@ -60,7 +60,7 @@ check('desktop: one build per distinct level config', desk.builds.filter(b => b.
   desk.builds.map(b => b.id));
 check('no two builds build the same thing', new Set(desk.builds.map(b => JSON.stringify(b.config) + b.shadows)).size === desk.builds.length);
 check('shadow-off build present', desk.builds.some(b => b.id === 'shadows-off'));
-check('full plan estimate is 3-6 minutes', desk.estimatedMs > 180000 && desk.estimatedMs < 360000, desk.estimatedMs);
+check('full plan estimate is 4-8 minutes', desk.estimatedMs > 240000 && desk.estimatedMs < 480000, desk.estimatedMs);
 
 const tab = MX.buildPlan({ mode: 'full', maxLevel: 4, defaultLevel: AQ.defaultLevel(true, 4), mobile: true, deviceDpr: 2.25 });
 check('mobile: base build is mid-lite', tab.builds[0].levelName === 'mid-lite', tab.builds[0].levelName);
@@ -71,19 +71,42 @@ check('mobile: grid includes device max ratio', tab.builds.some(b => b.stages.so
 check('mobile: levels up to ultra are measured', tab.builds.some(b => b.levelName === 'ultra'));
 
 const low = MX.buildPlan({ mode: 'full', maxLevel: 0, defaultLevel: 0, mobile: false, deviceDpr: 1 });
-check('low-only GPU: no level builds beyond low', low.builds.every(b => b.level === 0));
+check('low-only GPU: no level builds beyond low', low.builds.filter(b => b.id !== 'strip').every(b => b.level === 0));
 
 const quick = MX.buildPlan({ mode: 'quick', maxLevel: 4, defaultLevel: 1, mobile: true, deviceDpr: 2 });
 const quickIds = quick.builds.flatMap(b => b.stages.map(s => s.id));
 check('quick has a sustained stage of 10 s', quick.builds[0].stages.find(s => s.id === 'sustained').measureMs === 10000);
 check('quick has no +50 lights', quickIds.indexOf('lights+50') === -1);
 check('quick measures the top level', quick.builds.some(b => b.level === 4));
-check('quick is ~1 minute', quick.estimatedMs > 40000 && quick.estimatedMs < 100000, quick.estimatedMs);
+check('quick is ~2-3 minutes (light recompiles dominate)', quick.estimatedMs > 60000 && quick.estimatedMs < 200000, quick.estimatedMs);
 check('quick stages are a subset of full stage ids (same device)', (() => {
   const full = MX.buildPlan({ mode: 'full', maxLevel: 4, defaultLevel: 1, mobile: true, deviceDpr: 2 });
   const fullIds = new Set(full.builds.flatMap(b => b.stages.map(s => s.id)));
   return quickIds.every(id => fullIds.has(id));
 })());
+// Binding addition #1: the base build is the level the device RUNS (stored), every rung is measured.
+const stored0 = MX.buildPlan({ mode: 'full', maxLevel: 4, currentLevel: 0, currentDpr: 1.25, mobile: true, deviceDpr: 2.25 });
+check('stored level: base build is the stored level (low)', stored0.builds[0].levelName === 'low' && stored0.currentLevel === 0);
+check('stored level: every compiling rung is measured', [0, 1, 2, 3, 4].every(l => stored0.builds.some(b => b.level === l)),
+  stored0.builds.map(b => b.id));
+check('stored settled ratio joins the ratio list', stored0.dprs.indexOf(1.25) !== -1 && stored0.currentDpr === 1.25, stored0.dprs);
+check('every rung at every ratio (full)', stored0.builds.filter(b => b.id.startsWith('level-')).every(b => b.stages.length === stored0.dprs.length));
+check('level builds carry the furniture detail they build', stored0.builds[0].config.furnitureDetail === 'low' &&
+  stored0.builds.find(b => b.levelName === 'mid').config.furnitureDetail === 'full');
+const quickAll = MX.buildPlan({ mode: 'quick', maxLevel: 4, currentLevel: 0, mobile: true, deviceDpr: 2 });
+check('quick still measures every rung', [1, 2, 3, 4].every(l => quickAll.builds.some(b => b.level === l)), quickAll.builds.map(b => b.id));
+const lowMode = MX.buildPlan({ mode: 'full', maxLevel: 4, currentLevel: 4, mobile: false, deviceDpr: 1, shadows: 'low' });
+check('shadows=low: ultra-lite dedupes into ultra (same build)', !lowMode.builds.some(b => b.levelName === 'ultra-lite'), lowMode.builds.map(b => b.id));
+check('shadows=low: every level build uses low', lowMode.builds.filter(b => b.id.startsWith('level-') || b.id === 'base').every(b => b.shadows === 'low'));
+check('shadows=low: the shadow variants are the other two modes', lowMode.builds.filter(b => b.id.startsWith('shadows-')).every(b => b.shadows !== 'low'));
+// Binding addition #2: the strip group.
+const strip = desk.builds.find(b => b.id === 'strip');
+check('strip build present, level chosen at run time', strip && strip.level === null && strip.dynamic === 'recommended');
+check('strip stages: ref, A13, B13x3, B13x6, C13, C25', strip.stages.map(s => s.id).join() === 'strip-0,strip-A13,strip-B13x3,strip-B13x6,strip-C13,strip-C25',
+  strip.stages.map(s => s.id));
+check('strip B x6 is 78 dim points; C is RectAreaLights', strip.stages.find(s => s.id === 'strip-B13x6').strip.perStrip === 6 &&
+  strip.stages.find(s => s.id === 'strip-C25').strip.kind === 'rect');
+check('quick strip group is ref/A/Bx3/C13', quick.builds.find(b => b.id === 'strip').stages.map(s => s.id).join() === 'strip-0,strip-A13,strip-B13x3,strip-C13');
 const desc = MX.describePlan(desk);
 check('describePlan lists every build and stage id', desc.builds.length === desk.builds.length && desc.stageCount === desk.stageCount);
 
@@ -108,7 +131,7 @@ let v = V.computeVerdict([
 check('raise: recommendation', v.recommendation === 'raise', v);
 check('raise: best is mid @1.5', v.best && v.best.stage === 'b', v.best);
 check('raise: frame-basis headroom 46% for 18 ms', v.current.headroomPct === 46, v.current);
-check('raise: summary names the current and the target', /mid-lite @1\.5/.test(v.summary) && /raise to mid @1\.5/.test(v.summary), v.summary);
+check('raise: summary names the current and the target', /mid-lite @1\.5/.test(v.summary) && /highest sustainable: mid @1\.5/.test(v.summary), v.summary);
 
 // reduce: default fails, lower holds
 v = V.computeVerdict([
@@ -161,6 +184,39 @@ check('first failing light count is 50', v.perLightMs.firstFailingLights === 50,
 v = V.computeVerdict([st({ id: 'a', level: 1, dpr: 1.5 }),
   st({ id: 'sus', group: 'sustained', grid: false, level: 1, dpr: 1.5, drift: { driftPct: 22 } })], plan);
 check('thermal drift over 15% flags throttling', v.thermal && v.thermal.throttlingSuspected === true, v.thermal);
+
+// levels, furniture and strip lines (binding additions)
+const cfgOf = (tier, drop) => ({ tier, furnitureDetail: tier === 'low' ? 'low' : 'full', dropMinorFurniture: drop });
+const plan0 = { currentLevel: 0, currentDpr: 1.5, currentLevelFrom: 'stored' };
+v = V.computeVerdict([
+  st({ id: 'l0a', level: 0, levelName: 'low', dpr: 1, config: cfgOf('low', true), frames: { p95Ms: 10 } }),
+  st({ id: 'l0b', level: 0, levelName: 'low', dpr: 1.5, config: cfgOf('low', true), frames: { p95Ms: 12 } }),
+  st({ id: 'l2a', level: 2, levelName: 'mid', dpr: 1, config: cfgOf('mid', false), frames: { p95Ms: 20 } }),
+  st({ id: 'l2b', level: 2, levelName: 'mid', dpr: 1.5, config: cfgOf('mid', false), frames: { p95Ms: 40 } }),
+  st({ id: 'l4a', level: 4, levelName: 'ultra', dpr: 1, config: cfgOf('ultra', false), frames: { p95Ms: 90, pctOver50: 60 } })
+], plan0);
+check('verdict names the stored current level', v.current.levelName === 'low' && v.current.levelFrom === 'stored' && /(stored)/.test(v.summary), v.summary);
+check('verdict: highest sustainable is mid @1', v.best.stage === 'l2a' && v.recommendedLevel === 2, v.best);
+check('levels: mid holds up to DPR 1 only', v.levels.find(L => L.level === 2).holdsAtDpr === 1);
+check('levels: ultra misses at every ratio', v.levels.find(L => L.level === 4).holdsAtDpr === null && /misses the target/.test(v.levelLines.find(l => /ultra/.test(l))));
+check('furniture: current is low detail, full detail affordable', v.furniture.currentDetail === 'low' && v.furniture.fullDetailAffordable === true &&
+  v.furniture.allItemsFullDetailAffordable === true, v.furniture);
+v = V.computeVerdict([st({ id: 'l0', level: 0, levelName: 'low', dpr: 1.5, config: cfgOf('low', true), frames: { p95Ms: 10 } }),
+  st({ id: 'l1', level: 1, levelName: 'mid-lite', dpr: 1.5, config: cfgOf('mid', true), frames: { p95Ms: 20 } }),
+  st({ id: 'l2', level: 2, levelName: 'mid', dpr: 1.5, config: cfgOf('mid', false), frames: { p95Ms: 50 } })], plan0);
+check('furniture: full detail yes, every item no (only mid-lite holds)', v.furniture.fullDetailAffordable === true && v.furniture.allItemsFullDetailAffordable === false, v.furniture);
+const sv = (id, opt, kind, n, per, p95, extra) => st(Object.assign({ id, group: 'strip', grid: false, level: 2, levelName: 'mid', dpr: 1.5,
+  lightsAdded: n * per, strip: { option: opt, kind, strips: n, perStrip: per, label: id }, frames: { p95Ms: p95 } }, extra || {}));
+const sVerdict = V.stripVerdict([sv('ref', 'ref', null, 0, 0, 16.7), sv('A', 'A', 'point', 13, 1, 17.5),
+  sv('B3', 'B', 'point', 13, 3, 30), sv('B6', 'B', 'point', 13, 6, 45),
+  sv('C13', 'C', 'rect', 13, 1, 20), sv('C25', 'C', 'rect', 25, 1, 22, { compileFailed: true })]);
+check('strip: delta p95 vs the reference', sVerdict.options.find(o => o.stage === 'A').deltaP95Ms === 0.8, sVerdict.options[0]);
+check('strip: A tenable', sVerdict.tenable.A === true);
+check('strip: B not tenable when x6 misses', sVerdict.tenable.B === false);
+check('strip: a compile failure is NOT tenable even with good frames', sVerdict.options.find(o => o.stage === 'C25').tenable === false &&
+  sVerdict.tenable.C === false && /DID NOT COMPILE/.test(sVerdict.lines.find(l => /C25/.test(l))));
+check('strip lines name the level and ratio', /at mid @1.5/.test(sVerdict.lines[0]), sVerdict.lines[0]);
+check('no strip stages -> null', V.stripVerdict([st({})]) === null);
 
 // ---- 3. the document -----------------------------------------------------------
 const house = { id: 'x', name: 'SECRET NAME', rooms: { a: { poly: [[1, 2]] }, b: {} }, walls: [1, 2, 3], doors: [1],

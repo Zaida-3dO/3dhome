@@ -134,7 +134,24 @@ check('full: webgpu adapter info', f.webgpu && f.webgpu.available === true && f.
 check('full: no reason recorded for battery/network/webgpu', !('battery' in f.nullReasons) && !('network' in f.nullReasons) && !('webgpu' in f.nullReasons));
 check('app decision: Immortalis tablet is a mobile GPU', f.app.mobileGpu === true, f.app);
 check('app decision: compiles ultra, runs mid, defaults to mid-lite (level 1)', f.app.compileTier === 'ultra' && f.app.tier === 'mid' && f.app.defaultLevel === 1 && f.app.maxLevel === 4, f.app);
-check('app decision: nothing stored -> null with reason', f.app.storedAdaptiveState === null && typeof f.nullReasons['app.storedAdaptiveState'] === 'string');
+check('app decision: nothing stored -> null with reason, per shadows mode', f.app.storedAdaptiveState.auto === null &&
+  typeof f.nullReasons['app.storedAdaptiveState.auto'] === 'string' && typeof f.nullReasons['app.storedAdaptiveState.low'] === 'string');
+check('app decision: nothing stored -> running the default level', f.app.currentLevel === 1 && f.app.currentLevelFrom === 'default' &&
+  f.app.currentLevelConfig.dropMinorFurniture === true && f.app.currentLevelConfig.furnitureDetail === 'full', f.app);
+check('app decision: start ratio 1.5 on a mobile GPU', f.app.startDpr === 1.5 && f.app.currentDpr === 1.5);
+check('app decision: auto and low keys differ, and name the GPU', f.app.storageKeys.auto !== f.app.storageKeys.low &&
+  f.app.storageKeys.auto === 'home3d.quality.v1|Immortalis-G925 MC12|1024|auto', f.app.storageKeys);
+// A stored level 0 (the owner's low-poly bed): read, never written.
+store.set(f.app.storageKeys.low, JSON.stringify({ v: 1, level: 0, blocked: { level: 1, until: 9e15 }, dprCap: null,
+  settled: { level: 0, dpr: 1.25, p95: 40, at: 1 } }));
+const before = JSON.stringify([...store]);
+const f2 = await D.collectDevice(full, { shadows: 'low' });
+check('stored level 0 in low mode -> running low (stored)', f2.app.shadowsMode === 'low' && f2.app.currentLevel === 0 &&
+  f2.app.currentLevelFrom === 'stored' && f2.app.currentLevelConfig.furnitureDetail === 'low', f2.app);
+check('stored settled ratio is the current ratio', f2.app.currentDpr === 1.25 && f2.app.currentDprFrom === 'stored settled');
+check('the stored record is reported', f2.app.storedAdaptiveState.low && f2.app.storedAdaptiveState.low.level === 0);
+check('reading the device never writes storage', JSON.stringify([...store]) === before);
+check('auto mode is unaffected by the low record', (await D.collectDevice(full)).app.currentLevelFrom === 'default');
 check('referrer is reduced to its origin', f.embedding.referrerOrigin === 'https://dash.example.test', f.embedding.referrerOrigin);
 check('the referrer path and query never appear', JSON.stringify(f).indexOf('secret-path') === -1 && JSON.stringify(f).indexOf('token=abc') === -1);
 const masked = Object.assign({}, full, { document: { createElement: () => ({ getContext: t => (t === 'webgl2' ? fakeGL({ renderer: 'x', maxFragU: 256, debug: false }) : null) }), referrer: '' } });
@@ -173,6 +190,41 @@ const c2 = await IO.copyText({ navigator: { clipboard: { writeText: async () => 
 check('copy: falls back to execCommand when the Clipboard API is refused', c2.ok && c2.method === 'execCommand', c2);
 const c3 = await IO.copyText({ navigator: {}, document: fakeDoc(false) }, 'x');
 check('copy: both fail -> ok:false with both reasons', !c3.ok && /no Clipboard API/.test(c3.error) && /execCommand returned false/.test(c3.error), c3);
+
+// ---- apply recommended level --------------------------------------------------------
+const AQ = await imp('src/adaptive-quality.js');
+const qmem = new Map();
+const qw = { localStorage: { getItem: k => (qmem.has(k) ? qmem.get(k) : null), setItem: (k, v) => qmem.set(k, String(v)), removeItem: k => qmem.delete(k) } };
+const qkey = 'home3d.quality.v1|GPU|1024|low';
+const old = JSON.stringify({ v: 1, level: 0, blocked: { level: 1, until: 9e15 }, dprCap: null, settled: null });
+qmem.set(qkey, old);
+const ap = IO.applyStoredLevel(qw, qkey, 2);
+check('apply: returns the previous raw value', ap.ok && ap.previousRaw === old, ap);
+const loaded = AQ.loadState(qw.localStorage, qkey, 4);
+check('apply: written in the app format (loadState reads level 2, no block)', loaded && loaded.level === 2 && loaded.blocked === null, loaded);
+check('undo: previous value restored exactly', IO.restoreStoredLevel(qw, qkey, ap.previousRaw) && qmem.get(qkey) === old);
+const ap2 = IO.applyStoredLevel(qw, 'home3d.quality.v1|NEW|1024|auto', 3);
+check('undo of a fresh key removes it', ap2.previousRaw === null && IO.restoreStoredLevel(qw, 'home3d.quality.v1|NEW|1024|auto', null) &&
+  !qmem.has('home3d.quality.v1|NEW|1024|auto'));
+check('apply refuses a key that is not an adaptive-quality record', IO.applyStoredLevel(qw, 'home3d.diagnostics.deviceId', 1).ok === false);
+check('apply refuses a non-integer level', IO.applyStoredLevel(qw, qkey, 1.5).ok === false);
+check('apply with throwing storage fails cleanly', IO.applyStoredLevel({ get localStorage() { throw new Error('x'); } }, qkey, 1).ok === false);
+
+// ---- lights budget and strip specs ------------------------------------------------------
+const LB = await imp('src/diagnostics/lights-budget.js');
+check('light vectors: 13 points + 1 dir + 1 hemi = 13*4 + 2 + 3 + 1', LB.estimateLightVectors({ point: 13, directional: 1, hemisphere: 1 }) === 58);
+check('light vectors: rect areas count 4 each', LB.estimateLightVectors({ rectArea: 25 }) === 101);
+check('light vectors: point shadows add 6 each', LB.estimateLightVectors({ point: 1, pointShadow: 1 }) === 11);
+const R = await imp('src/diagnostics/runner.js');
+const anchors = [{ position: [0, 0.9, 0], along: [1, 0, 0], facing: [0, 0.9, 1] }, { position: [5, 0.9, 5], along: [0, 0, 1], facing: [4, 0.9, 5] }];
+const b6 = R.stripLightSpecs(anchors, { kind: 'point', perStrip: 6 });
+check('strip B x6: 6 dim points per strip', b6.length === 12 && b6.every(x => x.type === 'point' && x.distance === 2.5 && x.decay === 2));
+check('strip B x6: spread along the metre, centred', Math.abs(Math.min(...b6.slice(0, 6).map(x => x.position[0])) + 5 / 12) < 1e-9 &&
+  Math.abs(Math.max(...b6.slice(0, 6).map(x => x.position[0])) - 5 / 12) < 1e-9);
+check('strip B keeps total intensity per strip', Math.abs(b6.slice(0, 6).reduce((a, x) => a + x.intensity, 0) - R.stripLightSpecs(anchors, { kind: 'point', perStrip: 1 })[0].intensity) < 1e-9);
+const c = R.stripLightSpecs(anchors, { kind: 'rect', perStrip: 1 });
+check('strip C: one 1 m x 2 cm RectAreaLight per strip, facing into the room', c.length === 2 && c[0].type === 'rect' && c[0].width === 1 &&
+  c[0].height === 0.02 && c[0].lookAt === anchors[0].facing);
 
 // ---- 7. save ---------------------------------------------------------------------------
 const fetchOK = async (url, init) => ({ ok: true, status: 201, json: async () => ({ ok: true, id: 'run-1', receivedAt: 'T', echo: init.method }) });

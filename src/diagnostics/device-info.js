@@ -19,7 +19,7 @@
  */
 
 import { detectMobileGpu, resolveTier } from '../quality-tier.js';
-import { maxLevelFor, defaultLevel, storageKey, loadState } from '../adaptive-quality.js';
+import { maxLevelFor, defaultLevel, storageKey, loadState, levelConfig, LEVELS, MOBILE_START_RATIO } from '../adaptive-quality.js';
 
 /**
  * A probe: `get(path, fn)` runs fn and returns its value, or null -- and when
@@ -130,7 +130,7 @@ export function collectWebGL(env, probe) {
  * scene reads. The runner cross-checks these against what the first scene
  * build actually reports.
  */
-export function appDecision(env, webgl, probe) {
+export function appDecision(env, webgl, probe, shadows) {
   const nav = env.navigator || {};
   const renderer = webgl ? (webgl.unmaskedRenderer || webgl.renderer || '') : '';
   const maxFragU = webgl && webgl.limits ? webgl.limits.MAX_FRAGMENT_UNIFORM_VECTORS : null;
@@ -138,22 +138,47 @@ export function appDecision(env, webgl, probe) {
     probe.nul('app', 'no WebGL, so the app cannot pick a tier');
     return null;
   }
-  const coarse = typeof env.matchMedia === 'function' ? env.matchMedia('(pointer: coarse)').matches : undefined;
+  const mode = shadows === 'low' || shadows === 'off' || shadows === 'high' ? shadows : 'auto';
+  let coarse;
+  try { coarse = typeof env.matchMedia === 'function' ? env.matchMedia('(pointer: coarse)').matches : undefined; } catch (e) { coarse = undefined; }
   const gpu = detectMobileGpu({ renderer, userAgent: nav.userAgent || '', coarsePointer: coarse, maxTouchPoints: nav.maxTouchPoints || 0 });
   const t = resolveTier({ maxFragU, mobileGpu: gpu.mobileGpu });
   const maxLevel = maxLevelFor(t.compileTier);
   const def = defaultLevel(t.mobileCaps === true, maxLevel);
-  let stored = null;
   let storage = null;
   try { storage = env.localStorage || null; } catch (e) { storage = null; }
-  stored = probe.get('app.storedAdaptiveState', () => {
-    const s = loadState(storage, storageKey(renderer, maxFragU, 'auto'), maxLevel);
-    return s || NO('nothing stored for this GPU (the app has not settled a level here, or storage is unavailable)');
+  // The app keeps one adaptive record per GPU name, uniform budget AND
+  // shadows= mode: the standalone page ('auto') and the Home Assistant embed
+  // ('low') learn separately. Both are recorded, read-only.
+  const keys = { auto: storageKey(renderer, maxFragU, 'auto'), low: storageKey(renderer, maxFragU, 'low') };
+  if (!keys[mode]) keys[mode] = storageKey(renderer, maxFragU, mode);
+  const storedStates = {};
+  Object.keys(keys).forEach(m => {
+    storedStates[m] = probe.get('app.storedAdaptiveState.' + m, () => {
+      const s = loadState(storage, keys[m], maxLevel);
+      return s || NO('nothing stored under this key (the app has not settled a level here in shadows=' + m +
+        ' mode, or storage is unavailable)');
+    });
   });
+  const stored = storedStates[mode];
+  const ctx = { maxLevel, mobile: t.mobileCaps === true, shadows: mode };
+  const current = stored && stored.level != null ? stored.level : def;
+  const cfg = levelConfig(current, ctx);
+  // The DPR the app is running: where adaptive quality last settled at this
+  // level, else its start ratio (mobile 1.5, desktop min(dpr, 2)).
+  const dpr = env.devicePixelRatio > 0 ? env.devicePixelRatio : 1;
+  const startDpr = Math.round(Math.min(dpr, 2, t.mobileCaps === true ? MOBILE_START_RATIO : 2) * 100) / 100;
+  const settled = stored && stored.settled && stored.settled.level === current && stored.settled.dpr > 0 ? stored.settled.dpr : null;
   return {
     mobileGpu: gpu.mobileGpu, mobileReason: gpu.reason, mobileCaps: t.mobileCaps,
-    compileTier: t.compileTier, tier: t.tier, maxLevel, defaultLevel: def,
-    storedAdaptiveState: stored
+    compileTier: t.compileTier, tier: t.tier, maxLevel, defaultLevel: def, defaultLevelName: LEVELS[def].name,
+    shadowsMode: mode,
+    storageKeys: keys,
+    storedAdaptiveState: storedStates,
+    currentLevel: current, currentLevelName: LEVELS[current].name,
+    currentLevelFrom: stored && stored.level != null ? 'stored' : 'default',
+    currentLevelConfig: Object.assign({}, cfg, { furnitureDetail: cfg.tier === 'low' ? 'low' : 'full' }),
+    startDpr, currentDpr: settled || startDpr, currentDprFrom: settled ? 'stored settled' : 'app start ratio'
   };
 }
 
@@ -168,7 +193,7 @@ function mm(env, q) {
  *
  * @param {Object} env  window, or a fake with the same shape
  */
-export async function collectDevice(env) {
+export async function collectDevice(env, opts) {
   const P = createProbe();
   const nav = env.navigator || {};
   const out = {};
@@ -278,7 +303,7 @@ export async function collectDevice(env) {
     })
     : P.nul('webgpu', 'navigator.gpu not available (no WebGPU, or not a secure context)');
 
-  out.app = appDecision(env, out.webgl, P);
+  out.app = appDecision(env, out.webgl, P, opts && opts.shadows);
   out.nullReasons = P.reasons;
   return out;
 }
