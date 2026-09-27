@@ -1111,7 +1111,7 @@ channel to the strip's own entity in `rooms`, exactly like `main` and
            "desk_strip": ["light.example_desk_strip"] }
 ```
 
-A strip's `size` is `[x, y, z]` in cm along the plan axes (x east, y south), and
+A strip's `size` is `[east-west extent, height, north-south extent]` in cm, and
 `heightCm` is the strip's CENTRE -- put it half its height below the desktop's
 underside. A named channel follows its entity's on/off, brightness and colour,
 and it gets **no sidebar row**: the room's one Ambient row still switches the
