@@ -622,6 +622,8 @@ jobs:
         run: node scripts/test-sidebar-pin.mjs
       - name: Accent light colour -- rgb/hs conversion, colour square, HA colour parsing
         run: node scripts/test-light-color.mjs
+      - name: Real sun -- solar position, daylight curve, window sun pools, sun.sun, ?time=
+        run: node scripts/test-sun-position.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

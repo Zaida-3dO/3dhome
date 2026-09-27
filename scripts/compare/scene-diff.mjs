@@ -63,7 +63,7 @@ if (lonlyO + lonlyN) {
 // Sun + ambient, compared field by field (these set the whole mood).
 const pick = (arr, t) => arr.find(l => l.type === t);
 console.log('\n=== SUN / AMBIENT (full) ===');
-for (const t of ['DirectionalLight', 'AmbientLight']) {
+for (const t of ['DirectionalLight', 'AmbientLight', 'HemisphereLight']) {
   const a = pick(O.lights, t), b = pick(N.lights, t);
   for (const k of ['color', 'intensity', 'position', 'castShadow', 'shadow']) chk(t + '.' + k, a && a[k], b && b[k]);
 }

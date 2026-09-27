@@ -4187,7 +4187,7 @@
         },
         "site": {
           "type": "object",
-          "description": "Where the house is, for the daylight rig ONLY. The engine derives sunrise/sunset and sun angle from latitude and the day of year, so the model lights up and goes dark in step with the real day.\n\nPRIVACY: this is the one field in geometry.json that can locate a building. Give a city-level latitude, not a rooftop one — the sun rig cannot tell the difference, and a shared profile then carries no address. Omit the block entirely for a fixed neutral daylight.",
+          "description": "Where the house is, for the daylight rig ONLY. The engine computes the sun's real direction and height from latitude, longitude, northOffsetDegrees and the time, so the model lights up and goes dark in step with the real day and the sun comes in through the right windows. (When Home Assistant reports sun.sun, its azimuth and elevation are used instead.)\n\nPRIVACY: this is the one field in geometry.json that can locate a building. Give a city-level latitude, not a rooftop one — the sun rig cannot tell the difference, and a shared profile then carries no address. Omit the block entirely for a fixed neutral daylight.",
           "properties": {
             "latitude": {
               "type": "number",
