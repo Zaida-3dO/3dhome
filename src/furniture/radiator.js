@@ -39,9 +39,12 @@
  * PIPES AND `pipeDrop`. The real pipes run from the valves down to the room
  * floor. For a wall-hung radiator the floor is the item's `elevation` below
  * this module's y=0, which the builder cannot see, so `pipeDrop` (cm,
- * default 0) says how far below y=0 the pipes continue. Set it equal to the
+ * default 0) says how far below y=0 the pipes continue. It must equal the
  * item's own `elevation` (17 for a wall-hung radiator 17 cm up; 0 for the
- * floor-standing box, whose envelope already starts at the floor). The pipes
+ * floor-standing box, whose envelope already starts at the floor), so the
+ * PLACER sets it from the item's elevation whenever the item does not author
+ * it (src/furniture.js itemParams(), item 8596012d): a house file leaves it
+ * out. The pipes
  * are the only part allowed below y=0, and only by exactly `pipeDrop`: 1.5 cm
  * tubes that hug the wall beside the radiator's ends, never wider than the
  * envelope and never in front of it. Everything else stays inside W x H x D
@@ -81,7 +84,10 @@
  *            overhangs the carcass at the front and sides, side panels, a
  *            front frame whose stiles run to the floor as legs, a vent slot
  *            under the top board, a panel of vertical slats, and an open
- *            kick-out under the bottom rail. A DARK backing sits right behind
+ *            kick-out under the bottom rail, `boxKick` cm tall (optional:
+ *            min(12, 0.14 x height) when absent; 0 runs the bottom rail and
+ *            the panel down to the floor, with no kick-out -- the hallway
+ *            box). A DARK backing sits right behind
  *            the frame opening, so the gaps between the slats and the vent
  *            slot read dark (as the real one does) and the radiator never
  *            shows through them. White by default.
@@ -174,9 +180,10 @@ export const DEFAULTS = Object.freeze({
   bodyElevation: 0,      // cm, the body's bottom inside the envelope
   shelfExtendLeft: 0,    // cm, shelf overrun past the body's left end ('shelf' only)
   shelfExtendRight: 0,   // cm, shelf overrun past the body's right end ('shelf' only)
-  pipeDrop: 0,           // cm the pipes run BELOW y=0 -- set it to the item's elevation
+  pipeDrop: 0,           // cm the pipes run BELOW y=0 -- the placer sets it to the item's elevation
   // bodyWidth/bodyHeight/bodyDepth are intentionally ABSENT: they default to
-  // a snug fit, derived by layout() below.
+  // a snug fit, derived by layout() below. So is boxKick: it defaults to a
+  // proportion of the height.
 });
 
 const num = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
@@ -252,7 +259,9 @@ export function layout(params) {
     const slot = Math.min(2.5, 0.03 * H);
     const topRail = Math.min(10, 0.11 * H);
     const bottomRail = Math.min(9, 0.1 * H);
-    const kick = Math.min(12, 0.14 * H);
+    // the kick-out under the bottom rail: boxKick, or the proportional
+    // default; never so tall that the slat panel has no height left
+    const kick = clamp(num(o.boxKick, Math.min(12, 0.14 * H)), 0, Math.max(0, H - BOX_TOP_CM - slot - topRail - bottomRail - 1));
     const innerX = xo - stileW;
     const panelY0 = kick + bottomRail, panelY1 = H - BOX_TOP_CM - slot - topRail;
     const panelW = 2 * innerX;
@@ -302,6 +311,7 @@ export function oppositeCorner(corner) {
 const P = (width, height, depth, bodyWidth, cover, valveCorner, extra) => Object.freeze(Object.assign({
   width, height, depth, bodyWidth, bodyHeight: 60, bodyDepth: 12, thickness: 10,
   valveCorner, cover, bodyElevation: 0, shelfExtendLeft: 0, shelfExtendRight: 0, pipeDrop: 17,
+  boxKick: Math.min(12, 0.14 * height),   // the default kick-out (read by a 'box' cover only)
 }, extra || {}));
 export const PRESETS = Object.freeze([
   { name: 'Office: 80 wide, no cover, valve bottom-right (corner unconfirmed)', elevation: 17,
@@ -311,7 +321,7 @@ export const PRESETS = Object.freeze([
   { name: 'Living room: 100 wide (width unconfirmed), shelf, valve top-left', elevation: 17,
     params: P(118, 63.6, 15.5, 100, 'shelf', 'top-left', { shelfExtendLeft: 12, shelfExtendRight: 3 }) },
   { name: 'Hallway: 50 wide in a 75x92 slatted box, valve top-left', elevation: 0,
-    params: P(75, 92, 19, 50, 'box', 'top-left', { bodyElevation: 17, pipeDrop: 0 }) },
+    params: P(75, 92, 19, 50, 'box', 'top-left', { bodyElevation: 17, pipeDrop: 0, boxKick: 0 }) },   // the box stands on the floor: no kick-out
   { name: 'Kitchen: 40 wide, no cover, valve bottom-left', elevation: 17,
     params: P(58, 60, 12, 40, 'none', 'bottom-left') },
 ]);
@@ -469,11 +479,18 @@ export function build(THREE, params, opts) {
       boxCm('coverShelfLip', sx0, sx1, by1, by1 + SHELF_LIP_H_CM, L.D - lipT, L.D, 'matte', coverHex);
     }
     if (full) {
-      // a dark clip hooked over each end of the radiator, 7 cm down its end,
-      // deep enough to read from the front; its front stops short of the
-      // valve body's axis so it clears the valve stubs, heads and pipes
-      const cz0 = Math.max(0.2, b.gap - 0.5);
-      const cz1 = Math.max(cz0 + 1.2, b.gap + b.thickness / 2 - TRV_STUB_R_CM - 0.3);
+      // a dark clip hooked over each end of the radiator, 7 cm down its end.
+      // It sits at the FRONT of the end, in front of the smart valve's head:
+      // a top-corner valve shares the clip's height band, and a clip at the
+      // rear of the end was hidden behind the valve, its stub and its pipe
+      // (visual review of PR #76, item 216de62a) -- the real one reads as a
+      // dark tab just under the shelf. A body too shallow to fit it there
+      // keeps it at the rear, short of the valve body's axis.
+      const headR = valveHeadRadius(L, L.trvY);
+      const fz0 = valveAxisZ(L, headR) + headR + 0.3, fz1 = b.gap + b.thickness;
+      const front = fz1 - fz0 >= 1.2;
+      const cz0 = front ? fz0 : Math.max(0.2, b.gap - 0.5);
+      const cz1 = front ? fz1 : Math.max(cz0 + 1.2, b.gap + b.thickness / 2 - TRV_STUB_R_CM - 0.3);
       const cy0 = Math.max(b.y0, b.y1 - 7);
       boxCm('coverShelfClip_L', b.x0 - 0.45, b.x0 - 0.05, cy0, by0, cz0, cz1, 'matte', 0x1f1f22);
       boxCm('coverShelfClip_R', b.x1 + 0.05, b.x1 + 0.45, cy0, by0, cz0, cz1, 'matte', 0x1f1f22);
@@ -535,22 +552,30 @@ export function build(THREE, params, opts) {
   return group;
 }
 
+// Depth ceiling for anything the valves draw: the envelope, or -- inside a
+// box -- the same real air gap short of the backing the body keeps.
+const valveZCeil = L => (L.cover === 'box' ? L.D - BOX_BACKING_BACK_FROM_FRONT_CM - BOX_AIR_GAP_CM : L.D);
+/** A valve head's radius (cm) at height y: never below y=0 or through the depth ceiling. */
+function valveHeadRadius(L, y, headR = TRV_HEAD_D_CM / 2) {
+  return Math.max(0.2, Math.min(headR, y - 0.05, valveZCeil(L) / 2 - 0.05));
+}
+/** A valve's axis depth (cm) for head radius r: mid-body, kept clear of the wall and the ceiling. */
+function valveAxisZ(L, r) {
+  const b = L.body;
+  return clamp(b.gap + b.thickness / 2, r + 0.05, Math.max(r + 0.05, valveZCeil(L) - r - 0.05));
+}
+
 /** The smart valve on one end, the lockshield on the other, and their pipes. */
 function buildValves(THREE, group, L, add, mat, bodyHex, CHROME) {
   const b = L.body;
-  // Depth ceiling for anything the valves draw: the envelope, or -- inside a
-  // box -- the same real air gap short of the backing the body keeps.
-  const zCeil = L.cover === 'box' ? L.D - BOX_BACKING_BACK_FROM_FRONT_CM - BOX_AIR_GAP_CM : L.D;
-  const axisZfor = r => clamp(b.gap + b.thickness / 2, r + 0.05, Math.max(r + 0.05, zCeil - r - 0.05));
 
   function valve(name, side, y, stubLen, stubR, headLen, headR, isSmart) {
     const g = new THREE.Group();
     g.name = name;
     const dir = side === 'left' ? -1 : 1;
     const end = side === 'left' ? b.x0 : b.x1;
-    // never let the head reach below y=0 or through the depth ceiling
-    const r = Math.max(0.2, Math.min(headR, y - 0.05, zCeil / 2 - 0.05));
-    const z = axisZfor(r);
+    const r = valveHeadRadius(L, y, headR);
+    const z = valveAxisZ(L, r);
     const sR = Math.min(stubR, r);
 
     // valve body out of the end tapping, axis along x

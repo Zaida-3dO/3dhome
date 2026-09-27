@@ -184,15 +184,17 @@ jobs:
           # module contract: TYPE + frozen DEFAULTS + build()/buildRadiator
           # alias, the PLACER frame (y=0 at its own bottom, elevation applied
           # by the placer -- not baked in; z=0 at the back/wall face), the
-          # smart TRV valve landing in the requested corner for all 4
-          # VALVE_CORNERS with the lockshield diagonally opposite, an invalid
-          # corner falling back to the documented default, the
-          # thickness/wallGap split staying independent (bracket bridges
-          # exactly the gap), opts.detail 'low' dropping the valve assemblies
-          # with strictly fewer triangles than 'full', and merge fidelity
-          # (every mesh tagged with userData.finish from the shared flat-
-          # colour set, no texture maps, the smart valve's status LED
-          # genuinely emissive and flagged userData.keep). Builds real
+          # smart TRV valve on the END of the radiator at the requested
+          # corner for all 4 VALVE_CORNERS with the lockshield at the bottom
+          # of the other end, an invalid corner falling back to the
+          # documented default, the thickness/wallGap split staying
+          # independent (bracket bridges exactly the gap), the pipes reaching
+          # the floor (the placer derives pipeDrop from the item elevation),
+          # the shelf's valve-end clip visible, opts.detail 'low' dropping
+          # the valve assemblies with strictly fewer triangles than 'full',
+          # and merge fidelity (every mesh tagged with userData.finish from
+          # the shared flat-colour set, no texture maps, nothing emissive).
+          # Builds real
           # three.js geometry from the vendored module, same as the
           # wall-fittings test above.
           set -euo pipefail

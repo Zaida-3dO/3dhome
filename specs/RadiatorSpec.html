@@ -39,7 +39,7 @@
 <script type="application/json" id="spec-manifest">
 {
   "title": "Radiators",
-  "description": "One design for every house radiator — a white compact panel radiator with vertical ribs, a smart valve on the END of the radiator at a chosen corner and the lockshield at the bottom of the other end, with an optional clip-on shelf or framed slatted box. Width/height/depth are ALWAYS the item's outer envelope (the body, the end-valve room and any cover); the body itself is bodyWidth/bodyHeight/bodyDepth. Pipes run down to the floor: pipeDrop, which equals the item's elevation. Defaults are the standard house radiator. Pick a variant (one per room) above, or use the Tweaks panel.",
+  "description": "One design for every house radiator — a white compact panel radiator with vertical ribs, a smart valve on the END of the radiator at a chosen corner and the lockshield at the bottom of the other end, with an optional clip-on shelf or framed slatted box. Width/height/depth are ALWAYS the item's outer envelope (the body, the end-valve room and any cover); the body itself is bodyWidth/bodyHeight/bodyDepth. Pipes run down to the floor: pipeDrop, which the placer sets from the item's elevation. Defaults are the standard house radiator. Pick a variant (one per room) above, or use the Tweaks panel.",
   "objects": [
     { "id": "radiator", "label": "Radiator", "types": ["radiator"] }
   ]
@@ -116,7 +116,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "bodyElevation": 0,
   "shelfExtendLeft": 0,
   "shelfExtendRight": 0,
-  "pipeDrop": 17
+  "pipeDrop": 17,
+  "boxKick": 8.4
 }/*EDITMODE-END*/;
 
 const CM = 0.01;
@@ -264,7 +265,7 @@ function buildRadiatorModel(t, group, THREE) {
     valveCorner: t.valveCorner, color: t.color, cover: t.cover, coverColor: t.coverColor,
     bodyWidth: t.bodyWidth, bodyHeight: t.bodyHeight, bodyDepth: t.bodyDepth,
     bodyElevation: t.bodyElevation, shelfExtendLeft: t.shelfExtendLeft, shelfExtendRight: t.shelfExtendRight,
-    pipeDrop: t.pipeDrop,
+    pipeDrop: t.pipeDrop, boxKick: t.boxKick,
   }, { detail: 'full' });
   built.position.y = t.elevation * CM; // PLACER concern — module leaves y=0 at its own bottom
   group.add(built);
@@ -310,6 +311,16 @@ function furnitureJSON(t) {
   // (the snug body depends on the envelope, the valve room and the cover —
   // see layout() in the module), so they need their own diff: only emit
   // them when they differ from the snug fit the module would derive anyway.
+  // pipeDrop is DERIVED by the placer from the item's elevation when absent
+  // (src/furniture.js itemParams), so it is emitted only when it differs
+  // from the elevation previewed here -- including an explicit 0 at a
+  // non-zero elevation, which the placer would otherwise replace.
+  if (t.pipeDrop === t.elevation) delete params.pipeDrop;
+  else params.pipeDrop = t.pipeDrop;
+  // boxKick is absent from DEFAULTS too (its default is a proportion of the
+  // height): emitted only for a box cover, and only when it differs from
+  // that default.
+  if (t.cover === 'box' && typeof t.boxKick === 'number' && Math.abs(t.boxKick - Math.min(12, 0.14 * t.height)) > 1e-6) params.boxKick = t.boxKick;
   if (window.FurnitureRadiator) {
     const snug = window.FurnitureRadiator.bodyEnvelope(Object.assign({}, D, t, { bodyWidth: undefined, bodyHeight: undefined, bodyDepth: undefined }));
     const differs = (a, b) => Math.abs(a - b) > 1e-6;
@@ -485,6 +496,8 @@ function App() {
           onChange={v => setTweak('shelfExtendLeft', v)} />
         <TweakSlider label="Shelf overrun right" value={t.shelfExtendRight} min={0} max={30} step={0.5} unit="cm"
           onChange={v => setTweak('shelfExtendRight', v)} />
+        <TweakSlider label="Box kick-out (floor gap; 0 = to the floor)" value={t.boxKick} min={0} max={20} step={0.5} unit="cm"
+          onChange={v => setTweak('boxKick', v)} />
       </TweaksPanel>
     </SpecPage>
   );
