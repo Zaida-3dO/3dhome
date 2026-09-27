@@ -113,6 +113,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "clockFaceColor": "#f5f2ea",
   "clockRimColor": "#1a1a1a",
   "clockNumeralColor": "#1a1a1a",
+  "clockNumeralFinish": "matte",
   "clockHandColor": "#1a1a1a",
   "clockSecondHandColor": "#c62828",
   "clockLive": true
@@ -127,17 +128,25 @@ const CM = 0.01;
 const PRESETS = {
   'photo-match-words': {
     clockKind: 'diy-words', clockDiameter: 30, clockDepth: 4,
-    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#1a1a1a',
+    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#1a1a1a', clockNumeralFinish: 'matte',
+    clockHandColor: '#1a1a1a', clockSecondHandColor: '#c62828'
+  },
+  // The office clock over the ottoman: the same word clock with gold numerals,
+  // words, dots and centre disc. Satin, not metal -- the live house has no
+  // environment map, so a metallic gold would render dull brown there.
+  'photo-match-words-gold': {
+    clockKind: 'diy-words', clockDiameter: 30, clockDepth: 4,
+    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#c9a13b', clockNumeralFinish: 'satin',
     clockHandColor: '#1a1a1a', clockSecondHandColor: '#c62828'
   },
   'photo-match': {
     clockKind: 'diy-numerals', clockDiameter: 30, clockDepth: 4,
-    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#1a1a1a',
+    clockFaceColor: '#f5f2ea', clockRimColor: '#1a1a1a', clockNumeralColor: '#1a1a1a', clockNumeralFinish: 'matte',
     clockHandColor: '#1a1a1a', clockSecondHandColor: '#1a1a1a'
   },
   'framed-clock': {
     clockKind: 'framed', clockDiameter: 34, clockDepth: 5,
-    clockFaceColor: '#f5f2ea', clockRimColor: '#3a2f22', clockNumeralColor: '#1a1a1a',
+    clockFaceColor: '#f5f2ea', clockRimColor: '#3a2f22', clockNumeralColor: '#1a1a1a', clockNumeralFinish: 'matte',
     clockHandColor: '#1a1a1a', clockSecondHandColor: '#1a1a1a'
   }
 };
@@ -183,13 +192,13 @@ function buildClockScene(t, group, THREE, ctx) {
   const buildParams = t.clockKind === 'diy-words'
     ? {
         diameter: t.clockDiameter, depth: t.clockDepth, kind: t.clockKind,
-        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor,
+        numeralColor: t.clockNumeralColor, numeralFinish: t.clockNumeralFinish, handColor: t.clockHandColor,
         secondHandColor: t.clockSecondHandColor, time: '10:10'
       }
     : {
         width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
         kind: t.clockKind, faceColor: t.clockFaceColor, rimColor: t.clockRimColor,
-        numeralColor: t.clockNumeralColor, handColor: t.clockHandColor,
+        numeralColor: t.clockNumeralColor, numeralFinish: t.clockNumeralFinish, handColor: t.clockHandColor,
         secondHandColor: t.clockSecondHandColor, time: '10:10'
       };
   const clock = WallClock.build(THREE, buildParams, { detail: 'full' });
@@ -277,6 +286,7 @@ function furnitureJSON(t) {
       diameter: t.clockDiameter, depth: t.clockDepth, kind: t.clockKind,
       numeralColor: t.clockNumeralColor, handColor: t.clockHandColor, secondHandColor: t.clockSecondHandColor
     };
+    if (t.clockNumeralFinish && t.clockNumeralFinish !== 'matte') params.numeralFinish = t.clockNumeralFinish;
   } else {
     params = {
       width: t.clockDiameter, height: t.clockDiameter, depth: t.clockDepth, diameter: t.clockDiameter,
@@ -345,8 +355,8 @@ function App() {
 
   // OBJECT: the stick-on word clock (diy-words) or a wall clock; VARIANTS: the
   // presets of that object (same controls, different values).
-  const OBJECT_PRESETS = { 'word-clock': ['photo-match-words'], 'wall-clock': ['photo-match', 'framed-clock'] };
-  const VARIANT_LABELS = { 'photo-match-words': 'Words + numerals (photo match)', 'photo-match': 'DIY numerals (photo match)', 'framed-clock': 'Framed' };
+  const OBJECT_PRESETS = { 'word-clock': ['photo-match-words', 'photo-match-words-gold'], 'wall-clock': ['photo-match', 'framed-clock'] };
+  const VARIANT_LABELS = { 'photo-match-words': 'Words + numerals (photo match)', 'photo-match-words-gold': 'Gold words + numerals (office)', 'photo-match': 'DIY numerals (photo match)', 'framed-clock': 'Framed' };
   const objectId = t.clockKind === 'diy-words' ? 'word-clock' : 'wall-clock';
   const variants = OBJECT_PRESETS[objectId].map(id => ({ id, label: VARIANT_LABELS[id], params: PRESETS[id] }));
   return (
@@ -406,6 +416,8 @@ function App() {
             onChange={v => setTweak('clockRimColor', v)} />}
         <TweakColor label="Numeral/dot colour" value={t.clockNumeralColor}
           onChange={v => setTweak('clockNumeralColor', v)} />
+        <TweakRadio label="Numeral finish" value={t.clockNumeralFinish || 'matte'} options={['matte', 'satin']}
+          onChange={v => setTweak('clockNumeralFinish', v)} />
         <TweakColor label="Hand colour" value={t.clockHandColor}
           onChange={v => setTweak('clockHandColor', v)} />
         {t.clockKind === 'diy-words' &&

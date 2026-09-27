@@ -32,6 +32,10 @@ export const ICONS = {
   home: 'M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z',
   robot: 'M12,3A9,9 0 1,1 12,21A9,9 0 1,1 12,3M12,5A7,7 0 1,0 12,19A7,7 0 1,0 12,5M12,7.5A2.5,2.5 0 1,1 12,12.5A2.5,2.5 0 1,1 12,7.5M8,15H16V16.5H8Z',
   battery: 'M9,2H15V4H17A1,1 0 0,1 18,5V21A1,1 0 0,1 17,22H7A1,1 0 0,1 6,21V5A1,1 0 0,1 7,4H9V2M8,6V20H16V6H8Z',
+  // Plant card: a sprout and a water drop (simple glyphs drawn for this
+  // file, not MDI).
+  plant: 'M11,21V13.5C8.5,13.5 5,12 5,7C8.5,7 11,8.8 11,12.2C11.4,8.6 13.7,6 18,6C18,11 15,12.8 13,12.9V21H11Z',
+  drop: 'M12,21A6,6 0 0,1 6,15C6,11 12,3.5 12,3.5C12,3.5 18,11 18,15A6,6 0 0,1 12,21Z',
 };
 
 /** One icon as inline SVG markup. `cls` is the svg's class attribute. */

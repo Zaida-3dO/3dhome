@@ -870,6 +870,42 @@ export const HouseLoader = (() => {
   }
 
   /**
+   * A wall's `slats` -- the span of the living-room acoustic slat panel along
+   * it -- resolved for the renderer: `{ along: [lo, hi] }` in plan cm, or null.
+   * A bad entry is warned about and dropped, and the panel builder falls back
+   * to its old fixed span, so a typo never loses the panel.
+   *
+   * @param {Object} seg   a raw geometry.json wall segment (start/end arrays)
+   * @returns {{along:[number,number]}|null}
+   */
+  function compileWallSlats(seg, warn) {
+    const s = seg.slats;
+    if (s == null) return null;
+    const where = 'wall ' + seg.id + ' slats';
+    const a = s && s.along;
+    if (!Array.isArray(a) || a.length !== 2 || !a.every(Number.isFinite)) {
+      warn(where + ': `along` must be [start, end] in plan cm -- ignored, the panel keeps its default span');
+      return null;
+    }
+    const lo = Math.min(a[0], a[1]), hi = Math.max(a[0], a[1]);
+    if (!(hi > lo)) {
+      warn(where + ': `along` is empty -- ignored, the panel keeps its default span');
+      return null;
+    }
+    // The span is on the wall's long axis: y for a north-south wall, x for an
+    // east-west one. It must lie on the wall.
+    const ns = Math.abs(seg.end[0] - seg.start[0]) < Math.abs(seg.end[1] - seg.start[1]);
+    const k = ns ? 1 : 0;
+    const wLo = Math.min(seg.start[k], seg.end[k]), wHi = Math.max(seg.start[k], seg.end[k]);
+    if (lo < wLo - 0.5 || hi > wHi + 0.5) {
+      warn(where + ': `along` [' + lo + ', ' + hi + '] runs off the wall (' + wLo + ' to ' + wHi +
+        ') -- ignored, the panel keeps its default span');
+      return null;
+    }
+    return { along: [lo, hi] };
+  }
+
+  /**
    * A wall's `finishes` (schemaVersion 1.3), resolved for the renderer.
    *
    * Each entry names ONE long face -- `side: "exterior"` (the face pointing
@@ -1043,7 +1079,8 @@ export const HouseLoader = (() => {
       faceTexture: w.faceTexture,
       // Raw here; resolved to face normals by compileWallFinishes once the
       // rooms and the footprint exist (see after the footprint below).
-      finishes: Array.isArray(w.finishes) ? w.finishes : []
+      finishes: Array.isArray(w.finishes) ? w.finishes : [],
+      slats: compileWallSlats(w, warn)
     }));
     const wallsExt = extendWallsForCorners(rawWalls, defaults.wallThickness);
     const wallsById = {};

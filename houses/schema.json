@@ -370,6 +370,25 @@
             "$ref": "#/$defs/wallFinish"
           }
         },
+        "slats": {
+          "type": "object",
+          "description": "OPTIONAL: where the living-room acoustic slat panel runs on this wall. Read on wall 1 only, by the living-room panel builder (wall 1's room face plus the short step return onto wall 3, at the span's south end). Omit it and the builder keeps its old fixed span, y 353.4 to 707.8. An older engine ignores it.",
+          "properties": {
+            "along": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "[start, end]: the span the panel covers, in plan cm on the wall's long axis -- the same convention as a finish's `along`. The step return is drawn at the higher end."
+            }
+          },
+          "required": [
+            "along"
+          ],
+          "additionalProperties": false
+        },
         "notes": {
           "type": "string"
         }
@@ -1106,6 +1125,32 @@
           "default": 15,
           "description": "cm, the slab's thickness (y 0 .. slabThickness). Clamped to at most half the height."
         },
+        "floor": {
+          "type": "string",
+          "enum": [
+            "decking",
+            "slab"
+          ],
+          "default": "decking",
+          "description": "`decking` = dark charcoal composite boards running along the facade (parallel to x) with gaps between them and fine longitudinal grooves, over a dark structure, with a dark metal edge trim (railColor) round the front and both ends; the deck top is still at slabThickness. `slab` = the plain slab in slabColor."
+        },
+        "deckColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#2e2e30",
+          "description": "The decking boards (floor `decking`)."
+        },
+        "boardWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 14.5,
+          "description": "cm, the target width of one decking board; boards are widened evenly to fill the depth. Clamped to 2 .. 60."
+        },
+        "boardGap": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.6,
+          "description": "cm, the gap between decking boards. Clamped to at most 5."
+        },
         "railingThickness": {
           "type": "number",
           "exclusiveMinimum": 0,
@@ -1502,6 +1547,13 @@
         "topColor": {
           "$ref": "#/$defs/hexColor",
           "default": "#f2f0ec"
+        },
+        "gain": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 50,
+          "default": 1,
+          "description": "Multiplies the colour of the BODY: the carcass, the fronts, the top, the plinth and the light channels' recess (every part in the cabinet's own color/topColor and body finish). Linear, may exceed 1, like model gain. A white body renders light grey under the scene's tone mapping, and > 1 lifts it back to white (the LED bedside tables use 1.5). Glass, mirror, metal, LEDs, door frames and a display section's lining, wood and contents are not affected."
         },
         "shelfLights": {
           "type": "boolean",
@@ -2556,48 +2608,19 @@
 
     "furnitureParams_ottoman": {
       "type": "object",
-      "description": "Params for `ottoman` (src/furniture/digital-piano.js, TYPES['ottoman']): a simple velvet ottoman with a channel-tufted lid, on four short legs. Each `default` equals the module's OTTOMAN_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "description": "Params for `ottoman` (src/furniture/digital-piano.js, TYPES['ottoman']): a channel-tufted storage bench in velvet -- a plain box under an overhanging, piped-edge lid whose rolls run front to back (a wide centre panel, narrower rolls toward each end), a front pull-tab and tiny recessed feet. Each `default` equals the module's OTTOMAN_DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
       "properties": {
-        "width": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 92
-        },
-        "depth": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 46
-        },
-        "height": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 40
-        },
-        "channelCount": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 5,
-          "description": "Channel-tufted ridges across the lid, front-to-back."
-        },
-        "channelDepth": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "default": 1.5,
-          "description": "cm, how far each ridge stands proud of the flat lid."
-        },
-        "color": {
-          "$ref": "#/$defs/hexColor",
-          "default": "#2e6e6b",
-          "description": "Teal velvet body and lid."
-        },
-        "legColor": {
-          "$ref": "#/$defs/hexColor",
-          "default": "#3a2f28"
-        },
-        "finish": {
-          "$ref": "#/$defs/furnitureFinish",
-          "default": "matte"
-        }
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 92 },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 46 },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 40 },
+        "sideChannels": { "type": "integer", "minimum": 0, "maximum": 8, "default": 4, "description": "Rolls each side of the centre panel, narrowing toward the ends." },
+        "centreWidth": { "type": "number", "exclusiveMinimum": 0, "default": 27, "description": "cm, the wide flat panel in the middle of the lid (capped at 70% of the lid)." },
+        "channelDepth": { "type": "number", "exclusiveMinimum": 0, "default": 3.5, "description": "cm, how far the rolls rise above the lid." },
+        "lidThickness": { "type": "number", "exclusiveMinimum": 0, "default": 4, "description": "cm, the lid slab under the rolls." },
+        "lidOverhang": { "type": "number", "minimum": 0, "default": 1, "description": "cm, how far the lid overhangs the box all round." },
+        "color": { "$ref": "#/$defs/hexColor", "default": "#1b5e6a", "description": "Teal velvet: box, lid, rolls and tab." },
+        "footColor": { "$ref": "#/$defs/hexColor", "default": "#1c1c1c" },
+        "finish": { "$ref": "#/$defs/furnitureFinish", "default": "satin" }
       },
       "additionalProperties": false
     },
@@ -3757,6 +3780,11 @@
           "$ref": "#/$defs/hexColor",
           "default": "#1a1a1a"
         },
+        "numeralFinish": {
+          "enum": ["matte", "satin", "gloss", "metal"],
+          "default": "matte",
+          "description": "Finish of the numerals, words, dots and centre disc. A gold clock is numeralColor #c9a13b with 'satin': a soft sheen that still reads gold in the live house, which has no environment map (so 'metal' there renders dull). Hands keep handColor/secondHandColor."
+        },
         "handColor": {
           "$ref": "#/$defs/hexColor",
           "default": "#1a1a1a"
@@ -4519,6 +4547,71 @@
                     "pattern": "^[a-z_]+\\.[a-z0-9_]+$",
                     "default": "dreame_vacuum.vacuum_clean_segment",
                     "description": "The service a room clean calls, with `segments: [n]` and the vacuum as target. Defaults to the Dreame integration's."
+                  }
+                }
+              }
+            },
+            "plants": {
+              "type": "object",
+              "description": "Furniture item id -> a plant's Home Assistant binding. READ-ONLY: nothing is ever sent. The item id MUST exist in the paired geometry profile's `furniture[].id`: tapping that item opens the plant's card (moisture %, a Dry / OK / Wet status, when it last reported, battery and temperature when bound), and the sidebar's Controls view lists the same readings. An unavailable sensor reads 'Offline', never 0%. Needs rooms schemaVersion 1.5.",
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "anyOf": [
+                  { "required": ["moisture"] },
+                  { "required": ["watering"] }
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "moisture": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^sensor\\." }
+                    ],
+                    "description": "The soil moisture `sensor.*` (0-100 %). Required unless `watering` is given."
+                  },
+                  "watering": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^sensor\\." }
+                    ],
+                    "description": "For a plant with no probe: a watering countdown `sensor.*` (100 = watered today, 0 = due). The card shows it, and Water due at 0. With `moisture` too, the moisture is the main reading."
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional display name for the card. Without it the furniture item's `label` is used."
+                  },
+                  "battery": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^sensor\\." }
+                    ],
+                    "description": "Optional battery `sensor.*`: a % or a text gauge (high / low)."
+                  },
+                  "status": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^(sensor|binary_sensor)\\." }
+                    ],
+                    "description": "Optional needs-water helper, which then decides the status: a `binary_sensor.*` (on = dry) or a `sensor.*` warning (none / ok -> OK, dry / low / alarm -> Dry, wet / high -> Wet; anything else falls back to the thresholds)."
+                  },
+                  "temperature": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^sensor\\." }
+                    ],
+                    "description": "Optional temperature `sensor.*`, shown on the card."
+                  },
+                  "dryBelow": {
+                    "type": "number", "minimum": 0, "maximum": 100, "default": 20,
+                    "description": "Moisture % below which the status reads Dry, when no `status` helper decides. Must be below `wetAbove`."
+                  },
+                  "wetAbove": {
+                    "type": "number", "minimum": 0, "maximum": 100, "default": 80,
+                    "description": "Moisture % above which the status reads Wet, when no `status` helper decides."
                   }
                 }
               }

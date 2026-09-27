@@ -62,6 +62,9 @@
      module -- the same contract the live scene and the Node tests use. -->
 <script type="module">
   import * as SmallItems from '../src/furniture/small-items.js';
+  // The photo-frame image preview's span maths (page-only, DOM-free).
+  import * as PhotoSpan from '../src/photo-span.js';
+  window.PhotoSpan = PhotoSpan;
   window.SmallItems = SmallItems;
   window.dispatchEvent(new Event('small-items-ready'));
 </script>
@@ -226,11 +229,59 @@ function buildItem(t, group, THREE, ctx) {
   const impl = window.SmallItems.TYPES[t.type];
   if (!impl) return;
   // Tube floor lamp, light preview OFF: the tube is drawn unlit (matte).
-  const params = t.lamp && !t.lamp.on ? Object.assign({}, t.params, { finish: 'matte' }) : t.params;
+  let params = t.lamp && !t.lamp.on ? Object.assign({}, t.params, { finish: 'matte' }) : t.params;
+  // Photo frame, image preview ON: hand the builder the preview texture
+  // through its own injection hook. Only this build-params copy carries it:
+  // `t.params` (the params table, Copy JSON) never sees it.
+  if (t.photo) params = Object.assign({}, params, { image: 'page-preview', textureLoader: () => t.photo.tex });
   const built = impl.build(THREE, params, { detail: t.detail || 'full' });
   group.add(built);
+  disposePhotoSlices();
+  if (t.photo) spanPhoto(THREE, built, t.photo);
   if (t.lamp) addLampPreview(THREE, group, t.params, t.lamp);
   ctx.builtType = t.type;
+}
+
+// ---- PAGE-ONLY photo-frame image preview ----------------------------------
+// The owner picks an image (or the test pattern) and sees it in the frame;
+// on a multi-panel frame ONE image spans every panel, cover-fitted to their
+// combined area (src/photo-span.js, unit-tested by scripts/test-photo-span.mjs). The image is read with
+// URL.createObjectURL and drawn from memory: it is never uploaded, never
+// stored, and never part of Copy JSON. A house's own placements keep taking
+// their pictures from the house's files.
+
+// The rebuild before this one gave each picture panel its own material and
+// texture clone (its slice of the image); free them. Kept here, not on the
+// view's ctx: ThreeView empties ctx before every rebuild.
+let photoSlices = [];
+function disposePhotoSlices() {
+  photoSlices.forEach(x => x.dispose());
+  photoSlices = [];
+}
+
+function spanPhoto(THREE, built, photo) {
+  photoSlices = window.PhotoSpan.applyPhotoSpan(THREE, built, photo.tex, photo.aspect).disposables;
+}
+
+/** A page-drawn test pattern: a numbered grid over a colour sweep, a circle
+ * and a frame line -- so the span and the crop can be judged at a glance. */
+function testPatternCanvas() {
+  const c = document.createElement('canvas');
+  c.width = 1600; c.height = 800;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, c.width, 0);
+  ['#d94f4f', '#e3a23b', '#e8d84a', '#57b85a', '#3f8fd1', '#8a5cc7'].forEach((col, i, a) => grad.addColorStop(i / (a.length - 1), col));
+  g.fillStyle = grad; g.fillRect(0, 0, c.width, c.height);
+  g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineWidth = 4;
+  g.fillStyle = '#ffffff'; g.font = 'bold 56px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (let i = 0; i < 8; i++) for (let j = 0; j < 4; j++) {
+    g.strokeRect(i * 200, j * 200, 200, 200);
+    g.fillText(String(j * 8 + i + 1), i * 200 + 100, j * 200 + 100);
+  }
+  g.lineWidth = 14; g.strokeStyle = '#111111';
+  g.beginPath(); g.arc(800, 400, 330, 0, Math.PI * 2); g.stroke();
+  g.strokeRect(7, 7, c.width - 14, c.height - 14);
+  return c;
 }
 
 // PAGE-ONLY light preview for the tube floor lamp: a real point light at the
@@ -282,6 +333,39 @@ function SmallItemObject({ type }) {
   // Tube floor lamp light preview (page-only): on/off and brightness; the
   // colour is the lamp's own `color` param.
   const [lamp, setLamp] = React.useState({ on: true, brightness: 1 });
+  // Photo frame image preview (page-only): { tex, aspect, name, url }.
+  const [photo, setPhoto] = React.useState(null);
+  const [photoError, setPhotoError] = React.useState('');
+  const photoRef = React.useRef(null);
+  const replacePhoto = next => {
+    const prev = photoRef.current;
+    if (prev) { prev.tex.dispose(); if (prev.url) URL.revokeObjectURL(prev.url); }
+    photoRef.current = next;
+    setPhoto(next);
+  };
+  React.useEffect(() => () => replacePhoto(null), []);
+  const pickPhoto = e => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { setPhotoError('That is not an image file.'); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.src = url;
+    img.decode().then(() => {
+      const tex = new THREE.Texture(img);
+      if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+      tex.needsUpdate = true;
+      setPhotoError('');
+      replacePhoto({ tex, aspect: img.naturalWidth / img.naturalHeight, name: file.name, size: img.naturalWidth + ' x ' + img.naturalHeight, url });
+    }, () => { URL.revokeObjectURL(url); setPhotoError('Could not read that image.'); });
+  };
+  const useTestPattern = () => {
+    const tex = new THREE.CanvasTexture(testPatternCanvas());
+    if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    setPhotoError('');
+    replacePhoto({ tex, aspect: 2, name: 'test pattern', size: '1600 x 800', url: null });
+  };
 
   if (!ready) {
     return <div className="sub">Loading src/furniture/small-items.js…</div>;
@@ -292,7 +376,8 @@ function SmallItemObject({ type }) {
   const activePreset = presetName && presets[presetName] ? presetName : presetNames[0];
   const baseParams = paramsFor(type, activePreset);
   const params = Object.assign({}, baseParams, overrides);
-  const t = { type, params, detail, lamp: type === 'tube-floor-lamp' ? lamp : null };
+  const t = { type, params, detail, lamp: type === 'tube-floor-lamp' ? lamp : null,
+    photo: type === 'photo-frame' ? photo : null };
 
   const selectPreset = (pn) => {
     setPresetName(pn);
@@ -345,6 +430,27 @@ function SmallItemObject({ type }) {
             Copy JSON emits only the params that differ from this type's DEFAULTS —
             exactly what a real placement's furniture[].params should carry.
           </div>
+          {type === 'photo-frame' && (
+            <div id="photoPreview">
+              <div className="row">
+                <label className="btn" tabIndex={0} role="button"
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); document.getElementById('photoFile').click(); } }}>
+                  Preview an image…
+                  <input id="photoFile" type="file" accept="image/*" style={{ display: 'none' }} onChange={pickPhoto} />
+                </label>
+                <button className={'btn' + (photo && !photo.url ? ' active' : '')} onClick={useTestPattern}>Test pattern</button>
+                {photo && <button className="btn" onClick={() => replacePhoto(null)}>Clear</button>}
+              </div>
+              <div className="legend">
+                {photo
+                  ? 'Previewing ' + photo.name + ' (' + photo.size + ')' + (params.panels > 1 ? ', spanned across all ' + params.panels + ' panels' : '') + '. '
+                  : ''}
+                Preview only: the image stays in this browser tab. It is never uploaded or stored, and is not
+                part of Copy JSON. A real placement takes its picture from the house's own files.
+              </div>
+              {photoError && <div className="legend" style={{ color: '#a33', opacity: 1 }}>{photoError}</div>}
+            </div>
+          )}
           {type === 'tube-floor-lamp' && (
             <div className="row" id="lampPreview">
               <button className={'btn' + (lamp.on ? ' active' : '')}

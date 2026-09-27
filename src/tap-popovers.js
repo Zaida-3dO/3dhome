@@ -17,12 +17,15 @@
  *   door     ancestor userData.doorProfileId       -> sensors.doors[id]
  *   climate  (room)                                -> sensors.climate[room]
  *   vacuum   a furniture item's world box          -> sensors.vacuums[itemId]
+ *   plant    a furniture item's world box          -> sensors.plants[itemId]
  *
  * A robot vacuum is FURNITURE, and furniture renders merged into shared
  * buckets, so its meshes carry no identity. It is found by WHERE the tap
  * landed instead: the first solid hit's point, inside the world box of a
  * furniture item bound in sensors.vacuums (home.furnitureItemAt). Occlusion
- * is unchanged -- only the nearest solid hit is ever asked.
+ * is unchanged -- only the nearest solid hit is ever asked. A plant is found
+ * the same way; its card is READ-ONLY (moisture, status, battery) and sends
+ * nothing.
  *
  * Climate is keyed by ROOM (rooms.json 1.3, the sidebar's binding). Nothing on
  * main can be tapped for it yet: furniture renders merged into shared buckets,
@@ -44,6 +47,7 @@ import { ICONS, svgIcon } from './ui-icons.js';
 import { isColorChannel, supportsColor, swatchColor } from './light-color.js';
 import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCommand, vacuumStatusText,
   MOCK_VACUUM_READINGS, mockVacuumAfter } from './vacuum-control.js';
+import { normalisePlantBindings, plantStatusText, agoText, batteryText, mockPlantReading } from './plant-status.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -101,6 +105,19 @@ export function resolveTarget(obj, bindings) {
     }
   }
   return null;
+}
+
+/**
+ * A furniture item id -> the tap target it is bound as: a robot vacuum
+ * (sensors.vacuums) or a plant (sensors.plants), from their normalised
+ * binding Maps; null when it is neither. A vacuum binding wins if an id were
+ * bound as both.
+ */
+export function deviceTarget(id, vacuums, plants, object) {
+  const b = vacuums && vacuums.get(id);
+  if (b) return { kind: 'vacuum', id, entities: [b.entity], binding: b, object };
+  const p = plants && plants.get(id);
+  return p ? { kind: 'plant', id, entities: [p.moisture || p.watering], binding: p, object } : null;
 }
 
 /**
@@ -392,6 +409,7 @@ const STATUS = {
   offline: ['bad', 'Not connected', 'No Home Assistant configured. Changes only preview on the model.'],
   offlineMock: ['bad', 'Not connected', 'No Home Assistant configured. Showing sample temperatures; changes only preview.'],
   offlineSample: ['bad', 'Not connected', 'No Home Assistant configured. Showing a sample robot; the buttons only preview.'],
+  offlinePlant: ['bad', 'Not connected', 'No Home Assistant configured. Showing a sample plant reading.'],
 };
 
 /**
@@ -406,8 +424,8 @@ const STATUS = {
  *   rangeGap        the slider's margin-top below the row
  */
 export const GEOM = {
-  fine:   { ibH: 28, ibHitY: 4, swH: 20, swHitY: 12, rangeGap: 8, rangeH: 20 },
-  coarse: { ibH: 34, ibHitY: 5, swH: 24, swHitY: 10, rangeGap: 5, rangeH: 40 },
+  fine:   { ibH: 28, ibHitY: 4, swH: 20, swHitY: 12, rangeGap: 8, rangeH: 24 },
+  coarse: { ibH: 34, ibHitY: 5, swH: 24, swHitY: 10, rangeGap: 5, rangeH: 44 },
 };
 /** Pixels by which a control's hit area overlaps the slider below (<= 0: none). */
 export function hitOverlapPx(g) {
@@ -421,30 +439,38 @@ export function hitOverlapPx(g) {
 // a desktop browser cannot be made to report a coarse pointer.
 const GC = GEOM.coarse, GF = GEOM.fine;
 const MARQ_PAD = 6;   // px the marquee's fade reaches past the title box
-const COARSE = '--w:216px;--ib-w:38px;--ib-h:' + GC.ibH + 'px;--sw-w:40px;--sw-h:' + GC.swH + 'px;--thumb:20px;';
+const COARSE = '--w:216px;--ib-w:38px;--ib-h:' + GC.ibH + 'px;--sw-w:40px;--sw-h:' + GC.swH + 'px;--thumb:26px;--track-h:8px;';
 const coarseRules = sel => `
 ${sel} .tp-pop { ${COARSE} }
 ${sel} .tp-status::after { inset: -14px; }
 ${sel} .tp-btns { gap: 6px; }
 ${sel} .tp-ib::after { inset: -${GC.ibHitY}px -3px; }
 ${sel} .tp-sw::after { inset: -${GC.swHitY}px -2px; }
-${sel} .tp-range { height: ${GC.rangeH}px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 10)}px; }
-${sel} .tp-crow { gap: 12px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 10)}px; }
+${sel} .tp-range { height: ${GC.rangeH}px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 12)}px; }
+${sel} .tp-crow { gap: 12px; margin: ${GC.rangeGap}px 0 ${-(GC.rangeGap + 12)}px; }
 ${sel} .tp-crow .tp-range { margin: 0; }
 ${sel} .tp-color { --sq: 20px; --pad: 12px; }
 ${sel} .tp-pop.chip { padding: 10px 12px; }`;
 
 export const STYLE = `
-.tp-pop { --w:200px; --ib-w:30px; --ib-h:${GF.ibH}px; --sw-w:36px; --sw-h:${GF.swH}px; --thumb:14px;
+.tp-pop { --w:200px; --ib-w:30px; --ib-h:${GF.ibH}px; --sw-w:36px; --sw-h:${GF.swH}px; --thumb:20px; --track-h:6px;
   --ink:#fff; --ink-2:rgba(255,255,255,0.62); --accent:#6366f1; --ok:#22c55e; --warn:#eab308; --bad:#ef4444;
   --amber:#ffd43b; --heat:#ff8a3d; --door-open:#f59e0b;
+  /* The card and its pointer diamond paint from these same two variables. */
+  --pop-bg: rgba(10,10,20,0.94); --pop-border: rgba(255,255,255,0.10);
+  /* Range parts -- see the .tp-range block below. */
+  --range-track: rgba(255,255,255,0.30); --range-thumb: #fff;
+  /* Dark is declared, so the browser's own controls render dark, and so Chrome's
+     auto dark theme and Samsung Internet's dark web pages leave the card alone
+     instead of re-colouring parts of it. */
+  color-scheme: dark;
   position: fixed; z-index: 60; width: var(--w); padding: 10px 12px; border-radius: 10px;
-  background: rgba(10,10,20,0.94); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255,255,255,0.10); box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+  background: var(--pop-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--pop-border); box-shadow: 0 6px 20px rgba(0,0,0,0.45);
   color: var(--ink); font: 12px/1.3 'Segoe UI', system-ui, sans-serif; touch-action: manipulation; box-sizing: border-box; }
 .tp-pop *, .tp-pop *::before, .tp-pop *::after { box-sizing: border-box; }
 .tp-pop:focus { outline: none; }   /* the card itself holds focus only as a fallback; its controls show rings */
-.tp-arrow { position: absolute; width: 11px; height: 11px; background: rgb(10,10,20); border: 0 solid rgba(255,255,255,0.10); }
+.tp-arrow { position: absolute; width: 11px; height: 11px; background: var(--pop-bg); border: 0 solid var(--pop-border); }
 .tp-arrow.bottom { bottom: -6px; transform: translateX(-50%) rotate(45deg); border-right-width: 1px; border-bottom-width: 1px; }
 .tp-arrow.top { top: -6px; transform: translateX(-50%) rotate(45deg); border-left-width: 1px; border-top-width: 1px; }
 .tp-arrow.left { left: -6px; transform: translateY(-50%) rotate(45deg); border-left-width: 1px; border-bottom-width: 1px; }
@@ -520,20 +546,31 @@ export const STYLE = `
 .tp-range:disabled { opacity: 0.35; cursor: not-allowed; }
 .tp-offline { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: #fecaca; }
 .tp-offline::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
-.tp-range { --p: 50%; display: block; width: 100%; height: ${GF.rangeH}px; margin: ${GF.rangeGap}px 0 -2px; background: transparent;
-  -webkit-appearance: none; appearance: none; cursor: pointer; outline: none; }
-.tp-range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
-  background: linear-gradient(to right, var(--fill, var(--accent)) var(--p), rgba(255,255,255,0.16) var(--p)); }
-.tp-range::-moz-range-track { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.16); }
-.tp-range::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--fill, var(--accent)); }
-.tp-range::-webkit-slider-thumb { -webkit-appearance: none; width: var(--thumb); height: var(--thumb); border-radius: 50%;
-  background: #fff; margin-top: calc(2px - var(--thumb) / 2); box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
-.tp-range::-moz-range-thumb { width: var(--thumb); height: var(--thumb); border-radius: 50%; background: #fff; border: 0; }
+.tp-range { --p: 50%; display: block; width: 100%; height: ${GF.rangeH}px; margin: ${GF.rangeGap}px 0 -4px; background: transparent;
+  -webkit-appearance: none; appearance: none; cursor: pointer; outline: none; accent-color: var(--fill, var(--accent)); }
+/* EVERY part of the range is styled here, in both engines. A part left to the
+   browser renders its own way -- thumb, track and colours differ between
+   Chrome, Android Chrome, Samsung Internet, Safari and a WebView -- which is
+   why the same card looked different on each device. Filled part: --fill up
+   to --p (set from the value in JS); the rest: --range-track. Thumb: white
+   disc with a ring in the fill colour and a dark halo, so it separates from
+   the card, the fill and the unfilled track alike. */
+.tp-range::-webkit-slider-runnable-track { height: var(--track-h); border-radius: 999px; border: 0;
+  background: linear-gradient(to right, var(--fill, var(--accent)) var(--p), var(--range-track) var(--p)); }
+.tp-range::-moz-range-track { height: var(--track-h); border-radius: 999px; border: 0; background: var(--range-track); }
+.tp-range::-moz-range-progress { height: var(--track-h); border-radius: 999px; border: 0; background: var(--fill, var(--accent)); }
+.tp-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; box-sizing: border-box;
+  width: var(--thumb); height: var(--thumb); border-radius: 50%; margin-top: calc((var(--track-h) - var(--thumb)) / 2);
+  background: var(--range-thumb); border: 3px solid var(--fill, var(--accent));
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.55); }
+.tp-range::-moz-range-thumb { box-sizing: border-box; width: var(--thumb); height: var(--thumb); border-radius: 50%;
+  background: var(--range-thumb); border: 3px solid var(--fill, var(--accent));
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.55); }
 .tp-range.temp { --fill: var(--heat); }
 /* Accent light: colour square inline with the brightness slider. The input's
    box is the hit area; its padding insets the visible swatch, and matching
    negative margins keep the layout at the swatch's size. */
-.tp-crow { display: flex; align-items: center; gap: 8px; margin: ${GF.rangeGap}px 0 -2px; }
+.tp-crow { display: flex; align-items: center; gap: 8px; margin: ${GF.rangeGap}px 0 -4px; }
 .tp-crow .tp-range { flex: 1 1 auto; width: auto; min-width: 0; margin: 0; }
 .tp-color { --sq: 18px; --pad: 4px; flex: none; width: calc(var(--sq) + 2 * var(--pad)); height: calc(var(--sq) + 2 * var(--pad));
   margin: calc(-1 * var(--pad)); padding: 0; border: 0; background: none; cursor: pointer; -webkit-appearance: none; appearance: none; }
@@ -542,7 +579,7 @@ export const STYLE = `
 .tp-color::-moz-color-swatch { border: 1px solid rgba(255,255,255,0.35); border-radius: 5px; }
 .tp-color:disabled { opacity: 0.35; cursor: not-allowed; }
 .tp-color:focus-visible { outline: 2px solid #a5b4fc; outline-offset: -2px; }
-.tp-range.off { --fill: rgba(255,255,255,0.4); }
+.tp-range.off { --fill: rgba(255,255,255,0.55); }
 /* Robot vacuum card: a status line with the battery, three labelled buttons,
    then one chip per bound room. */
 .tp-pop[data-kind=vacuum] { --w: 236px; }
@@ -569,6 +606,26 @@ export const STYLE = `
   font: 12px/1.2 'Segoe UI', system-ui, sans-serif; cursor: pointer; }
 .tp-vroom:disabled { opacity: 0.35; cursor: not-allowed; }
 @media (hover: hover) { .tp-vroom:hover:not(:disabled) { background: rgba(255,255,255,0.1); } }
+/* Plant card (read-only): the moisture big, a status pill, then one muted
+   line with when HA last heard from it, the battery and the temperature. */
+.tp-pop[data-kind=plant] { --w: 220px; }
+.tp-ico.p-ok { fill: var(--ok); }
+.tp-ico.p-dry, .tp-ico.p-due { fill: var(--door-open); }
+.tp-ico.p-wet { fill: #60a5fa; }
+.tp-pmoist { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; min-width: 0; }
+.tp-pmoist svg { width: 16px; height: 16px; flex: none; fill: #60a5fa; }
+.tp-pmoist b { font-size: 20px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+.tp-pmoist.muted b { font-size: 15px; color: var(--ink-2); }
+.tp-pmoist.muted svg { fill: rgba(255,255,255,0.35); }
+.tp-pst { flex: none; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.2;
+  border: 1px solid transparent; }
+.tp-pst.ok { color: #bbf7d0; background: rgba(34,197,94,0.16); border-color: rgba(34,197,94,0.4); }
+.tp-pst.dry, .tp-pst.due { color: #fde68a; background: rgba(245,158,11,0.18); border-color: rgba(245,158,11,0.45); }
+.tp-pst.wet { color: #bfdbfe; background: rgba(96,165,250,0.16); border-color: rgba(96,165,250,0.45); }
+.tp-pmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 6px; font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.tp-pmeta .tp-batt { font-size: 11px; }
+.tp-pmeta .tp-batt svg { width: 12px; height: 12px; }
+.tp-pnote { margin-top: 5px; font-size: 11px; color: var(--ink-2); line-height: 1.3; }
 .tp-pop.chip { width: auto; max-width: 240px; padding: 8px 10px; border-radius: 999px; }
 .tp-pop.chip .tp-name { flex: 0 1 auto; }
 .tp-pop.chip .sep { color: var(--ink-2); }
@@ -655,6 +712,35 @@ export const popoverHtml = {
       '<div class="tp-row"><span class="tp-vstat' + cls + '" data-v>' + esc(vacuumStatusText(r)) + '</span>' + batt + '</div>' +
       btns + rooms + offlineLine(m));
   },
+  /**
+   * Plant (read-only). m: { name, status, haOff, reading, ago } -- reading
+   * from parsePlant (or a sample), ago the "updated" text. Unavailable reads
+   * "Offline", never 0%.
+   */
+  plant(m, dot) {
+    const shell = shellWith(dot);
+    const r = m.reading;
+    const level = r && r.level ? r.level : 'none';
+    const live = !!(r && r.available);
+    const watering = live && r.moisture == null && r.watering != null;
+    const val = live
+      ? '<span class="tp-pmoist" data-v>' + svg(I.drop) + (watering ? 'Countdown <b>' + r.watering + '%</b>' : '<b>' + r.moisture + '%</b>') + '</span>'
+      : '<span class="tp-pmoist muted" data-v>' + svg(I.drop) + '<b>' + (level === 'offline' ? 'Offline' : 'No reading') + '</b></span>';
+    const tip = !live ? '' : r.fromHa ? ' title="From Home Assistant"' : watering ? ' title="A countdown to the next watering"' :
+      ' title="From the moisture reading"';
+    const pill = !live ? '' :
+      '<span class="tp-pst ' + level + '" data-level="' + level + '"' + tip + '>' + esc(plantStatusText(r)) + '</span>';
+    const bt = batteryText(r);
+    const meta = [];
+    if (m.ago) meta.push('<span data-ago>' + (live ? 'Updated ' : 'Last reading ') + esc(m.ago) + '</span>');
+    if (bt) meta.push('<span class="tp-batt' + (r.batteryLow ? ' low' : '') + '" data-batt>' + svg(I.battery) + esc(bt) + '</span>');
+    if (r && r.temperature != null) meta.push('<span data-temp>' + r.temperature.toFixed(1) + '°</span>');
+    const note = level === 'offline'
+      ? '<div class="tp-pnote" data-offline-note>The sensor is not reporting. Soil sensors often drop off; a press of its button usually brings it back.</div>' : '';
+    return shell(ico(I.plant, live ? 'p-' + level : 'dim'), m.name, m.status,
+      '<div class="tp-row">' + val + pill + '</div>' +
+      (meta.length ? '<div class="tp-pmeta">' + meta.join('') + '</div>' : '') + note + offlineLine(m));
+  },
   climate(m, dot) {
     const shell = shellWith(dot);
     const f = v => (typeof v === 'number' && isFinite(v) ? v.toFixed(1) + '°' : '–');
@@ -707,13 +793,13 @@ export function attachTapPopovers(o) {
     doors: (o.sensors && o.sensors.doors) || {},
   };
   const vacuums = normaliseVacuumBindings(o.sensors && o.sensors.vacuums);
-  const vacuumIds = new Set(vacuums.keys());
+  const plants = normalisePlantBindings(o.sensors && o.sensors.plants);
+  const deviceIds = new Set([...vacuums.keys(), ...plants.keys()]);
   const furnitureLabels = new Map(((o.house && o.house.furniture) || []).map(f => [f.id, f.label || null]));
-  // A robot vacuum is found by where the tap landed (see the header).
-  const deviceAt = !vacuumIds.size || typeof home.furnitureItemAt !== 'function' ? null : h => {
-    const it = h && h.point ? home.furnitureItemAt(h.point, vacuumIds) : null;
-    const b = it && vacuums.get(it.id);
-    return b ? { kind: 'vacuum', id: it.id, entities: [b.entity], binding: b, object: h.object } : null;
+  // A robot vacuum or a plant is found by where the tap landed (see the header).
+  const deviceAt = !deviceIds.size || typeof home.furnitureItemAt !== 'function' ? null : h => {
+    const it = h && h.point ? home.furnitureItemAt(h.point, deviceIds) : null;
+    return it ? deviceTarget(it.id, vacuums, plants, h.object) : null;
   };
   const curtainNames = new Map(((o.house && o.house.curtains) || []).map(c => [c.id, c.name || c.id]));
   const doorNames = new Map(((o.house && o.house.doors) || []).map(d => [d.id, d.name || d.id]));
@@ -818,6 +904,17 @@ export function attachTapPopovers(o) {
     if (vacuumSim.has(id)) return vacuumSim.get(id);
     const h = ha();
     if (h && h.getVacuum) return h.getVacuum(id);
+    return null;
+  };
+  // Plant: the live reading from the client (or the ?debug=1 seam's); with
+  // no HA configured, the page's sample (S.plantMock) or this module's own.
+  const plantSim = new Map();
+  const plantOrder = new Map([...plants.keys()].map((id, i) => [id, i]));
+  const plantMock = new Map();
+  const plantReading = id => {
+    if (plantSim.has(id)) return plantSim.get(id);
+    const h = ha();
+    if (h && h.getPlant) return h.getPlant(id);
     return null;
   };
 
@@ -1044,6 +1141,28 @@ export function attachTapPopovers(o) {
         el.querySelectorAll('[data-a=room]').forEach(btn =>
           btn.addEventListener('click', () => { if (!btn.disabled) send('room', btn.dataset.room); }));
       },
+    },
+
+    plant: {
+      model(t) {
+        const c = conn();
+        let reading = plantReading(t.id), mock = false;
+        if (c == null && !reading) {
+          if (S.plantMock) reading = S.plantMock(t.id);
+          else {
+            if (!plantMock.has(t.id)) plantMock.set(t.id, mockPlantReading(plantOrder.get(t.id) || 0, plants.get(t.id)));
+            reading = plantMock.get(t.id);
+          }
+          mock = true;
+        }
+        const b = t.binding || plants.get(t.id) || {};
+        const na = !mock && (!reading || !reading.available);
+        return { status: mock ? 'offlinePlant' : statusKey('plant', c, na && isLive(c), false), mock, haOff: haOfflineConn(c),
+          reading, ago: reading ? agoText(reading.updated) : '',
+          name: t.label || b.name || furnitureLabels.get(t.id) || 'Plant' };
+      },
+      html(m) { return popoverHtml.plant(m, dot); },
+      bind() {},   // read-only: nothing to wire, nothing to send
     },
 
     door: {
@@ -1324,11 +1443,13 @@ export function attachTapPopovers(o) {
       if (kind === 'light') ents = (bindings.lights[id.split('/')[0]] || {})[id.split('/')[1]];
       else if (kind === 'climate') ents = typeof climateBinding[id] === 'string' ? [climateBinding[id]] : null;
       else if (kind === 'vacuum') ents = vacuums.has(id) ? [vacuums.get(id).entity] : null;
+      else if (kind === 'plant') ents = plants.has(id) ? deviceTarget(id, null, plants).entities : null;
       else ents = (bindings[kind + 's'] || {})[id];
       if (!ents) return false;
       const t = Object.assign({ kind, id, entities: ents }, extra || {});
       if (kind === 'light') { t.roomId = id.split('/')[0]; t.channel = id.split('/')[1]; }
       if (kind === 'vacuum') t.binding = vacuums.get(id);
+      if (kind === 'plant') t.binding = plants.get(id);
       open(t, x, y);
       return true;
     },
@@ -1338,7 +1459,9 @@ export function attachTapPopovers(o) {
       if (spec && spec.raw) Object.keys(spec.raw).forEach(k => sim.raw.set(k, spec.raw[k]));
       // vacuum: { <itemId>: reading } -- a parseVacuum-shaped reading.
       if (spec && spec.vacuum) Object.keys(spec.vacuum).forEach(k => vacuumSim.set(k, spec.vacuum[k]));
-      if (spec && spec.reset) { sim.status = undefined; sim.raw.clear(); vacuumSim.clear(); }
+      // plant: { <itemId>: reading } -- a parsePlant-shaped reading.
+      if (spec && spec.plant) Object.keys(spec.plant).forEach(k => plantSim.set(k, spec.plant[k]));
+      if (spec && spec.reset) { sim.status = undefined; sim.raw.clear(); vacuumSim.clear(); plantSim.clear(); }
       render(false);
     },
     /** Repaint an open card from the shared state now (never under a drag). */

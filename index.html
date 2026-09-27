@@ -3,6 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- The app is dark. Declaring it keeps Chrome's auto dark theme (Android) and
+       Samsung Internet's dark web pages from re-colouring it, and makes the
+       browser draw its own controls and scrollbars dark. -->
+  <meta name="color-scheme" content="dark">
   <title>3dHome</title>
   <script>
     // Favicon: only registered in standalone mode.
@@ -38,6 +42,7 @@
   </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { color-scheme: dark; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f0f1a; color: #fff; overflow: hidden; }
 
     /* Back button */
@@ -54,12 +59,18 @@
     .back-btn svg { width: 16px; height: 16px; }
 
     /* Title overlay */
+    /* The title sits over the 3D sky, which follows the time of day (a light
+       blue at noon, near-black at night). A translucent dark plate keeps the
+       title and hint readable over ANY sky: white on the plate composited over
+       the brightest noon sky is still > 4.5:1 (task 24e8b3d3). */
     .title-overlay {
-      position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 30;
+      position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 30;
       text-align: center; pointer-events: none;
+      padding: 5px 14px 6px; border-radius: 10px;
+      background: rgba(10, 12, 20, 0.62);
     }
-    .title-overlay h1 { font-size: 18px; font-weight: 700; text-shadow: 0 2px 8px rgba(0,0,0,0.6); }
-    .title-overlay p { font-size: 11px; opacity: 0.5; margin-top: 2px; }
+    .title-overlay h1 { font-size: 18px; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+    .title-overlay p { font-size: 11px; color: rgba(255,255,255,0.82); margin-top: 2px; }
 
     /* Compass overlay — pinned bottom-right of the view. OFF by default
        (display:none). The whole rose (#compass-rose) rotates each frame to keep
@@ -177,6 +188,27 @@
       padding: 4px 10px; font-size: 12px; cursor: pointer; }
     .vac-room:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
 
+    /* Plants block (Controls view): one read-only row per sensors.plants
+       binding, the same reading as its tap card (src/plant-status.js). */
+    .plant-list { margin: 6px 16px 12px; border-radius: 9px; border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03); overflow: hidden; }
+    .plant-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; min-height: 40px; }
+    .plant-row + .plant-row { border-top: 1px solid rgba(255,255,255,0.06); }
+    .plant-row svg { width: 16px; height: 16px; flex: none; fill: rgba(255,255,255,0.4); }
+    .plant-row svg.p-ok { fill: #22c55e; }
+    .plant-row svg.p-dry, .plant-row svg.p-due { fill: #f59e0b; }
+    .plant-row svg.p-wet { fill: #60a5fa; }
+    .plant-main { flex: 1; min-width: 0; }
+    .plant-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .plant-sub { font-size: 11px; opacity: 0.55; margin-top: 1px; font-variant-numeric: tabular-nums; }
+    .plant-val { flex: none; white-space: nowrap; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .plant-val.muted { font-size: 12px; font-weight: 500; opacity: 0.55; }
+    .plant-st { flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid transparent; }
+    .plant-st.ok { color: #bbf7d0; background: rgba(34,197,94,0.16); border-color: rgba(34,197,94,0.4); }
+    .plant-st.dry, .plant-st.due { color: #fde68a; background: rgba(245,158,11,0.18); border-color: rgba(245,158,11,0.45); }
+    .plant-st.wet { color: #bfdbfe; background: rgba(96,165,250,0.16); border-color: rgba(96,165,250,0.45); }
+    .plant-sample { padding: 0 12px 8px; font-size: 11px; opacity: 0.45; }
+
     /* Control section */
     .control-section { padding: 8px 16px; }
     .control-group { margin-bottom: 20px; }
@@ -212,23 +244,52 @@
     /* Slider */
     .slider-row { margin-bottom: 10px; }
     .slider-label { font-size: 11px; opacity: 0.5; margin-bottom: 4px; }
+    /* Every part of the range is styled, in both engines -- a part left to
+       the browser renders differently per device (see src/tap-popovers.js,
+       .tp-range, which this matches). Filled part: --fill up to --p (set
+       from the value by fillRange() in src/room-panel.js); the rest:
+       --range-track. The input's own box is the hit area; the track and
+       thumb are drawn inside it. */
     .slider {
-      width: 100%; height: 6px; border-radius: 3px;
-      -webkit-appearance: none; appearance: none;
-      background: rgba(255,255,255,0.15); outline: none; cursor: pointer;
+      --p: 50%; --fill: #6366f1; --range-track: rgba(255,255,255,0.30);
+      --thumb: 20px; --track-h: 6px;
+      display: block; width: 100%; height: 28px; margin: -6px 0;
+      -webkit-appearance: none; appearance: none; background: transparent;
+      outline: none; cursor: pointer; accent-color: var(--fill);
     }
+    .slider::-webkit-slider-runnable-track {
+      height: var(--track-h); border-radius: 999px; border: 0;
+      background: linear-gradient(to right, var(--fill) var(--p), var(--range-track) var(--p));
+    }
+    .slider::-moz-range-track { height: var(--track-h); border-radius: 999px; border: 0; background: var(--range-track); }
+    .slider::-moz-range-progress { height: var(--track-h); border-radius: 999px; border: 0; background: var(--fill); }
     .slider::-webkit-slider-thumb {
-      -webkit-appearance: none; width: 14px; height: 14px;
-      border-radius: 50%; background: #fff; cursor: pointer;
+      -webkit-appearance: none; appearance: none; box-sizing: border-box;
+      width: var(--thumb); height: var(--thumb); border-radius: 50%;
+      margin-top: calc((var(--track-h) - var(--thumb)) / 2);
+      background: #fff; border: 3px solid var(--fill); cursor: pointer;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.55);
     }
-    .slider.temp {
-      background: linear-gradient(to right, #ffaa55, #fff, #aaccff);
+    .slider::-moz-range-thumb {
+      box-sizing: border-box; width: var(--thumb); height: var(--thumb); border-radius: 50%;
+      background: #fff; border: 3px solid var(--fill); cursor: pointer;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.55);
     }
+    /* Colour temperature: the whole track is the warm-to-cool scale, so no
+       fill; the ring is neutral so it reads on every part of the scale. */
+    .slider.temp { --fill: #1f2937; }
+    .slider.temp::-webkit-slider-runnable-track { background: linear-gradient(to right, #ffaa55, #fff, #aaccff); }
+    .slider.temp::-moz-range-track { background: linear-gradient(to right, #ffaa55, #fff, #aaccff); }
+    .slider.temp::-moz-range-progress { background: transparent; }
+    /* Touch: a 26px knob in a 44px hit area. */
+    @media (pointer: coarse) { .slider { --thumb: 26px; --track-h: 8px; height: 44px; margin: -12px 0; } }
+    .tp-force-coarse .slider { --thumb: 26px; --track-h: 8px; height: 44px; margin: -12px 0; }
     /* A slider with nothing it can safely command (device unavailable, a
        thermostat that is off). Dimmed and not-allowed so it reads as
        "disconnected, not broken". */
     .slider:disabled { opacity: 0.35; cursor: not-allowed; }
     .slider:disabled::-webkit-slider-thumb { cursor: not-allowed; }
+    .slider:disabled::-moz-range-thumb { cursor: not-allowed; }
 
     /* Status-only rows (door, motion): one line, no controls. */
     .control-group.status-row { margin-bottom: 14px; }
@@ -797,7 +858,7 @@
     import { parseSunTime }   from './src/sun-position.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
              haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml,
-             boundLightChannels, hasAmbientRow, ambientRowLabel }
+             boundLightChannels, hasAmbientRow, ambientRowLabel, fillRange }
                               from './src/room-panel.js?v=__VERSION__';
     // Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
     // Shift+D, or the Settings sidebar "Wall numbers" switch).
@@ -815,6 +876,7 @@
     import { ICONS, svgIcon }  from './src/ui-icons.js?v=__VERSION__';
     import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCommand, vacuumStatusText,
              MOCK_VACUUM_READINGS, mockVacuumAfter } from './src/vacuum-control.js?v=__VERSION__';
+    import { normalisePlantBindings, plantStatusText, agoText, mockPlantReading } from './src/plant-status.js?v=__VERSION__';
 
     // ── Why there is no DOMContentLoaded wrapper here ──────────────────────
     // There used to be one, and for classic scripts it was correct: an inline
@@ -953,6 +1015,10 @@
       const container = document.getElementById('scene-container');
       const panel = document.getElementById('panel');
       const panelBody = document.getElementById('panel-body');
+      // Keep a sidebar slider's filled part under its thumb as it moves. One
+      // delegated, display-only listener: it sends nothing, so it sits outside
+      // wireRoomControls, where every click/input handler must be HA-gated.
+      panelBody.addEventListener('input', e => { if (e.target.matches && e.target.matches('input.slider')) fillRange(e.target); });
       const panelTitle = document.getElementById('panel-title');
       const panelArea = document.getElementById('panel-area');
       const panelBack = document.getElementById('panel-back');
@@ -2129,6 +2195,9 @@
         // of the parsed reading; a status change enables/disables buttons.
         ha.onVacuumChange(() => refreshVacuumBlocks());
         ha.onStatusChange(() => refreshVacuumBlocks());
+        // Plants block (read-only), likewise only on a real change.
+        ha.onPlantChange(() => refreshPlantBlock());
+        ha.onStatusChange(() => refreshPlantBlock());
 
         // Cover -> animate that curtain (and, through it, the room's
         // daylight). Cornice light -> that curtain's cornice strip. Both fire
@@ -2168,6 +2237,9 @@
           // sidebar block, so a Start in either shows in both.
           vacuumMock: id => vacuumMockFor(id),
           setVacuumMock: (id, reading) => { vacuumMock.set(id, reading); },
+          // The sample plant readings (no HA configured), shared with the
+          // sidebar's Plants block so the two always agree.
+          plantMock: id => plantMockFor(id),
         },
         curtainSender, climateSender,
         onChange: () => renderPanel(),
@@ -2483,6 +2555,7 @@
           }).join('');
 
           html += vacuumBlocksHtml();
+          html += plantBlockHtml();
 
           panelBody.innerHTML = html;
 
@@ -2638,6 +2711,56 @@
           wireVacuumBlock(fresh);
         });
       }
+
+      // ---- Plants block (Controls view) ----
+      //
+      // One read-only row per rooms.json sensors.plants binding: the same
+      // reading as the plant's tap card (src/plant-status.js). Nothing here
+      // sends anything. With no Home Assistant configured (the demo), sample
+      // readings, labelled as such. Offline reads "Offline", never 0%.
+      const plantBindings = normalisePlantBindings(sensors && sensors.plants);
+      const plantOrder = new Map(Array.from(plantBindings.keys()).map((id, i) => [id, i]));
+      const plantMock = new Map();
+      function plantMockFor(id) {
+        if (!plantMock.has(id)) plantMock.set(id, mockPlantReading(plantOrder.get(id) || 0, plantBindings.get(id)));
+        return plantMock.get(id);
+      }
+      function plantRowHtml(id) {
+        const b = plantBindings.get(id);
+        const r = ha ? ha.getPlant(id) : plantMockFor(id);
+        const live = !!(r && r.available);
+        const name = b.name || vacuumLabels.get(id) || 'Plant';
+        const val = live
+          ? '<span class="plant-val">' + (r.moisture != null ? r.moisture : r.watering) + '%</span>'
+          : '<span class="plant-val muted">' + (r && r.level === 'offline' ? 'Offline' : 'No reading') + '</span>';
+        const ago = r ? agoText(r.updated) : '';
+        // A probe-less plant's % is its watering countdown, not moisture: say so.
+        const sub = (live && r.moisture == null ? 'Countdown' + (ago ? ' · ' : '') : '') +
+          (ago ? (live ? 'Updated ' : 'Last reading ') + ago : '');
+        return '<div class="plant-row" data-plant="' + esc(id) + '">' +
+          svgIcon(ICONS.plant, live ? 'p-' + r.level : '') +
+          '<div class="plant-main"><div class="plant-name">' + esc(name) + '</div>' +
+          (sub ? '<div class="plant-sub">' + esc(sub) + '</div>' : '') + '</div>' +
+          val + (live ? '<span class="plant-st ' + r.level + '">' + esc(plantStatusText(r)) + '</span>' : '') + '</div>';
+      }
+      function plantBlockHtml() {
+        if (!plantBindings.size) return '';
+        return '<div class="panel-section-title">Plants</div><div class="plant-list" data-plants>' +
+          Array.from(plantBindings.keys()).map(plantRowHtml).join('') +
+          (ha ? '' : '<div class="plant-sample">Sample readings: no Home Assistant configured</div>') + '</div>';
+      }
+      // Repaint only the block, and only while the Controls view shows it.
+      function refreshPlantBlock() {
+        if (!panelReady || selectedRoom || panelView === 'settings') return;
+        const block = panelBody.querySelector('[data-plants]');
+        if (!block) return;
+        const tmp = document.createElement('div');
+        tmp.innerHTML = plantBlockHtml();
+        const fresh = tmp.querySelector('[data-plants]');
+        if (fresh) block.replaceWith(fresh);
+      }
+      // "Updated 3 min ago" ages with the clock, not only with a reading.
+      if (plantBindings.size) setInterval(refreshPlantBlock, 30000);
 
       function roomRowKeys(rid) {
         const s = home.lightState[rid] || {};

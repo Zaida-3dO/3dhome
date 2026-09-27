@@ -24,6 +24,8 @@
   th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
   th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .warn { background:#fff3e0; border:1px solid #d9822b; color:#7a3d00; border-radius:6px; padding:12px 14px; font-size:11px; line-height:1.6; margin-bottom:16px; }
+  .warn b { color:#5c2d00; }
   pre.json { font-size:10px; background:#f7f5f0; border:1px solid #ece8e0; border-radius:4px; padding:8px; margin-top:10px; white-space:pre-wrap; word-break:break-all; }
   @media (max-width: 760px) {
     body { padding:12px; }
@@ -82,6 +84,11 @@
 
    ?texture=<url> previews an IMAGE instead of the procedural fill (e.g. a
    photo-derived texture hosted privately). This repo ships no rug image.
+   THE IMAGE MUST BE SAME-ORIGIN, OR SERVED WITH CORS
+   (Access-Control-Allow-Origin): WebGL cannot upload a cross-origin image
+   without it. The 2D <img> preview still shows such an image, so the page
+   puts up a visible warning when the 3D load fails rather than leaving the
+   slab silently grey.
 
    NOT YET WIRED INTO THE HOUSE: the scene reads `rooms[].rug` (polygon,
    color, texture) but not a `pattern` key. "Copy JSON" marks `pattern`
@@ -128,14 +135,51 @@ function patternCanvas(t) {
 }
 
 // One loaded image texture, reused across rebuilds (the ?texture= case).
-let imageTex = null;
+// A failed load is remembered (textureFailed) and announced with a
+// 'rug-texture-failed' event, which the App turns into a visible warning:
+// the usual cause is a cross-origin image served without CORS, which the
+// 2D <img> shows happily while WebGL refuses it -- a silent grey slab.
+let imageTex = null, textureFailed = false;
 function loadImageTexture(THREE, onReady) {
   if (imageTex) { onReady(imageTex); return; }
+  if (textureFailed) return;
   new THREE.TextureLoader().load(TEXTURE_URL, tex => {
     if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
     imageTex = tex;
     onReady(tex);
-  }, undefined, () => console.warn('RugSpec: could not load ?texture=' + TEXTURE_URL));
+  }, undefined, () => {
+    textureFailed = true;
+    console.warn('RugSpec: could not load ?texture=' + TEXTURE_URL);
+    window.dispatchEvent(new Event('rug-texture-failed'));
+  });
+}
+
+/** Where the ?texture= image comes from, for the warning. */
+function textureOrigin() {
+  try { return new URL(TEXTURE_URL, location.href).origin; } catch (e) { return null; }
+}
+
+/** The visible warning for a ?texture= image that could not reach the 3D view. */
+function TextureWarning() {
+  const [failed, setFailed] = React.useState(textureFailed);
+  React.useEffect(() => {
+    const on = () => setFailed(true);
+    window.addEventListener('rug-texture-failed', on);
+    return () => window.removeEventListener('rug-texture-failed', on);
+  }, []);
+  if (!TEXTURE_URL || !failed) return null;
+  const origin = textureOrigin();
+  const cross = origin && origin !== location.origin;
+  return (
+    <div className="warn" id="textureWarning" role="alert">
+      <b>The ?texture= image could not be loaded into the 3D view</b>, so the rug below is plain grey
+      {cross ? <> -- it comes from another origin (<code>{origin}</code>), and WebGL can only use a
+        cross-origin image served with CORS (<code>Access-Control-Allow-Origin</code>).</>
+        : <> -- the address did not load as an image.</>}
+      {' '}Serve it from this page's own origin, or with CORS. The flat preview may still show it: a
+      plain image tag does not need CORS; the 3D view does.
+    </div>
+  );
 }
 
 function buildRugModel(t, group, THREE) {
@@ -209,6 +253,8 @@ function App() {
         All units cm. A procedural shag-rug look: zig-zag bands through a palette, with seeded pile noise.
         {TEXTURE_URL ? ' Previewing an IMAGE from ?texture= (the procedural pattern is off).' : ''}
       </div>
+
+      <TextureWarning />
 
       <div className="grid">
         <div className="card">

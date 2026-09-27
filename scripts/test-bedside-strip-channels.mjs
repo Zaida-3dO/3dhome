@@ -216,30 +216,84 @@ function levelFixtures(preset, centreY, side) {
   pose({ on: true, bri: 100, color: '#ff0000' }, { on: false, bri: 100, color: '#00ff00' });
   check('top ON: its strips show, in its colour, lit', of('bedside_north_top', 'strip').every(o =>
     o.visible && hex(o.material.color) === '#ff0000' && hex(o.material.emissive) === '#ff0000' && o.material.emissiveIntensity >= 0.99));
-  const band = of('bedside_north_top', 'glow').find(o => o.userData.glowWeight === 1);
-  const faint = of('bedside_north_top', 'glow').find(o => o.userData.glowWeight === 0.15);
-  check('top ON: the wash fades down the drawer (the band at the channel is redder and brighter than the lowest)',
-    band && faint && band.material.color.g < faint.material.color.g - 0.2 &&
-    band.material.emissiveIntensity > faint.material.emissiveIntensity * 3, [hex(band.material.color), hex(faint.material.color)]);
-  check('top ON: the drawer below is washed in its colour (red over white)', band &&
-    band.material.color.r > band.material.color.g + 0.3 && band.material.emissiveIntensity > 0.9 &&
-    hex(band.material.emissive) === hex(band.material.color), hex(band.material.color));
+  const wash = of('bedside_north_top', 'glow')[0];
+  const built = wash.material.opacity;
+  check('top ON: the drawer below is washed in its colour at 100% (one visible unlit quad, in red)', wash &&
+    wash.visible && wash.userData.wash === true && hex(wash.material.color) === '#ff0000',
+    wash && [wash.visible, hex(wash.material.color)]);
+  check('...at the build-time opacity, which posing never touches (the wall fade owns it)',
+    Math.abs(built - LP.WASH_OPACITY) < 1e-9, built);
   check('bottom OFF: its strips are hidden (just the recess)', of('bedside_north_bottom', 'strip').every(o => !o.visible));
-  const offBands = of('bedside_north_bottom', 'glow');
-  check('bottom OFF: its drawer is the plain front, every band of it', offBands.length === 4 && offBands.every(b =>
-    hex(b.material.color) === p.color && hex(b.material.emissive) === '#000000' && b.material.emissiveIntensity === 0),
-    offBands.map(b => [hex(b.material.color), hex(b.material.emissive)]));
+  const offWash = of('bedside_north_bottom', 'glow');
+  check('bottom OFF: its wash is hidden, leaving the plain front', offWash.length === 1 && offWash.every(o => !o.visible));
 
-  const fullG = band.material.color.g, fullK = band.material.emissiveIntensity;
+  // The top vertex row's alpha is the wash's strength at the channel: 1 as
+  // built (cabinet.js WASH_ALPHA[0]) times the brightness.
+  const topAlpha = m => { const c = m.geometry.attributes.color, y = m.geometry.attributes.position;
+    let best = -Infinity, a = null; for (let v = 0; v < c.count; v++) if (y.getY(v) > best) { best = y.getY(v); a = c.getW(v); } return a; };
+  check('top at 100%: the gradient is at full strength (alpha 1 at the channel)', Math.abs(topAlpha(wash) - 1) < 1e-6, topAlpha(wash));
   pose({ on: true, bri: 10, color: '#ff0000' }, { on: true, bri: 100, color: '#0000ff' });
-  const dim = band.material;
-  check('top at 10%: the wash is weaker than at 100% (less red over the white, dimmer)',
-    dim.color.g > fullG + 0.1 && dim.emissiveIntensity < fullK - 0.3, [hex(dim.color), dim.emissiveIntensity, fullG, fullK]);
+  check('top at 10%: still the light colour, its gradient at a tenth (alpha 0.1 at the channel)',
+    wash.visible && hex(wash.material.color) === '#ff0000' && Math.abs(topAlpha(wash) - 0.1) < 1e-6, [hex(wash.material.color), topAlpha(wash)]);
+  {
+    // ...and keeps its GRADIENT: every vertex is its built alpha times 0.1, so
+    // the bottom row is still 0 and the rows still fall top to bottom.
+    const c = wash.geometry.attributes.color, y = wash.geometry.attributes.position;
+    const rows = []; for (let v = 0; v < c.count; v++) rows.push([y.getY(v), c.getW(v), wash.userData.washAlpha[v]]);
+    rows.sort((a, b) => b[0] - a[0]);
+    check('top at 10%: the gradient is kept, scaled -- bottom row 0, falling top to bottom',
+      rows.every(r => Math.abs(r[1] - 0.1 * r[2]) < 1e-6) && rows[rows.length - 1][1] === 0 &&
+      rows.every((r, i) => i === 0 || r[1] <= rows[i - 1][1]) && rows[0][1] > rows[rows.length - 1][1], rows.map(r => r[1]));
+  }
+  check('...and its opacity is still the build-time one', wash.material.opacity === built, wash.material.opacity);
+  wash.material.opacity = 0.3;   // a wall fade mid-way
+  pose({ on: true, bri: 60, color: '#ff0000' }, { on: true, bri: 100, color: '#0000ff' });
+  check('posing a light never overwrites a fade in progress', wash.material.opacity === 0.3, wash.material.opacity);
+  wash.material.opacity = built;
+  check('bottom back ON: its wash shows again, in the new colour', offWash.every(o => o.visible && hex(o.material.color) === '#0000ff'));
+  pose({ on: true, bri: 0, color: '#ff0000' }, { on: true, bri: 100, color: '#0000ff' });
+  check('on at 0%: no wash', !wash.visible);
   check('bottom back ON: its strips show again, in the new colour', of('bedside_north_bottom', 'strip').every(o =>
     o.visible && hex(o.material.color) === '#0000ff'));
   check('a dimmed strip still reads lit', of('bedside_north_top', 'strip').every(o => o.material.emissiveIntensity >= LP.STRIP_MIN_INTENSITY));
   check('a non-light mesh or a missing state is left alone',
     LP.applyLightPart({ userData: {} }, { on: true }) === false && LP.applyLightPart(parts[0], undefined) === false);
+}
+
+// ---- 6. the wash's visible contribution falls with brightness ---------------
+// The wash is UNLIT: whatever the room's light, it adds its own colour, at
+// alpha a x opacity o per vertex. At night the front under it is near-black,
+// so what the wash shows is a*o*luminance(its colour). Summed over the
+// vertices, that must fall strictly as brightness falls and be nothing at 0,
+// for warm, cool, saturated and white lights, over a white and a non-white
+// (pink) front. (Round 4 dimmed by mixing the colour toward the front's: a
+// dimmed #ffb070 over white came out BRIGHTER, 0.74 -> 0.95.)
+{
+  ['#ffffff', '#e9a3ab'].forEach(front => {
+    const p = JSON.parse(JSON.stringify(CABINET_PRESETS.bedsideTableLedNarrow.params));
+    p.color = front; p.topColor = front;
+    p.fronts.forEach((r, i) => { if (r.channel) r.channel.light = 'lvl' + i; });
+    const g = C.build(THREE, p, { detail: 'full' });
+    let w = null;
+    g.traverse(o => { if (o.isMesh && o.userData.wash && !w) w = o; });
+    check('front ' + front + ': the wash knows the front colour', !!w && w.userData.baseColor === front, w && w.userData.baseColor);
+    ['#ffb070', '#dbe8ff', '#ff0000', '#00ff50', '#ffffff'].forEach(light => {
+      const contribution = bri => {
+        LP.applyLightPart(w, { on: true, bri, color: light });
+        if (!w.visible) return 0;
+        const c = w.geometry.attributes.color, m = w.material.color;
+        const lum = 0.2126 * m.r + 0.7152 * m.g + 0.0722 * m.b;
+        let sum = 0;
+        for (let v = 0; v < c.count; v++) sum += c.getW(v) * w.material.opacity * lum;
+        return sum;
+      };
+      const steps = [100, 75, 50, 25, 10, 1, 0].map(contribution);
+      const falls = steps.every((x, i) => i === 0 || x <= steps[i - 1] + 1e-12) && steps[steps.length - 1] === 0;
+      const strict = steps.slice(0, 6).every((x, i) => i === 0 || x < steps[i - 1]);
+      check('front ' + front + ', light ' + light + ': its luminance contribution falls with brightness, to nothing at 0',
+        falls && strict, steps.map(x => +x.toFixed(4)));
+    });
+  });
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

@@ -7,15 +7,23 @@
  *     build(THREE, params, { detail: 'full' | 'low' }) -> THREE.Group.
  *   - Local frame in METRES: y = 0 is the item's bottom, x is centred along
  *     the width, the BACK face is at z = 0, and the front faces +z.
- *   - Every material comes from makeFinish() (./finishes.js). No lights, no
- *     textures.
+ *   - Every material comes from makeFinish() (./finishes.js). No lights.
+ *     ONE exception to "no textures": the decking boards' groove map (see
+ *     makeGrooveMap below), a small procedural canvas, null under Node.
  *   - bbox == params.width/depth/height within 0.5 cm for ANY params.
  * See docs/house-profile.md, "Furniture".
  *
- * A cantilevered balcony: a concrete slab and a balustrade. The BACK (z = 0)
+ * A cantilevered balcony: a slab and a balustrade. The BACK (z = 0)
  * is the building face; `width` runs along the facade and the front railing
  * runs along z = depth. `height` is slab bottom to rail top.
  *
+ *   floor     'decking' (default) = a dark structural slab under dark
+ *             charcoal composite boards running ALONG x (parallel to the
+ *             facade) with real gaps between them, a fine longitudinal
+ *             groove map on the boards, and a dark metal edge trim
+ *             (railColor) round the front and both ends. The deck top is
+ *             still y = slabThickness. Low detail is one charcoal slab box.
+ *             'slab' = the plain light slab (slabColor).
  *   slab      width x depth, slabThickness thick, y 0 .. slabThickness
  *   railing   'bars'  = a top rail, a bottom rail and vertical metal bars
  *             'glass' = a top rail and glass panels between posts
@@ -45,6 +53,10 @@ export const DEFAULTS = Object.freeze({
   depth: 155,              // building face to the front of the railing
   height: 125,             // slab bottom to rail top (a 15 slab + a ~110 guard)
   slabThickness: 15,
+  floor: 'decking',        // 'decking' | 'slab'
+  deckColor: '#2e2e30',    // charcoal composite boards
+  boardWidth: 14.5,        // cm, one board's face (typical composite; not measured)
+  boardGap: 0.6,           // cm, the gap between boards (typical; not measured)
   railingThickness: 5,     // top rail / post section, cm
   railing: 'bars',         // 'bars' | 'glass'
   barSpacing: 11,          // centre spacing; the clear gap is held <= 10
@@ -64,6 +76,54 @@ const BOTTOM_RAIL_H = 3;   // cm
 const BOTTOM_RAIL_UP = 6;  // cm above the slab top
 const GLASS_T = 1.2;       // glass panel thickness, cm
 const GLASS_PANEL_MAX = 120; // cm, the widest glass panel before another post
+const BOARD_T = 2.5;       // cm, decking board thickness (typical composite)
+const TRIM_T = 1;          // cm, the metal edge trim's thickness
+const DECK_UNDER = '#141416'; // the structure under the boards: dark, so the gaps read dark
+const GROOVES = 9;         // fine grooves across one board's face
+
+/**
+ * The decking boards' groove map: a tiny canvas, near-white with GROOVES
+ * darker lines, multiplied onto deckColor. On a board's top face u runs
+ * along x (the board's length) and v across it, so the lines are ROWS of the
+ * canvas and the grooves run the length of the board.
+ *
+ * NODE / NO-DOM BUILDS: returns null (no `document`), and the boards are
+ * plain deckColor -- the same fallback as wall-panels.js's grain map. The
+ * mesh is marked `keep` either way, so a finish-bucket merge never strips
+ * the map.
+ *
+ * @param {Object} THREE
+ * @returns {?THREE.CanvasTexture}
+ */
+function makeGrooveMap(THREE) {
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') return null;
+  const w = 4, h = 64;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#8a8a8a';
+  for (let i = 0; i < GROOVES; i++) ctx.fillRect(0, Math.round((i + 0.5) * h / GROOVES), w, 2);
+  const tex = new THREE.CanvasTexture(c);
+  if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/**
+ * Board z-intervals (cm) across [z0, z1]: as many boards of about `bw` with
+ * `gap` between them as fit, widened evenly so the first starts at z0 and
+ * the last ends at z1. At least one board.
+ */
+function boardSpans(z0, z1, bw, gap) {
+  const L = z1 - z0;
+  const n = Math.max(1, Math.round((L + gap) / (bw + gap)));
+  const b = (L - (n - 1) * gap) / n;
+  const out = [];
+  for (let i = 0; i < n; i++) out.push([z0 + i * (b + gap), z0 + i * (b + gap) + b]);
+  return out;
+}
 
 function resolveParams(params) {
   return Object.assign({}, DEFAULTS, params || {});
@@ -149,12 +209,13 @@ export function build(THREE, params, opts) {
   const gap = clamp(num(p.barSpacing, DEFAULTS.barSpacing) - bar, 1, MAX_GAP);
   const glass = p.railing === 'glass';
   const left = sideMode(p.leftSide), right = sideMode(p.rightSide);
+  const decking = p.floor !== 'slab';
 
   const group = new THREE.Group();
   group.name = 'furniture:balcony';
 
   const mats = {
-    slab: makeFinish(THREE, 'matte', p.slabColor),
+    slab: makeFinish(THREE, 'matte', decking ? (full ? DECK_UNDER : p.deckColor) : p.slabColor),
     rail: makeFinish(THREE, 'metal', p.railColor),
     solid: makeFinish(THREE, 'matte', p.solidColor),
     glass: makeFinish(THREE, 'glass', p.glassColor)
@@ -177,8 +238,31 @@ export function build(THREE, params, opts) {
     if (boxes.length) add(boxesGeometry(THREE, boxes, !!open), mat, name, data);
   };
 
-  // ---- slab --------------------------------------------------------------
-  addBoxes([box(-W / 2, W / 2, 0, slabT, 0, D)], mats.slab, 'slab', { part: 'slab' });
+  // ---- slab / deck ---------------------------------------------------------
+  if (decking && full) {
+    // structure under the boards, full footprint; the boards sit on it, inset
+    // from the front and the ends by the trim so no two top faces coincide
+    const bt = Math.min(BOARD_T, slabT * 0.5);
+    const trim = Math.min(TRIM_T, rt);
+    addBoxes([box(-W / 2, W / 2, 0, slabT - bt, 0, D)], mats.slab, 'slab', { part: 'slab' });
+    const bw = clamp(num(p.boardWidth, DEFAULTS.boardWidth), 2, 60);
+    const bgap = clamp(num(p.boardGap, DEFAULTS.boardGap), 0, 5);
+    const boards = boardSpans(0, D - trim, bw, bgap)
+      .map(([z0, z1]) => box(-W / 2 + trim, W / 2 - trim, slabT - bt, slabT, z0, z1));
+    const deckMat = makeFinish(THREE, 'matte', p.deckColor);
+    const map = makeGrooveMap(THREE);
+    if (map) deckMat.map = map;
+    const deck = add(boxesGeometry(THREE, boards, false), deckMat, 'deck-boards', { part: 'deck', boards: boards.length });
+    deck.userData.keep = true; // the groove map must survive any finish-bucket merge
+    // dark metal edge trim: front, then the two ends, slab bottom to deck top
+    addBoxes([
+      box(-W / 2, W / 2, 0, slabT, D - trim, D),
+      box(-W / 2, -W / 2 + trim, 0, slabT, 0, D - trim),
+      box(W / 2 - trim, W / 2, 0, slabT, 0, D - trim)
+    ], mats.rail, 'edge-trim', { part: 'trim' });
+  } else {
+    addBoxes([box(-W / 2, W / 2, 0, slabT, 0, D)], mats.slab, 'slab', { part: 'slab' });
+  }
 
   // ---- one balustrade run ------------------------------------------------
   // `along` 'x' (the front, at z = D) or 'z' (a side, at x = xc). The span

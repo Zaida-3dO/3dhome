@@ -83,6 +83,23 @@ export function climateView(reading) {
  * offline: there is nothing to be out of sync with, and the lights stay a
  * local preview there, as they always have.
  */
+/**
+ * A range input's filled fraction as a CSS length, for the `--p` variable
+ * the .slider track paints its fill up to. `rangeFillStyle` is the inline
+ * style for the row markup; `fillRange` updates a live input as it moves.
+ */
+export function rangeFillPct(value, min, max) {
+  const lo = +min, hi = +max, v = +value;
+  if (!Number.isFinite(v) || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return '0%';
+  return (Math.max(0, Math.min(1, (v - lo) / (hi - lo))) * 100).toFixed(2).replace(/\.?0+$/, '') + '%';
+}
+export function rangeFillStyle(value, min, max) {
+  return ' style="--p:' + rangeFillPct(value, min, max) + '"';
+}
+export function fillRange(el) {
+  el.style.setProperty('--p', rangeFillPct(el.value, el.min, el.max));
+}
+
 export function haOffline(ha) {
   return !!ha && ha.status !== 'connected';
 }
@@ -149,7 +166,7 @@ export function mainLightRowHtml(s, offline) {
     const t = s.temp;
     h += `<div class="slider-row">
       <div class="slider-label">Brightness: ${s.bri}%</div>
-      <input type="range" class="slider" min="5" max="100" value="${s.bri}" data-action="bri-main"${dis}>
+      <input type="range" class="slider" min="5" max="100" value="${s.bri}"${rangeFillStyle(s.bri, 5, 100)} data-action="bri-main"${dis}>
     </div>
     <div class="slider-row">
       <div class="slider-label">Temperature: ${t}K ${t < 3200 ? 'Warm' : t > 5000 ? 'Cool' : 'Neutral'}</div>
@@ -179,7 +196,7 @@ export function ambientRowHtml(s, name, offline, colorable) {
   if (s.on) {
     h += `<div class="slider-row inline-row">
       ${colorable === false ? '' : `<input type="color" class="color-square" value="${esc(swatchColor(s.color))}" data-action="color-ambient" aria-label="Colour" title="Colour"${dis}>`}
-      <input type="range" class="slider" min="5" max="100" value="${s.bri}" data-action="bri-ambient" aria-label="Brightness"${dis}>
+      <input type="range" class="slider" min="5" max="100" value="${s.bri}"${rangeFillStyle(s.bri, 5, 100)} data-action="bri-ambient" aria-label="Brightness"${dis}>
       <span class="inline-val">${s.bri}%</span>
     </div>`;
   }
@@ -198,7 +215,7 @@ export function galaxyRowHtml(s, offline) {
   if (s.on) {
     h += `<div class="slider-row">
       <div class="slider-label">Brightness: ${s.bri}%</div>
-      <input type="range" class="slider" min="5" max="100" value="${s.bri}" data-action="bri-galaxy"${dis}>
+      <input type="range" class="slider" min="5" max="100" value="${s.bri}"${rangeFillStyle(s.bri, 5, 100)} data-action="bri-galaxy"${dis}>
     </div>`;
   }
   return h + '</div>';
@@ -217,7 +234,7 @@ export function curtainRowHtml(cu, pct, available, offline) {
     </div>
     <div class="slider-row">
       <div class="slider-label">${available ? ('Open: ' + shown + '%') : 'Unavailable'}</div>
-      <input type="range" class="slider" min="0" max="100" value="${shown}"
+      <input type="range" class="slider" min="0" max="100" value="${shown}"${rangeFillStyle(shown, 0, 100)}
         data-action="curtain-open" data-curtain="${esc(cu.id)}"${dis}>
     </div>
   </div>`;
@@ -234,7 +251,7 @@ export function climateRowHtml(reading, offline, heating) {
     </div>
     <div class="slider-row">
       <div class="slider-label">${v.status === 'Unavailable' ? 'Unavailable' : 'Target: ' + esc(v.target)}</div>
-      <input type="range" class="slider" min="${v.min}" max="${v.max}" step="${v.step}" value="${v.value}"
+      <input type="range" class="slider" min="${v.min}" max="${v.max}" step="${v.step}" value="${v.value}"${rangeFillStyle(v.value, v.min, v.max)}
         data-action="climate-target"${(v.disabled || offline) ? ' disabled' : ''}>
     </div>
   </div>`;

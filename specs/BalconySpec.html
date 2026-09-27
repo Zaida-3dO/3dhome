@@ -40,7 +40,7 @@
 <script type="application/json" id="spec-manifest">
 {
   "title": "Balcony",
-  "description": "All units cm. A cantilevered balcony: a slab and a balustrade of black metal bars or glass panels; each end a railing, a solid panel or open. Pick a variant, then fine-tune in the Tweaks panel.",
+  "description": "All units cm. A cantilevered balcony: a charcoal decking floor (or a plain slab) and a balustrade of black metal bars or glass panels; each end a railing, a solid panel or open. Pick a variant, then fine-tune in the Tweaks panel.",
   "objects": [
     { "id": "balcony", "label": "Balcony", "types": ["balcony"] }
   ]
@@ -91,6 +91,10 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "depth": 155,
   "height": 125,
   "slabThickness": 15,
+  "floor": "decking",
+  "deckColor": "#2e2e30",
+  "boardWidth": 14.5,
+  "boardGap": 0.6,
   "railingThickness": 5,
   "railing": "bars",
   "barSpacing": 11,
@@ -106,7 +110,14 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // The balcony's VARIANTS (same controls, different values), picked from the
 // shared picker bar (<SpecVariants>). Each sets only the keys it names.
 const PRESETS = [
-  { name: 'Black bars, railing both ends', edits: { railing: 'bars', leftSide: 'railing', rightSide: 'railing' } },
+  { name: 'Black bars, railing both ends', edits: { railing: 'bars', leftSide: 'railing', rightSide: 'railing', floor: 'decking' } },
+  // The owner's balcony (photo 2026-09-27): dark charcoal grooved composite
+  // decking with gaps, boards parallel to the facade, a dark metal edge trim,
+  // thin black bars. Deck level with the door threshold (the house places it
+  // with an 11 cm slab). Board width / gap are typical composite figures,
+  // not measured.
+  { name: "Owner's balcony (charcoal decking, 11 slab)", edits: { railing: 'bars', leftSide: 'railing', rightSide: 'railing', floor: 'decking', deckColor: '#2e2e30', slabThickness: 11 } },
+  { name: 'Plain concrete slab', edits: { floor: 'slab' } },
   { name: 'Glass panels', edits: { railing: 'glass', leftSide: 'railing', rightSide: 'railing' } },
   { name: 'Recessed (solid both ends)', edits: { railing: 'bars', leftSide: 'solid', rightSide: 'solid' } },
   { name: 'Front rail only', edits: { railing: 'bars', leftSide: 'none', rightSide: 'none' } },
@@ -159,6 +170,7 @@ function App() {
     else setCopied('clipboard unavailable — select the JSON below');
   };
   const gap = Math.min(10, Math.max(1, t.barSpacing - Math.min(1.6, t.railingThickness)));
+  const boards = Math.max(1, Math.round((t.depth - 1 + t.boardGap) / (t.boardWidth + t.boardGap)));
   const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   return (
     <SpecPage>
@@ -174,7 +186,9 @@ function App() {
               <tr><td>Width <span style={{opacity:0.6}}>(along the facade)</span></td><td className="num">{t.width.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Depth <span style={{opacity:0.6}}>(building face to railing front)</span></td><td className="num">{t.depth.toFixed(0)}</td><td><b>Variable</b></td></tr>
               <tr><td>Height <span style={{opacity:0.6}}>(slab bottom to rail top)</span></td><td className="num">{t.height.toFixed(0)}</td><td><b>Variable</b></td></tr>
-              <tr><td>Slab thickness</td><td className="num">{t.slabThickness.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Slab thickness <span style={{opacity:0.6}}>(= deck top)</span></td><td className="num">{t.slabThickness.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Decking boards <span style={{opacity:0.6}}>(along the facade)</span></td><td className="num">{t.floor === 'decking' ? boards : '—'}</td><td>derived from depth, board width and gap</td></tr>
+              <tr><td>Board width / gap</td><td className="num">{t.floor === 'decking' ? t.boardWidth.toFixed(1) + ' / ' + t.boardGap.toFixed(1) : '—'}</td><td><b>Variable</b> (typical, not measured)</td></tr>
               <tr><td>Railing above the slab</td><td className="num">{(t.height - t.slabThickness).toFixed(0)}</td><td>derived</td></tr>
               <tr><td>Rail / post section</td><td className="num">{t.railingThickness.toFixed(1)}</td><td><b>Variable</b></td></tr>
               <tr><td>Bar spacing (centres)</td><td className="num">{t.barSpacing.toFixed(1)}</td><td><b>Variable</b></td></tr>
@@ -193,7 +207,11 @@ function App() {
         <div className="card">
           <h2>Look</h2>
           <div className="legend">
-            A light concrete slab, full width and depth, with a balustrade along its front edge: a black metal top
+            Decking (the default): dark charcoal composite boards running parallel to the facade, with narrow dark
+            gaps between them and fine grooves along each board, on a dark structure, finished by a dark metal edge
+            trim round the front and both ends. The deck top is the slab thickness, so it can sit level with a door
+            threshold. Low detail draws one charcoal slab. Or a plain light concrete slab. Either way there is a
+            balustrade along the front edge: a black metal top
             rail, a bottom rail and slim vertical black bars, or glass panels between slim posts under the same top
             rail. Each end is the same balustrade running back to the building face, a solid panel (where the
             balcony sits between two walls) or open.
@@ -226,6 +244,14 @@ function App() {
         <TweakSlider label="Slab thickness" value={t.slabThickness} min={5} max={30} step={1} unit="cm"
           onChange={v => setTweak('slabThickness', v)} />
 
+        <TweakSection label="Floor" />
+        <TweakRadio label="Floor" value={t.floor} options={['decking', 'slab']}
+          onChange={v => setTweak('floor', v)} />
+        <TweakSlider label="Board width" value={t.boardWidth} min={8} max={30} step={0.5} unit="cm"
+          onChange={v => setTweak('boardWidth', v)} />
+        <TweakSlider label="Board gap" value={t.boardGap} min={0} max={2} step={0.1} unit="cm"
+          onChange={v => setTweak('boardGap', v)} />
+
         <TweakSection label="Railing" />
         <TweakRadio label="Railing" value={t.railing} options={['bars', 'glass']}
           onChange={v => setTweak('railing', v)} />
@@ -241,7 +267,9 @@ function App() {
           onChange={v => setTweak('rightSide', v)} />
 
         <TweakSection label="Colours" />
-        <TweakColor label="Slab" value={t.slabColor}
+        <TweakColor label="Decking boards" value={t.deckColor}
+          onChange={v => setTweak('deckColor', v)} />
+        <TweakColor label="Slab (plain floor)" value={t.slabColor}
           onChange={v => setTweak('slabColor', v)} />
         <TweakColor label="Rails and bars (metal)" value={t.railColor}
           onChange={v => setTweak('railColor', v)} />
