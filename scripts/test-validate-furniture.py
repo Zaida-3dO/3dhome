@@ -12,6 +12,8 @@ WHAT THIS GUARDS
      plan lists fires on a synthetic house built to trip it -- and a clean
      house trips none of them, so a check that fires on everything fails too.
   3. The wall-side probe errors on "neither side" for windows and curtains.
+  4. Per-kind envelopes: a `{kind}` item is sized from the schema block's
+     x-kindDefaults for that kind, as the house path sizes it (item 7c056b3e).
 
 Every number here is synthetic.
 """
@@ -228,6 +230,32 @@ _, warns = run_checks(house([
     dict(run, id="run_west", wall=3, centre=260),     # starts at y 160: meets the north run's front face
 ]))
 check("no worktop warning when the runs only meet", not has(warns, "worktop"), warns)
+
+# ---- 5. per-kind envelopes (item 7c056b3e) ---------------------------------------
+# The house path sizes a `{kind}`-only item from THAT kind's DEFAULTS
+# (defaultsFor), so the validator's footprint/ceiling checks must too -- via the
+# schema block's x-kindDefaults. Ceiling 250: a diy-words clock (39 tall) at
+# elevation 215 tops out at 254, over it, where the generic 30 x 30 would read
+# 245 and pass. An up-down sconce (20 tall) at 220 tops out at 240, under it,
+# where the swing-arm globe's 45.95 would read 265.95 and warn.
+d = vh.schema_param_defaults(SCHEMA, "wall-clock", "diy-words")
+check("schema_param_defaults: diy-words gets its own width/height", (d["width"], d["height"], d["depth"]) == (49.8, 39, 4), d)
+d = vh.schema_param_defaults(SCHEMA, "wall-clock")
+check("schema_param_defaults: no kind -> the default kind's (30 x 30)", (d["width"], d["height"]) == (30, 30), d)
+d = vh.schema_param_defaults(SCHEMA, "wall-sconce", "up-down")
+check("schema_param_defaults: up-down gets its own envelope", (d["width"], d["height"], d["depth"]) == (12, 20, 6), d)
+CLOCK = {"id": "clock", "room": "room", "type": "wall-clock", "wall": 1, "centre": 300}
+_, warns = run_checks(house([dict(CLOCK, elevation=215, params={"kind": "diy-words"})]))
+check("warn: a diy-words clock sized by ITS envelope reaches over the ceiling",
+      has(warns, "furniture/clock", "top at 254 cm"), warns)
+_, warns = run_checks(house([dict(CLOCK, elevation=215, params={"kind": "framed"})]))
+check("no warn: the same clock as `framed` (30 tall) stays under it", not has(warns, "above the ceiling"), warns)
+SCONCE = {"id": "sconce", "room": "room", "type": "wall-sconce", "wall": 1, "centre": 300, "elevation": 220}
+_, warns = run_checks(house([dict(SCONCE, params={"kind": "up-down"})]))
+check("no warn: an up-down sconce sized by ITS envelope stays under the ceiling", not has(warns, "above the ceiling"), warns)
+_, warns = run_checks(house([dict(SCONCE, params={"kind": "swing-arm-globe"})]))
+check("warn: the same sconce as swing-arm-globe (45.95 tall) reaches over it",
+      has(warns, "furniture/sconce", "above the ceiling"), warns)
 
 print(("FAILED" if failures else "ok") + f" -- {passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

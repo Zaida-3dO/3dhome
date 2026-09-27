@@ -836,6 +836,11 @@ fails when:
   adds a module replaces its placeholder with the real params in the same PR.
 - a `DEFAULTS` value differs from the schema `default`, or either side has a
   key the other lacks
+- a module exports `defaultsFor(params)` (a type whose kinds differ in size:
+  wall-clock `diy-words`, wall-sconce `up-down`) and, for some kind, the schema
+  defaults overlaid with the block's `x-kindDefaults[kind]` give a different
+  width/depth/height. An item that names only its `kind` is built from that
+  kind's defaults, and the validator sizes it from `x-kindDefaults`.
 
 ### Lights
 
