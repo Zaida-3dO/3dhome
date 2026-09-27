@@ -281,17 +281,80 @@ By default the tier is detected on two axes (`src/quality-tier.js`):
   iPadOS. Failing that, it is true for Android or iOS/iPadOS with a coarse
   pointer. A mobile-class GPU in a desktop OS without a touch pointer (a
   Snapdragon X Windows laptop's Adreno) is not treated as mobile. A mobile GPU
-  is capped at `mid`, which means:
+  **starts** at `mid-lite` (see below):
   - no room-shadow lights, even with `?shadows=high`
-  - a pixel-ratio ceiling of 1.5
+  - a pixel ratio of 1.5
   - no `priority: "minor"` furniture
 
-`?tier=` wins over the mobile cap, and lifts the pixel-ratio ceiling and the
-minor-furniture skip with it, which is what makes it an A/B knob on a tablet. It never goes **above** what the uniform budget compiles: `?tier=ultra`
+**Adaptive quality** (`src/adaptive-quality.js`) then moves it on measured
+frame times. The GPU class only decides where a device starts.
+
+- **The levels**, cheapest first:
+
+  | level | tier | room-shadow lights | minor furniture |
+  |---|---|---|---|
+  | `low` | low | no | skipped |
+  | `mid-lite` | mid | no | skipped (a mobile GPU's start) |
+  | `mid` | mid | only with `?shadows=high` | built (a 512-uniform desktop's start) |
+  | `ultra-lite` | ultra | no | built |
+  | `ultra` | ultra | yes | built (a 1024-uniform desktop's start) |
+
+  A device never goes above what its uniform budget compiles. A level that
+  would build the same thing as its neighbour under the current `shadows=`
+  (e.g. `ultra-lite` and `ultra` under the embed's `shadows=low`) is skipped.
+- **What is measured.** The interval between consecutive drawn frames (95th
+  percentile over a window of up to 60 frames, or 1.5 s), after a warm-up
+  and never across an idle gap, a hidden tab, or a drag at reduced
+  resolution. The scene renders on demand, so it draws a few short "probe"
+  bursts after load (at most 4 s each, 6 per session) and, while someone is
+  using it, one 2.5 s burst every 3 minutes at most; otherwise it measures
+  only frames it was drawing anyway. An untouched scene costs nothing.
+- **A throttled browser is not a slow GPU.** When the browser itself holds
+  animation frames down while the scene is idle (a power-saving mode, a
+  background window), nothing is measured: the pixel ratio goes straight to
+  the start ratio, as it did before adaptive quality, the level stays where
+  it is, and the console says so.
+- **Thresholds.** Headroom is a 95th percentile under 20 ms, or under the
+  frame-rate cap's own cadence if that is slower (the 60 fps cap lands on
+  20.8 ms at 144 Hz). Too slow is over 34 ms, and at least one refresh
+  beyond the headroom line: 34 ms rather than 33 so that a steady,
+  vsync-locked 30 fps holds instead of flip-flopping. On a 75 Hz display the
+  60 fps cap already draws every 26.7 ms, which puts "too slow" at 46.7 ms
+  there. Between the two, nothing moves. Either way it takes two windows in
+  a row.
+- **What moves when.** The pixel ratio moves **live**, in 0.25 steps: first
+  from the cheap 1.0 first paint to the start ratio (1.5 on a mobile GPU,
+  the full ratio elsewhere), then above it up to 2. The **level** is decided
+  now and applied on the **next load**: changing lights or shadows under a
+  running scene would recompile every material, which is a multi-second
+  freeze. A step down lowers the pixel ratio first; a level is only stepped
+  down once the ratio falls below the start ratio.
+- **No flip-flop.** A pixel-ratio notch that failed is not tried again for
+  this level for 7 days. A level stepped down from is blocked, along with
+  everything above it, for 7 days. A first frame that blocks for over a
+  second at a level above the device's default (a cold room-shadow pass)
+  counts as a step down on its own.
+- **Desktop.** A desktop starts exactly where it did before. It only moves
+  if it is measured as slow.
+- **Stored per device**, in `localStorage` under
+  `home3d.quality.v1|<GPU name>|<uniform budget>|<shadows mode>`. Settings >
+  Quality shows where the device is and what the next load will use;
+  **Re-measure** forgets it.
+
+`?tier=` wins over all of this: it pins the tier, turns adaptation off (no
+probes, nothing read or stored), and lifts the pixel-ratio ceiling and the
+minor-furniture skip, which is what makes it an A/B knob on a tablet. It never
+goes **above** what the uniform budget compiles: `?tier=ultra`
 on a 256-vector phone stays `low`, because the ultra shader would not compile
-and nothing would render. The detected values, including `mobileGpu`, the
-reason for it and the light counts, are printed in the console's
-`[Home3DScene] Quality tier=` line.
+and nothing would render. Adaptation is also off in the auto-rotating preview
+and with `?fps=` below 50. With it off, the pixel ratio ramps once after load
+exactly as it always did.
+
+The detected values, including `mobileGpu`, the reason for it, the level and
+where it came from, and the light counts, are printed in the console's
+`[Home3DScene] Quality tier=` line. Every adaptive step prints an
+`[Home3DScene] Adaptive quality:` line, and the end of measuring prints
+`Adaptive quality settled: level=… DPR … p95 … ms; next load: …`.
 
 ### `fps`
 

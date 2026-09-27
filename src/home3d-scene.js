@@ -9,7 +9,12 @@
  */
 
 import * as THREE from 'three';
-import { detectMobileGpu, resolveTier, capPixelRatio } from './quality-tier.js';
+import { detectMobileGpu, resolveTier } from './quality-tier.js';
+import {
+  LEVELS, maxLevelFor, levelForTier, defaultLevel, levelConfig, createController,
+  storageKey, loadState, saveState, clearState, estimateVsync, capCadence, rafThrottle,
+  MOBILE_START_RATIO, MIN_FPS_CAP, BLOCK_MS, COLD_FRAME_MS
+} from './adaptive-quality.js';
 import { collapseEmitters } from './light-merge.js';
 import { HouseLoader } from './house-loader.js';
 import {
@@ -3292,57 +3297,67 @@ export const Home3DScene = (() => {
       maxTouchPoints: typeof navigator !== 'undefined' ? navigator.maxTouchPoints : 0
     });
     const tierInfo = resolveTier({ maxFragU, mobileGpu: gpu.mobileGpu, override: opts.tier });
-    // The mobile pixel-ratio cap and minor-furniture skip; ?tier= lifts them.
+    // A mobile GPU that ?tier= has not pinned (?tier= lifts every mobile cap).
     const mobileGpu = tierInfo.mobileCaps;
-    const tier = tierInfo.tier;
-    // The resolution ramp's ceiling (basePixelRatio below) on a mobile GPU.
-    const scenePixelRatio = capPixelRatio(pixelRatio, mobileGpu);
+
+    // ─── Adaptive quality (task 230713da, src/adaptive-quality.js) ─────────
+    // The GPU class only picks where a device STARTS. Measured frame times
+    // then move it: the pixel-ratio ceiling live (the loop below), and the
+    // structural LEVEL -- tier, room shadows, minor furniture -- for the NEXT
+    // load, because changing one of those under a running scene is a full
+    // material recompile (see the shadow-ramp tombstone below). This load
+    // builds exactly one level, once.
+    //
+    // Off, and the scene behaves exactly as before, when: ?tier= pins the
+    // tier; the scene is the auto-rotating preview; or a frame-rate cap below
+    // MIN_FPS_CAP puts the frame floor above the headroom threshold.
+    const adaptiveOff = tierInfo.overridden ? '?tier= pins it'
+      : autoRotate ? 'auto-rotating preview'
+      : (maxFps > 0 && maxFps < MIN_FPS_CAP) ? `maxFps ${maxFps} < ${MIN_FPS_CAP}`
+      : null;
+    let qStorage = null;
+    try { qStorage = typeof localStorage !== 'undefined' ? localStorage : null; } catch (e) { qStorage = null; }
+    const qKey = storageKey(gpuName, maxFragU, shadows);
+    const maxLevel = tierInfo.overridden ? levelForTier(tierInfo.tier) : maxLevelFor(tierInfo.compileTier);
+    const levelCtx = { maxLevel, mobile: mobileGpu === true, shadows };
+    const stored = adaptiveOff ? null : loadState(qStorage, qKey, maxLevel);
+    const startLevelIdx = tierInfo.overridden ? maxLevel
+      : (stored && stored.level != null ? stored.level : defaultLevel(mobileGpu === true, maxLevel));
+    const levelFrom = tierInfo.overridden ? '?tier=' : (stored && stored.level != null ? 'stored' : 'default');
+    // The build. At a device's default level this is the pre-adaptive build
+    // exactly (scripts/test-adaptive-quality.mjs compares every uniform tier
+    // x shadows= value against the old formula): the `shadows` opt still
+    // wins ('off' drops every shadow, 'low' the room-shadow lights and 3/4 of
+    // the sun map), 'high' forces room-shadow lights only at the top level
+    // (the old `!capped`), and a mobile GPU starts at mid-lite (PR #54).
+    const startLevel = levelConfig(startLevelIdx, levelCtx);
+    const tier = startLevel.tier;
+    // Pixel ratio: the ramp's hard ceiling is the pixelRatio opt; a mobile GPU
+    // STARTS at 1.5 and climbs past it only on measured headroom. With
+    // adaptation off it keeps PR #54's hard 1.5 cap.
+    const scenePixelRatio = (mobileGpu && adaptiveOff) ? Math.min(pixelRatio, MOBILE_START_RATIO) : pixelRatio;
+    const dprStart = mobileGpu ? Math.min(scenePixelRatio, MOBILE_START_RATIO) : scenePixelRatio;
     if (scenePixelRatio !== pixelRatio) {
       ren.setPixelRatio(scenePixelRatio);
       ren.setSize(W, H);
-    }
-    // Start from the GPU-tier defaults, then let the `shadows` opt override. The
-    // 10 invisible per-room shadow-casting PointLights ('ultra' only) are by far
-    // the biggest GPU cost (each = a 6-face cubemap shadow render every frame) —
-    // 'low' and 'off' both drop them; 'off' also drops the sun shadow.
-    let sunShadow = tier !== 'low';
-    let roomShadowLights = tier === 'ultra';
-    let shadowMapScale = 1;
-    if (shadows === 'off') {
-      sunShadow = false;
-      roomShadowLights = false;
-    } else if (shadows === 'low') {
-      sunShadow = tier !== 'low';
-      roomShadowLights = false;
-      shadowMapScale = 0.25; // 2048 -> 512
-    } else if (shadows === 'high') {
-      // Force the FULL shadow set (sun @2048 + the 10 per-room shadow-casting
-      // lights), overriding the GPU-tier gate — the #3d popup should ALWAYS have
-      // room-shadow lights. Guarded by tier !== 'low': on a sub-512-uniform GPU
-      // the full light+shadow set fails to compile the shader (nothing renders),
-      // so only the very weakest devices degrade instead of breaking.
-      // A mobile GPU capped to mid gets NO room-shadow lights even here:
-      // fill rate, not the shader, is what it cannot afford (b37115bc).
-      // ?tier= lifts the cap, and this with it.
-      sunShadow = tier !== 'low';
-      roomShadowLights = tier !== 'low' && !tierInfo.capped;
-      shadowMapScale = 1;
     }
     const quality = {
       tier,
       maxFragU,
       mobileGpu,
-      // A mobile GPU also skips `priority: "minor"` furniture (as low does).
-      dropMinorFurniture: mobileGpu,
-      sunShadow,
-      roomShadowLights,
+      level: startLevelIdx,
+      levelName: startLevel.name,
+      // mid-lite (a mobile GPU's start) skips `priority: "minor"` furniture.
+      dropMinorFurniture: startLevel.dropMinorFurniture,
+      sunShadow: startLevel.sunShadow,
+      roomShadowLights: startLevel.roomShadowLights,
       ambientStrips:    tier !== 'low',
       // Total cornice downlights (see buildScene). Ultra: uncapped; mid: 12
       // (84 fragment-uniform vectors); low builds none (ambientStrips off).
       corniceLightCap:  tier === 'ultra' ? null : 12,
       // ...and at most this many per cornice below ultra (null: 3 or 5).
       cornicePerCornice: tier === 'ultra' ? null : 2,
-      shadowMapScale,
+      shadowMapScale: startLevel.shadowMapScale,
       // Opt-in bespoke decoration (see the acoustic panels below). Empty by
       // default: a house gets only what its profile describes. The PROFILE is
       // the primary source — decor is per-house data, so a house that owns
@@ -3406,9 +3421,14 @@ export const Home3DScene = (() => {
       console.info(
         `[Home3DScene] Quality tier=${tier} ` +
         `(MAX_FRAGMENT_UNIFORM_VECTORS=${maxFragU}; mobileGpu=${gpu.mobileGpu} [${gpu.reason}]` +
-        `${tierInfo.capped ? '; capped from ' + tierInfo.compileTier : ''}` +
+        // Below what compiles because of the LEVEL this load was built at
+        // (a mobile start, or a measured step down) -- not the GPU class.
+        `${!tierInfo.overridden && tier !== tierInfo.compileTier ? '; capped from ' + tierInfo.compileTier : ''}` +
         `${tierInfo.overridden ? '; ?tier=' + opts.tier : ''}) ` +
         `shadows=${shadows} maxFps=${maxFps || 'uncapped'} pixelRatio<=${scenePixelRatio}. ` +
+        `adaptive=${adaptiveOff ? 'off (' + adaptiveOff + ')' : 'on'} ` +
+        `level=${startLevel.name} (${startLevelIdx}/${maxLevel}, ${levelFrom})` +
+        `${adaptiveOff ? '' : ' dprStart=' + dprStart}. ` +
         `sunShadow=${quality.sunShadow} ` +
         `roomShadowLights=${quality.roomShadowLights} ` +
         `shadowMapScale=${quality.shadowMapScale} ` +
@@ -3791,6 +3811,264 @@ export const Home3DScene = (() => {
       );
     }
 
+    // ── Adaptive quality: the live half (task 230713da) ─────────────────────
+    // With adaptation on, this REPLACES the ramp above (which still runs,
+    // unchanged, when it is off -- ?tier=, the preview, a low fps cap). The
+    // ramp's one jump (RAMP_START -> the start ratio) is now the controller's
+    // first up-decision, and the controller can then keep going: +/- DPR
+    // notches live, and a structural level proposed for the NEXT load.
+    //
+    // THE SIGNAL is the interval between consecutive RENDERED frames, not the
+    // ren.render() call's CPU time the ramp uses. WebGL is asynchronous, so the
+    // CPU time under-reads a fill-bound frame -- exactly how a tablet GPU
+    // fails -- whereas a GPU that cannot keep up stretches the rAF cadence.
+    // A sample only counts when the previous tick rendered too (or was skipped
+    // by the maxFps cap alone): `frameContinuous`, cleared by every early
+    // return below, so an idle gap on this on-demand scene is never a sample.
+    //
+    // PROBES: the scene idles at zero frames, so measuring needs frames. A
+    // probe self-drives rendering (as the ramp did) for at most PROBE_MS,
+    // once after warm-up and once after each DPR step to verify it, and ends
+    // the moment the controller reaches a verdict. Bounded per session by
+    // MAX_PROBES and PROBE_BUDGET_MS. Otherwise the controller only sees
+    // naturally continuous runs (drag tails, fades, doors), so a tablet that
+    // throttles later is still caught without a single forced frame.
+    const PROBE_MS = 4000;
+    const MAX_PROBES = 6;
+    const PROBE_BUDGET_MS = 20000;
+    // In active use, one short probe at most this often, outside the load
+    // budget. Drag frames are drawn at the reduced interaction ratio and so
+    // say nothing about the ceiling; without this, a tablet that heats up
+    // during a long session would only be caught by the odd fade or door
+    // swing. Only after an interaction in the last minute, never while one
+    // is in progress: an untouched scene still costs zero frames.
+    const MAINT_PROBE_EVERY_MS = 180000;
+    const MAINT_PROBE_MS = 2500;
+    const MAINT_ACTIVE_MS = 60000;
+    // After onReady, and again after the furniture attaches: the time-sliced
+    // furniture build and its first frames would read as slow frames.
+    const WARMUP_MS = 900;
+    const RESUME_QUIET_MS = 1000;
+    // A ratio this level failed above on an earlier load (plan r2, M3): the
+    // session starts under it instead of re-trying the failed notch.
+    const storedCap = stored && stored.dprCap && stored.dprCap.level === startLevelIdx &&
+      Date.now() < stored.dprCap.until ? stored.dprCap : null;
+    const adaptive = adaptiveOff ? null : createController({
+      floor: RAMP_START, startRatio: dprStart, maxRatio: basePixelRatio,
+      level: startLevelIdx, ctx: levelCtx, blocked: stored && stored.blocked,
+      dprCap: storedCap ? storedCap.ratio : null,
+      defaultLevel: defaultLevel(mobileGpu === true, maxLevel)
+    });
+    // The cold frames (plan r2, M5): the ren.render() time of the first
+    // rendered frames after onReady and after the furniture attaches -- the
+    // frames that pay the full shadow pass. Counted down per phase.
+    let coldFramesLeft = adaptive ? 5 : 0;
+    // The display's refresh, from rAF tick-to-tick deltas (every tick, drawn
+    // or not), and the cadence the fps cap allows on it (plan r2, M1).
+    const tickDeltas = [];
+    let lastTickTs = 0;
+    let ticksSinceVsync = 0;
+    let lastTickDelta = 0;
+    // Browser-side rAF throttling (see rafThrottle): the deltas of IDLE ticks
+    // only -- consecutive ticks on which the on-demand gate found nothing to
+    // draw -- so our own GPU work can never be what slowed them.
+    const idleDeltas = [];
+    let gateIdleTicks = 0;
+    let throttleNoted = false;
+    // True while frame times cannot be trusted: the browser throttles rAF, or
+    // there is not yet enough idle evidence to know it does not (so a probe
+    // waits for the scene to have idled for a few ticks first).
+    function browserThrottled() {
+      if (idleDeltas.length < 5) return true;
+      const t = rafThrottle(idleDeltas);
+      if (t.throttled !== throttleNoted) {
+        throttleNoted = t.throttled;
+        console.info(t.throttled
+          ? `[Home3DScene] Adaptive quality: paused -- the browser is holding animation frames at ~${t.fps} fps ` +
+            'while the scene is idle (power saving, or a background window), so frame times say nothing about the GPU.'
+          : '[Home3DScene] Adaptive quality: animation frames are no longer throttled; measuring again.');
+        notifyQuality();
+      }
+      return t.throttled;
+    }
+    const UNMEASURED_JUMP_MS = 8000;
+    function jumpUnmeasured() {
+      const d = adaptive && adaptive.jumpToStart();
+      if (!d) return;
+      applyAdaptiveDecision(d, throttleNoted
+        ? 'the browser is throttling frames, so no measurement'
+        : 'no idle frames to judge the browser by, so no measurement');
+      notifyQuality();
+    }
+    let vsyncMs = 0;
+    let cadenceMs = 0;
+    let dprCapState = storedCap;
+    let frameContinuous = false;
+    let prevRenderAt = 0;
+    let warmUntil = 0;            // set once onReady has fired (the loop's first ready tick)
+    let wantProbe = !!adaptive;   // the controller still has something to learn
+    let probeUntil = 0;
+    let probeStartedAt = 0;
+    let probesRun = 0;
+    let probeSpentMs = 0;
+    let probeIsMaint = false;
+    let lastProbeEndAt = 0;
+    let lastInteractAt = 0;
+    let adaptiveSettledLogged = false;
+    let storageWarned = false;
+    const qualityListeners = [];
+
+    function levelName(l) { return l == null ? null : LEVELS[l].name; }
+    // Set by resetQuality(): the rest of this session writes nothing, so a
+    // Re-measure cannot be undone by a decision, a settle or a maintenance
+    // probe that lands afterwards. The next load starts from the default.
+    let qualityForgotten = false;
+    function persistQuality(extra) {
+      if (!adaptive || qualityForgotten) return;
+      const ok = saveState(qStorage, qKey, Object.assign({
+        level: adaptive.pending != null ? adaptive.pending : startLevelIdx,
+        blocked: adaptive.blocked,
+        dprCap: dprCapState
+      }, extra || {}));
+      if (!ok && !storageWarned) {
+        storageWarned = true;
+        console.info('[Home3DScene] Adaptive quality: storage unavailable; adapting for this session only.');
+      }
+    }
+    function qualityStatus() {
+      const pending = adaptive && !qualityForgotten ? adaptive.pending : null;
+      const blocked = adaptive && adaptive.blocked && Date.now() < adaptive.blocked.until ? adaptive.blocked : null;
+      return {
+        adaptive: !!adaptive,
+        reason: adaptiveOff || (throttleNoted ? 'paused: the browser is throttling frames'
+          : wantProbe || probeUntil ? 'measuring' : 'settled'),
+        level: startLevelIdx, levelName: startLevel.name, levelFrom, maxLevel, tier,
+        dpr: ceilingRatio, dprStart: adaptive ? dprStart : null, dprMax: basePixelRatio,
+        dprCap: adaptive && adaptive.sessionMax < basePixelRatio ? adaptive.sessionMax : null,
+        p95: adaptive && Number.isFinite(adaptive.lastP95) ? Math.round(adaptive.lastP95 * 10) / 10 : null,
+        thresholds: adaptive && adaptive.lastThresholds ? {
+          up: Math.round(adaptive.lastThresholds.up * 10) / 10, down: Math.round(adaptive.lastThresholds.down * 10) / 10 } : null,
+        vsyncMs: vsyncMs ? Math.round(vsyncMs * 100) / 100 : null,
+        nextLevel: pending, nextLevelName: levelName(pending),
+        // Levels at or above this are not proposed until `until`.
+        blockedFrom: blocked ? { level: blocked.level, levelName: levelName(blocked.level), until: blocked.until } : null
+      };
+    }
+    function notifyQuality() {
+      const s = qualityStatus();
+      for (let i = 0; i < qualityListeners.length; i++) {
+        try { qualityListeners[i](s); } catch (e) { /* a listener must not break the loop */ }
+      }
+    }
+    function endProbe(now) {
+      if (!probeUntil) return;
+      if (!probeIsMaint) probeSpentMs += now - probeStartedAt;
+      probeIsMaint = false;
+      probeUntil = 0;
+      lastProbeEndAt = now;
+    }
+    // Called from the loop, before the on-demand gate: start or continue a
+    // probe. Returns true while one is running (the loop then keeps drawing).
+    function tickProbe(now, interacting) {
+      if (!adaptive) return false;
+      if (!warmUntil) warmUntil = now + WARMUP_MS;
+      if (interacting) lastInteractAt = now;
+      if (probeUntil) {
+        if (now < probeUntil) return true;
+        endProbe(now);   // deadline: whatever the window holds, background finishes
+        return false;
+      }
+      if (!wantProbe) {
+        // The in-use maintenance probe (see MAINT_PROBE_EVERY_MS).
+        if (interacting || !lastInteractAt || now - lastInteractAt > MAINT_ACTIVE_MS) return false;
+        if (now - Math.max(lastProbeEndAt, warmUntil) < MAINT_PROBE_EVERY_MS) return false;
+        if (browserThrottled()) return false;
+        probeIsMaint = true;
+        probeStartedAt = now;
+        probeUntil = now + MAINT_PROBE_MS;
+        return true;
+      }
+      if (now < warmUntil) return false;
+      if (browserThrottled()) {
+        // Frame times cannot be trusted, so do what the scene did before
+        // adaptive quality: go to the start ratio unmeasured (a throttled
+        // browser, or no idle evidence within UNMEASURED_JUMP_MS). Never
+        // left at the cheap first-paint ratio for the whole session.
+        if (throttleNoted || now - warmUntil > UNMEASURED_JUMP_MS) jumpUnmeasured();
+        return false;
+      }
+      // Furniture still building: its slices and first frames are not the
+      // scene's cost. (Bounded, so a build that never lands cannot stop it.)
+      if (furnitureStarted && !furnitureResult && now - furnitureTimeline.start < 30000) return false;
+      if (probesRun >= MAX_PROBES || probeSpentMs >= PROBE_BUDGET_MS) {
+        wantProbe = false;
+        logAdaptiveSettled();
+        return false;
+      }
+      probesRun++;
+      probeStartedAt = now;
+      probeUntil = now + PROBE_MS;
+      return true;
+    }
+    function logAdaptiveSettled() {
+      if (adaptiveSettledLogged || !adaptive) return;
+      adaptiveSettledLogged = true;
+      const pending = adaptive.pending;
+      const t = adaptive.lastThresholds;
+      console.info(
+        `[Home3DScene] Adaptive quality settled: level=${startLevel.name} DPR ${ceilingRatio}` +
+        `${Number.isFinite(adaptive.lastP95) ? ' p95 ' + adaptive.lastP95.toFixed(1) + ' ms' : ' (no measurement)'}` +
+        `${t ? ' (up < ' + t.up.toFixed(1) + ', down > ' + t.down.toFixed(1) + ' ms)' : ''}` +
+        `${pending != null ? '; next load: ' + levelName(pending) : '; next load: same'}` +
+        ` (${probesRun} probe${probesRun === 1 ? '' : 's'}, ${Math.round(probeSpentMs)} ms).`
+      );
+      persistQuality({ settled: { level: startLevelIdx, dpr: ceilingRatio,
+        p95: Number.isFinite(adaptive.lastP95) ? Math.round(adaptive.lastP95 * 10) / 10 : null, at: Date.now() } });
+      notifyQuality();
+    }
+    // Apply and report one controller decision (a verdict's, or a cold frame's).
+    function applyAdaptiveDecision(d, why) {
+      if (d.to != null) { ceilingRatio = d.to; needsRender = true; }
+      if (d.cap != null) dprCapState = { level: startLevelIdx, ratio: d.cap, until: Date.now() + BLOCK_MS };
+      const bits = [];
+      if (d.to != null) bits.push(`DPR ${d.to}`);
+      if (d.revoke) bits.push('next-load step up withdrawn');
+      if (d.proposeLevel != null) bits.push(`next load: ${levelName(d.proposeLevel)}`);
+      if (d.block) bits.push(`${levelName(d.block.level)} and above blocked for 7 days`);
+      console.info(`[Home3DScene] Adaptive quality: ${why} at DPR ${d.from} (level ${startLevel.name}) -> ${bits.join('; ')}.`);
+      if (d.proposeLevel != null || d.revoke || d.block || d.cap != null) persistQuality();
+      // A step down after "settled" re-opens the record of where it settled.
+      if (d.kind === 'down') adaptiveSettledLogged = false;
+    }
+    function onAdaptiveVerdict(r, now) {
+      const d = r.decision;
+      if (d) {
+        const t = r.thresholds;
+        applyAdaptiveDecision(d, `p95 ${r.p95.toFixed(1)} ms over ${r.samples} frames, ` +
+          (d.kind === 'up' ? `headroom (< ${t.up.toFixed(1)} ms)` : `too slow (> ${t.down.toFixed(1)} ms)`) +
+          `, sustained`);
+      }
+      if (r.verdict !== 'pending') {
+        endProbe(now);
+        // Verify a DPR step with one more probe; anything else is an answer.
+        wantProbe = !!(d && d.to != null);
+        if (!wantProbe) logAdaptiveSettled();
+      }
+      notifyQuality();
+    }
+    // The first frames of a load pay the full shadow pass (and any compile
+    // the precompile missed). The rolling p95 excludes them by design, so they
+    // are judged on their own: see coldFrame() in src/adaptive-quality.js.
+    function sampleColdFrame(renderMs) {
+      if (!adaptive || coldFramesLeft <= 0) return;
+      coldFramesLeft--;
+      const d = adaptive.coldFrame(renderMs, Date.now());
+      if (!d) return;
+      coldFramesLeft = 0;
+      applyAdaptiveDecision(d, `a cold frame blocked ${Math.round(renderMs)} ms (> ${COLD_FRAME_MS} ms)`);
+      notifyQuality();
+    }
+
     // ── Shader precompile, off the critical path ───────────────────────────
     // three.js builds a program the first time a material is drawn, and the
     // driver finishes the link lazily -- the stall surfaces later, when three
@@ -3974,6 +4252,13 @@ export const Home3DScene = (() => {
         const stop = startLiveClock(dyn.group, { onTick: () => requestRender() });
         liveClockStops.set(itemId, stop);
       });
+      // Adaptive quality: the attach frame repaints every shadow map with the
+      // new casters (a cold frame worth judging), and the frames around the
+      // attach are not the steady cost -- go quiet before sampling again.
+      if (adaptive) {
+        coldFramesLeft = Math.max(coldFramesLeft, 3);
+        adaptive.quiet(furnitureTimeline.attachedAt, WARMUP_MS);
+      }
       // MOVES GEOMETRY (new casters) -> shadows must refresh once.
       invalidateShadows();
       requestRender();
@@ -4384,6 +4669,12 @@ export const Home3DScene = (() => {
       const p = _hidden || _inactive;
       if (p === paused) return;
       paused = p;
+      // Adaptive quality: a hidden or inactive scene measures nothing. Drop
+      // any probe (its budget spent so far still counts) and go quiet on
+      // resume, so the resume gap and its first frames are never samples.
+      frameContinuous = false;
+      if (paused) endProbe(performance.now());
+      else if (adaptive) adaptive.quiet(performance.now(), RESUME_QUIET_MS);
       if (!paused) { lastRender = performance.now(); needsRender = true; } // repaint on resume
     }
 
@@ -4420,9 +4711,28 @@ export const Home3DScene = (() => {
     let autoAngle = 0;
     const minFrameMs = maxFps > 0 ? (1000 / maxFps) - 1 : 0;
     let lastRender = performance.now();
-    (function loop() {
+    let lastRenderTs = 0;          // rAF timestamp of the last drawn frame (the fps cap)
+    (function loop(rafTs) {
       animId = requestAnimationFrame(loop);
-      if (paused) return;
+      // The rAF timestamp (vsync-aligned) times the fps cap and the adaptive
+      // samples; performance.now() at callback start jitters by up to a
+      // millisecond, which is the whole slack in the 60 fps cap's gate.
+      const tickTs = typeof rafTs === 'number' ? rafTs : performance.now();
+      if (adaptive) {
+        // Every tick, drawn or not: the display's refresh (see estimateVsync).
+        lastTickDelta = lastTickTs ? tickTs - lastTickTs : 0;
+        if (lastTickTs) {
+          tickDeltas.push(tickTs - lastTickTs);
+          if (tickDeltas.length > 240) tickDeltas.shift();
+          if (++ticksSinceVsync >= 30) {
+            ticksSinceVsync = 0;
+            vsyncMs = estimateVsync(tickDeltas, vsyncMs);
+            cadenceMs = capCadence(minFrameMs, vsyncMs);
+          }
+        }
+        lastTickTs = tickTs;
+      }
+      if (paused) { frameContinuous = false; gateIdleTicks = 0; return; }
       // First-frame gate: draw NOTHING until the shader precompile above has
       // settled (readyFired is set on every path: success, failure, and no
       // compileAsync at all). Drawing earlier defeats the precompile outright:
@@ -4433,9 +4743,17 @@ export const Home3DScene = (() => {
       // doing the same work off the main thread in parallel. The loading
       // overlay covers the canvas until onReady, so the frames skipped here
       // were never visible anyway; they only froze the page.
-      if (!readyFired) return;
+      if (!readyFired) {
+        // Nothing is drawn before onReady, so these ticks are idle evidence too.
+        frameContinuous = false;
+        if (adaptive && ++gateIdleTicks >= 3 && lastTickDelta > 0) {
+          idleDeltas.push(lastTickDelta);
+          if (idleDeltas.length > 20) idleDeltas.shift();
+        }
+        return;
+      }
       const frameNow = performance.now();
-      if (minFrameMs && (frameNow - lastRender) < minFrameMs) return;
+      if (minFrameMs && (tickTs - lastRenderTs) < minFrameMs) { gateIdleTicks = 0; return; }
 
       // On-demand gate: a non-auto-rotating scene (the #3d popup) renders only
       // while the user is interacting (drag, or the short tail after a wheel/
@@ -4461,7 +4779,19 @@ export const Home3DScene = (() => {
       // anything, so the gate below then lets that repaint through.
       applyPixelRatio(resolvePixelRatio(interacting));
 
-      if (!autoRotate && !needsRender && !interacting && !transitionsActive) return;
+      // An adaptive-quality probe keeps the frames coming while it measures.
+      if (tickProbe(frameNow, interacting)) needsRender = true;
+
+      if (!autoRotate && !needsRender && !interacting && !transitionsActive) {
+        // Idle: the next drawn frame's gap is idleness, not cost.
+        frameContinuous = false;
+        if (adaptive && ++gateIdleTicks >= 3 && lastTickDelta > 0) {
+          idleDeltas.push(lastTickDelta);
+          if (idleDeltas.length > 20) idleDeltas.shift();
+        }
+        return;
+      }
+      gateIdleTicks = 0;
 
       // Seconds since last rendered frame, clamped so a long idle/pause doesn't jump
       const dt = Math.min((frameNow - lastRender) / 1000, 0.1);
@@ -4563,7 +4893,21 @@ export const Home3DScene = (() => {
       const renderT0 = performance.now();
       ren.render(scene, cam);
       framesRendered++;
-      sampleRampFrame(frameNow, performance.now() - renderT0, interacting);
+      const renderMs = performance.now() - renderT0;
+      if (adaptive) {
+        // The CPU time of the call, or -- for a GPU-bound shadow pass, which the
+        // call does not wait for -- the gap it left before this frame.
+        sampleColdFrame(Math.max(renderMs, frameContinuous && prevRenderAt ? tickTs - prevRenderAt : 0));
+        if (prevRenderAt && !browserThrottled()) {
+          const r = adaptive.feed({ ms: tickTs - prevRenderAt, now: frameNow, continuous: frameContinuous, lowered: appliedRatio < ceilingRatio - RATIO_EPSILON, cadence: cadenceMs, vsync: vsyncMs, wall: Date.now() });
+          if (r) onAdaptiveVerdict(r, frameNow);
+        }
+        prevRenderAt = tickTs;
+        frameContinuous = true;
+      } else {
+        sampleRampFrame(frameNow, renderMs, interacting);
+      }
+      lastRenderTs = tickTs;
 
       // Notify onRender subscribers (compass overlay etc.) after the frame is
       // drawn, so screen-space overlays can track the current camera. Guarded
@@ -4897,6 +5241,31 @@ export const Home3DScene = (() => {
       },
       // Frames drawn since construction. Monotonic, and flat while idle.
       getFrameCount() { return framesRendered; },
+      // Adaptive quality (task 230713da): where this device is and why.
+      // { adaptive, reason ('measuring'|'settled'|why it is off), level,
+      //   levelName, levelFrom ('default'|'stored'|'?tier='), maxLevel, tier,
+      //   dpr, dprStart, dprMax, dprCap, p95, thresholds, vsyncMs,
+      //   nextLevel, nextLevelName, blockedFrom }
+      getQualityStatus() { return qualityStatus(); },
+      // fn(status) on every adaptive decision or settle. Returns an unsubscribe.
+      onQualityChange(fn) {
+        if (typeof fn !== 'function') return () => {};
+        qualityListeners.push(fn);
+        return () => { const i = qualityListeners.indexOf(fn); if (i !== -1) qualityListeners.splice(i, 1); };
+      },
+      // Forget this device's measurements (Settings "Re-measure"): the next
+      // load starts from the default level again. This load is unchanged.
+      // With adaptation off (?tier=, preview, a low fps cap) it touches
+      // nothing and returns false: ?tier= must never read or write storage.
+      resetQuality() {
+        if (!adaptive) return false;
+        qualityForgotten = true;
+        adaptive.forget();          // drop the pending proposal and any block
+        dprCapState = null;
+        const ok = clearState(qStorage, qKey);
+        console.info('[Home3DScene] Adaptive quality: measurements cleared; the next load starts from the default level.');
+        return ok;
+      },
       // What the exterior-fade loop is ACTUALLY doing, per outer wall. Same
       // reasoning as getFootstepDebug below: preserveDrawingBuffer is false, so
       // a screenshot reads the canvas back as a single flat colour and a pixel

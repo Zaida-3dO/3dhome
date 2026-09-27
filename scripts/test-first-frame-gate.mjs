@@ -41,11 +41,14 @@ function check(name, ok, detail) {
 
 // 1. The loop draws nothing until the precompile has settled.
 {
-  const start = code.indexOf('(function loop() {');
+  // `loop(rafTs)` since task 230713da (the rAF timestamp times the fps cap).
+  const start = code.search(/\(function loop\((rafTs)?\) \{/);
   const render = code.indexOf('ren.render(scene, cam);', start);
   const body = start >= 0 && render > start ? code.slice(start, render) : '';
   check('render loop found', body.length > 0);
-  const gate = body.search(/if\s*\(\s*!readyFired\s*\)\s*return\s*;/);
+  // Either `if (!readyFired) return;` or a block that ends in `return;`
+  // (adaptive quality counts these idle ticks first, task 230713da).
+  const gate = body.search(/if\s*\(\s*!readyFired\s*\)\s*(return\s*;|\{[^{}]*(\{[^{}]*\}[^{}]*)*return\s*;\s*\})/);
   check('loop returns early while !readyFired, before ren.render()', gate >= 0);
   const firstRequest = body.search(/requestAnimationFrame\(loop\)/);
   check('...and after re-arming requestAnimationFrame (the loop must keep ticking)',
