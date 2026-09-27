@@ -415,9 +415,9 @@
         ],
         "thickness": 10.0,
         "finishes": [
-          { "finish": "tile", "room": "bathroom", "along": [540, 700] }
+          { "finish": "tile", "room": "bathroom", "along": [540, 700], "look": { "relief": 5, "roughness": 0.35 } }
         ],
-        "notes": "Store / bathroom divider. Bathroom side tiled full height over the shower corner only (a span)."
+        "notes": "Store / bathroom divider. Bathroom side tiled full height over the shower corner only (a span), in the embossed wet-area tile (a look)."
       },
       {
         "id": 14,

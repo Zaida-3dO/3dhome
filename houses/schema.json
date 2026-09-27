@@ -345,7 +345,7 @@
             "brick",
             "tile"
           ],
-          "description": "`brick`: the running-bond buff brick the WindowSpec and BalconyWindowSpec pages draw on the outer leaf (UK 215 x 65 mm brick, 10 mm joint). `tile`: a PLACEHOLDER 15 cm square off-white tile, pending the real bathroom tile look."
+          "description": "`brick`: the running-bond buff brick the WindowSpec and BalconyWindowSpec pages draw on the outer leaf (UK 215 x 65 mm brick, 10 mm joint). `tile`: the bathroom spec pages' tile -- a 40 x 25 cm landscape tile in a 0.4 cm grout joint, greige face, darker grout, flat by default; `look` changes any of that."
         },
         "side": {
           "type": "string",
@@ -380,6 +380,49 @@
           "minItems": 2,
           "maxItems": 2,
           "description": "[start, end]: the span of the wall to finish, in plan cm on the wall's long axis (x for an east-west wall, y for a north-south one) -- the same convention as `door.centre`. Omit to finish the whole length. Needs an axis-aligned wall; ignored on an end face."
+        },
+        "look": {
+          "type": "object",
+          "title": "How a tile finish looks",
+          "description": "Tile only (ignored, with a warning, on brick). Every property is optional and defaults to the bathroom spec pages' flat tile. A bad value is warned about and falls back to its default; the tile is still drawn.",
+          "properties": {
+            "size": {
+              "type": "array",
+              "items": { "type": "number", "minimum": 1, "maximum": 500 },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "[width, height] of one tile in cm, grout included (the pitch). Default [40, 25]."
+            },
+            "grout": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 10,
+              "description": "The joint between tiles, cm. Default 0.4. 0 = butt-jointed."
+            },
+            "colour": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "description": "The tile face. Default #cdc2b1."
+            },
+            "groutColour": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "description": "The joint. Default #a89c87."
+            },
+            "relief": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 500,
+              "description": "0 (default) = a flat tile. Otherwise each tile's face is embossed with a grid of squares about this many cm across, each its own shade, with a faint highlight between them (not grout) -- 5 on a 40 x 25 tile is the spec's 8 x 5 wet-area tile."
+            },
+            "roughness": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "The material's roughness. Default 0.55; the spec's wet-area tile is 0.35."
+            }
+          },
+          "additionalProperties": false
         },
         "reveals": {
           "type": "boolean",

@@ -33,7 +33,7 @@ import {
 import { startLiveClock } from './furniture/wall-clock.js';
 import {
   FINISH_TYPES, makeFinishTexture, alongToMetres, finishRectOnBox, createFinishBatch, addLongFace,
-  addCrossFace, buildFinishGeometry, revealEnds
+  addCrossFace, buildFinishGeometry, revealEnds, finishKey
 } from './wall-finish.js';
 
 export const Home3DScene = (() => {
@@ -1284,33 +1284,35 @@ export const Home3DScene = (() => {
     // mesh (quads 1.5 mm proud of the painted boxes), so a finish costs one
     // draw per wall however many boxes the wall is split into, and the boxes
     // keep their single material. One texture and one material template per
-    // finish type per scene, created on first use so a house with no finishes
-    // allocates nothing; each wall's mesh clones the template so it can fade
-    // on its own. The tint lives in the map, so `color` stays white (the
-    // material.color x map multiply trap, LEARNINGS #57). Every tier gets
-    // them: the canvases are 384 x 96 and 128 x 128 px, below any mobile
-    // texture budget, and a brick house drawn plain on a phone would be a
-    // different house rather than a cheaper one.
+    // finish LOOK (finishKey: the name, plus a tile's look) per scene, created
+    // on first use so a house with no finishes allocates nothing; each wall's
+    // mesh clones the template so it can fade on its own. The tint lives in
+    // the map, so `color` stays white (the material.color x map multiply
+    // trap, LEARNINGS #57). Every tier gets them: the canvases are 384 x 96
+    // (brick) and 256 x 160 (the default tile; never over 512 a side) px,
+    // below any mobile texture budget, and a brick house drawn plain on a
+    // phone would be a different house rather than a cheaper one.
     const _finishTextures = {};
     const _finishTemplates = {};
-    function finishMaterial(name, isOuter) {
-      if (!_finishTemplates[name]) {
-        const map = _finishTextures[name] || (_finishTextures[name] = makeFinishTexture(THREE, name));
-        _finishTemplates[name] = new THREE.MeshStandardMaterial({
-          color: 0xffffff, roughness: FINISH_TYPES[name].roughness, map: map,
+    function finishMaterial(name, look, isOuter) {
+      const fk = finishKey(name, look);
+      if (!_finishTemplates[fk]) {
+        const map = _finishTextures[fk] || (_finishTextures[fk] = makeFinishTexture(THREE, name, null, look));
+        _finishTemplates[fk] = new THREE.MeshStandardMaterial({
+          color: 0xffffff, roughness: FINISH_TYPES[name].roughness(look), map: map,
           // Seen from its own face only, and pulled toward the camera in
           // depth so it never z-fights the painted face 1.5 mm behind it.
           side: THREE.FrontSide,
           polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2
         });
       }
-      const m = _finishTemplates[name].clone();
+      const m = _finishTemplates[fk].clone();
       m.userData.finish = name;
       m.transparent = !!isOuter;
       m.opacity = 1;
       return m;
     }
-    // wall id + finish -> { batch, wallId, finish, outer }. Built into meshes
+    // wall id + finish key -> { batch, wallId, finish, look, outer }. Built into meshes
     // after the wall loop; they join the fade after the outward derivation.
     const finishBatches = new Map();
     const finishMeshes = [];   // { mesh, wallId }
@@ -1362,9 +1364,9 @@ export const Home3DScene = (() => {
       // (world m), decided once per wall so every pier/cill/lintel box agrees.
       const frame = { wx1, wz1, ux: dx / len, uz: dz / len, T: wallWidthM };
       const wallFinishes = (finishes || []).map(f => {
-        const key = id + '|' + f.finish;
+        const key = id + '|' + finishKey(f.finish, f.look);
         if (!finishBatches.has(key)) {
-          finishBatches.set(key, { batch: createFinishBatch(), wallId: id, finish: f.finish, outer: !!outer });
+          finishBatches.set(key, { batch: createFinishBatch(), wallId: id, finish: f.finish, look: f.look, outer: !!outer });
         }
         return {
           finish: f.finish, normal: f.normal, face: f.face, reveals: !!f.reveals,
@@ -1499,10 +1501,10 @@ export const Home3DScene = (() => {
 
     // One mesh per wall per finish (see WALL FINISHES above): a single draw,
     // no shadow cast (the painted box behind it already casts that shadow).
-    finishBatches.forEach(({ batch, wallId, finish, outer }) => {
+    finishBatches.forEach(({ batch, wallId, finish, look, outer }) => {
       const geo = buildFinishGeometry(THREE, batch);
       if (!geo) return;
-      const mesh = new THREE.Mesh(geo, finishMaterial(finish, outer));
+      const mesh = new THREE.Mesh(geo, finishMaterial(finish, look, outer));
       mesh.receiveShadow = true;
       mesh.castShadow = false;
       mesh.name = 'wall-finish:' + wallId + ':' + finish;

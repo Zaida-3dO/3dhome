@@ -308,7 +308,8 @@ def check_wall_finishes(geo, room_ids, report):
     along pair); this checks what it cannot: the declared version, that a
     `room` exists, that `to` is above `from`, that `along` lies on the wall
     (and is not given for an END face), and that a finish does not land on
-    the face the wall's wallpaper (`faceTexture`) is on.
+    the face the wall's wallpaper (`faceTexture`) is on, and that a `look` is
+    on a tile (and its grout fits the tile).
     Which face a `room` finish lands on is probed by the engine (the same
     probe windows use); see src/house-loader.js compileWallFinishes.
     """
@@ -343,6 +344,12 @@ def check_wall_finishes(geo, room_ids, report):
                 report.warn(where, "`along` does not apply to an end face -- ignored")
             if room is not None and room not in room_ids:
                 report.error(where, f"room '{room}' is not a room in this profile")
+            look = f.get("look")
+            if look is not None and f.get("finish") != "tile":
+                report.warn(where, f"`look` applies to a tile finish only -- ignored on {f.get('finish')}")
+            elif isinstance(look, dict) and isinstance(look.get("size"), list) and len(look["size"]) == 2                     and isinstance(look.get("grout"), (int, float))                     and all(isinstance(v, (int, float)) for v in look["size"])                     and not look["grout"] < min(look["size"]) / 2:
+                report.warn(where, f"look.grout {look['grout']} is not under half the tile {look['size']} -- "
+                                   "the engine falls back to the default joint")
             lo_h, hi_h = f.get("from"), f.get("to")
             if lo_h is not None and hi_h is not None and not hi_h > lo_h:
                 report.error(where, f"`to` ({hi_h}) must be above `from` ({lo_h})")
