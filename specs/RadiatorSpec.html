@@ -60,65 +60,57 @@
 
 <script type="text/babel">
 /* =====================================================================
-   RADIATOR SPEC   ·   one design for EVERY house radiator — a modern white
-   panel radiator (horizontal convector fins, wall brackets bridging the
-   wall gap, pipe tails to the floor) with a smart TRV valve on one of the
-   four corners and the lockshield diagonally opposite it.
+   RADIATOR SPEC   ·   one design for EVERY house radiator — a white compact
+   panel radiator with VERTICAL ribs across the front, a slotted top grille
+   and closed end caps, a smart thermostatic valve on the END of the radiator
+   at a chosen corner, a lockshield at the bottom of the other end, and pipes
+   dropping from both. Optional cover: a clip-on wooden shelf with a raised
+   front lip, or a framed slatted box with dark gaps behind the slats.
 
-   ── DEFAULTS ARE THE STANDARD HOUSE RADIATOR ────────────────────────────
-   width/height/depth ALWAYS describe the OUTER ENVELOPE — including any
-   cover — because the house validator and the live-scene placer both read
-   these three params directly, with no idea a body/cover split exists: 80 x
-   60, thickness 10, depth 12 (a 2cm wall gap, derived as bodyDepth -
-   thickness), no cover. Other rooms vary (remodel.sh3d: living room 95cm,
-   bedroom 95cm; a hallway radiator is often SMALLER than its slatted cover)
-   — drive those from this Tweaks panel per room, not by editing the
-   module's defaults. An optional cover ('shelf' or 'box', a full slatted
-   enclosure) can sit inside the envelope; the RADIATOR BODY's own size is
-   the independent, optional bodyWidth/bodyHeight/bodyDepth, defaulting to a
-   snug fit against the envelope (== no cover) and clamped DOWN if given
-   bigger than the envelope.
-   ────────────────────────────────────────────────────────────────────────
+   ── WIDTH/HEIGHT/DEPTH ARE THE WHOLE OUTER ENVELOPE ─────────────────────
+   The house validator and the live-scene placer read these three params with
+   no idea a body/valve/cover split exists, so they cover EVERYTHING: the
+   body, the room both end valves need (18 cm together), any shelf overrun,
+   the box. The default 98 x 60 x 12 envelope holds the standard 80 x 60
+   body. The body's own size is bodyWidth/bodyHeight/bodyDepth (optional,
+   snug by default, clamped inside any cover); bodyElevation lifts it inside
+   the envelope (the floor-standing hallway box).
 
-   The geometry builder itself lives in src/furniture/radiator.js (a plain,
-   pure ESM function, `build(THREE, params, opts)` / `buildRadiator` alias,
-   following the shared src/furniture/* contract) so the furniture placer
-   (item 78f2b614) imports the exact same module this page tweaks. That
-   module's own frame puts y=0 at the radiator's BOTTOM (not the floor).
-   `elevation` is deliberately NOT a `params` field or a DEFAULTS key (fixed
-   per item 2bc314c9: an earlier `params.elevation` was dead — nothing in
-   the loader/placer/validator ever read it) — a real placement sets the
-   furniture ITEM's own top-level `elevation` field instead. The Elevation
-   slider on this page is a SPEC-PAGE-ONLY preview control: it plays the
-   placer role for this page's own 3D preview (adding `t.elevation` when it
-   positions the built group), and "Copy as furniture JSON" correctly never
-   emits it, since it is not a key of the module's own DEFAULTS. This file
-   is the tweakable harness around the module: the Tweaks panel, the 2x2
-   corner-picker diagram, the numbers table, and the "Copy as furniture
-   JSON" button.
+   The geometry builder lives in src/furniture/radiator.js (a pure ESM
+   `build(THREE, params, opts)`, following the shared src/furniture/*
+   contract), so the furniture placer imports the exact module this page
+   tweaks. Its frame puts y=0 at the item's BOTTOM. `elevation` is NOT a
+   params field (item 2bc314c9): a real placement sets the furniture ITEM's
+   own top-level `elevation`. The Elevation slider here is a SPEC-PAGE-ONLY
+   preview control that plays the placer role, and "Copy as furniture JSON"
+   never emits it. Each preset carries the item elevation it is placed at,
+   and applying a preset sets the slider to it.
 
    Harness: tweaks-panel.jsx (controls) + spec-three.jsx (ThreeView).
    ===================================================================== */
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "width": 80,
+  "width": 98,
   "height": 60,
   "depth": 12,
   "thickness": 10,
   "elevation": 17,
   "valveCorner": "bottom-right",
-  "color": "#f2f2ef",
+  "color": "#f4f4f1",
   "cover": "none",
-  "coverColor": "#c8a878",
+  "coverColor": "#d9b27a",
   "bodyWidth": 80,
   "bodyHeight": 60,
-  "bodyDepth": 12
+  "bodyDepth": 12,
+  "bodyElevation": 0,
+  "shelfExtendLeft": 0,
+  "shelfExtendRight": 0
 }/*EDITMODE-END*/;
 
 const CM = 0.01;
 const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 const CORNER_LABEL = { 'top-left': 'Top left', 'top-right': 'Top right', 'bottom-left': 'Bottom left', 'bottom-right': 'Bottom right' };
 const COVERS = ['none', 'shelf', 'box'];
-const COVER_LABEL = { none: 'None', shelf: 'Shelf', box: 'Full slatted cover' };
+const COVER_LABEL = { none: 'None', shelf: 'Clip-on shelf', box: 'Framed slatted box' };
 
 // ============== 2x2 corner picker — a clickable diagram, not a dropdown =====
 // Grid order top-left, top-right, bottom-left, bottom-right (CSS grid reads
@@ -141,147 +133,102 @@ function CornerPicker({ value, onChange }) {
   );
 }
 
-// ============== Front-elevation SVG (wall-facing view) ======================
+// ============== Front elevation SVG (looking at the wall) ===================
+// Drawn from the module's own layout() -- the same numbers build() uses -- so
+// the diagram and the 3D view can never disagree about where anything is.
 function FrontElevation({ t }) {
   const ref = React.useRef(null);
   React.useEffect(() => {
     const svg = ref.current;
-    if (!svg) return;
+    if (!svg || !window.FurnitureRadiator) return;
     svg.innerHTML = '';
     const ns = 'http://www.w3.org/2000/svg';
     const W = 400, H = 300;
     svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-
-    // width/height are ALWAYS the outer envelope (the cover's, if present).
-    // The body diagram is drawn separately, inset, whenever a cover exists.
-    const width = t.width, height = t.height;
-    const bodyEnv = window.FurnitureRadiator ? window.FurnitureRadiator.bodyEnvelope(t) : { width: t.width, height: t.height, depth: t.depth };
-    const hasCover = t.cover !== 'none';
+    const L = window.FurnitureRadiator.layout(t);
+    const b = L.body;
     const margin = 40;
-    const SCALE = Math.min((W - 2 * margin) / width, (H - 2 * margin - 30) / height);
-    const midX = W / 2;
-    const baseY = H - 40; // floor line
+    const SCALE = Math.min((W - 2 * margin) / L.W, (H - 2 * margin - 30) / (L.H + t.elevation));
+    const midX = W / 2, baseY = H - 40;
+    const px = x => midX + x * SCALE;
+    const py = y => baseY - (t.elevation + y) * SCALE; // local y, lifted by the preview elevation
 
-    const px = (x_cm) => midX + x_cm * SCALE;
-    const py = (y_cm) => baseY - y_cm * SCALE; // y grows upward
+    const el = (tag, attrs) => {
+      const e = document.createElementNS(ns, tag);
+      Object.keys(attrs).forEach(k => e.setAttribute(k, attrs[k]));
+      svg.appendChild(e);
+      return e;
+    };
+    const rect = (x0, y0, x1, y1, fill, stroke, sw) => el('rect', {
+      x: px(Math.min(x0, x1)), y: py(Math.max(y0, y1)), width: Math.abs(x1 - x0) * SCALE, height: Math.abs(y1 - y0) * SCALE,
+      fill: fill || 'none', stroke: stroke || 'none', 'stroke-width': sw || 1 });
+    const line = (x1, y1, x2, y2, stroke, w) => el('line', { x1, y1, x2, y2, stroke, 'stroke-width': w || 1 });
+    const txt = (x, y, s, o = {}) => { const e = el('text', { x, y, 'font-size': o.size || 10, fill: o.color || '#444', 'text-anchor': o.anchor || 'start' }); e.textContent = s; };
 
-    function rect(x1, y1, x2, y2, opts = {}) {
-      const r = document.createElementNS(ns, 'rect');
-      r.setAttribute('x', Math.min(x1, x2)); r.setAttribute('y', Math.min(y1, y2));
-      r.setAttribute('width', Math.abs(x2 - x1)); r.setAttribute('height', Math.abs(y2 - y1));
-      r.setAttribute('fill', opts.fill || 'none');
-      r.setAttribute('stroke', opts.stroke || '#333');
-      r.setAttribute('stroke-width', opts.sw || 1.5);
-      if (opts.rx) r.setAttribute('rx', opts.rx);
-      svg.appendChild(r);
-    }
-    function line(x1, y1, x2, y2, stroke, w = 1.5) {
-      const l = document.createElementNS(ns, 'line');
-      l.setAttribute('x1', x1); l.setAttribute('y1', y1);
-      l.setAttribute('x2', x2); l.setAttribute('y2', y2);
-      l.setAttribute('stroke', stroke); l.setAttribute('stroke-width', w);
-      svg.appendChild(l);
-    }
-    function circle(cx, cy, r, opts = {}) {
-      const c = document.createElementNS(ns, 'circle');
-      c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', r);
-      c.setAttribute('fill', opts.fill || '#888');
-      c.setAttribute('stroke', opts.stroke || '#333');
-      c.setAttribute('stroke-width', opts.sw || 1);
-      svg.appendChild(c);
-    }
-    function txt(x, y, s, o = {}) {
-      const tt = document.createElementNS(ns, 'text');
-      tt.setAttribute('x', x); tt.setAttribute('y', y);
-      tt.setAttribute('font-size', o.size || '10'); tt.setAttribute('fill', o.color || '#444');
-      if (o.anchor) tt.setAttribute('text-anchor', o.anchor);
-      tt.textContent = s; svg.appendChild(tt);
-    }
-
-    // floor line
     line(margin - 10, baseY, W - margin + 10, baseY, '#a89c80', 3);
-    txt(margin - 10, baseY + 14, 'floor', { color: '#a89c80', size: '9' });
+    txt(margin - 10, baseY + 14, 'floor', { color: '#a89c80', size: 9 });
 
-    // COVER (the outer envelope) — drawn first, behind the body, whenever
-    // a cover is present. width/height are ALWAYS the envelope, so this is
-    // simply the full rect at t.elevation..t.elevation+height.
-    const ex1 = px(-width / 2), ex2 = px(width / 2);
-    const ey1 = py(t.elevation), ey2 = py(t.elevation + height);
-    if (hasCover) {
-      // Match the 3D builder's own default exactly: a 'box' enclosure is
-      // WHITE unless coverColor was explicitly moved away from the shelf
-      // default (#c8a878) — a 'shelf' (open-sided, no enclosure) keeps the
-      // page's neutral card background so it doesn't read as a solid box.
-      const DEFAULT_COVER_COLOR = '#c8a878';
-      const boxFill = (t.coverColor && t.coverColor !== DEFAULT_COVER_COLOR) ? t.coverColor : '#ffffff';
-      const coverFill = t.cover === 'box' ? boxFill : '#f4f1ec';
-      const coverStroke = t.cover === 'box' ? '#999' : '#8a6a1a';
-      rect(ex1, ey1, ex2, ey2, { fill: coverFill, stroke: coverStroke, sw: 1.5, rx: 3 });
-      // vertical slats for a 'box' cover, so the diagram reads as an
-      // enclosure rather than a plain rectangle.
-      if (t.cover === 'box') {
-        const slatCount = Math.max(6, Math.round(width / 6));
-        for (let i = 1; i < slatCount; i++) {
-          const sx = ex1 + ((ex2 - ex1) * i) / slatCount;
-          line(sx, ey1 + 4, sx, ey2 - 4, '#ddd', 1);
-        }
+    // the envelope, dashed: what the placer and the validator see
+    el('rect', { x: px(-L.W / 2), y: py(L.H), width: L.W * SCALE, height: L.H * SCALE,
+      fill: 'none', stroke: '#b9b1a0', 'stroke-width': 1, 'stroke-dasharray': '4 3' });
+
+    const bodyFill = t.color || '#f4f4f1';
+    if (L.cover !== 'box') {
+      // pipes, then valves, then the body with its vertical ribs
+      const pipe = (x, y) => rect(x - 0.75, 0, x + 0.75, y, '#f7f7f5', '#999', 0.8);
+      const trvLeft = L.valveSide === 'left';
+      const trvEnd = trvLeft ? b.x0 : b.x1, lsEnd = trvLeft ? b.x1 : b.x0, d1 = trvLeft ? -1 : 1;
+      pipe(trvEnd + d1 * 1, L.trvY);
+      pipe(lsEnd - d1 * 1, L.lockshieldY);
+      rect(trvEnd, L.trvY - 1.1, trvEnd + d1 * 2.5, L.trvY + 1.1, '#c9ccd0', '#888', 0.8);
+      rect(trvEnd + d1 * 2.5, L.trvY - 2.95, trvEnd + d1 * 12, L.trvY + 2.95, '#ffffff', '#8a6a1a', 1.2);
+      rect(lsEnd, L.lockshieldY - 0.9, lsEnd - d1 * 1.9, L.lockshieldY + 0.9, '#c9ccd0', '#888', 0.8);
+      rect(lsEnd - d1 * 1.9, L.lockshieldY - 1.5, lsEnd - d1 * 5.9, L.lockshieldY + 1.5, '#ffffff', '#888', 1);
+      rect(b.x0, b.y0, b.x1, b.y1, bodyFill, '#333', 1.5);
+      const ribs = Math.min(24, Math.round((b.width - 1.6) / 5));
+      for (let i = 0; i <= ribs; i++) {
+        const x = b.x0 + 0.8 + ((b.width - 1.6) * i) / Math.max(1, ribs);
+        line(px(x), py(b.y0 + 1), px(x), py(b.y1 - 1), '#c8c8c4', 1);
       }
-      // the shelf top + fascia lip, ~2cm below the cover's own top edge —
-      // the shelf/fascia itself is always the (default oak) coverColor,
-      // regardless of the box enclosure's own colour.
-      const shelfLineY = py(t.elevation + height - 2);
-      line(ex1, shelfLineY, ex2, shelfLineY, '#8a6a1a', 1);
-      txt(ex2 + 4, (ey1 + shelfLineY) / 2, 'cover', { size: '8', color: coverStroke });
+      line(px(b.x0), py(b.y1 - 0.45), px(b.x1), py(b.y1 - 0.45), '#999', 1); // top grille edge
+      txt(px(trvEnd + d1 * 7), py(L.trvY + 4), 'smart valve', { anchor: 'middle', size: 8, color: '#8a6a1a' });
+      txt(px(lsEnd - d1 * 4), py(L.lockshieldY - 5) + 8, 'lockshield', { anchor: 'middle', size: 8, color: '#888' });
+    }
+    if (L.cover === 'shelf' && L.shelf) {
+      const wood = t.coverColor || '#d9b27a';
+      rect(L.shelf.x0, b.y1 + 0.3, L.shelf.x1, b.y1 + 2.1, wood, '#8a6a1a', 1);
+      rect(L.shelf.x0, b.y1 + 2.1, L.shelf.x1, b.y1 + 3.6, wood, '#8a6a1a', 1);
+      txt(px(L.shelf.x1) + 4, py(b.y1 + 2), 'shelf + raised lip', { size: 8, color: '#8a6a1a' });
+    }
+    if (L.cover === 'box' && L.box) {
+      const X = L.box, white = (t.coverColor && t.coverColor !== '#d9b27a') ? t.coverColor : '#f6f6f3';
+      rect(-X.innerX - 1, X.kick + X.bottomRail / 2, X.innerX + 1, L.H - 2, '#3a3a3a', 'none');
+      rect(-X.xo, 0, -X.innerX, L.H - 2, white, '#999', 1);
+      rect(X.innerX, 0, X.xo, L.H - 2, white, '#999', 1);
+      rect(-X.innerX, X.panelY1, X.innerX, L.H - 2 - X.slot, white, '#999', 1);
+      rect(-X.innerX, X.kick, X.innerX, X.panelY0, white, '#999', 1);
+      const pitch = X.panelW / X.slats;
+      for (let i = 0; i < X.slats; i++) {
+        const x = -X.innerX + pitch * (i + 0.5);
+        rect(x - pitch * 0.29, X.panelY0, x + pitch * 0.29, X.panelY1, white, '#bbb', 0.6);
+      }
+      rect(-L.W / 2, L.H - 2, L.W / 2, L.H, white, '#999', 1);
+      // the radiator inside, dashed
+      el('rect', { x: px(b.x0), y: py(b.y1), width: b.width * SCALE, height: b.height * SCALE,
+        fill: 'none', stroke: '#e2b23c', 'stroke-width': 1, 'stroke-dasharray': '3 3' });
+      txt(px(X.xo) + 4, py(L.H / 2), 'box', { size: 8, color: '#999' });
     }
 
-    // BODY (the radiator itself) — bodyWidth/bodyHeight/bodyDepth, centred
-    // in the envelope, sitting on the SAME elevation as the envelope (the
-    // body's own bottom is the envelope's own bottom; only its top may sit
-    // below the envelope's top when a cover encloses it).
-    const bw = bodyEnv.width, bh = bodyEnv.height;
-    const x1 = px(-bw / 2), x2 = px(bw / 2);
-    const y1 = py(t.elevation), y2 = py(t.elevation + bh);
-    rect(x1, y1, x2, y2, { fill: t.color, stroke: '#333', sw: 1.5, rx: 3 });
-
-    // fin ribs
-    const finCount = Math.max(4, Math.round(bh / 4));
-    for (let i = 1; i < finCount; i++) {
-      const fy = py(t.elevation + (bh * i) / finCount);
-      line(x1 + 4, fy, x2 - 4, fy, '#bbb', 1);
-    }
-
-    // elevation dimension
-    line(ex1 - 16, baseY, ex1 - 16, ey1, '#999', 1);
-    txt(ex1 - 20, (baseY + ey1) / 2, `${t.elevation}`, { anchor: 'end', size: '9', color: '#666' });
-
-    // corners with the valve dot on the SELECTED corner, lockshield on the
-    // opposite one — mirrors cornerPoint()'s inset logic (against the
-    // BODY's own width/height, exactly as the module does) so the diagram
-    // and the 3D view never disagree about which corner is which.
-    const inset = Math.min(bw, bh) * 0.1 + 4;
-    const cx = (c) => c.endsWith('left') ? x1 + inset * SCALE : x2 - inset * SCALE;
-    const cy = (c) => c.startsWith('bottom') ? py(t.elevation + inset) : py(t.elevation + bh - inset);
-    const opposite = { 'bottom-left': 'top-right', 'bottom-right': 'top-left', 'top-left': 'bottom-right', 'top-right': 'bottom-left' };
-    const opp = opposite[t.valveCorner] || 'top-left';
-    circle(cx(opp), cy(opp), 5, { fill: '#9a9a9a' });
-    txt(cx(opp), cy(opp) - 10, 'lockshield', { anchor: 'middle', size: '8', color: '#888' });
-    circle(cx(t.valveCorner), cy(t.valveCorner), 6, { fill: '#e2b23c', stroke: '#8a6a1a' });
-    txt(cx(t.valveCorner), cy(t.valveCorner) - 11, 'smart TRV', { anchor: 'middle', size: '8', color: '#8a6a1a' });
-
-    // width dimension — the ENVELOPE's own width (what the item actually
-    // occupies on the wall), labelled to say so when a cover makes it
-    // differ from the body's own width.
+    // elevation dimension (preview only)
+    line(px(-L.W / 2) - 16, baseY, px(-L.W / 2) - 16, py(0), '#999', 1);
+    txt(px(-L.W / 2) - 20, (baseY + py(0)) / 2, `${t.elevation}`, { anchor: 'end', size: 9, color: '#666' });
+    // envelope width
     const dimY = baseY + 26;
-    line(ex1, dimY, ex2, dimY, '#999', 1);
-    line(ex1, dimY - 4, ex1, dimY + 4, '#999', 1);
-    line(ex2, dimY - 4, ex2, dimY + 4, '#999', 1);
-    txt(midX, dimY + 14, hasCover ? `cover width ${width} cm (body ${bw} cm)` : `width ${width} cm`, { anchor: 'middle', color: '#666', size: '10' });
-
-    const head = document.createElementNS(ns, 'text');
-    head.setAttribute('x', 12); head.setAttribute('y', 18);
-    head.setAttribute('font-size', '12'); head.setAttribute('fill', '#333');
-    head.textContent = 'Front elevation (wall-facing)';
-    svg.appendChild(head);
+    line(px(-L.W / 2), dimY, px(L.W / 2), dimY, '#999', 1);
+    line(px(-L.W / 2), dimY - 4, px(-L.W / 2), dimY + 4, '#999', 1);
+    line(px(L.W / 2), dimY - 4, px(L.W / 2), dimY + 4, '#999', 1);
+    txt(midX, dimY + 14, `envelope ${L.W} cm (body ${Math.round(b.width * 10) / 10} cm)`, { anchor: 'middle', color: '#666', size: 10 });
+    txt(12, 18, 'Front elevation (looking at the wall)', { size: 12, color: '#333' });
   }, [t]);
   return <svg ref={ref}></svg>;
 }
@@ -296,6 +243,7 @@ function buildRadiatorModel(t, group, THREE) {
     width: t.width, height: t.height, depth: t.depth, thickness: t.thickness,
     valveCorner: t.valveCorner, color: t.color, cover: t.cover, coverColor: t.coverColor,
     bodyWidth: t.bodyWidth, bodyHeight: t.bodyHeight, bodyDepth: t.bodyDepth,
+    bodyElevation: t.bodyElevation, shelfExtendLeft: t.shelfExtendLeft, shelfExtendRight: t.shelfExtendRight,
   }, { detail: 'full' });
   built.position.y = t.elevation * CM; // PLACER concern — module leaves y=0 at its own bottom
   group.add(built);
@@ -338,15 +286,15 @@ function furnitureJSON(t) {
     if (t[key] !== undefined && t[key] !== D[key]) params[key] = t[key];
   }
   // bodyWidth/bodyHeight/bodyDepth are intentionally absent from DEFAULTS
-  // (there is no universal default independent of width/height/depth — see
-  // bodyEnvelope() in the module), so they need their own diff: only emit
-  // them when they differ from the snug-fit default bodyEnvelope() would
-  // compute anyway (== the envelope, i.e. "no separate body size").
+  // (the snug body depends on the envelope, the valve room and the cover —
+  // see layout() in the module), so they need their own diff: only emit
+  // them when they differ from the snug fit the module would derive anyway.
   if (window.FurnitureRadiator) {
-    const snug = window.FurnitureRadiator.bodyEnvelope(Object.assign({}, D, t, { bodyWidth: undefined, bodyHeight: undefined, bodyDepth: undefined, cover: 'none' }));
-    if (t.bodyWidth !== undefined && t.bodyWidth !== snug.width) params.bodyWidth = t.bodyWidth;
-    if (t.bodyHeight !== undefined && t.bodyHeight !== snug.height) params.bodyHeight = t.bodyHeight;
-    if (t.bodyDepth !== undefined && t.bodyDepth !== snug.depth) params.bodyDepth = t.bodyDepth;
+    const snug = window.FurnitureRadiator.bodyEnvelope(Object.assign({}, D, t, { bodyWidth: undefined, bodyHeight: undefined, bodyDepth: undefined }));
+    const differs = (a, b) => Math.abs(a - b) > 1e-6;
+    if (t.bodyWidth !== undefined && differs(t.bodyWidth, snug.width)) params.bodyWidth = t.bodyWidth;
+    if (t.bodyHeight !== undefined && differs(t.bodyHeight, snug.height)) params.bodyHeight = t.bodyHeight;
+    if (t.bodyDepth !== undefined && differs(t.bodyDepth, snug.depth)) params.bodyDepth = t.bodyDepth;
   }
   return { type: TYPE, params };
 }
@@ -374,7 +322,11 @@ function CopyJSONButton({ t }) {
 // preset does) — otherwise switching presets could leave a stale body size
 // from a PREVIOUSLY-applied preset.
 function applyPreset(setTweak, params) {
-  const merged = Object.assign({ width: 80, height: 60, depth: 12 }, params);
+  // A preset's item elevation sits beside its params (it is not a param);
+  // find it by the params object itself, so any caller passing p.params works.
+  const owner = window.FurnitureRadiator && window.FurnitureRadiator.PRESETS.find(p => p.params === params);
+  if (owner && typeof owner.elevation === 'number') setTweak('elevation', owner.elevation);
+  const merged = Object.assign({ width: 98, height: 60, depth: 12 }, params);
   const snug = window.FurnitureRadiator
     ? window.FurnitureRadiator.bodyEnvelope(Object.assign({ bodyWidth: undefined, bodyHeight: undefined, bodyDepth: undefined, cover: 'none' }, merged))
     : { width: merged.width, height: merged.height, depth: merged.depth };
@@ -421,7 +373,7 @@ function App() {
           <h2>Front elevation</h2>
           <FrontElevation t={t} />
           <div className="legend">
-            <b>Yellow dot</b> = smart TRV valve (on the chosen corner). <b>Grey dot</b> = lockshield valve (always the diagonally opposite corner). Use the corner picker below the 3D view to move the valve. The dashed/outlined outer rectangle is the cover, when one is present — the radiator body is drawn inset within it.
+            The <b>smart valve</b> sits on the end of the radiator at the chosen corner, pointing outward along the wall; the <b>lockshield</b> sits at the bottom of the other end. Pipes drop from both. The dashed rectangle is the envelope (width x height x depth): everything is built inside it, so it is what the placer and the house validator see. Inside a box cover the radiator is drawn dashed.
           </div>
         </div>
 
@@ -430,16 +382,18 @@ function App() {
           <table>
             <tbody>
               <tr><th>Feature</th><th className="num">value</th><th>Variability</th></tr>
-              <tr><td>Width (outer envelope)</td><td className="num">{t.width}</td><td><b>Variable</b> — per room (50/80/95/120cm typical); includes any cover</td></tr>
+              <tr><td>Width (outer envelope)</td><td className="num">{t.width}</td><td><b>Variable</b> — per room; the body plus 18 cm of end-valve room, or the box</td></tr>
               <tr><td>Height (outer envelope)</td><td className="num">{t.height}</td><td>Per room; includes any cover</td></tr>
               <tr><td>Depth (outer envelope)</td><td className="num">{t.depth}</td><td>Wall face to the outermost front face; includes any cover</td></tr>
               <tr><td>Body width / height / depth</td><td className="num">{bodyEnv.width} × {bodyEnv.height} × {bodyEnv.depth}</td><td><b>Variable</b> — the radiator itself; snug-fits the envelope by default</td></tr>
               <tr><td>Thickness (body slab depth, as built)</td><td className="num">{builtThickness}</td><td>{builtThickness !== t.thickness ? `Clamped down from the requested ${t.thickness}cm — the body's own depth can't fit more` : "The radiator's own slab depth"}</td></tr>
               <tr><td>Wall gap (derived)</td><td className="num">{wallGap}</td><td>= body depth − thickness</td></tr>
+              <tr><td>Body elevation (inside the envelope)</td><td className="num">{t.bodyElevation}</td><td>0 on a wall-hung radiator; 17 inside the floor-standing hallway box</td></tr>
+              <tr><td>Shelf overrun left / right</td><td className="num">{t.shelfExtendLeft} / {t.shelfExtendRight}</td><td>How far a clip-on shelf runs past each end (shelf cover only)</td></tr>
               <tr><td>Elevation (floor to bottom edge)</td><td className="num">{t.elevation}</td><td>Spec-page preview only — not an authorable param; a real placement sets the furniture item's own `elevation` field</td></tr>
-              <tr><td>Valve corner</td><td className="num">{CORNER_LABEL[t.valveCorner]}</td><td><b>Variable</b> — one of 4 corners, visual picker</td></tr>
+              <tr><td>Valve corner</td><td className="num">{CORNER_LABEL[t.valveCorner]}</td><td><b>Variable</b> — one of 4 corners, visual picker; the valve sits on that corner's END</td></tr>
               <tr><td>Colour</td><td className="num"><span style={{ display:'inline-block', width:11, height:11, borderRadius:2, background:t.color, border:'1px solid rgba(0,0,0,.2)', verticalAlign:'middle' }}></span></td><td>Default white</td></tr>
-              <tr><td>Cover</td><td className="num">{COVER_LABEL[t.cover]}</td><td><b>Variable</b> — none, shelf, or full slatted enclosure</td></tr>
+              <tr><td>Cover</td><td className="num">{COVER_LABEL[t.cover]}</td><td><b>Variable</b> — none, clip-on shelf with a raised lip, or framed slatted box</td></tr>
             </tbody>
           </table>
         </div>
@@ -490,6 +444,8 @@ function App() {
           onChange={v => setTweak('bodyDepth', v)} />
         <TweakSlider label="Thickness (body slab depth)" value={t.thickness} min={4} max={20} step={0.5} unit="cm"
           onChange={v => setTweak('thickness', v)} />
+        <TweakSlider label="Body elevation (inside the envelope)" value={t.bodyElevation} min={0} max={40} step={1} unit="cm"
+          onChange={v => setTweak('bodyElevation', v)} />
         <TweakRow label="Wall gap (derived)">
           <span style={{ fontSize: 11 }}>{wallGap} cm</span>
         </TweakRow>
@@ -511,6 +467,10 @@ function App() {
           onChange={v => setTweak('cover', v)} />
         <TweakColor label="Cover colour" value={t.coverColor}
           onChange={v => setTweak('coverColor', v)} />
+        <TweakSlider label="Shelf overrun left" value={t.shelfExtendLeft} min={0} max={30} step={0.5} unit="cm"
+          onChange={v => setTweak('shelfExtendLeft', v)} />
+        <TweakSlider label="Shelf overrun right" value={t.shelfExtendRight} min={0} max={30} step={0.5} unit="cm"
+          onChange={v => setTweak('shelfExtendRight', v)} />
       </TweaksPanel>
     </>
   );
