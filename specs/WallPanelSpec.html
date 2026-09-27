@@ -94,7 +94,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "backingDepth": 0.9,
   "hexSide": 18,
   "hexThickness": 1,
-  "hexColor": "#5a828c",
+  "hexColor": "#466e5e",
   "hexBevelWidth": 0.9,
   "hexBevelDepth": 0.5
 }/*EDITMODE-END*/;
@@ -265,15 +265,17 @@ function App() {
             // colour hard to judge on this page. Hex mode gets a pale,
             // off-white wall colour instead (matching the photo reference
             // named in the plan comment above). Slat mode is unaffected
-            // (keeps the original dark viewer background). NOTE (round 5,
-            // 2026-09-27): the felt colour default itself is now tuned for
-            // the LIVE APP's lighting, not this page's -- this page also has
-            // an environment map (see ThreeView's own comment above) that
-            // makes the same base colour render noticeably brighter/more
-            // teal here than in the app. That is accepted, not a bug;
-            // aligning this page's lighting with the app is a separate
-            // follow-up. See wall-panels.js's HEX_CLUSTER_DEFAULTS.color for
-            // the full account of how the value was chosen.
+            // (keeps the original dark viewer background). NOTE (round 6,
+            // 2026-09-27): the felt colour default itself is tuned for the
+            // LIVE APP's lighting across four light states (night/morning/
+            // noon-lit/noon-lights-off), not this page's -- this page also
+            // has an environment map (see ThreeView's own comment above)
+            // that makes the same base colour render noticeably lighter and
+            // more sage here (rgb ~80,113,95) than the dark green it reads
+            // as in the app. That is accepted, not a bug; aligning this
+            // page's lighting with the app is a separate follow-up. See
+            // wall-panels.js's HEX_CLUSTER_DEFAULTS.color for the full
+            // account of how the value was chosen.
             backgroundOf={tt => (tt.panelType === 'hex-panel-cluster' ? '#d8d3c8' : 0x1a1a1c)}
           />
         </div>

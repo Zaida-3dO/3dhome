@@ -207,29 +207,31 @@ const HEX_CLUSTER_DEFAULTS = Object.freeze({
   columns: HEX_DEFAULT_COLUMNS,
   columnOffsets: HEX_DEFAULT_COLUMN_OFFSETS,
   thickness: 1,
-  // TUNED FOR THE LIVE APP, NOT THE SPEC PAGE (review round 5, 2026-09-27;
-  // round 4 found #0a2515 read as pure/near-pure black in the app, so the
-  // decision was made to tune for the app instead). Earlier rounds (2-4)
-  // judged this colour on the spec page,
+  // TUNED FOR THE LIVE APP, NOT THE SPEC PAGE, ACROSS FOUR LIGHT STATES
+  // (review round 6, 2026-09-27; round 5's #5a828c was tuned in only ONE
+  // light state -- sun on "auto" at 01:12, i.e. night with warm room light
+  // -- and that single-state fit did not hold: in daylight it rendered
+  // teal (hue 182), and at noon with the lights off it rendered blue (hue
+  // 195), both in the demo house and in the real living room the reference
+  // photos are of). Earlier rounds also judged colour on the spec page,
   // which reads noticeably brighter than the app for the same base colour:
   // specs/spec-three.jsx installs a CubeCamera + WebGLCubeRenderTarget and
   // sets scene.environment to it, giving EVERY MeshStandardMaterial
   // image-based lighting from the room's own (pale) background -- an IBL
-  // term the live app does not have at all. That is why #0a2515 (chosen on
-  // the spec page in round 3) rendered to only ~rgb(1,3,1) in the app
-  // (houses/demo's lounge_hexes, main light on) -- indistinguishable from
-  // black. This value was instead tuned IN the app directly: rendered the
-  // demo house's lounge_hexes cluster with the room's real light on, sampled
-  // actual pixels (not raw swatches) at several base colours, and picked the
-  // one landing the RENDERED result in the target band (R 25-40, G 38-55,
-  // B 30-42, G clearly highest) while still reading as dark green by eye,
-  // not neutral/black. Measured in the app at #5a828c: samples across
-  // several hexes ranged ~rgb(19,33,30) to ~rgb(35,54,48), all G-dominant.
-  // The spec page inherits this same value but, per its environment map
-  // above, renders it noticeably brighter/more teal there -- accepted,
-  // round 5: the app is what this is tuned for. Aligning the spec page's
-  // own lighting with the app is a separate follow-up, not done here.
-  color: '#5a828c',
+  // term the live app does not have at all. (That is also why round 3's
+  // #0a2515, chosen on the spec page, rendered as pure/near-pure black in
+  // the app -- round 4's finding.) This value was instead verified across
+  // FOUR light states in the live app: night-lit, morning-lit, noon-lit and
+  // noon-lights-off, both in houses/demo's lounge_hexes and the real
+  // living room. #466e5e held dark green in every one (hue 124-157,
+  // brightness 0.25-0.34 of the wall, matching the reference photo's own
+  // ~0.23) -- the earlier per-state fits did not generalise across time of
+  // day and light-on/off combinations, so verifying every combination
+  // rather than the one state at hand is what this round actually fixed.
+  // The spec page renders this same value noticeably lighter and more sage
+  // (rgb ~80,113,95) due to its environment map -- accepted; aligning the
+  // spec page's own lighting with the app remains a separate follow-up.
+  color: '#466e5e',
   finish: 'matte',
   // Chamfered edge (review round 3, 2026-09-26): each real panel is
   // full thickness in the centre, sloping down to a thinner rim, so two
