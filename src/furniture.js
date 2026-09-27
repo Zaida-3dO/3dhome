@@ -212,17 +212,37 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
   const byId = {};
   const tagged = [];          // { part, room, fadeWallId }
   const made = [];            // every geometry this build owns, until it returns
+  const dynamicGroups = [];   // { itemId, type, group } -- see buildPlaced
   let finished = false;
   const casters = new Map();  // room -> [{ item, builder, params, placement, parts }]
   let skipped = 0;
 
+  // A dynamic part (userData.dynamic -- a clock's hands, an LED strip
+  // segment) is pulled OUT of its builder's group before that group is
+  // disposed, and re-parented into a small per-item wrapper positioned
+  // exactly like placeGroup positions the builder's own group (so its world
+  // transform is unchanged: THREE.Object3D#attach re-parents while
+  // preserving world position/rotation/scale). The wrapper -- not the
+  // dynamic mesh itself -- is what the scene attaches, so the mesh keeps
+  // following the item's placement without needing its own copy of the
+  // placement math.
   function buildPlaced(item, builder, params, placement, det) {
     const group = builder.build(THREE, params, { detail: det });
     if (!group || !group.isObject3D) throw new Error('build() did not return a THREE.Object3D');
     placeGroup(group, placement, o.tx, o.tz);
     const flat = flattenGroup(THREE, group, { label: 'furniture "' + item.id + '" (' + item.type + ')' });
+    let dynamicGroup = null;
+    if (flat.dynamic.length) {
+      dynamicGroup = new THREE.Group();
+      dynamicGroup.name = 'furniture-dynamic:' + item.id;
+      dynamicGroup.position.copy(group.position);
+      dynamicGroup.rotation.copy(group.rotation);
+      dynamicGroup.updateMatrixWorld(true);
+      flat.dynamic.forEach(mesh => dynamicGroup.attach(mesh));
+      dynamicGroup.userData = { furniture: 'dynamic', itemId: item.id, type: item.type };
+    }
     disposeBuilt(group);
-    return flat;
+    return { parts: flat.parts, warnings: flat.warnings, dynamicGroup: dynamicGroup };
   }
 
   // Room by room (stable within a room), so a slice boundary falls between
@@ -257,11 +277,13 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
       tagged.push({ part: p, room: item.room, fadeWallId: fadeWallId });
     });
     byId[item.id] = { id: item.id, room: item.room, type: item.type, placement: placement,
-      fadeWallId: fadeWallId, caster: caster, triangles: tris, parts: flat.parts.length };
+      fadeWallId: fadeWallId, caster: caster, triangles: tris, parts: flat.parts.length,
+      dynamicParts: flat.dynamicGroup ? flat.dynamicGroup.children.length : 0 };
     if (caster && wantProxies) {
       if (!casters.has(item.room)) casters.set(item.room, []);
       casters.get(item.room).push({ item, builder, params, placement, parts: flat.parts });
     }
+    if (flat.dynamicGroup) dynamicGroups.push({ itemId: item.id, type: item.type, group: flat.dynamicGroup });
     yield 'item ' + item.id;
   }
 
@@ -300,6 +322,15 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
           flat.parts.forEach(p => made.push(p.geometry));
           castParts(flat.parts).forEach(p => parts.push(p));
           flat.parts.forEach(p => r.lowOwned.push(p));
+          // This low-detail rebuild is ONLY for the shadow proxy (an
+          // invisible, position-only geometry) -- its own dynamic parts (a
+          // second set of clock hands, say) are never attached to the scene
+          // and must be freed here, or they leak: disposeBuilt() already
+          // skipped them (buildPlaced re-parented them out of the disposed
+          // group before that call), precisely so the ATTACHED build's
+          // dynamic parts survive; this discarded low-detail build has no
+          // such attachment coming, so it disposes its own.
+          if (flat.dynamicGroup) disposeBuilt(flat.dynamicGroup);
         } catch (err) {
           // A builder that builds 'full' but throws on 'low': keep its full parts.
           castParts(e.parts).forEach(p => parts.push(p));
@@ -412,10 +443,27 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
   root.name = 'furniture';
   beauty.forEach(m => root.add(m));
   shadowProxies.forEach(m => root.add(m));
+  // Dynamic parts (item 059873ed / 816d71ee): each item's small wrapper
+  // group, holding the meshes merge.js excluded from every bucket, added
+  // to the scene graph as its own draws so it can keep being posed after
+  // the house is built (a clock's hands, an LED strip segment).
+  const dynamicByItemId = {};
+  dynamicGroups.forEach(({ itemId, type, group }) => {
+    root.add(group);
+    dynamicByItemId[itemId] = { itemId, type, group };
+  });
 
-  let beautyTris = 0, proxyTris = 0;
+  let beautyTris = 0, proxyTris = 0, dynamicTris = 0, dynamicDraws = 0;
   beauty.forEach(m => { beautyTris += m.userData.triangles; });
   shadowProxies.forEach(m => { proxyTris += m.userData.triangles; });
+  dynamicGroups.forEach(({ group }) => {
+    group.traverse(o => {
+      if (!o.isMesh || !o.geometry || !o.geometry.attributes || !o.geometry.attributes.position) return;
+      dynamicDraws++;
+      const idx = o.geometry.index;
+      dynamicTris += (idx ? idx.count : o.geometry.attributes.position.count) / 3;
+    });
+  });
   const stats = {
     items: Object.keys(byId).length,
     skipped: skipped,
@@ -424,16 +472,26 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
     beautyTriangles: beautyTris,
     proxyTriangles: proxyTris,
     proxyLowRooms: proxyLowRooms,
-    detail: detail
+    detail: detail,
+    // Every dynamic part is its OWN permanent draw call (merge.js's own
+    // header note: never amortised by the merge), so this is the direct
+    // cost of every item.js's dynamic parts across the house -- worth
+    // watching against perf-audit-furniture.md's draw budget as more
+    // builders adopt userData.dynamic.
+    dynamicDraws: dynamicDraws,
+    dynamicTriangles: dynamicTris
   };
   if (proxyMaterial) extraDisposables.push(proxyMaterial);
-  const result = { root, beauty, shadowProxies, byId, warnings, stats, depthPrecompile,
+  const result = { root, beauty, shadowProxies, dynamicByItemId, byId, warnings, stats, depthPrecompile,
     materials: materials.all, extraDisposables: extraDisposables.concat(materials.textures) };
   finished = true;
   return result;
   } finally {
     // Abandoned part-way (a cancelled sliced build): free what was made.
-    if (!finished) made.forEach(g => g.dispose());
+    if (!finished) {
+      made.forEach(g => g.dispose());
+      dynamicGroups.forEach(({ group }) => disposeBuilt(group));
+    }
   }
 }
 
@@ -547,15 +605,36 @@ export function scheduleFurnitureAttach(ctx) {
     .catch(e => { warn('furniture could not be built or attached; the house renders without it.', e); return null; });
 }
 
-/** Free every geometry and material the furniture owns, and detach it. */
+/**
+ * Free every geometry and material the furniture owns, and detach it.
+ *
+ * Materials are collected by traversing `result.root` rather than trusting
+ * only `result.materials` (the bucket materials from createMaterialSet):
+ * a dynamic part (userData.dynamic -- a clock's hands, an LED strip
+ * segment) keeps its OWN builder-made material, never folded into a bucket,
+ * so it is not in `result.materials` at all and would otherwise leak. The
+ * traversal also re-visits every bucket mesh's material, which is already
+ * in `result.materials` -- harmless, since both are collected into the same
+ * Set before disposing.
+ *
+ * Any live clock (or other per-item ticker) on a dynamic part must be
+ * stopped by the CALLER before this runs (see home3d-scene.js's
+ * stopLiveClocksFor / detachFurniture) -- disposeFurniture only frees
+ * three.js resources, it does not know which dynamic groups were animated
+ * or how to stop them.
+ */
 export function disposeFurniture(result) {
   if (!result) return;
   const geos = new Set();
+  const mats = new Set();
   if (result.root) {
-    result.root.traverse(o => { if (o.geometry) geos.add(o.geometry); });
+    result.root.traverse(o => {
+      if (o.geometry) geos.add(o.geometry);
+      if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => mats.add(m));
+    });
     if (result.root.parent) result.root.parent.remove(result.root);
   }
   geos.forEach(g => g.dispose());
-  if (result.materials) result.materials.forEach(m => m.dispose());
+  mats.forEach(m => m.dispose());
   (result.extraDisposables || []).forEach(m => m.dispose());
 }

@@ -313,13 +313,16 @@ function addHands(THREE, group, radius, handColor, time, detail, backZ, totalDep
     mesh.position.set(0, 0, z);
     // Clockwise from 12 o'clock (+y) -> rotate about z by -angle.
     mesh.rotation.z = -angle;
-    // Hands move every frame/minute in the live scene: keep them their own
-    // draw rather than folding into the merged static-furniture bucket, the
-    // same way any moving or emissive part is kept (see finishes.js). (See
-    // this module's own KNOWN GAP note: same-finish parts are demoted back
-    // out of "kept" by the live house's merge pass today regardless of this
-    // flag -- tracked, not fixed here.)
+    // Hands rotate continuously in the live scene (once a second, via
+    // setClockTime/startLiveClock below): userData.dynamic = true is the
+    // merge's per-part opt-out (src/furniture/merge.js flattenGroup) that
+    // keeps a part OUT of every bucket entirely, as its own mesh, parented
+    // so it follows the item's placement -- the mechanism the KNOWN GAP note
+    // used to say did not exist. `keep` stays set too (a dynamic part is
+    // also never re-coloured/merged if something upstream reads keep on its
+    // own), but `dynamic` is what actually excludes it now.
     mesh.userData.keep = true;
+    mesh.userData.dynamic = true;
     return mesh;
   }
   if (tapered) {

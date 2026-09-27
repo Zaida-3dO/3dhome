@@ -86,6 +86,28 @@ export function partKeep(mesh, material) {
   return { keep: k, error: null };
 }
 
+/**
+ * The part's `dynamic` flag, under the SAME either/or rule as partKeep:
+ * `{dynamic: true|false, error}`. Unlike `keep` (which only chooses a
+ * bucket), `dynamic` opts a part out of merging entirely -- it stays its own
+ * live mesh so the scene can keep posing it after the house is built (a
+ * clock's hands, a light-following LED segment). See merge.js's DYNAMIC
+ * PARTS note. Absent on both mesh and material reads as `false`, same as an
+ * absent `keep` reads as `undefined` but is treated as falsy by every caller
+ * -- `dynamic` has no third "kept finish implies it" rule to need the
+ * distinction, so it simply defaults to `false`.
+ */
+export function partDynamic(mesh, material) {
+  const mat = material || (mesh && (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material));
+  const onMesh = mesh && mesh.userData ? mesh.userData.dynamic : undefined;
+  const onMat = mat && mat.userData ? mat.userData.dynamic : undefined;
+  if (onMesh != null && onMat != null && !!onMesh !== !!onMat) {
+    return { dynamic: false, error: 'mesh dynamic=' + onMesh + ' but its material dynamic=' + onMat };
+  }
+  const d = onMesh != null ? !!onMesh : (onMat != null ? !!onMat : false);
+  return { dynamic: d, error: null };
+}
+
 const MIRROR_COLOR = 0xd8dadc;
 
 /** '#rrggbb' | 0xrrggbb -> 0xrrggbb, or the fallback. */
