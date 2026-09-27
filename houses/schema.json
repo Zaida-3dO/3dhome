@@ -3773,6 +3773,11 @@
           "$ref": "#/$defs/hexColor",
           "default": "#1a1a1a"
         },
+        "numeralFinish": {
+          "enum": ["matte", "satin", "gloss", "metal"],
+          "default": "matte",
+          "description": "Finish of the numerals, words, dots and centre disc. A gold clock is numeralColor #c9a13b with 'satin': a soft sheen that still reads gold in the live house, which has no environment map (so 'metal' there renders dull). Hands keep handColor/secondHandColor."
+        },
         "handColor": {
           "$ref": "#/$defs/hexColor",
           "default": "#1a1a1a"

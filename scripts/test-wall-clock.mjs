@@ -831,5 +831,45 @@ check('DEFAULTS kind is diy-numerals', Clock.DEFAULTS.kind === 'diy-numerals');
   Clock._resetNumeralFontForTest();
 }
 
+// ============================================================
+// Gold word clock (the office clock over the ottoman): numeralColor +
+// numeralFinish colour the numerals, words, dots and centre disc; the hands
+// stay black and the second hand red. The DEFAULT stays matte black, so the
+// kitchen and bedroom clocks (which set neither) are unchanged.
+// ============================================================
+{
+  const hex = m => m.material.color.getHex();
+  check('numeralFinish defaults to matte', Clock.DEFAULTS.numeralFinish === 'matte' &&
+    Clock.DIY_WORDS_DEFAULTS.numeralFinish === 'matte');
+  const black = meshesByName(Clock.build(THREE, Clock.DIY_WORDS_DEFAULTS, { detail: 'full' }));
+  check('default word clock: dots + disc stay matte black',
+    ['dot7', 'dot8', 'dot10', 'dot11', 'centreDisc'].every(n => hex(black[n]) === 0x1a1a1a && black[n].material.userData.finish === 'matte'));
+  check('default word clock: words panel stays matte (roughness 0.8)',
+    black.wordsPanel.userData.finish === 'matte' && black.wordsPanel.material.roughness === 0.8);
+
+  const GOLD = '#c9a13b';
+  const goldParams = Object.assign({}, Clock.DIY_WORDS_DEFAULTS, { numeralColor: GOLD, numeralFinish: 'satin' });
+  const stubCtx = { clearRect() {}, fillStyle: '', font: '', textAlign: '', textBaseline: '', fillRect() {}, fillText() {} };
+  const fills = [];
+  const ctx = new Proxy(stubCtx, { set(t, k, v) { if (k === 'fillStyle') fills.push(v); t[k] = v; return true; } });
+  const g = meshesByName(Clock.build(THREE, goldParams, { detail: 'full',
+    createCanvas: (w, h) => ({ width: w, height: h, getContext() { return ctx; } }) }));
+  check('gold: dots and centre disc are gold, satin',
+    ['dot7', 'dot8', 'dot10', 'dot11', 'centreDisc'].every(n => hex(g[n]) === 0xc9a13b && g[n].material.userData.finish === 'satin'),
+    ['dot7', 'centreDisc'].map(n => [hex(g[n]).toString(16), g[n].material.userData.finish]));
+  check('gold: the numerals + words are drawn in gold', fills.includes(GOLD), fills);
+  check('gold: the words panel takes the satin roughness (0.6), not metal',
+    g.wordsPanel.userData.finish === 'satin' && g.wordsPanel.material.roughness === 0.6 && g.wordsPanel.material.metalness === 0);
+  check('gold: hour and minute hands stay black', hex(g.hourHand) === 0x1a1a1a && hex(g.minuteHand) === 0x1a1a1a);
+  check('gold: the second hand stays red', hex(g.secondHand) === 0xc62828);
+  check('gold: satin is not metal (the live house has no env map)', g.centreDisc.material.metalness === 0);
+  const bad = meshesByName(Clock.build(THREE, Object.assign({}, goldParams, { numeralFinish: 'glass' }), { detail: 'full' }));
+  check('an off-list numeralFinish falls back to matte', bad.centreDisc.material.userData.finish === 'matte');
+  // diy-numerals and framed honour it too.
+  const dn = meshesByName(Clock.build(THREE, Object.assign({}, Clock.DEFAULTS, { numeralColor: GOLD, numeralFinish: 'satin' }), { detail: 'full' }));
+  const satinParts = Object.values(dn).filter(m => m.material && m.material.userData.finish === 'satin');
+  check('diy-numerals: gold numerals are satin', satinParts.length > 0 && satinParts.every(m => hex(m) === 0xc9a13b), satinParts.length);
+}
+
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
 process.exit(failures ? 1 : 0);
