@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rug Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  pre.json { font-size:10px; background:#f7f5f0; border:1px solid #ece8e0; border-radius:4px; padding:8px; margin-top:10px; white-space:pre-wrap; word-break:break-all; }
+  @media (max-width: 760px) {
+    body { padding:12px; }
+    .grid { grid-template-columns:1fr; }
+    #c3d { height:420px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- The pattern lives in src/rug-pattern.js: a pure, deterministic pixel
+     filler (no DOM), unit-tested by scripts/test-rug-pattern.mjs. It is NOT
+     a furniture type: the house draws rugs from `rooms[].rug`. Loaded as a
+     real ES module and stashed on window for the Babel app below. -->
+<script type="module">
+  import * as R from '../src/rug-pattern.js';
+  window.RugPattern = R;
+  window.dispatchEvent(new Event('rug-pattern-ready'));
+</script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   RUG SPEC   ·   a procedural shag-rug LOOK (not a furniture type)
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every value below is a DEFAULT, not a survey.
+   ─────────────────────────────────────────────────────────────────────
+
+   Look: bold zig-zag (chevron) bands cycling through a palette, with
+   seeded per-pixel pile noise so it reads as a long shaggy pile. The
+   pattern is drawn by fillRugPattern() into a canvas (512 px on the long
+   side) and shown two ways: flat, and as a CanvasTexture on a ~3 cm rug
+   slab on a floor.
+
+   ?texture=<url> previews an IMAGE instead of the procedural fill (e.g. a
+   photo-derived texture hosted privately). This repo ships no rug image.
+
+   NOT YET WIRED INTO THE HOUSE: the scene reads `rooms[].rug` (polygon,
+   color, texture) but not a `pattern` key. "Copy JSON" marks `pattern`
+   as a proposal.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "pattern": "chevron",
+  "color0": "#9a9a96",
+  "color1": "#e8e2d4",
+  "color2": "#2f7e8c",
+  "bandWidth": 26,
+  "angle": 40,
+  "zigzags": 1,
+  "pileNoise": 0.18,
+  "seed": 1,
+  "widthCm": 210,
+  "depthCm": 150
+}/*EDITMODE-END*/;
+
+const TEXTURE_URL = new URLSearchParams(location.search).get('texture');
+const RUG_THICKNESS = 0.03;   // m
+const LONG_SIDE_PX = 512;
+
+function patternParams(t) {
+  return {
+    pattern: t.pattern, colors: [t.color0, t.color1, t.color2],
+    bandWidth: t.bandWidth, angle: t.angle, zigzags: t.zigzags, pileNoise: t.pileNoise, seed: t.seed,
+    widthCm: t.widthCm, depthCm: t.depthCm
+  };
+}
+
+/** A canvas of the pattern, LONG_SIDE_PX on the rug's long side. */
+function patternCanvas(t) {
+  const long = Math.max(t.widthCm, t.depthCm);
+  const w = Math.max(8, Math.round(LONG_SIDE_PX * t.widthCm / long));
+  const h = Math.max(8, Math.round(LONG_SIDE_PX * t.depthCm / long));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(w, h);
+  window.RugPattern.fillRugPattern(img.data, w, h, patternParams(t));
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
+// One loaded image texture, reused across rebuilds (the ?texture= case).
+let imageTex = null;
+function loadImageTexture(THREE, onReady) {
+  if (imageTex) { onReady(imageTex); return; }
+  new THREE.TextureLoader().load(TEXTURE_URL, tex => {
+    if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    imageTex = tex;
+    onReady(tex);
+  }, undefined, () => console.warn('RugSpec: could not load ?texture=' + TEXTURE_URL));
+}
+
+function buildRugModel(t, group, THREE) {
+  const w = t.widthCm / 100, d = t.depthCm / 100;
+  const side = new THREE.MeshStandardMaterial({ color: new THREE.Color(t.color0), roughness: 1 });
+  const top = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
+  if (TEXTURE_URL) {
+    loadImageTexture(THREE, tex => { top.map = tex; top.needsUpdate = true; });
+  } else {
+    const tex = new THREE.CanvasTexture(patternCanvas(t));
+    if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    top.map = tex;
+  }
+  // BoxGeometry face order: +x, -x, +y (top), -y, +z, -z.
+  const rug = new THREE.Mesh(new THREE.BoxGeometry(w, RUG_THICKNESS, d), [side, side, top, side, side, side]);
+  rug.position.y = RUG_THICKNESS / 2;
+  rug.receiveShadow = true;
+  rug.name = 'rug';
+  group.add(rug);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 4.5), new THREE.MeshStandardMaterial({ color: 0x9c8b72, roughness: 0.9 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  floor.name = 'floor';
+  group.add(floor);
+}
+
+/** The rooms[].rug-shaped suggestion. `pattern` is a PROPOSAL the scene does not read yet. */
+function rugJSON(t) {
+  const W = t.widthCm, D = t.depthCm;
+  const rug = {
+    polygon: [[0, 0], [W, 0], [W, D], [0, D]],
+    notes: 'Outline is a ' + W + ' x ' + D + ' rectangle at the origin -- translate it to where the rug lies.'
+  };
+  if (TEXTURE_URL) {
+    rug.texture = { path: 'textures/' + (TEXTURE_URL.split('/').pop() || 'rug.jpg'), fit: 'stretch' };
+  } else {
+    const p = patternParams(t);
+    delete p.widthCm; delete p.depthCm;
+    rug.pattern = Object.assign({ _proposal: 'NOT YET READ BY THE SCENE -- rooms[].rug has no pattern key today' }, p);
+  }
+  return { rug };
+}
+
+function Preview2D({ t }) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (TEXTURE_URL || !ref.current) return;
+    const src = patternCanvas(t);
+    const c = ref.current;
+    c.width = src.width; c.height = src.height;
+    c.getContext('2d').drawImage(src, 0, 0);
+  }, [t]);
+  if (TEXTURE_URL) return <img src={TEXTURE_URL} alt="rug texture" style={{ width: '100%', display: 'block', borderRadius: 4 }} />;
+  return <canvas ref={ref} style={{ width: '100%', height: 'auto', display: 'block', borderRadius: 4 }} />;
+}
+
+// ============== App ==============
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [copied, setCopied] = React.useState('');
+  const json = JSON.stringify(rugJSON(t), null, 2);
+  const copy = () => {
+    const done = () => { setCopied('copied'); setTimeout(() => setCopied(''), 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
+    else setCopied('clipboard unavailable — select the JSON below');
+  };
+  return (
+    <>
+      <h1>Rug Spec</h1>
+      <div className="sub">
+        All units cm. A procedural shag-rug look: zig-zag bands through a palette, with seeded pile noise.
+        {TEXTURE_URL ? ' Previewing an IMAGE from ?texture= (the procedural pattern is off).' : ''}
+      </div>
+
+      <div className="grid">
+        <div className="card">
+          <h2>Flat preview {TEXTURE_URL ? '(image)' : '(' + LONG_SIDE_PX + ' px on the long side)'}</h2>
+          <Preview2D t={t} />
+          <div className="legend">
+            {TEXTURE_URL
+              ? 'An image loaded from ?texture= -- the pattern tweaks do not apply to it.'
+              : 'Pattern: ' + t.pattern + ', ' + t.bandWidth + ' cm bands at ' + t.angle + '°, pile noise ' + t.pileNoise +
+                ', seed ' + t.seed + '. Deterministic: the same params always give the same pixels.'}
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Width</td><td className="num">{t.widthCm.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Depth</td><td className="num">{t.depthCm.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Thickness (pile)</td><td className="num">{(RUG_THICKNESS * 100).toFixed(0)}</td><td>Fixed on this page</td></tr>
+              <tr><td>Band width</td><td className="num">{t.bandWidth}</td><td><b>Variable</b></td></tr>
+              <tr><td>Textures</td><td className="num">1</td><td>one canvas, ≤ 512 px</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            Not yet wired into the house: the scene reads <code>rooms[].rug</code> (polygon, color, texture) but not
+            a <code>pattern</code> key. The JSON below marks <code>pattern</code> as a proposal.
+          </div>
+          <div className="row">
+            <button className="btn" onClick={copy}>Copy JSON (rooms[].rug suggestion)</button>
+            {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
+          </div>
+          <pre className="json">{json}</pre>
+        </div>
+
+        <div className="card full">
+          <h2>3D — rug on a floor</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildRugModel}
+            heightOf={() => 0.1}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Pattern" />
+        <TweakRadio label="Pattern" value={t.pattern} options={['chevron', 'solid']}
+          onChange={v => setTweak('pattern', v)} />
+        <TweakColor label="Colour 1" value={t.color0} onChange={v => setTweak('color0', v)} />
+        <TweakColor label="Colour 2" value={t.color1} onChange={v => setTweak('color1', v)} />
+        <TweakColor label="Colour 3" value={t.color2} onChange={v => setTweak('color2', v)} />
+        <TweakSlider label="Band width" value={t.bandWidth} min={6} max={40} step={1} unit="cm"
+          onChange={v => setTweak('bandWidth', v)} />
+        <TweakSlider label="Angle" value={t.angle} min={0} max={60} step={1} unit="°"
+          onChange={v => setTweak('angle', v)} />
+        <TweakSlider label="Zig-zags across" value={t.zigzags} min={1} max={4} step={1} unit=""
+          onChange={v => setTweak('zigzags', v)} />
+        <TweakSlider label="Pile noise" value={t.pileNoise} min={0} max={0.5} step={0.01} unit=""
+          onChange={v => setTweak('pileNoise', v)} />
+        <TweakSlider label="Seed" value={t.seed} min={1} max={50} step={1} unit=""
+          onChange={v => setTweak('seed', v)} />
+
+        <TweakSection label="Size" />
+        <TweakSlider label="Width" value={t.widthCm} min={60} max={400} step={1} unit="cm"
+          onChange={v => setTweak('widthCm', v)} />
+        <TweakSlider label="Depth" value={t.depthCm} min={40} max={300} step={1} unit="cm"
+          onChange={v => setTweak('depthCm', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+function mount() { ReactDOM.createRoot(document.getElementById('root')).render(<App />); }
+if (window.RugPattern) mount();
+else window.addEventListener('rug-pattern-ready', mount, { once: true });
+
+// Standalone viewing: self-activate the TweaksPanel (see BedSpec.html).
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>
