@@ -413,6 +413,22 @@ function checkContract(tag, build, p) {
       impl && impl.DEFAULTS && { width: impl.DEFAULTS.width, depth: impl.DEFAULTS.depth, height: impl.DEFAULTS.height });
     if (!ok) continue;
     covered.push(t);
+    if (typeof impl.prepare === 'function') {
+      // A type with async assets (model.js): its DEFAULTS name no file, so
+      // prepare it with a stand-in (a lopsided box, off-centre, so the fit
+      // is exercised) and hold build() to the same contract as every other.
+      const src = 'contract/' + t + '.glb';
+      await impl.prepare([{ params: { src }, assetBase: '' }], { loadGltf: async () => {
+        const scene = new THREE.Group();
+        const m = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.4, 0.3), new THREE.MeshStandardMaterial());
+        m.position.set(0.5, 0.3, -0.2);
+        scene.add(m);
+        return { scene };
+      } });
+      checkContract(t + ' (defaults, prepared)', (T, p, o) => impl.build(T, p, Object.assign({ assetBase: '' }, o)),
+        Object.assign({}, impl.DEFAULTS, { src }));
+      continue;
+    }
     checkContract(t + ' (defaults)', impl.build, Object.assign({}, impl.DEFAULTS));
   }
   check('contract loop covers box', covered.includes('box'), covered);
@@ -594,7 +610,15 @@ function threeImportProblems(src, allowDynamic) {
   const dir = path.join(root, 'src/furniture');
   fs.readdirSync(dir).filter(f => f.endsWith('.js')).forEach(f => {
     const src = fs.readFileSync(path.join(dir, f), 'utf8');
-    const problems = threeImportProblems(src, f === 'registry.js');
+    let problems = threeImportProblems(src, f === 'registry.js');
+    // The ONE exemption: model.js lazily imports the vendored GLTFLoader
+    // (which itself imports three) -- by this exact literal path only. It
+    // turns the parse into plain typed arrays at once and builds every
+    // object from the INJECTED THREE, so nothing from the loader's three
+    // instance reaches the scene (scripts/test-model.mjs).
+    if (f === 'model.js') {
+      problems = problems.filter(x => x !== "import('../../vendor/three-r160/addons/loaders/GLTFLoader.js')");
+    }
     check(f + ': does not import three (THREE is injected)', problems.length === 0, problems);
   });
 }

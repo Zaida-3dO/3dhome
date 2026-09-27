@@ -37,3 +37,21 @@ version change is attempted.
 The r160 **UMD** build next door is still loaded by the five `specs/*.html`
 pages, which use in-browser Babel and cannot consume ES modules. The two never
 load on the same page.
+
+## `addons/` — GLTFLoader for the `model` furniture type
+
+Two files from the same published `three@0.160.0` tarball, **unmodified**,
+at the same relative layout as upstream's `examples/jsm/` (so the loader's
+own `import '../utils/BufferGeometryUtils.js'` resolves without an edit):
+
+    package/examples/jsm/loaders/GLTFLoader.js          -> addons/loaders/GLTFLoader.js
+        sha256  d073b438e6a07e1359741dd5d6c76c953420cc0d4fd84eb1bdde94315540e6a3
+    package/examples/jsm/utils/BufferGeometryUtils.js   -> addons/utils/BufferGeometryUtils.js
+        sha256  9be041e96308775d00e2695cc607645b9a9b64fd7c0e759dd8f7c00a8d92becb
+
+MIT, as three.js. Only `src/furniture/model.js` imports them, lazily, and only
+when a house places a `model` item. Their bare `import ... from 'three'`
+resolves through the page's importmap (index.html, and specs/ModelSpec.html).
+The import from src/ is `?v=`-stamped at deploy; the import between the two
+vendored files is not (vendor/ is never stamped), which is safe for the same
+reason as above: the revision is in the path.
