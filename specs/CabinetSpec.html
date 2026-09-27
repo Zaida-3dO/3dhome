@@ -363,7 +363,7 @@ function buildCabinet(params, levels) {
 // fixture puts its light), in the level's colour, with a floor and a wall
 // behind the table to see what it lights. Nothing here is part of the builder
 // or the house, and brightness is scaled for this page, not the house.
-const PREVIEW_MAX_INTENSITY = 3;
+const PREVIEW_MAX_INTENSITY = 0.3;
 const levelName = (i, n) => (n === 2 ? ['top', 'bottom'][i] : 'level ' + (i + 1));
 
 /** Indices (into params.fronts, top first) of the light channel rows. */
