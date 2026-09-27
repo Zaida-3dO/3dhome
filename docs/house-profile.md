@@ -635,6 +635,20 @@ Its registry entries name the property to use in `key`:
 
 A single-type module has `key: null`.
 
+**Bathroom fittings** (`bathroom.js`, spec page `BathroomFittingsSpec`):
+`bathtub`, `toilet`, `vanity-counter`, `shower-set`, `shower-screen`,
+`shower-tray` and `towel-rail`. A mirror cabinet is a `cabinet` with
+`mirror` fronts and `plinth: { "height": 0 }`. Three of these have a derived
+envelope:
+- `vanity-counter`: `depth` is where the basin's front stands, and `height` is
+  the tap's top. `vanityEnvelope()` gives both.
+- `toilet`: `height` is the flush plate's top.
+- `shower-set`: it is authored by floor heights (`valveHeight`, `riserFrom`,
+  `riserTo`, `spoutHeight`). Its `width`/`depth`/`height`, and the
+  `elevation` to hang it at, are outputs of `showerSetEnvelope()`. The spec
+  page's Copy JSON fills them in. Give it `fade: "never"` when it hangs on a
+  pillar near an exterior wall, or it fades with that wall.
+
 **Cache-busting.** Every builder URL the registry imports carries the app
 version as `?v=`, just as `index.html` does for the scripts it names and
 `deploy/generate-config.sh` does for every static relative import. Otherwise

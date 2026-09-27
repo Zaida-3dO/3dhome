@@ -733,6 +733,8 @@
       ],
       "additionalProperties": false,
       "allOf": [
+        { "if": { "properties": { "type": { "const": "bathtub" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_bathtub" } } } },
+
         { "if": { "properties": { "type": { "const": "bed" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_bed" } } } },
 
         { "if": { "properties": { "type": { "const": "box" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_box" } } } },
@@ -775,6 +777,12 @@
 
         { "if": { "properties": { "type": { "const": "shelf" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_shelf" } } } },
 
+        { "if": { "properties": { "type": { "const": "shower-screen" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_shower-screen" } } } },
+
+        { "if": { "properties": { "type": { "const": "shower-set" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_shower-set" } } } },
+
+        { "if": { "properties": { "type": { "const": "shower-tray" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_shower-tray" } } } },
+
         { "if": { "properties": { "type": { "const": "slat-panel" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_slat-panel" } } } },
 
         { "if": { "properties": { "type": { "const": "sofa" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_sofa" } } } },
@@ -785,9 +793,15 @@
 
         { "if": { "properties": { "type": { "const": "subwoofer" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_subwoofer" } } } },
 
+        { "if": { "properties": { "type": { "const": "toilet" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_toilet" } } } },
+
+        { "if": { "properties": { "type": { "const": "towel-rail" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_towel-rail" } } } },
+
         { "if": { "properties": { "type": { "const": "tube-floor-lamp" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_tube-floor-lamp" } } } },
 
         { "if": { "properties": { "type": { "const": "tv" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_tv" } } } },
+
+        { "if": { "properties": { "type": { "const": "vanity-counter" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_vanity-counter" } } } },
 
         { "if": { "properties": { "type": { "const": "wall-clock" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_wall-clock" } } } },
 
@@ -836,6 +850,55 @@
         "emissive"
       ],
       "description": "The closed finish palette (src/furniture/finishes.js)."
+    },
+
+    "furnitureParams_bathtub": {
+      "type": "object",
+      "description": "Params for `bathtub` (src/furniture/bathroom.js, TYPES['bathtub']): a straight built-in bath (lofted curved ceramic shell, rolled deck, deep rounded inner basin, chrome waste). `width` is the run along the wall. Each `default` equals bathroom.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). Generic, illustrative defaults; a real room's values live in its furniture[].params.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 170,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 70,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 55,
+          "description": "cm, bottom to top."
+        },
+        "rim": {
+          "type": "number",
+          "minimum": 0,
+          "default": 5,
+          "description": "cm, the flat deck around the inner basin."
+        },
+        "wasteEnd": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ],
+          "default": "right",
+          "description": "which end the plug is at, as you face the bath."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f7f5f0"
+        },
+        "wasteColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#eef0f2"
+        }
+      },
+      "additionalProperties": false
     },
 
     "furnitureParams_bed": {
@@ -2338,6 +2401,214 @@
       "additionalProperties": false
     },
 
+    "furnitureParams_shower-screen": {
+      "type": "object",
+      "description": "Params for `shower-screen` (src/furniture/bathroom.js, TYPES['shower-screen']): framed glazing in one plane: a bath screen (`frame: rail` -- hinge jamb + top rail) or framed fixed panes and hinged doors with mullions (`frame: full`). Always drawn closed. Each `default` equals bathroom.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). Generic, illustrative defaults; a real room's values live in its furniture[].params.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 70,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 140,
+          "description": "cm, bottom to top."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 3,
+          "description": "cm, back to front."
+        },
+        "frame": {
+          "type": "string",
+          "enum": [
+            "rail",
+            "full"
+          ],
+          "default": "rail",
+          "description": "'rail' (hinge jamb + top rail) or 'full' (framed panels)."
+        },
+        "panels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "fixed",
+                  "door"
+                ]
+              },
+              "width": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "kind",
+              "width"
+            ],
+            "additionalProperties": false
+          },
+          "default": [
+            {
+              "kind": "fixed",
+              "width": 70
+            }
+          ],
+          "description": "left to right as you face the screen; widths are scaled to fill `width`."
+        },
+        "hinge": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ],
+          "default": "right",
+          "description": "which end the jamb (rail) or each door's hinge (full) is at."
+        },
+        "frameColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f1ede2"
+        },
+        "glassColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#bcd8e6"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_shower-set": {
+      "type": "object",
+      "description": "Params for `shower-set` (src/furniture/bathroom.js, TYPES['shower-set']): a thermostatic bar valve, riser rail, handset and hose, with an optional wall bath spout. Authored by FLOOR heights; `width`/`depth`/`height` are OUTPUTS -- set them, and the item's `elevation`, from showerSetEnvelope() in bathroom.js. Each `default` equals bathroom.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). Generic, illustrative defaults; a real room's values live in its furniture[].params.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 44.7,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 19.2,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 133.8,
+          "description": "cm, bottom to top."
+        },
+        "valveHeight": {
+          "type": "number",
+          "minimum": 0,
+          "default": 110,
+          "description": "cm, floor to the bar valve centreline."
+        },
+        "valveLength": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 30,
+          "description": "cm."
+        },
+        "riserOffset": {
+          "type": "number",
+          "default": 20,
+          "description": "cm along the wall from the valve centre to the riser; + is right as you face the wall."
+        },
+        "riserFrom": {
+          "type": "number",
+          "minimum": 0,
+          "default": 118,
+          "description": "cm, floor to the lower riser bracket."
+        },
+        "riserTo": {
+          "type": "number",
+          "minimum": 0,
+          "default": 200,
+          "description": "cm, floor to the upper riser bracket."
+        },
+        "handsetHeight": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "description": "cm, floor to the handset slider; null = 22 below riserTo."
+        },
+        "hose": {
+          "type": "boolean",
+          "default": true,
+          "description": "draw the hose."
+        },
+        "spoutHeight": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "description": "cm, floor to a wall bath spout under the valve; null = none."
+        },
+        "spoutReach": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 16,
+          "description": "cm the spout reaches out from the wall."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#eef0f2"
+        },
+        "faceColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#9aa0a6"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_shower-tray": {
+      "type": "object",
+      "description": "Params for `shower-tray` (src/furniture/bathroom.js, TYPES['shower-tray']): a low rounded shower tray with a waste. Each `default` equals bathroom.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). Generic, illustrative defaults; a real room's values live in its furniture[].params.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 90,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 80,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 4.5,
+          "description": "cm, bottom to top."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f7f5f0"
+        },
+        "wasteColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#eef0f2"
+        }
+      },
+      "additionalProperties": false
+    },
+
     "furnitureParams_slat-panel": {
       "type": "object",
       "description": "Params for `slat-panel` (src/furniture/wall-panels.js): vertical slat panelling over a felt backing, ported from the acoustic-panel look in src/home3d-scene.js. Each `default` equals wall-panels.js TYPES['slat-panel'].DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
@@ -2510,6 +2781,99 @@
       "additionalProperties": false
     },
 
+    "furnitureParams_toilet": {
+      "type": "object",
+      "description": "Params for `toilet` (src/furniture/bathroom.js, TYPES['toilet']): a back-to-wall WC: lofted pan, square soft-close seat and lid, and an optional flush plate on the wall behind it. `height` is the envelope: the flush plate's top (with no plate, the lid's top = seatHeight + 4.2). Each `default` equals bathroom.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). Generic, illustrative defaults; a real room's values live in its furniture[].params.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 36,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 54,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 75,
+          "description": "cm, bottom to top."
+        },
+        "seatHeight": {
+          "type": "number",
+          "minimum": 0,
+          "default": 40,
+          "description": "cm, floor to the top of the pan (the seat sits on it)."
+        },
+        "flushPlate": {
+          "type": "boolean",
+          "default": true,
+          "description": "draw the flush plate on the wall behind the pan, its top at `height`."
+        },
+        "plateWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 22,
+          "description": "cm."
+        },
+        "plateHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 15,
+          "description": "cm."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f7f5f0"
+        },
+        "plateColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#eef0f2"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_towel-rail": {
+      "type": "object",
+      "description": "Params for `towel-rail` (src/furniture/bathroom.js, TYPES['towel-rail']): a chrome ladder towel rail standing on the floor against a wall. Each `default` equals bathroom.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). Generic, illustrative defaults; a real room's values live in its furniture[].params.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 50,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 120,
+          "description": "cm, bottom to top."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 4.2,
+          "description": "cm, back to front."
+        },
+        "rungs": {
+          "type": "number",
+          "minimum": 0,
+          "default": 7,
+          "description": "count."
+        },
+        "color": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#eef0f2"
+        }
+      },
+      "additionalProperties": false
+    },
+
     "furnitureParams_tube-floor-lamp": {
       "type": "object",
       "description": "Params for `tube-floor-lamp` (src/furniture/small-items.js, TYPES['tube-floor-lamp']): a thin emissive light tube rising from a small cylinder base. `width`/`depth` are the OVERALL footprint (the base, the widest part), not the thin tube. Each `default` equals the module's DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
@@ -2545,6 +2909,124 @@
         "standHeight": { "type": "number", "exclusiveMinimum": 0, "default": 10, "description": "cm." },
         "standWidth": { "type": "number", "exclusiveMinimum": 0, "default": 42, "description": "cm." },
         "standDepth": { "type": "number", "exclusiveMinimum": 0, "default": 31.7, "description": "cm, clamped to at most the declared `depth`." }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_vanity-counter": {
+      "type": "object",
+      "description": "Params for `vanity-counter` (src/furniture/bathroom.js, TYPES['vanity-counter']): a boxed vanity counter / duct with a countertop, an optional semi-recessed basin let into a notch in the countertop and a mono mixer. `depth` is the envelope (counterDepth + how far the basin stands proud); `height` is the tap's top (vanityEnvelope() in bathroom.js). Each `default` equals bathroom.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). Generic, illustrative defaults; a real room's values live in its furniture[].params.",
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 120,
+          "description": "cm, along the wall / the item's local x."
+        },
+        "depth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 48,
+          "description": "cm, back to front."
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 106,
+          "description": "cm, bottom to top."
+        },
+        "counterDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 30,
+          "description": "cm, wall to the counter face."
+        },
+        "counterHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 90,
+          "description": "cm, floor to the countertop top."
+        },
+        "topThick": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 3,
+          "description": "cm, countertop slab."
+        },
+        "basin": {
+          "type": "boolean",
+          "default": true,
+          "description": "draw a semi-recessed basin."
+        },
+        "basinWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 50,
+          "description": "cm."
+        },
+        "basinDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 40,
+          "description": "cm, clamped so its back clears the wall by 1 cm."
+        },
+        "basinHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 18,
+          "description": "cm, rim to the bowl underside."
+        },
+        "basinAt": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "description": "cm from the counter's LEFT end (as you face it) to the basin centre; null = centred."
+        },
+        "basinLip": {
+          "type": "number",
+          "minimum": 0,
+          "default": 2,
+          "description": "cm the rim stands above the countertop."
+        },
+        "tap": {
+          "type": "boolean",
+          "default": true,
+          "description": "a mono mixer on the basin deck, rising to `height`."
+        },
+        "bodyColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#cdc2b1"
+        },
+        "topColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f6f4ef"
+        },
+        "ceramicColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#f7f5f0"
+        },
+        "tapColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#eef0f2"
+        },
+        "tileWidth": {
+          "type": "number",
+          "minimum": 0,
+          "default": 40,
+          "description": "cm, grout-line pitch on the counter face; 0 = none."
+        },
+        "tileHeight": {
+          "type": "number",
+          "minimum": 0,
+          "default": 25,
+          "description": "cm."
+        },
+        "groutColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#a89c87"
+        }
       },
       "additionalProperties": false
     },

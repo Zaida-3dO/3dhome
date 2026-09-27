@@ -95,7 +95,9 @@
        room instead of reading black. The cube is captured a few frames
        after each rebuild (settle frames), positioned at the room centre
        (target). Meshes tagged mesh.userData.isMirror = true are HIDDEN
-       during the cube capture so a mirror never reflects itself.
+       during the cube capture so a mirror never reflects itself, and
+       faded shell walls and ceiling are captured SOLID (their fade is
+       restored straight after), so the cube never sees the background.
        buildModel only needs to tag mirror meshes with
        userData.isMirror = true (optional but recommended); no other work.
    ===================================================================== */
@@ -267,11 +269,27 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
         const mirrors = stateRef.current._mirrors || [];
         const hidden = [];
         for (const m of mirrors) { hidden.push(m.visible); m.visible = false; }
+        // The cube sits INSIDE the room, so it must see the room whole. A
+        // shell wall or ceiling faded for the orbit camera (which is outside
+        // or above) would otherwise let the dark scene background into the
+        // reflection, and every glossy or mirror surface picks it up at
+        // grazing angles -- the "black border" round ceramic rims and the
+        // dark-grey mirror doors. Capture them solid, then put the fade back.
+        const solid = [];
+        const shells = (stateRef.current._shellWalls || []).concat(stateRef.current._ceiling ? [stateRef.current._ceiling] : []);
+        for (const mesh of shells) {
+          for (const m of (Array.isArray(mesh.material) ? mesh.material : [mesh.material])) {
+            if (!m || solid.some(s => s.m === m)) continue;
+            solid.push({ m, opacity: m.opacity, depthWrite: m.depthWrite });
+            m.opacity = 1; m.depthWrite = true;
+          }
+        }
         cubeCam.position.copy(target);
         const prevEnv = scene.environment;
         scene.environment = null; // avoid feedback while capturing
         cubeCam.update(renderer, scene);
         scene.environment = prevEnv;
+        for (const s of solid) { s.m.opacity = s.opacity; s.m.depthWrite = s.depthWrite; }
         for (let i = 0; i < mirrors.length; i++) mirrors[i].visible = hidden[i];
       }
 

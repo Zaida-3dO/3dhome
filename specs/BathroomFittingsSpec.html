@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bathroom Fittings Spec — Tweakable</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  pre.json { font-size:10px; background:#f7f5f0; border:1px solid #ece8e0; border-radius:4px; padding:8px; margin-top:10px; white-space:pre-wrap; word-break:break-all; }
+  @media (max-width: 760px) {
+    body { padding:12px; }
+    .grid { grid-template-columns:1fr; }
+    #c3d { height:420px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- The fittings live in src/furniture/bathroom.js (and the mirror cabinet in
+     cabinet.js) -- the SAME pure builder modules the house scene calls for a
+     placed item. Loaded as real ES modules and stashed on window for the
+     Babel-transpiled page below. -->
+<script type="module">
+  import * as Bath from '../src/furniture/bathroom.js';
+  import * as Cab from '../src/furniture/cabinet.js';
+  window.FurnitureBathroom = Bath;
+  window.FurnitureCabinet = Cab;
+  window.dispatchEvent(new Event('furniture-bathroom-ready'));
+</script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   BATHROOM FITTINGS SPEC   ·   bath, WC, vanity counter + basin, shower
+   set, bath / shower screen, shower tray, towel rail, mirror cabinet
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every size here is a generic DEFAULT or preset, not a survey of any
+   particular room. A real room's values belong in its own house profile
+   (furniture[].params), usually copied from this page's Copy JSON.
+   ─────────────────────────────────────────────────────────────────────
+
+   The geometry is NOT built here: it lives in src/furniture/bathroom.js
+   (seven types) and src/furniture/cabinet.js (the mirror cabinet is a
+   `cabinet` with mirror fronts and no plinth), unit-tested by
+   scripts/test-furniture-bathroom.mjs. This page is a thin harness.
+
+   The ceramic (bath, pan, seat, lid, basin, tray) is lofted from stacked
+   rounded-rectangle rings -- curved, single-sided, gloss palette finish.
+   ===================================================================== */
+
+// The mirror cabinet: a `cabinet` preset, not a bathroom.js type.
+function mirrorCabinetParams(w, h, d, doors) {
+  const cells = [];
+  for (let i = 0; i < doors; i++) cells.push({ kind: 'mirror', width: +(w / doors).toFixed(3) });
+  return { width: w, height: h, depth: d, plinth: { type: 'plinth', height: 0 }, handles: false,
+    color: '#f4f1ea', topColor: '#f4f1ea', fronts: [{ height: h, cells }] };
+}
+const EXTRA_PRESETS = {
+  'Mirror cabinet, 3 doors': { type: 'cabinet', params: mirrorCabinetParams(120, 70, 18, 3) },
+  'Mirror cabinet, 2 doors': { type: 'cabinet', params: mirrorCabinetParams(80, 70, 16, 2) },
+};
+function allPresets() {
+  return Object.assign({}, window.FurnitureBathroom.PRESETS, EXTRA_PRESETS);
+}
+function impl(type) {
+  if (type === 'cabinet') return window.FurnitureCabinet;
+  return window.FurnitureBathroom.TYPES[type];
+}
+const ALL = 'All fittings (lined up)';
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "preset": "Bath 170 x 70",
+  "detail": "full"
+}/*EDITMODE-END*/;
+
+let reportStats = null;
+
+function resolved(name) {
+  const pr = allPresets()[name];
+  const I = impl(pr.type);
+  return { type: pr.type, params: Object.assign({}, I.DEFAULTS, pr.params), build: I.build };
+}
+
+function triCount(obj) {
+  let n = 0;
+  obj.traverse(o => { if (o.isMesh) n += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  return n;
+}
+
+function buildFittings(t, group, THREE) {
+  if (!window.FurnitureBathroom) return;
+  const detail = { detail: t.detail === 'low' ? 'low' : 'full' };
+  const names = t.preset === ALL ? Object.keys(allPresets()) : [t.preset];
+  let x = 0, tris = 0;
+  const built = names.map(n => {
+    const r = resolved(n);
+    const g = r.build(THREE, r.params, detail);
+    tris += triCount(g);
+    return { g, w: r.params.width / 100, r };
+  });
+  const total = built.reduce((a, b) => a + b.w + 0.3, -0.3);
+  built.forEach(({ g, w, r }) => {
+    // Hang wall items at a plausible height so the line-up reads.
+    const y = r.type === 'cabinet' ? 1.3 : r.type === 'shower-set' ? 0.7 : r.type === 'shower-screen' && r.params.frame !== 'full' ? 0.55 : 0;
+    g.position.set(x - total / 2 + w / 2, y, names.length === 1 ? -r.params.depth / 200 : 0);
+    x += w + 0.3;
+    group.add(g);
+  });
+  if (reportStats) reportStats(tris);
+  const floorW = Math.max(3.2, total + 1);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(floorW, 2.4), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  floor.name = 'floor';
+  group.add(floor);
+}
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [tris, setTris] = React.useState(null);
+  const [copied, setCopied] = React.useState('');
+  reportStats = setTris;   // set during render: ThreeView's effect runs before App's
+  const names = Object.keys(allPresets());
+  const single = t.preset !== ALL && allPresets()[t.preset];
+  const r = single ? resolved(t.preset) : null;
+  const B = window.FurnitureBathroom;
+  let json = '';
+  let envNote = '';
+  if (r) {
+    const params = r.type === 'cabinet' ? allPresets()[t.preset].params : B.paramsDiff(r.type, r.params);
+    const item = { id: 'my_' + r.type.replace(/-/g, '_'), room: 'bathroom', type: r.type, wall: 1, centre: 0, offset: 0, params };
+    if (r.type === 'shower-set') {
+      const e = B.showerSetEnvelope(THREE, r.params);
+      item.elevation = e.bottom;
+      item.fade = 'never';
+      envNote = 'elevation ' + e.bottom + ' cm puts every part at its floor height; the valve centre is ' + e.valveX + ' cm along the width from the set\'s centre.';
+    }
+    if (r.type === 'cabinet') item.elevation = 130;
+    json = JSON.stringify(item, null, 2);
+  }
+  const copy = () => {
+    const done = () => { setCopied('copied'); setTimeout(() => setCopied(''), 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
+    else setCopied('clipboard unavailable — select the JSON below');
+  };
+  return (
+    <>
+      <h1>Bathroom Fittings Spec</h1>
+      <div className="sub">All units cm. Generic bathroom fittings for the live house: pick a preset in Tweaks (or "{ALL}"). Illustrative sizes only.</div>
+      <div className="grid">
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">value</th><th>Note</th></tr>
+              <tr><td>Type</td><td className="num">{r ? r.type : 'all'}</td><td>{r && r.type === 'cabinet' ? 'the cabinet type, mirror fronts' : 'src/furniture/bathroom.js'}</td></tr>
+              {r && <tr><td>W x D x H</td><td className="num">{r.params.width} x {r.params.depth} x {r.params.height}</td><td>the bounding box (builder contract)</td></tr>}
+              <tr><td>Triangles</td><td className="num">{tris ?? '—'}</td><td>{t.detail} detail{r && B.TRIANGLE_CAPS[r.type] ? ' · cap ' + B.TRIANGLE_CAPS[r.type][t.detail] : ''}</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            Ceramic is <b>gloss</b>, chrome <b>metal</b>, glass <b>glass</b> (one draw), mirror <b>mirror</b> -- the closed
+            finish palette, so a whole bathroom merges into the house's existing draws. No lights, no textures.
+            {envNote && <><br />{envNote}</>}
+          </div>
+        </div>
+        <div className="card">
+          <h2>Copy JSON</h2>
+          {r ? (
+            <>
+              <div className="row">
+                <button className="btn" onClick={copy}>Copy as furniture JSON</button>
+                {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
+              </div>
+              <pre className="json">{json}</pre>
+              <div className="legend">Placement (wall / centre / offset / elevation) is a placeholder: set it for your room.</div>
+            </>
+          ) : <div className="legend">Pick one preset to copy its JSON.</div>}
+        </div>
+        <div className="card full">
+          <h2>3D — {t.preset}</h2>
+          <ThreeView t={t} buildModel={buildFittings} heightOf={() => 0.8} />
+        </div>
+      </div>
+      <TweaksPanel>
+        <TweakSection label="Fitting" />
+        <TweakSelect label="Preset" value={t.preset} options={[ALL, ...names]} onChange={v => setTweak('preset', v)} />
+        <TweakSection label="Render" />
+        <TweakRadio label="Detail" value={t.detail} options={['full', 'low']} onChange={v => setTweak('detail', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+function mount() { ReactDOM.createRoot(document.getElementById('root')).render(<App />); }
+if (window.FurnitureBathroom) mount();
+else window.addEventListener('furniture-bathroom-ready', mount, { once: true });
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>
