@@ -2575,84 +2575,154 @@
 
     "furnitureParams_plant": {
       "type": "object",
-      "description": "Params for `plant` (src/furniture/plant.js): a procedural potted or wall-mounted plant. Each `default` equals plant.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). width/depth/height are the authoritative bounding envelope the builder fits its procedural geometry onto exactly; potHeight/plantHeight/spread/stemCount/leafCount proportion the interior detail for the `kind` in use.",
+      "description": "Params for `plant` (src/furniture/plant.js): a procedural potted or wall-mounted plant. Each `default` equals plant.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs). width/depth/height are the authoritative bounding envelope the builder fits its procedural geometry onto exactly; the other numbers proportion the interior detail for the `kind` in use.",
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["corn-plant", "wall-planter"],
+          "enum": [
+            "corn-plant",
+            "wall-planter",
+            "peace-lily",
+            "snake-plant",
+            "pothos",
+            "ficus",
+            "jade"
+          ],
           "default": "corn-plant",
-          "description": "corn-plant: a potted Dracaena fragrans, free-standing. wall-planter: a hanging faceted ceramic planter, wall-mounted."
+          "description": "corn-plant: a potted Dracaena, canes crowned by tufts of long leaves. wall-planter: a geometric wall planter (ceramic lower half, brass wire diamond). peace-lily: grown in water in a glass bubble vase. snake-plant: stiff sword leaves. pothos: heart leaves, upright or trailing (see habit/trail). ficus: a small thick-trunk tree. jade: a succulent with fleshy pads."
         },
         "width": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 40,
+          "default": 60,
           "description": "cm, along the wall / the item's local x -- the footprint envelope."
         },
         "depth": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 40,
+          "default": 60,
           "description": "cm, back to front."
         },
         "height": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 166,
-          "description": "cm, floor (or `elevation`) to top."
+          "description": "cm, floor (or `elevation`) to top. For a trailing pothos this INCLUDES `trail`: the vine tips are at y = 0."
+        },
+        "potStyle": {
+          "type": "string",
+          "enum": [
+            "egg",
+            "tapered",
+            "ribbed-footed",
+            "bowl",
+            "cylinder",
+            "glass-bubble"
+          ],
+          "default": "egg",
+          "description": "Free-standing kinds: the pot's shape. glass-bubble is clear glass (kept as its own draw). The peace-lily kind always uses glass-bubble."
         },
         "potHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 56,
-          "description": "corn-plant only: pot height, cm (proportioning; width/depth/height above are the final envelope)."
+          "description": "Free-standing kinds: pot height, cm (proportioning; width/depth/height are the final envelope)."
         },
         "potTopDiameter": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 30,
-          "description": "corn-plant only: pot opening diameter, cm (proportioning)."
+          "description": "Free-standing kinds: pot opening diameter, cm (proportioning)."
         },
         "potColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#9c7c4a"
+          "default": "#a67c4e",
+          "description": "Pot colour; for wall-planter, the ceramic."
         },
         "plantHeight": {
           "type": "number",
           "exclusiveMinimum": 0,
           "default": 110,
-          "description": "corn-plant: vase-top to top-of-foliage, cm (proportioning). wall-planter: leaf height above the opening, cm (proportioning)."
+          "description": "Foliage height above the pot rim, cm (proportioning). corn-plant: the canes are fixed fractions of it (about 0.72 / 0.30 / 0.12 to their tops)."
         },
         "stemCount": {
           "type": "integer",
           "exclusiveMinimum": 0,
           "default": 3,
-          "description": "corn-plant only: number of canes."
+          "description": "corn-plant: canes. pothos: stems or vines. ficus: branches. jade: stems."
         },
         "spread": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "default": 40,
-          "description": "corn-plant only: widest leaf spread, cm (proportioning)."
+          "default": 60,
+          "description": "Widest foliage spread, cm (proportioning). corn-plant: the top crown."
         },
-        "leafColor": {
-          "$ref": "#/$defs/hexColor",
-          "default": "#33502a"
+        "leafLength": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 45,
+          "description": "Leaf length, cm. corn-plant: independent of spread -- a narrower spread bends the leaves steeper rather than shortening them."
+        },
+        "leafWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 6,
+          "description": "Widest leaf width, cm."
         },
         "leafCount": {
           "type": "integer",
           "exclusiveMinimum": 0,
           "default": 5,
-          "description": "wall-planter only: number of spiky leaves."
+          "description": "Leaves (peace-lily, snake-plant, pothos, ficus) or pads (jade). corn-plant and wall-planter set their own counts per cane / per `contents`."
+        },
+        "leafColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1f3a1c"
+        },
+        "accentColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#d8d3a8",
+          "description": "Variegation (peace-lily) and leaf margins (snake-plant; wall-planter contents snake-plant)."
+        },
+        "habit": {
+          "type": "string",
+          "enum": [
+            "upright",
+            "trailing"
+          ],
+          "default": "upright",
+          "description": "pothos only: upright arching stems, or vines that hang over the rim."
+        },
+        "trail": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "description": "pothos trailing only: cm the vines hang BELOW the pot base. The pot stands at y = trail, so place the item with elevation = surface height - trail."
+        },
+        "glassColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#dcecef",
+          "description": "glass-bubble pot tint."
         },
         "frameColor": {
           "$ref": "#/$defs/hexColor",
-          "default": "#b8945a"
+          "default": "#b8945a",
+          "description": "wall-planter only: the brass wire."
+        },
+        "contents": {
+          "type": "string",
+          "enum": [
+            "spiky",
+            "succulent",
+            "snake-plant"
+          ],
+          "default": "spiky",
+          "description": "wall-planter only: a spiky tuft, a short succulent, or a few sword leaves with pale margins."
         },
         "seed": {
           "type": "integer",
           "default": 1,
-          "description": "Deterministic leaf-layout seed -- the same seed always lays out the same leaves."
+          "description": "Deterministic layout seed -- the same seed always lays out the same plant."
         }
       },
       "additionalProperties": false
