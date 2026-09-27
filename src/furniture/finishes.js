@@ -45,9 +45,17 @@ export const FINISHES = Object.freeze(Object.keys(FINISH_PARAMS));
  * glass and catches the room's highlights, at no cost (same texel lookup,
  * same program, no new draw). Spec pages, which DO install an environment
  * (specs/spec-three.jsx), keep the true mirror from makeFinish().
+ *
+ * `metal` has the same problem at a smaller scale: at metalness 0.9 only a
+ * tenth of its colour is diffuse, so a light-grey handle, radiator fin or
+ * brass sconce read near-black in the house. Live, it is a mostly-diffuse
+ * satin grey that keeps a little metallic tint in its highlights. Every
+ * metal part of every registered builder lands in the palette bucket (see
+ * scripts/test-live-finishes.mjs), so this one entry is the whole fix.
  */
 export const NO_ENV_FINISH_PARAMS = Object.freeze({
-  mirror: Object.freeze({ roughness: 0.12, metalness: 0.15 })
+  mirror: Object.freeze({ roughness: 0.12, metalness: 0.15 }),
+  metal: Object.freeze({ roughness: 0.35, metalness: 0.3 })
 });
 
 /** The params the live (no-environment) scene draws `finish` with. */

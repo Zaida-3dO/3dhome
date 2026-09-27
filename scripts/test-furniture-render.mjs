@@ -257,7 +257,9 @@ const build = (h, quality, extra, opts) => quietly(() => F.buildFurnitureSync(TH
     const i = M.PALETTE_FINISHES.indexOf('mirror'), d = tex.image.data;
     check('mirror texel is not fully metallic (no env map to reflect)', d[i * 4 + 2] / 255 <= 0.2 && d[i * 4 + 1] / 255 <= 0.2,
       [d[i * 4 + 1], d[i * 4 + 2]]);
-    check('every other finish draws exactly as the palette', M.PALETTE_FINISHES.filter(f => f !== 'mirror').every(f => Fin.liveFinishParams(f) === Fin.FINISH_PARAMS[f]));
+    // metal has its own live override too (finishes.js); its checks are in
+    // scripts/test-live-finishes.mjs.
+    check('every other finish draws exactly as the palette', M.PALETTE_FINISHES.filter(f => f !== 'mirror' && f !== 'metal').every(f => Fin.liveFinishParams(f) === Fin.FINISH_PARAMS[f]));
   }
   check('a vertex uv lands on its own finish texel', ['matte', 'gloss', 'satin', 'metal', 'mirror'].every(f =>
     Math.floor(M.paletteU(f) * M.PALETTE_FINISHES.length) === M.PALETTE_FINISHES.indexOf(f)));
