@@ -1,0 +1,848 @@
+/**
+ * tap-popovers.js -- tap a 3D object, get a compact popover controlling the
+ * Home Assistant entity bound to it. SPIKE (docs/plans/tap-popovers.md).
+ *
+ * The sidebar stays the primary control surface; this is an additional,
+ * direct-manipulation path. It READS the sidebar's own state (index.html's
+ * doorStatus / climateReading / curtainAvailableState maps, home.lightState)
+ * and WRITES through the sidebar's own send paths (sendToHA, and the shared
+ * createDragSender instances for curtains and climate), so the two can never
+ * disagree about what was sent or double-send.
+ *
+ * THE MAPPING IS DERIVED, NOT HAND-WRITTEN. A target is recognised from what
+ * the scene already tags on its meshes, and bound through rooms.json:
+ *
+ *   light    mesh.userData.{roomId, lightChannel}  -> rooms[roomId][channel]
+ *   curtain  ancestor group named 'curtain:<id>'   -> sensors.curtains[id]
+ *   door     ancestor userData.doorProfileId       -> sensors.doors[id]
+ *   climate  (room)                                -> sensors.climate[room]
+ *
+ * Climate is keyed by ROOM (rooms.json 1.3, the sidebar's binding). Nothing on
+ * main can be tapped for it yet: furniture renders merged into shared buckets,
+ * so a radiator mesh carries no identity -- see the plan. It opens through the
+ * ?debug=1 seam (__home3dTap.openAt('climate', roomId, x, y)).
+ *
+ * OCCLUSION: nearest drawn, non-see-through hit wins. A faded exterior wall
+ * (opacity 0.05), the ceiling seen from above (0), the room click-catchers (0)
+ * and window glass (0.28) are see-through; a solid wall, a door frame or
+ * furniture in front of a light BLOCKS the tap.
+ *
+ * The pure parts (materialOpacity, resolveTarget, pickFromHits,
+ * placePopover, statusKey, climateActivity, lightName) take no DOM and are
+ * unit-tested in scripts/test-tap-popovers.mjs.
+ */
+
+export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
+export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
+export const FUZZ_PX = 24;           // finger tolerance for tiny light fixtures
+export const ARROW_INSET = 14;       // arrow never closer than this to a corner
+
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
+
+/** Effective opacity of the material a hit landed on (0 = not drawn). */
+export function materialOpacity(material, materialIndex) {
+  const m = Array.isArray(material) ? (material[materialIndex || 0] || material[0]) : material;
+  if (!m) return 0;
+  if (m.visible === false || m.colorWrite === false) return 0;
+  return m.transparent ? m.opacity : 1;
+}
+
+/** True when the object and every ancestor are visible. */
+export function isDrawn(obj) {
+  for (let o = obj; o; o = o.parent) if (o.visible === false) return false;
+  return true;
+}
+
+/**
+ * Walk up from a hit mesh to the first thing that identifies a controllable
+ * object. Returns a target when that object is BOUND in rooms.json, or null
+ * (an unbound door is still a solid door -- the caller treats null as "not a
+ * target", i.e. an occluder if opaque).
+ *
+ * @param bindings  { lights: rooms, curtains, doors } from rooms.json
+ */
+export function resolveTarget(obj, bindings) {
+  const b = bindings || {};
+  for (let o = obj; o; o = o.parent) {
+    const u = o.userData || {};
+    if (u.lightChannel && u.roomId) {
+      const ents = ((b.lights || {})[u.roomId] || {})[u.lightChannel];
+      return Array.isArray(ents) && ents.length
+        ? { kind: 'light', id: u.roomId + '/' + u.lightChannel, roomId: u.roomId, channel: u.lightChannel, entities: ents, object: o }
+        : null;
+    }
+    if (u.doorProfileId !== undefined) {
+      const ents = u.doorProfileId ? (b.doors || {})[u.doorProfileId] : null;
+      return Array.isArray(ents) && ents.length
+        ? { kind: 'door', id: u.doorProfileId, entities: ents, object: o }
+        : null;
+    }
+    if (typeof o.name === 'string' && o.name.indexOf('curtain:') === 0) {
+      const id = o.name.slice('curtain:'.length);
+      const ents = (b.curtains || {})[id];
+      return Array.isArray(ents) && ents.length
+        ? { kind: 'curtain', id, entities: ents, object: o }
+        : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Decide a tap from raycast hits (sorted nearest-first). Returns
+ * { target, hit } for a target, { target:null, hit } when the first solid
+ * thing is not a target (OCCLUDED), or { target:null, hit:null }.
+ */
+export function pickFromHits(hits, bindings) {
+  for (let i = 0; i < hits.length; i++) {
+    const h = hits[i];
+    const o = h.object;
+    if (!o || !(o.isMesh)) continue;
+    if (!isDrawn(o)) continue;
+    const t = resolveTarget(o, bindings);
+    if (t) return { target: t, hit: h };
+    if (materialOpacity(o.material, h.face ? h.face.materialIndex : 0) < OPACITY_SOLID) continue;
+    return { target: null, hit: h };
+  }
+  return { target: null, hit: null };
+}
+
+/**
+ * Where to put a w x h popover for a tap at (x, y), inside `bounds`
+ * ({left, top, right, bottom}). Boundary-aware, in this order:
+ *   1. ABOVE the tap (a finger covers what is below it);
+ *   2. BELOW it;
+ *   3. to the RIGHT or LEFT of it, whichever has room (the larger if both) --
+ *      the case a short landscape phone viewport hits, where neither above
+ *      nor below fits and the old clamp put the card over the finger;
+ *   4. only then clamped inside the bounds ('clamped', no arrow).
+ * The arrow points at the tap from whichever side the card is on; its
+ * offset is along that edge, kept ARROW_INSET from the corners.
+ *
+ * @returns {{left, top, placement, arrow: null | {side, offset}}}
+ */
+export function placePopover(x, y, w, h, bounds, gap, margin) {
+  const g = gap == null ? 12 : gap;
+  const m = margin == null ? 8 : margin;
+  const minL = bounds.left + m, maxL = bounds.right - m - w;
+  const minT = bounds.top + m, maxT = bounds.bottom - m - h;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+  const along = (pos, size) => clamp(pos, ARROW_INSET, Math.max(ARROW_INSET, size - ARROW_INSET));
+  const out = (left, top, placement, side) => {
+    left = Math.round(left); top = Math.round(top);
+    const arrow = side === 'bottom' || side === 'top'
+      ? { side, offset: Math.round(along(x - left, w)) }
+      : side ? { side, offset: Math.round(along(y - top, h)) } : null;
+    return { left, top, placement, arrow };
+  };
+  const hLeft = clamp(x - w / 2, minL, Math.max(minL, maxL));
+  if (y - g - h >= minT) return out(hLeft, y - g - h, 'above', 'bottom');
+  if (y + g + h <= bounds.bottom - m) return out(hLeft, y + g, 'below', 'top');
+  const roomRight = bounds.right - m - (x + g);   // space for the card right of the tap
+  const roomLeft = (x - g) - (bounds.left + m);
+  const vTop = clamp(y - h / 2, minT, Math.max(minT, maxT));
+  const fitsR = roomRight >= w, fitsL = roomLeft >= w;
+  if (fitsR && (!fitsL || roomRight >= roomLeft)) return out(x + g, vTop, 'right', 'left');
+  if (fitsL) return out(x - g - w, vTop, 'left', 'right');
+  return out(clamp(x - w / 2, minL, Math.max(minL, maxL)), clamp(y - g - h, minT, Math.max(minT, maxT)), 'clamped', null);
+}
+
+/**
+ * The status dot for one popover:
+ *   ok          green   HA connected over the websocket, entity reporting
+ *   connecting  yellow  polling / syncing / reconnecting (dot pulses)
+ *   na          yellow  connected, but this entity is unavailable/unknown
+ *   motor       yellow  connected, but a curtain motor is unavailable
+ *   offline     red     no client, disconnected, auth_failed, sync_failed
+ *   offlineMock red     offline AND showing sample values (climate)
+ *
+ * @param conn    HA client status string, or null when there is no client
+ * @param entityUnavailable  true when HA is up but this entity is not
+ */
+export function statusKey(kind, conn, entityUnavailable, mock) {
+  if (!conn || conn === 'disconnected' || conn === 'auth_failed' || conn === 'sync_failed') {
+    return mock ? 'offlineMock' : 'offline';
+  }
+  if (conn !== 'connected') return 'connecting';
+  if (entityUnavailable) return kind === 'curtain' ? 'motor' : 'na';
+  return 'ok';
+}
+
+/**
+ * Is a radiator firing? From `hvac_action` (heating / idle / off), NEVER from
+ * the entity's `state` -- state is the MODE ('heat' means "set to heat", not
+ * "heating now"). A thermostat at target reads state 'heat', hvac_action
+ * 'idle'. Returns 'heating' | 'idle' | 'off' | null (not reported).
+ */
+export function climateActivity(hvacAction, off) {
+  if (off) return 'off';
+  if (hvacAction === 'heating' || hvacAction === 'preheating') return 'heating';
+  if (hvacAction === 'off') return 'off';
+  if (typeof hvacAction === 'string' && hvacAction) return 'idle';
+  return null;
+}
+
+/**
+ * A light's popover name. Always carries the room, since the popover no
+ * longer has a room subtitle: "Hall ceiling" stays as is, a bare channel
+ * becomes "{Room} light", and a label lacking the room gets it prefixed
+ * ("Cove" -> "Lounge cove"). Sentence case: Capitalised words after the
+ * first are lowered, ALL-CAPS words (TV, LED) are kept.
+ */
+export function lightName(roomName, channel, label) {
+  const room = String(roomName || '').trim();
+  let base = String(label || '').trim();
+  if (!base || base.toLowerCase() === room.toLowerCase()) {
+    base = channel === 'main' ? 'light' : channel === 'ambient' ? 'ambient light' : String(channel || 'light');
+  }
+  const full = room && base.toLowerCase().indexOf(room.toLowerCase()) === -1 ? room + ' ' + base : base;
+  return sentenceCase(full);
+}
+
+/** "Living Room Radiator" -> "Living room radiator"; ALL-CAPS words kept. */
+export function sentenceCase(text) {
+  return String(text || '').trim().split(/\s+/).map((wd, i) => {
+    if (i === 0) return wd.charAt(0).toUpperCase() + wd.slice(1);
+    return /^[A-Z][a-z]/.test(wd) ? wd.charAt(0).toLowerCase() + wd.slice(1) : wd;
+  }).join(' ');
+}
+
+// ---------------------------------------------------------------------------
+// Runtime (browser)
+// ---------------------------------------------------------------------------
+
+// MDI icon paths (@mdi/svg 7.4.47, Apache-2.0), inlined: no font, no fetch.
+const I = {
+  bulb: 'M12,2A7,7 0 0,0 5,9C5,11.38 6.19,13.47 8,14.74V17A1,1 0 0,0 9,18H15A1,1 0 0,0 16,17V14.74C17.81,13.47 19,11.38 19,9A7,7 0 0,0 12,2M9,21A1,1 0 0,0 10,22H14A1,1 0 0,0 15,21V20H9V21Z',
+  bulbOff: 'M12,2A7,7 0 0,1 19,9C19,11.38 17.81,13.47 16,14.74V17A1,1 0 0,1 15,18H9A1,1 0 0,1 8,17V14.74C6.19,13.47 5,11.38 5,9A7,7 0 0,1 12,2M9,21V20H15V21A1,1 0 0,1 14,22H10A1,1 0 0,1 9,21M12,4A5,5 0 0,0 7,9C7,11.05 8.23,12.81 10,13.58V16H14V13.58C15.77,12.81 17,11.05 17,9A5,5 0 0,0 12,4Z',
+  curtains: 'M23 3H1V1H23V3M2 22H6C6 19 4 17 4 17C10 13 11 4 11 4H2V22M22 4H13C13 4 14 13 20 17C20 17 18 19 18 22H22V4Z',
+  curtainsClosed: 'M23 3H1V1H23V3M2 22H11V4H2V22M22 4H13V22H22V4Z',
+  cOpen: 'M18,16V13H15V22H13V2H15V11H18V8L22,12L18,16M2,12L6,16V13H9V22H11V2H9V11H6V8L2,12Z',
+  cClose: 'M13,20V4H15.03V20H13M10,20V4H12.03V20H10M5,8L9.03,12L5,16V13H2V11H5V8M20,16L16,12L20,8V11H23V13H20V16Z',
+  doorOpen: 'M12,3C10.89,3 10,3.89 10,5H3V19H2V21H22V19H21V5C21,3.89 20.11,3 19,3H12M12,5H19V19H12V5M5,11H7V13H5V11Z',
+  doorClosed: 'M16,11H18V13H16V11M12,3H19C20.11,3 21,3.89 21,5V19H22V21H2V19H10V5C10,3.89 10.89,3 12,3M12,5V19H19V5H12Z',
+  radiator: 'M7.95,3L6.53,5.19L7.95,7.4H7.94L5.95,10.5L4.22,9.6L5.64,7.39L4.22,5.19L6.22,2.09L7.95,3M13.95,2.89L12.53,5.1L13.95,7.3L13.94,7.31L11.95,10.4L10.22,9.5L11.64,7.3L10.22,5.1L12.22,2L13.95,2.89M20,2.89L18.56,5.1L20,7.3V7.31L18,10.4L16.25,9.5L17.67,7.3L16.25,5.1L18.25,2L20,2.89M2,22V14A2,2 0 0,1 4,12H20A2,2 0 0,1 22,14V22H20V20H4V22H2M6,14A1,1 0 0,0 5,15V17A1,1 0 0,0 6,18A1,1 0 0,0 7,17V15A1,1 0 0,0 6,14M10,14A1,1 0 0,0 9,15V17A1,1 0 0,0 10,18A1,1 0 0,0 11,17V15A1,1 0 0,0 10,14M14,14A1,1 0 0,0 13,15V17A1,1 0 0,0 14,18A1,1 0 0,0 15,17V15A1,1 0 0,0 14,14M18,14A1,1 0 0,0 17,15V17A1,1 0 0,0 18,18A1,1 0 0,0 19,17V15A1,1 0 0,0 18,14Z',
+  radiatorIdle: 'M20,12H4A2,2 0 0,0 2,14V22H4V20H20V22H22V14A2,2 0 0,0 20,12M7,17A1,1 0 0,1 6,18A1,1 0 0,1 5,17V15A1,1 0 0,1 6,14A1,1 0 0,1 7,15V17M11,17A1,1 0 0,1 10,18A1,1 0 0,1 9,17V15A1,1 0 0,1 10,14A1,1 0 0,1 11,15V17M15,17A1,1 0 0,1 14,18A1,1 0 0,1 13,17V15A1,1 0 0,1 14,14A1,1 0 0,1 15,15V17M19,17A1,1 0 0,1 18,18A1,1 0 0,1 17,17V15A1,1 0 0,1 18,14A1,1 0 0,1 19,15V17Z',
+  minus: 'M19,13H5V11H19V13Z',
+  plus: 'M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z',
+};
+const svg = (p, cls) => '<svg class="' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true"><path d="' + p + '"/></svg>';
+const ico = (p, cls) => svg(p, 'tp-ico ' + (cls || ''));
+
+const STATUS = {
+  ok: ['ok', 'Live', 'Connected to Home Assistant.'],
+  connecting: ['warn pulse', 'Connecting…', 'Reconnecting to Home Assistant. Changes are still sent.'],
+  na: ['warn', 'Entity unavailable', 'Home Assistant is connected, but this device isn’t responding.'],
+  motor: ['warn', 'Motor unavailable', 'One of this curtain’s motors isn’t responding in Home Assistant.'],
+  offline: ['bad', 'Not connected', 'Home Assistant is offline. Changes only preview on the model.'],
+  offlineMock: ['bad', 'Not connected', 'Home Assistant is offline. Showing sample temperatures; changes only preview.'],
+};
+
+// Sizes as CSS variables; the coarse set is emitted twice -- under
+// (pointer: coarse), and under .tp-force-coarse for the ?debug=1 seam, since
+// a desktop browser cannot be made to report a coarse pointer.
+const COARSE = '--w:216px;--ib-w:38px;--ib-h:34px;--sw-w:40px;--sw-h:24px;--thumb:20px;';
+const coarseRules = sel => `
+${sel} .tp-pop { ${COARSE} }
+${sel} .tp-status::after { inset: -14px; }
+${sel} .tp-btns { gap: 6px; }
+${sel} .tp-ib::after { inset: -5px -3px; }
+${sel} .tp-sw::after { inset: -10px -2px; }
+${sel} .tp-range { height: 40px; margin: 2px 0 -12px; }
+${sel} .tp-pop.chip { padding: 10px 12px; }`;
+
+const STYLE = `
+.tp-pop { --w:200px; --ib-w:30px; --ib-h:28px; --sw-w:36px; --sw-h:20px; --thumb:14px;
+  --ink:#fff; --ink-2:rgba(255,255,255,0.62); --accent:#6366f1; --ok:#22c55e; --warn:#eab308; --bad:#ef4444;
+  --amber:#ffd43b; --heat:#ff8a3d; --door-open:#f59e0b;
+  position: fixed; z-index: 60; width: var(--w); padding: 10px 12px; border-radius: 10px;
+  background: rgba(10,10,20,0.94); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.10); box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+  color: var(--ink); font: 12px/1.3 'Segoe UI', system-ui, sans-serif; touch-action: manipulation; box-sizing: border-box; }
+.tp-pop *, .tp-pop *::before, .tp-pop *::after { box-sizing: border-box; }
+.tp-arrow { position: absolute; width: 11px; height: 11px; background: rgb(10,10,20); border: 0 solid rgba(255,255,255,0.10); }
+.tp-arrow.bottom { bottom: -6px; transform: translateX(-50%) rotate(45deg); border-right-width: 1px; border-bottom-width: 1px; }
+.tp-arrow.top { top: -6px; transform: translateX(-50%) rotate(45deg); border-left-width: 1px; border-top-width: 1px; }
+.tp-arrow.left { left: -6px; transform: translateY(-50%) rotate(45deg); border-left-width: 1px; border-bottom-width: 1px; }
+.tp-arrow.right { right: -6px; transform: translateY(-50%) rotate(45deg); border-right-width: 1px; border-top-width: 1px; }
+.tp-head { display: flex; align-items: center; gap: 7px; min-height: 20px; }
+.tp-ico { width: 16px; height: 16px; flex: none; fill: rgba(255,255,255,0.72); }
+.tp-ico.light-on { fill: var(--amber); filter: drop-shadow(0 0 4px rgba(255,212,59,0.55)); }
+.tp-ico.heat { fill: var(--heat); filter: drop-shadow(0 0 4px rgba(255,138,61,0.5)); }
+.tp-ico.d-open { fill: var(--door-open); }
+.tp-ico.d-closed { fill: var(--ok); }
+.tp-ico.dim { fill: rgba(255,255,255,0.4); }
+.tp-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tp-status { position: relative; flex: none; width: 16px; height: 16px; margin-right: -4px; display: grid; place-items: center;
+  border: 0; background: none; cursor: help; padding: 0; }
+.tp-status::after { content: ''; position: absolute; inset: -8px; border-radius: 50%; }
+.tp-status i { width: 8px; height: 8px; border-radius: 50%; display: block; }
+.tp-status.ok i { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.tp-status.warn i { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+.tp-status.bad i { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
+.tp-status.warn.pulse i { animation: tp-pulse 1.2s ease-in-out infinite; }
+@keyframes tp-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .tp-status.warn.pulse i { animation: none; } }
+.tp-tip { position: absolute; top: calc(100% + 8px); right: -6px; z-index: 5; width: max-content; max-width: 200px;
+  padding: 6px 9px; border-radius: 7px; background: #1d1d2e; border: 1px solid rgba(255,255,255,0.16);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.5); font-size: 12px; line-height: 1.35; color: #fff; text-align: left;
+  font-weight: 400; pointer-events: none; opacity: 0; transform: translateY(-2px); transition: opacity .12s, transform .12s; }
+.tp-tip b { font-weight: 600; }
+.tp-tip small { display: block; color: var(--ink-2); font-size: 12px; margin-top: 2px; }
+@media (hover: hover) { .tp-status:hover .tp-tip { opacity: 1; transform: none; transition-delay: .15s; } }
+.tp-status:focus-visible .tp-tip, .tp-status.tip-open .tp-tip { opacity: 1; transform: none; }
+.tp-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; min-height: var(--ib-h); }
+.tp-val { font-size: 12px; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tp-val b { font-size: 13px; font-weight: 600; color: var(--ink); }
+.tp-val.muted b { color: var(--ink-2); }
+.tp-temp { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.tp-temp small { display: flex; flex-direction: column; font-size: 12px; line-height: 1.2; color: var(--ink-2); white-space: nowrap; }
+.tp-temp small .heat { color: var(--heat); }
+.tp-val .big { font-size: 18px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+.tp-btns { display: flex; gap: 4px; flex: none; }
+.tp-ib { position: relative; width: var(--ib-w); height: var(--ib-h); border-radius: 7px; display: grid; place-items: center;
+  border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.07); color: #fff; cursor: pointer; padding: 0; }
+.tp-ib svg { width: 18px; height: 18px; fill: currentColor; }
+.tp-ib::after { content: ''; position: absolute; inset: -4px -2px; }
+.tp-ib:active:not(:disabled) { background: rgba(99,102,241,0.35); }
+.tp-ib:disabled { opacity: 0.35; cursor: not-allowed; }
+@media (hover: hover) {
+  .tp-ib:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
+  .tp-ib[data-tip]:hover::before { content: attr(data-tip); position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+    white-space: nowrap; padding: 4px 7px; border-radius: 6px; background: #1d1d2e; border: 1px solid rgba(255,255,255,0.16); font-size: 12px; z-index: 5; }
+}
+.tp-ib:focus-visible, .tp-sw:focus-visible, .tp-status:focus-visible, .tp-range:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
+.tp-sw { position: relative; width: var(--sw-w); height: var(--sw-h); border-radius: 999px; border: 0; padding: 0; cursor: pointer;
+  background: rgba(255,255,255,0.18); flex: none; transition: background .2s; }
+.tp-sw::after { content: ''; position: absolute; inset: -12px -4px; }
+.tp-sw i { position: absolute; top: 2px; left: 2px; width: calc(var(--sw-h) - 4px); height: calc(var(--sw-h) - 4px); border-radius: 50%; background: #fff; transition: left .2s; }
+.tp-sw.on { background: var(--accent); }
+.tp-sw.on i { left: calc(var(--sw-w) - var(--sw-h) + 2px); }
+.tp-sw:disabled { opacity: 0.35; cursor: not-allowed; }
+.tp-range { --p: 50%; display: block; width: 100%; height: 20px; margin: 6px 0 0; background: transparent;
+  -webkit-appearance: none; appearance: none; cursor: pointer; outline: none; }
+.tp-range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px;
+  background: linear-gradient(to right, var(--fill, var(--accent)) var(--p), rgba(255,255,255,0.16) var(--p)); }
+.tp-range::-moz-range-track { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.16); }
+.tp-range::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--fill, var(--accent)); }
+.tp-range::-webkit-slider-thumb { -webkit-appearance: none; width: var(--thumb); height: var(--thumb); border-radius: 50%;
+  background: #fff; margin-top: calc(2px - var(--thumb) / 2); box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
+.tp-range::-moz-range-thumb { width: var(--thumb); height: var(--thumb); border-radius: 50%; background: #fff; border: 0; }
+.tp-range.temp { --fill: var(--heat); }
+.tp-range.off { --fill: rgba(255,255,255,0.4); }
+.tp-pop.chip { width: auto; max-width: 240px; padding: 8px 10px; border-radius: 999px; }
+.tp-pop.chip .tp-name { flex: 0 1 auto; }
+.tp-pop.chip .sep { color: var(--ink-2); }
+.tp-pop.chip .st { font-weight: 600; white-space: nowrap; }
+.tp-pop.chip .st.open { color: var(--door-open); }
+.tp-pop.chip .st.closed { color: #4ade80; }
+.tp-pop.chip .st.na { color: var(--ink-2); font-weight: 500; }
+.tp-pop.chip .tp-status { margin-left: 2px; margin-right: 0; }
+@media (pointer: coarse) { ${coarseRules('')} }
+${coarseRules('.tp-force-coarse')}
+`;
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fillPct = r => ((+r.value - +r.min) / ((+r.max - +r.min) || 1) * 100) + '%';
+
+/**
+ * Attach the popover layer.
+ *
+ * @param {Object} o
+ * @param o.THREE, o.home, o.container, o.Home3DScene, o.house, o.HAClient
+ * @param o.rooms           rooms.json `rooms` (room -> channel -> entities)
+ * @param o.sensors         rooms.json `sensors`
+ * @param o.getHa           () => HAClient instance or null
+ * @param o.sendLight       (roomId, channel, state, debounceMs) -- index.html's sendToHA
+ * @param o.state           accessors onto the sidebar's own maps:
+ *   doorStatus(id) 'on'|'off'|'unavailable'|null, curtainAvailable(id) bool|null,
+ *   curtainPct(id), curtainLocal(id, pct), climate(roomId) parseClimate reading|null,
+ *   climateEntity(roomId)
+ * @param o.curtainSender, o.climateSender  the sidebar's createDragSender instances
+ * @param o.onChange        () => void -- repaint the sidebar
+ * @param o.debug           expose window.__home3dTap
+ */
+export function attachTapPopovers(o) {
+  const { THREE, home, container, Home3DScene } = o;
+  const S = o.state || {};
+  const bindings = {
+    lights: o.rooms || {},
+    curtains: (o.sensors && o.sensors.curtains) || {},
+    doors: (o.sensors && o.sensors.doors) || {},
+  };
+  const curtainNames = new Map(((o.house && o.house.curtains) || []).map(c => [c.id, c.name || c.id]));
+  const doorNames = new Map(((o.house && o.house.doors) || []).map(d => [d.id, d.name || d.id]));
+  const ha = () => (o.getHa ? o.getHa() : null);
+  const onChange = () => { try { o.onChange && o.onChange(); } catch (e) { /* sidebar repaint must not break us */ } };
+
+  // Debug-only overrides (?debug=1): a desktop browser has no Home Assistant
+  // here, so the connection status and raw entity states can be SIMULATED to
+  // exercise the green / yellow states. Never set outside the seam.
+  const sim = { status: undefined, raw: new Map() };
+  const conn = () => (sim.status !== undefined ? sim.status : (ha() ? ha().status : null));
+  const raw = eid => (sim.raw.has(eid) ? sim.raw.get(eid) : (ha() && ha().getRawState ? ha().getRawState(eid) : null));
+  // Commands go out only through a real client that is not known-down; the
+  // yellow 'connecting' states still send (polling uses REST, syncing has an
+  // open socket). Offline is preview-on-the-model only.
+  const canSend = () => {
+    const h = ha(); const c = h ? h.status : null;
+    return !!h && (c === 'connected' || c === 'polling' || c === 'syncing');
+  };
+  const unavail = st => !st || st === 'unavailable' || st === 'unknown';
+
+  const styleEl = document.createElement('style');
+  styleEl.textContent = STYLE;
+  document.head.appendChild(styleEl);
+
+  const rc = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const tmpV = new THREE.Vector3();
+
+  const lightTargets = [];
+  home.scene.traverse(obj => {
+    if (!obj.isMesh || !obj.userData || !obj.userData.lightChannel) return;
+    const t = resolveTarget(obj, bindings);
+    if (t) lightTargets.push(t);
+  });
+
+  function canvasRect() { return container.getBoundingClientRect(); }
+
+  function raycastAt(clientX, clientY) {
+    const r = canvasRect();
+    ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    rc.setFromCamera(ndc, home.getCamera());
+    return rc.intersectObjects(home.scene.children, true);
+  }
+
+  function unoccluded(t, point) {
+    const origin = home.getCamera().position;
+    const dir = tmpV.copy(point).sub(origin);
+    const dist = dir.length();
+    dir.normalize();
+    rc.set(origin, dir);
+    rc.far = dist + 0.05;
+    const res = pickFromHits(rc.intersectObjects(home.scene.children, true), bindings);
+    rc.far = Infinity;
+    if (res.target) return res.target.id === t.id && res.target.kind === t.kind;
+    return !res.hit;
+  }
+
+  let lastPickMs = 0;
+  function pickAt(clientX, clientY) {
+    const t0 = performance.now();
+    const res = pickFromHits(raycastAt(clientX, clientY), bindings);
+    let out;
+    if (res.target) {
+      out = { target: res.target, point: res.hit.point };
+    } else {
+      const r = canvasRect();
+      const cam = home.getCamera();
+      const cands = [];
+      lightTargets.forEach(t => {
+        t.object.getWorldPosition(tmpV);
+        const wp = tmpV.clone();
+        tmpV.project(cam);
+        if (tmpV.z > 1 || tmpV.z < -1) return;
+        const sx = r.left + (tmpV.x + 1) / 2 * r.width;
+        const sy = r.top + (1 - tmpV.y) / 2 * r.height;
+        const d = Math.hypot(sx - clientX, sy - clientY);
+        if (d <= FUZZ_PX) cands.push({ t, d, wp });
+      });
+      cands.sort((a, b) => a.d - b.d);
+      const hit = cands.find(c => unoccluded(c.t, c.wp));
+      if (hit) out = { target: hit.t, point: hit.wp, fuzzy: true };
+      else out = res.hit ? { occludedBy: res.hit.object } : null;
+    }
+    lastPickMs = performance.now() - t0;
+    return out;
+  }
+
+  // ---- views: model() -> data, html(m) -> inner markup, bind(el) ---------
+  const roomName = id => ((Home3DScene.ROOMS || {})[id] || {}).name || id;
+  const shell = (icon, name, st, body) =>
+    '<div class="tp-head">' + icon + '<span class="tp-name">' + esc(name) + '</span>' + dot(st) + '</div>' + body;
+  const dot = k => {
+    const s = STATUS[k];
+    return '<button class="tp-status ' + s[0] + (tipOpen ? ' tip-open' : '') + '" type="button" data-a="status" data-st="' + k +
+      '" aria-label="Connection status: ' + esc(s[1]) + '"><i></i><span class="tp-tip" role="tooltip"><b>' + esc(s[1]) +
+      '</b><small>' + esc(s[2]) + '</small></span></button>';
+  };
+  const climateMock = new Map();
+
+  const VIEWS = {
+    light: {
+      model(t) {
+        const st = (home.lightState[t.roomId] || {})[t.channel] || { on: false, bri: 100 };
+        const c = conn();
+        const r = raw(t.entities[0]);
+        const na = c === 'connected' && (!r || unavail(r.state));
+        const lc = ((Home3DScene.LIGHTS || {})[t.roomId] || {})[t.channel];
+        return { status: statusKey('light', c, na), na, on: !!st.on, bri: st.bri != null ? st.bri : 100,
+          name: lightName(roomName(t.roomId), t.channel, lc && lc.name) };
+      },
+      html(m) {
+        const on = m.on && !m.na;
+        const val = m.na ? '<span class="tp-val muted"><b>Unavailable</b></span>'
+          : '<span class="tp-val" data-v><b>' + (m.on ? 'On' : 'Off') + '</b>' + (m.on ? ' · ' + m.bri + '%' : '') + '</span>';
+        return shell(ico(on ? I.bulb : I.bulbOff, on ? 'light-on' : (m.na ? 'dim' : '')), m.name, m.status,
+          '<div class="tp-row">' + val + '<button class="tp-sw' + (m.on ? ' on' : '') + '" data-a="power" role="switch" aria-checked="' +
+          m.on + '" aria-label="Power"' + (m.na ? ' disabled' : '') + '><i></i></button></div>' +
+          (m.na ? '' : '<input class="tp-range' + (m.on ? '' : ' off') + '" data-a="bri" type="range" min="5" max="100" value="' +
+            m.bri + '" aria-label="Brightness">'));
+      },
+      bind(t, el, ctl) {
+        const s = () => (home.lightState[t.roomId] || {})[t.channel];
+        const sw = el.querySelector('[data-a=power]');
+        if (sw) sw.addEventListener('click', () => {
+          const st = s(); if (!st) return;
+          st.on = !st.on; if (st.on && !st.bri) st.bri = 100;
+          home.updateLights(); o.sendLight(t.roomId, t.channel, st, 0); onChange(); ctl.refresh(true);
+        });
+        const r = el.querySelector('[data-a=bri]');
+        if (r) {
+          r.addEventListener('input', () => {
+            const st = s(); if (!st) return;
+            ctl.dragging = true;
+            st.bri = +r.value; st.on = true;
+            home.updateLights(); o.sendLight(t.roomId, t.channel, st, 200);
+            r.style.setProperty('--p', fillPct(r)); r.classList.remove('off');
+            const v = el.querySelector('[data-v]'); if (v) v.innerHTML = '<b>On</b> · ' + st.bri + '%';
+            sw.classList.add('on'); sw.setAttribute('aria-checked', 'true');
+            const ic = el.querySelector('.tp-ico'); if (ic) ic.outerHTML = ico(I.bulb, 'light-on');
+          });
+          const end = () => { if (ctl.dragging) { ctl.dragging = false; onChange(); ctl.refresh(); } };
+          r.addEventListener('change', end); r.addEventListener('pointerup', end); r.addEventListener('pointercancel', end);
+        }
+      },
+    },
+
+    curtain: {
+      model(t) {
+        const c = conn();
+        const avail = S.curtainAvailable ? S.curtainAvailable(t.id) : null;
+        const na = c === 'connected' && avail !== true;
+        const pct = Math.round((S.curtainPct ? S.curtainPct(t.id) : home.getCurtainOpen(t.id)) || 0);
+        return { status: statusKey('curtain', c, na), na, pct, name: curtainNames.get(t.id) || t.id };
+      },
+      html(m) {
+        const dis = m.na ? ' disabled' : '';
+        const val = m.na ? '<span class="tp-val muted"><b>Motor unavailable</b></span>'
+          : '<span class="tp-val" data-v>Open <b>' + m.pct + '%</b></span>';
+        return shell(ico(m.pct > 0 ? I.curtains : I.curtainsClosed, m.na ? 'dim' : ''), m.name, m.status,
+          '<div class="tp-row">' + val + '<span class="tp-btns">' +
+          '<button class="tp-ib" data-a="close" data-tip="Close" aria-label="Close curtain"' + dis + '>' + svg(I.cClose) + '</button>' +
+          '<button class="tp-ib" data-a="open" data-tip="Open" aria-label="Open curtain"' + dis + '>' + svg(I.cOpen) + '</button>' +
+          '</span></div>' +
+          (m.na ? '' : '<input class="tp-range" data-a="pos" type="range" min="0" max="100" value="' + m.pct + '" aria-label="Open percentage">'));
+      },
+      bind(t, el, ctl) {
+        const sender = o.curtainSender;
+        const local = pct => { if (S.curtainLocal) S.curtainLocal(t.id, pct); else home.setCurtainOpen(t.id, pct, null); };
+        const r = el.querySelector('[data-a=pos]');
+        if (r) {
+          r.addEventListener('input', () => {
+            ctl.dragging = true;
+            const pct = +r.value;
+            local(pct);
+            if (canSend() && sender) sender.input(t.id, pct);
+            r.style.setProperty('--p', fillPct(r));
+            const v = el.querySelector('[data-v]'); if (v) v.innerHTML = 'Open <b>' + pct + '%</b>';
+          });
+          r.addEventListener('change', () => {
+            if (canSend() && sender) sender.commit(t.id, +r.value);
+            ctl.dragging = false; onChange(); ctl.refresh();
+          });
+          const end = () => { if (sender) sender.end(t.id); if (ctl.dragging) { ctl.dragging = false; ctl.refresh(); } };
+          r.addEventListener('pointerup', end); r.addEventListener('pointercancel', end);
+        }
+        const press = cmd => {
+          if (canSend() && sender) sender.press(t.id, o.HAClient.coverOpenCloseCommand(cmd, t.entities));
+          else local(cmd === 'open' ? 100 : 0);   // offline: preview on the model
+          onChange(); ctl.refresh(true);
+        };
+        el.querySelectorAll('[data-a=open],[data-a=close]').forEach(b =>
+          b.addEventListener('click', () => { if (!b.disabled) press(b.dataset.a); }));
+      },
+    },
+
+    climate: {
+      model(t) {
+        const c = conn();
+        const eid = t.entities[0];
+        let reading = S.climate ? S.climate(t.id) : null;
+        const r = raw(eid);
+        const offlineConn = statusKey('climate', c, false) === 'offline';
+        let mock = false, action;
+        if (offlineConn && !reading) {
+          // No client, or no reading ever: sample values, clearly marked (red dot tooltip).
+          if (!climateMock.has(t.id)) climateMock.set(t.id, { available: true, off: false, current: 19.5, target: 21, min: 7, max: 30, step: 0.5, action: 'heating' });
+          reading = climateMock.get(t.id); mock = true; action = reading.action;
+        } else {
+          action = r && r.attributes ? r.attributes.hvac_action : undefined;
+        }
+        // The dot says whether HA is live; the BODY says what we last knew. A
+        // last reading of 'unavailable' reads "Unavailable" even while offline,
+        // never "Off" (parseClimate folds a null target into off).
+        const readingNa = !mock && (!reading || !reading.available);
+        const na = readingNa && (c === 'connected' || !!reading);
+        const off = !na && !!(reading && reading.off);
+        return { status: statusKey('climate', c, readingNa && c === 'connected', mock), na, mock, off,
+          current: reading ? reading.current : null, target: reading ? reading.target : null,
+          min: reading ? reading.min : 7, max: reading ? reading.max : 30, step: reading ? reading.step : 0.5,
+          activity: climateActivity(action, off), name: sentenceCase(t.label || (roomName(t.id) + ' radiator')) };
+      },
+      html(m) {
+        const f = v => (typeof v === 'number' && isFinite(v) ? v.toFixed(1) + '°' : '–');
+        const live = !m.na && !m.off && typeof m.target === 'number';
+        const icon = m.na ? ico(I.radiatorIdle, 'dim') : ico(I.radiator, m.activity === 'heating' ? 'heat' : '');
+        const act = m.activity === 'heating' ? '<span class="heat">heating</span>' : m.activity ? '<span>' + m.activity + '</span>' : '';
+        const val = m.na ? '<span class="tp-val muted"><b>Unavailable</b></span>'
+          : m.off ? '<span class="tp-val tp-temp"><span class="big">Off</span><small><span>now ' + f(m.current) + '</span></small></span>'
+          : '<span class="tp-val tp-temp" data-v><span class="big" data-t>' + f(m.target) + '</span><small><span>now ' + f(m.current) + '</span>' + act + '</small></span>';
+        return shell(icon, m.name, m.status,
+          '<div class="tp-row">' + val + (live ? '<span class="tp-btns">' +
+            '<button class="tp-ib" data-a="down" data-tip="−' + m.step + '°" aria-label="Lower target">' + svg(I.minus) + '</button>' +
+            '<button class="tp-ib" data-a="up" data-tip="+' + m.step + '°" aria-label="Raise target">' + svg(I.plus) + '</button></span>' : '') +
+          '</div>' +
+          (live ? '<input class="tp-range temp" data-a="set" type="range" min="' + m.min + '" max="' + m.max + '" step="' + m.step +
+            '" value="' + m.target + '" aria-label="Target temperature">' : ''));
+      },
+      bind(t, el, ctl) {
+        const sender = o.climateSender;
+        const m0 = () => VIEWS.climate.model(t);
+        const show = v => {
+          const e = el.querySelector('[data-t]'); if (e) e.textContent = v.toFixed(1) + '°';
+          const r = el.querySelector('[data-a=set]'); if (r) { r.value = v; r.style.setProperty('--p', fillPct(r)); }
+        };
+        const apply = (v, how) => {
+          const m = m0();
+          v = Math.max(m.min, Math.min(m.max, Math.round(v / m.step) * m.step));
+          if (m.mock) { climateMock.get(t.id).target = v; show(v); return; }
+          if (canSend() && sender) {
+            if (how === 'input') sender.input(t.id, v);
+            else if (how === 'commit') sender.commit(t.id, v);
+            else sender.press(t.id, o.HAClient.climateTargetCommand(v, t.entities[0], S.climate ? S.climate(t.id) : null));
+          }
+          show(v);   // optimistic; HA's echo repaints via the reading
+        };
+        const r = el.querySelector('[data-a=set]');
+        if (r) {
+          r.addEventListener('input', () => { ctl.dragging = true; apply(+r.value, 'input'); });
+          r.addEventListener('change', () => { apply(+r.value, 'commit'); ctl.dragging = false; onChange(); });
+          const end = () => { if (sender) sender.end(t.id); ctl.dragging = false; };
+          r.addEventListener('pointerup', end); r.addEventListener('pointercancel', end);
+        }
+        const step = d => { const m = m0(); const cur = r ? +r.value : m.target; apply(cur + d * m.step, 'press'); onChange(); };
+        const dn = el.querySelector('[data-a=down]'), up = el.querySelector('[data-a=up]');
+        if (dn) dn.addEventListener('click', () => step(-1));
+        if (up) up.addEventListener('click', () => step(1));
+      },
+    },
+
+    door: {
+      chip: true,
+      model(t) {
+        const c = conn();
+        const s = S.doorStatus ? S.doorStatus(t.id) : null;
+        const known = s === 'on' || s === 'off';
+        const na = c === 'connected' && !known;
+        return { status: statusKey('door', c, na), state: s === 'on' ? 'open' : s === 'off' ? 'closed' : 'na',
+          name: doorNames.get(t.id) || t.id };
+      },
+      html(m) {
+        const map = { open: [I.doorOpen, 'd-open', 'Open'], closed: [I.doorClosed, 'd-closed', 'Closed'], na: [I.doorClosed, 'dim', 'Unavailable'] }[m.state];
+        return '<div class="tp-head">' + ico(map[0], map[1]) + '<span class="tp-name">' + esc(m.name) + '</span><span class="sep">·</span>' +
+          '<span class="st ' + m.state + '">' + map[2] + '</span>' + dot(m.status) + '</div>';
+      },
+      bind() {},
+    },
+  };
+
+  // ---- popover lifecycle ------------------------------------------------
+  let pop = null;          // { el, target, x, y, camSnap, sig, ctl, timer }
+  let tipOpen = false, tipTimer = 0;
+  function close() {
+    if (!pop) return;
+    clearInterval(pop.timer); clearTimeout(tipTimer); tipOpen = false;
+    if (pop.el.parentNode) pop.el.parentNode.removeChild(pop.el);
+    pop = null;
+  }
+  function camSnapshot() { const cam = home.getCamera(); cam.updateMatrixWorld(); return cam.matrixWorld.elements.slice(); }
+  function camMoved(snap) {
+    const e = home.getCamera().matrixWorld.elements;
+    for (let i = 0; i < 16; i++) if (Math.abs(e[i] - snap[i]) > 1e-6) return true;
+    return false;
+  }
+
+  function position() {
+    const el = pop.el;
+    const r = canvasRect();
+    const bounds = {
+      left: Math.max(0, r.left), top: Math.max(0, r.top),
+      right: Math.min(window.innerWidth, r.right), bottom: Math.min(window.innerHeight, r.bottom),
+    };
+    const p = placePopover(pop.x, pop.y, el.offsetWidth, el.offsetHeight, bounds);
+    el.style.left = p.left + 'px';
+    el.style.top = p.top + 'px';
+    el.dataset.placement = p.placement;
+    const a = el.querySelector('.tp-arrow');
+    if (a) {
+      a.className = 'tp-arrow' + (p.arrow ? ' ' + p.arrow.side : '');
+      a.style.display = p.arrow ? '' : 'none';
+      a.style.left = a.style.top = '';
+      if (p.arrow && (p.arrow.side === 'top' || p.arrow.side === 'bottom')) a.style.left = p.arrow.offset + 'px';
+      else if (p.arrow) a.style.top = p.arrow.offset + 'px';
+    }
+  }
+
+  function render(force) {
+    if (!pop) return;
+    const v = VIEWS[pop.target.kind];
+    const m = v.model(pop.target);
+    const sig = JSON.stringify(m) + tipOpen;
+    if (!force && (sig === pop.sig || pop.ctl.dragging)) return;
+    pop.sig = sig;
+    pop.el.innerHTML = v.html(m) + '<span class="tp-arrow"></span>';
+    pop.el.setAttribute('aria-label', m.name);
+    pop.el.querySelectorAll('.tp-range').forEach(r => r.style.setProperty('--p', fillPct(r)));
+    v.bind(pop.target, pop.el, pop.ctl);
+    position();
+  }
+
+  function open(target, x, y) {
+    close();
+    const el = document.createElement('div');
+    el.className = 'tp-pop' + (VIEWS[target.kind].chip ? ' chip' : '');
+    el.dataset.kind = target.kind;
+    el.dataset.target = target.id;
+    el.setAttribute('role', 'dialog');
+    document.body.appendChild(el);
+    pop = { el, target, x, y, camSnap: camSnapshot(), sig: null, ctl: { dragging: false } };
+    pop.ctl.refresh = f => render(!!f);
+    // Status dot: tap toggles its tooltip (touch; auto-hides after 4 s),
+    // mouse gets it on hover through CSS. Delegated, so it survives rebuilds.
+    el.addEventListener('click', e => {
+      const st = e.target.closest && e.target.closest('[data-a=status]');
+      if (st) {
+        tipOpen = !tipOpen; st.classList.toggle('tip-open', tipOpen);
+        clearTimeout(tipTimer);
+        if (tipOpen) tipTimer = setTimeout(() => { tipOpen = false; if (pop) { const d = pop.el.querySelector('[data-a=status]'); if (d) d.classList.remove('tip-open'); } }, 4000);
+        return;
+      }
+      if (tipOpen) { tipOpen = false; const d = el.querySelector('[data-a=status]'); if (d) d.classList.remove('tip-open'); }
+    });
+    render(true);
+    // Most live changes repaint the scene (-> onRender below); a reading that
+    // moves nothing requests no frame, so a slow DOM-only tick covers it.
+    pop.timer = setInterval(() => { try { render(false); } catch (e) { /* ignore */ } }, 1000);
+    home.requestRender();
+  }
+
+  // ---- input --------------------------------------------------------------
+  const pointers = new Set();
+  let downX = 0, downY = 0, multi = false;
+  const inCanvas = e => container.contains(e.target);
+  const onPointerDown = e => {
+    if (pop && !pop.el.contains(e.target)) close();
+    if (!inCanvas(e)) return;
+    pointers.add(e.pointerId);
+    if (pointers.size === 1) { downX = e.clientX; downY = e.clientY; multi = false; }
+    else multi = true;
+  };
+  const onPointerEnd = e => { pointers.delete(e.pointerId); };
+  const onClick = e => {
+    if (!inCanvas(e)) return;
+    if (multi) return;
+    if (Math.abs(e.clientX - downX) > TAP_SLOP_PX || Math.abs(e.clientY - downY) > TAP_SLOP_PX) return;
+    const res = pickAt(e.clientX, e.clientY);
+    if (res && res.target) {
+      e.stopPropagation();   // this tap is ours: no room selection underneath
+      open(res.target, e.clientX, e.clientY);
+    }
+  };
+  const onWheel = e => { if (pop && inCanvas(e)) close(); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  const onResize = () => close();
+
+  window.addEventListener('pointerdown', onPointerDown, true);
+  window.addEventListener('pointerup', onPointerEnd, true);
+  window.addEventListener('pointercancel', onPointerEnd, true);
+  window.addEventListener('click', onClick, true);
+  window.addEventListener('wheel', onWheel, { capture: true, passive: true });
+  window.addEventListener('keydown', onKey);
+  window.addEventListener('resize', onResize);
+
+  const unsub = home.onRender(() => {
+    if (!pop) return;
+    if (camMoved(pop.camSnap)) { close(); return; }
+    try { render(false); } catch (e) { /* never break the render loop */ }
+  });
+
+  const climateBinding = (o.sensors && o.sensors.climate) || {};
+  const api = {
+    pickAt(x, y) {
+      const r = pickAt(x, y);
+      if (!r) return null;
+      if (r.target) return { kind: r.target.kind, id: r.target.id, fuzzy: !!r.fuzzy };
+      const ob = r.occludedBy;
+      let size = null;
+      if (ob && ob.geometry) {
+        ob.geometry.computeBoundingBox();
+        const s = ob.geometry.boundingBox.getSize(new THREE.Vector3());
+        size = [+s.x.toFixed(2), +s.y.toFixed(2), +s.z.toFixed(2)];
+      }
+      return { occludedBy: (ob && (ob.name || (ob.parent && ob.parent.name) || ob.geometry && ob.geometry.type)) || 'mesh',
+        occluderSize: size, occluderOpacity: ob ? materialOpacity(ob.material) : null };
+    },
+    /** Open without a tap (debug seam; the only route to climate on main). */
+    openAt(kind, id, x, y, extra) {
+      let ents;
+      if (kind === 'light') ents = (bindings.lights[id.split('/')[0]] || {})[id.split('/')[1]];
+      else if (kind === 'climate') ents = typeof climateBinding[id] === 'string' ? [climateBinding[id]] : null;
+      else ents = (bindings[kind + 's'] || {})[id];
+      if (!ents) return false;
+      const t = Object.assign({ kind, id, entities: ents }, extra || {});
+      if (kind === 'light') { t.roomId = id.split('/')[0]; t.channel = id.split('/')[1]; }
+      open(t, x, y);
+      return true;
+    },
+    /** SIMULATE a connection status / raw entity states (debug only). */
+    simulate(spec) {
+      if (spec && 'status' in spec) sim.status = spec.status;
+      if (spec && spec.raw) Object.keys(spec.raw).forEach(k => sim.raw.set(k, spec.raw[k]));
+      if (spec && spec.reset) { sim.status = undefined; sim.raw.clear(); }
+      render(false);
+    },
+    close,
+    isOpen: () => !!pop,
+    current: () => (pop ? { kind: pop.target.kind, id: pop.target.id, entities: pop.target.entities.slice(), placement: pop.el.dataset.placement,
+      status: (pop.el.querySelector('[data-a=status]') || {}).dataset?.st, rect: pop.el.getBoundingClientRect().toJSON() } : null),
+    lastPickMs: () => lastPickMs,
+    lightTargets() {
+      const r = canvasRect(); const cam = home.getCamera();
+      return lightTargets.map(t => {
+        t.object.getWorldPosition(tmpV); tmpV.project(cam);
+        return { id: t.id, x: Math.round(r.left + (tmpV.x + 1) / 2 * r.width), y: Math.round(r.top + (1 - tmpV.y) / 2 * r.height) };
+      });
+    },
+    dispose() {
+      close(); unsub();
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('pointerup', onPointerEnd, true);
+      window.removeEventListener('pointercancel', onPointerEnd, true);
+      window.removeEventListener('click', onClick, true);
+      window.removeEventListener('wheel', onWheel, { capture: true });
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onResize);
+      if (styleEl.parentNode) styleEl.parentNode.removeChild(styleEl);
+    },
+  };
+  if (o.debug) {
+    window.__home3dTap = api;
+    // ?tpCoarse=1 forces touch sizing on a fine-pointer browser (verification only).
+    if (new URLSearchParams(location.search).get('tpCoarse') === '1') document.documentElement.classList.add('tp-force-coarse');
+  }
+  return api;
+}

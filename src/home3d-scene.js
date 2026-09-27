@@ -1646,7 +1646,10 @@ export const Home3DScene = (() => {
         const locZ = new V(Math.sin(theta), 0, Math.cos(theta));
         const swingSign = locZ.dot(normal) > 0 ? -1 : 1;
         pivot.rotation.y = swingSign * restRad;
-        mount.userData = { doorId: d.name, maxAngleDeg: maxDeg, swingSign };
+        // doorProfileId: the schema's doors[].id -- what rooms.json binds a
+        // sensor to (doorId above is the DISPLAY label). Read by the
+        // tap-popover picker (src/tap-popovers.js).
+        mount.userData = { doorId: d.name, doorProfileId: d.id || null, maxAngleDeg: maxDeg, swingSign };
         // openPct must agree with the pose actually rendered above, or the
         // panel's "Open: N%" readout contradicts the door on screen.
         const doorRec = { id: d.id, name: d.name, pivot, maxDeg, swingSign, openPct: restFraction * 100 };
@@ -2458,6 +2461,10 @@ export const Home3DScene = (() => {
           ls.push(pl);
         }
 
+        // Tag each fixture with its channel -- the join key to rooms.json's
+        // rooms[roomId][channel] -- so a tap on the fixture can resolve the
+        // entity it controls (src/tap-popovers.js).
+        ms.forEach(m => { m.userData.lightChannel = channel; });
         groupLights[channel] = ls;
         groupMeshes[channel] = ms;
       });

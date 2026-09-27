@@ -423,6 +423,8 @@ jobs:
         run: node scripts/test-quality-tier.mjs
       - name: Room lights - per-channel collapse to one or two lights
         run: node scripts/test-light-collapse.mjs
+      - name: Tap popovers -- target resolution, nearest-visible occlusion, placement
+        run: node scripts/test-tap-popovers.mjs
       - name: Validate every JSON file in houses/ and the repo root
         run: |
           set -euo pipefail

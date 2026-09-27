@@ -735,6 +735,8 @@
     // Door-numbering debug overlay (off by default; ?debugDoors=1 or the
     // Settings sidebar "Door numbers" switch).
     import { DoorDebugOverlay } from './src/overlays/door-debug-overlay.js?v=__VERSION__';
+    // Tap a 3D object -> popover for its bound HA entity (spike).
+    import { attachTapPopovers } from './src/tap-popovers.js?v=__VERSION__';
 
     // ── Why there is no DOMContentLoaded wrapper here ──────────────────────
     // There used to be one, and for classic scripts it was correct: an inline
@@ -1899,6 +1901,30 @@
 
         ha.connect();
       }
+
+      // ---- Tap-an-object popovers (src/tap-popovers.js) ----
+      // An ADDITIONAL control path beside the sidebar: tap a bound light,
+      // curtain or door and a compact popover controls its entity. It READS
+      // the sidebar's own state maps and WRITES through the sidebar's own
+      // senders (curtainSender / climateSender share their drag lock, dedupe
+      // and availability guards), then repaints the sidebar.
+      if (!isPreview) attachTapPopovers({
+        THREE, home, container, Home3DScene, house,
+        rooms: rooms || {}, sensors: sensors || {},
+        getHa: () => ha, HAClient,
+        sendLight: (roomId, channel, state, debounceMs) => sendToHA(roomId, channel, state, debounceMs),
+        state: {
+          doorStatus: id => (doorStatus.has(id) ? doorStatus.get(id) : null),
+          curtainAvailable: id => (curtainAvailableState.has(id) ? curtainAvailableState.get(id) : null),
+          curtainPct: id => curtainShownPct(id),
+          curtainLocal: (id, pct) => { home.setCurtainOpen(id, pct, null); curtainTarget.set(id, pct); },
+          climate: roomId => climateReading.get(roomId) || null,
+          climateEntity: roomId => climateEntityForRoom(roomId),
+        },
+        curtainSender, climateSender,
+        onChange: () => renderPanel(),
+        debug: params.get('debug') === '1',
+      });
 
       // Phase 3: Send state from 3D controls → HA
       function sendToHA(roomId, group, state, debounceMs) {
