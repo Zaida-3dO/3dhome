@@ -934,12 +934,17 @@ function sampleResult() {
   const rc = new THREE.Raycaster(new THREE.Vector3(3, 5, 2.5), new THREE.Vector3(0, -1, 0));
   const hits = rc.intersectObjects(scene.children, true);
   check('fixture: the ray hits furniture before the floor', hits.length > 1 && hits[0].object !== catcher, hits.map(x => x.object.name));
-  // The scene's own predicate, read from the source so the test follows it.
+  // The scene's own room-click decision (src/room-pick.js), read from the
+  // source so the test follows it: furniture passes the tap through, so
+  // the real built buckets (glass included) must carry the furniture tag.
   const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
-  check('the scene still resolves a click by the first clickable hit',
-    src.includes('rc.intersectObjects(scene.children, true).find(x => x.object.userData.clickable)'));
-  const h1 = hits.find(x => x.object.userData.clickable);
-  check('room click resolves through the furniture', h1 && h1.object === catcher && h1.object.userData.roomId === 'r');
+  check('the scene resolves a room click through pickRoom',
+    src.includes('pickRoom(rc.intersectObjects(scene.children, true), rc.ray.direction'));
+  const { pickRoom } = await imp('src/room-pick.js');
+  const picked = pickRoom(hits, rc.ray.direction, [{ id: 'r', poly: [[100, 100], [500, 100], [500, 400], [100, 400]] }],
+    (x, z) => [x * 100, z * 100]);
+  check('room click resolves through the furniture', picked.roomId === 'r' && picked.hit.object === catcher,
+    { roomId: picked.roomId, via: picked.via });
   let anyClickable = false;
   res.root.traverse(o => { if (o.userData && o.userData.clickable) anyClickable = true; });
   check('no furniture mesh is clickable', !anyClickable);

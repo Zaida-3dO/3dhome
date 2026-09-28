@@ -37,6 +37,7 @@ import {
 import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { rugPatternForBox } from './rug-pattern.js';
+import { pickRoom, roomPolygons, sceneToHouse } from './room-pick.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
   solarPosition, solarNoon, sunDirection, daylightCurve, NIGHT,
@@ -5432,8 +5433,12 @@ export const Home3DScene = (() => {
       on(container, "click", e => {
         if (Math.abs(e.clientX - clickStart.x) > 5 || Math.abs(e.clientY - clickStart.y) > 5) return;
         rc.setFromCamera(mouse, cam);
-        const h = rc.intersectObjects(scene.children, true).find(x => x.object.userData.clickable);
-        if (h && onRoomClick) onRoomClick(h.object.userData.roomId);
+        // Walls block and resolve to the side tapped; furniture and
+        // see-through surfaces pass the tap on (src/room-pick.js).
+        // ROOMS and the transform are per house, so both are read per tap.
+        const picked = pickRoom(rc.intersectObjects(scene.children, true), rc.ray.direction,
+          roomPolygons(ROOMS), sceneToHouse(S, OX, OY));
+        if (picked.roomId && onRoomClick) onRoomClick(picked.roomId);
       });
       on(container, "wheel", e => {
         e.preventDefault();
