@@ -843,7 +843,11 @@ jobs:
           body='{"schema":"home3d-diagnostics","schemaVersion":1,"save":{"deviceId":"ci-device","appVersion":"ci"}}'
           [ "$(code -X POST -H 'Content-Type: application/json' -d "$body" http://127.0.0.1:8080/api/diagnostics)" = 404 ] \
             || { echo "::error::save endpoint should be OFF by default"; exit 1; }
-          curl -fsS http://127.0.0.1:8080/config.js | grep -q 'diagnosticsSave: false' || { echo "::error::config.js lacks diagnosticsSave: false"; exit 1; }
+          # Capture, then grep: `producer | grep -q` under pipefail is racy --
+          # grep -q exits on the first match, the producer can take SIGPIPE,
+          # and pipefail turns that into a failed assertion.
+          cfg=$(curl -fsS http://127.0.0.1:8080/config.js)
+          grep -qF 'diagnosticsSave: false' <<<"$cfg" || { echo "::error::config.js lacks diagnosticsSave: false"; exit 1; }
       - name: Diagnostics save endpoint ON (njs in the real image)
         if: steps.dockerfile.outputs.present == 'true'
         run: |
@@ -853,13 +857,16 @@ jobs:
             -v "$PWD/runs:/data/diagnostics" home3d:ci
           trap 'docker logs home3d-diag || true; docker rm -f home3d-diag >/dev/null 2>&1 || true' EXIT
           for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:8081/healthz >/dev/null 2>&1 && break; sleep 1; done
-          docker logs home3d-diag 2>&1 | grep -q 'diagnostics saving: ON' || { echo "::error::endpoint did not switch on"; exit 1; }
-          curl -fsS http://127.0.0.1:8081/config.js | grep -q 'diagnosticsSave: true'
+          # Captured first, never `docker logs | grep -q` (see the step above).
+          logs=$(docker logs home3d-diag 2>&1)
+          grep -qF 'diagnostics saving: ON' <<<"$logs" || { echo "::error::endpoint did not switch on"; exit 1; }
+          cfg=$(curl -fsS http://127.0.0.1:8081/config.js)
+          grep -qF 'diagnosticsSave: true' <<<"$cfg"
           code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
           body='{"schema":"home3d-diagnostics","schemaVersion":1,"save":{"deviceId":"../../ci dev","appVersion":"ci-1"}}'
           out=$(curl -s -X POST -H 'Content-Type: application/json' -d "$body" http://127.0.0.1:8081/api/diagnostics)
           echo "$out"
-          echo "$out" | grep -q '"ok":true' || { echo "::error::save failed"; exit 1; }
+          grep -qF '"ok":true' <<<"$out" || { echo "::error::save failed"; exit 1; }
           find runs -type f
           n=$(find runs -type f -name '*.json' | wc -l)
           [ "$n" = 1 ] || { echo "::error::expected one saved run, found $n"; exit 1; }
@@ -897,7 +904,8 @@ jobs:
           [ "$got" = 507 ] || { echo "::error::file cap did not refuse (got $got)"; exit 1; }
           n=$(find full -type f | wc -l)
           [ "$n" = 1 ] || { echo "::error::the cap refusal wrote a file ($n files)"; exit 1; }
-          docker logs home3d-webroot 2>&1 | grep -q 'diagnostics saving: OFF' || { echo "::error::web-root directory was not refused"; exit 1; }
+          logs=$(docker logs home3d-webroot 2>&1)
+          grep -qF 'diagnostics saving: OFF' <<<"$logs" || { echo "::error::web-root directory was not refused"; exit 1; }
           got=$(code -X POST -H 'Content-Type: application/json' -d "$body" http://127.0.0.1:8083/api/diagnostics)
           [ "$got" = 404 ] || { echo "::error::web-root container should have saving OFF (got $got)"; exit 1; }
 
