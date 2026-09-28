@@ -63,7 +63,7 @@ import { normalisePlantBindings, plantStatusText, agoText, batteryText, mockPlan
 import { normaliseItemBindings, furnitureTapTarget, tappableFurnitureIds, mediaRowModel, lightRowModel, readingRowModel,
   rowLabel, mediaPowerCommand, mediaVolumeCommand, mediaSourceCommand, mediaSoundModeCommand, lightRowCommand,
   applyCommand, mockItemState, clockText, cardEntities, cardTitle, cardIcon, rowLabelUnderTitle, bindingTitle,
-  clockTitle } from './item-cards.js';
+  clockTitle, radiatorTitle } from './item-cards.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -1270,7 +1270,7 @@ export function attachTapPopovers(o) {
         return { status: statusKey('climate', c, readingNa && isLive(c), mock), na, mock, off, haOff: haOfflineConn(c),
           current: reading ? reading.current : null, target: reading ? reading.target : null,
           min: reading ? reading.min : 7, max: reading ? reading.max : 30, step: reading ? reading.step : 0.5,
-          activity: climateActivity(action, off), name: sentenceCase(t.label || (roomName(t.id) + ' radiator')) };
+          activity: climateActivity(action, off), name: radiatorTitle(t.label, roomName(t.id)) };
       },
       html(m) { return popoverHtml.climate(m, dot); },
       bind(t, el, ctl) {

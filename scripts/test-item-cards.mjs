@@ -263,19 +263,28 @@ const CONSOLE = [
 {
   // Mutation: return the whole label from shortLabel -> fails.
   check('shortLabel: an authoring note is cut at the first " ("', IC.shortLabel('Word clock (study, above the desk)') === 'Word clock');
-  check('shortLabel: ... or at the first " - "', IC.shortLabel('Frame TV, 43-inch - PHOTO-DERIVED POSITION') === 'Frame TV, 43-inch');
-  check('shortLabel: whichever comes first', IC.shortLabel('Frame TV, 43-inch (art mode) - PHOTO-DERIVED') === 'Frame TV, 43-inch');
+  check('shortLabel: ... or at the first " - "', IC.shortLabel('Panel TV - DRAFT POSITION') === 'Panel TV');
+  check('shortLabel: whichever comes first', IC.shortLabel('Wall TV, 50-inch (matte) - DRAFT') === 'Wall TV, 50-inch');
   check('shortLabel: a plain label is kept, nothing -> empty', IC.shortLabel('Sideboard') === 'Sideboard' && IC.shortLabel(undefined) === '');
-  check('shortLabel: a leading "(" is not a cut', IC.shortLabel('(spare) shelf') === '(spare) shelf');
+  // Mutation: separator ' - ' -> '-' cuts 'Hi-fi' at its hyphen -> 'Hi' -> fails.
+  check('shortLabel: a hyphen inside a word is not a cut', IC.shortLabel('Hi-fi cabinet (left)') === 'Hi-fi cabinet');
+  // Mutation: separator ' (' -> '(' cuts '(spare) shelf' to '' -> fails.
+  check('shortLabel: a label that opens with "(" is kept whole', IC.shortLabel('(spare) shelf') === '(spare) shelf');
   // Mutation: prefer the label over card.title -> fails.
-  check('cardTitle: the binding title wins', IC.cardTitle({ title: 'Living room TV' }, 'TV, 75-inch (flat)', 'tv') === 'Living room TV');
-  check('cardTitle: no title -> the short label', IC.cardTitle({ title: null }, 'TV, 75-inch (flat, thin bezel)', 'tv') === 'TV, 75-inch');
+  check('cardTitle: the binding title wins', IC.cardTitle({ title: 'Den TV' }, 'Wall TV, 50-inch (matte)', 'tv') === 'Den TV');
+  check('cardTitle: no title -> the short label', IC.cardTitle({ title: null }, 'Wall TV, 50-inch (matte)', 'tv') === 'Wall TV, 50-inch');
   check('cardTitle: no label either -> the id humanised', IC.cardTitle({}, null, 'hall_tv') === 'Hall tv');
   const raw = { k_clock: { title: 'Kitchen clock' }, list: [{ title: 'x' }], tv: { media: [] } };
   check('bindingTitle: a title-only binding', IC.bindingTitle(raw, 'k_clock') === 'Kitchen clock');
   check('bindingTitle: a list or no title -> null', IC.bindingTitle(raw, 'list') === null && IC.bindingTitle(raw, 'tv') === null && IC.bindingTitle(null, 'x') === null);
   // Mutation: fall back to the furniture label in clockTitle -> not reachable; a
   // mutation returning 'Clock' always fails the room case.
+  // Mutation: drop the lower-casing in roomThingTitle -> 'Home Office clock' -> fails.
+  check('clock and radiator titles share one room rule', IC.clockTitle(null, 'Home Office') === 'Home office clock' &&
+    IC.radiatorTitle(null, 'Home Office') === 'Home office radiator' && IC.radiatorTitle(null, '') === 'Radiator');
+  // Mutation: sentence-case a bound title -> 'Home Office heater' becomes 'Home office heater' -> fails.
+  check('a bound title shows exactly as written', IC.radiatorTitle('Home Office heater', 'Home Office') === 'Home Office heater' &&
+    IC.clockTitle('The BIG Clock', 'Hall') === 'The BIG Clock');
   check('clockTitle: binding title, else "<Room> clock", else "Clock"', IC.clockTitle('Gold clock', 'Office') === 'Gold clock' &&
     IC.clockTitle(null, 'Office') === 'Office clock' && IC.clockTitle(null, '') === 'Clock');
   const items = IC.normaliseItemBindings({ k_clock: { title: 'Kitchen clock' } });
@@ -289,7 +298,7 @@ const CONSOLE = [
   check('cardIcon: lights -> bulb, readings -> thermometer', IC.cardIcon({ media: [], lights: [{}], readings: [] }) === 'bulb' &&
     IC.cardIcon({ media: [], lights: [], readings: [{}] }) === 'thermometer');
   // Mutation: return the label unchanged -> 'TV' under 'TV' -> fails.
-  check('first row: a label equal to the title becomes its role', IC.rowLabelUnderTitle('Vader', 'vader', 'receiver', 'media') === 'Receiver');
+  check('first row: a label equal to the title becomes its role', IC.rowLabelUnderTitle('Soundbar', 'soundbar', 'receiver', 'media') === 'Receiver');
   check('first row: a TV under a "TV" title reads Television', IC.rowLabelUnderTitle('TV', 'TV', 'tv', 'media') === 'Television');
   check('first row: a different label is kept', IC.rowLabelUnderTitle('TV', 'Living room', 'tv', 'media') === 'TV');
   check('first row: no role -> the kind', IC.rowLabelUnderTitle('Lamp', 'Lamp', null, 'light') === 'Light');

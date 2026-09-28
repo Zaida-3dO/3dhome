@@ -316,15 +316,15 @@ export function readingRowModel(raw, humRaw) {
 
 /**
  * A furniture `label` shortened for a card title. In a real house the label
- * is an authoring note ("Word clock (study, above the desk)", "Frame TV,
- * 43-inch (...) - PHOTO-DERIVED POSITION"): keep what comes before the first
+ * is an authoring note ("Word clock (study, above the desk)", "Panel TV
+ * (matte) - DRAFT POSITION"): keep what comes before the first
  * " (" or " - ". A binding's own `title` is the proper fix; this is the
  * fallback.
  */
 export function shortLabel(label) {
   const s = typeof label === 'string' ? label.trim() : '';
   if (!s) return '';
-  const cut = [' (', ' - ', ' – ', ' — '].map(sep => s.indexOf(sep)).filter(i => i > 0);
+  const cut = [' (', ' - ', ' – ', ' — '].map(sep => s.indexOf(sep)).filter(i => i >= 0);
   return (cut.length ? s.slice(0, Math.min(...cut)) : s).trim();
 }
 
@@ -344,11 +344,28 @@ export function bindingTitle(items, itemId) {
   return b && !Array.isArray(b) && typeof b === 'object' ? str(b.title) : null;
 }
 
-/** A clock card's title: the binding's title, else "<Room> clock", else "Clock". Never the label. */
-export function clockTitle(title, roomName) {
-  if (title) return title;
+/**
+ * "<Room> <thing>" in sentence case -- "Home office clock", "Home office
+ * radiator" -- or the bare thing, capitalised, with no room. The ONE rule
+ * the clock and the radiator titles share, so the same room never reads two
+ * ways. Words after the first lose a leading capital; ALL-CAPS words (TV)
+ * are kept.
+ */
+export function roomThingTitle(roomName, thing) {
   const r = typeof roomName === 'string' ? roomName.trim() : '';
-  return r ? r + ' clock' : 'Clock';
+  const words = ((r ? r + ' ' : '') + thing).split(/\s+/);
+  return words.map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1)
+    : /^[A-Z][a-z]/.test(w) ? w.charAt(0).toLowerCase() + w.slice(1) : w)).join(' ');
+}
+
+/** A clock card's title: the binding's title exactly as written, else "<Room> clock". Never the label. */
+export function clockTitle(title, roomName) {
+  return title || roomThingTitle(roomName, 'clock');
+}
+
+/** A radiator's climate card title: the binding's title exactly as written, else "<Room> radiator". */
+export function radiatorTitle(title, roomName) {
+  return title || roomThingTitle(roomName, 'radiator');
 }
 
 /**
