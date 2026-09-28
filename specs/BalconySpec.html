@@ -150,6 +150,7 @@ function buildBalconyModel(t, group, THREE) {
   const wall = new THREE.Mesh(new THREE.BoxGeometry(wW, 3.2, 0.1), new THREE.MeshStandardMaterial({ color: 0x55565a, roughness: 1 }));
   wall.position.set(0, 3.2 / 2 - 0.6, dz - 0.05);
   wall.receiveShadow = true;
+  wall.userData.specBackdrop = 'wall'; // the house's own finish (spec-three.jsx (D))
   wall.name = 'context-wall';
   group.add(wall);
 }

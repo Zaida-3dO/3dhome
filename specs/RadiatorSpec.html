@@ -283,6 +283,7 @@ function buildRadiatorModel(t, group, THREE) {
   wall.name = 'referenceWall';
   wall.position.set(0, wallH / 2, -0.03);
   wall.receiveShadow = true;
+  wall.userData.specBackdrop = 'wall'; // the house's own finish (spec-three.jsx (D))
   group.add(wall);
 
   const floor = new THREE.Mesh(
@@ -293,6 +294,7 @@ function buildRadiatorModel(t, group, THREE) {
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(0, 0, 0.65);
   floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
   group.add(floor);
 }
 

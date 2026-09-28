@@ -179,6 +179,7 @@ function buildClockScene(t, group, THREE, ctx) {
   );
   wall.position.set(0, wallHeight / 2, -0.8);
   wall.receiveShadow = true;
+  wall.userData.specBackdrop = 'wall'; // the house's own finish (spec-three.jsx (D))
   group.add(wall);
 
   // diy-words' own width/height are the WIDER full envelope (including the

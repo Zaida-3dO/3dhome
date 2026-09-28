@@ -165,6 +165,7 @@ function buildItemModel(t, group, THREE, ctx) {
   const floor = new THREE.Mesh(new THREE.CircleGeometry(1.2, 32), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
   floor.name = 'floor';
   group.add(floor);
 }

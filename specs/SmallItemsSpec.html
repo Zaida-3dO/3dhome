@@ -293,9 +293,11 @@ function addLampPreview(THREE, group, p, lamp) {
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(0, -0.001, 0.5);
   floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
   const wall = new THREE.Mesh(new THREE.PlaneGeometry(3, 2.4), room);
   wall.position.set(0, 1.2, -0.01);
   wall.receiveShadow = true;
+  wall.userData.specBackdrop = 'wall'; // the house's own finish (spec-three.jsx (D))
   group.add(floor, wall);
   if (!lamp.on) return;
   // The brightness is spread over five lights along the tube, a little in

@@ -634,6 +634,14 @@ jobs:
         # folded pages redirect to a declared object, and every page uses the
         # shared SpecPage/SpecVariants picker with no other switcher.
         run: node scripts/test-spec-pages.mjs
+      - name: Shared render rig -- the house and the spec pages light alike
+        # src/render-rig.js is the one lighting/render setup: renderer
+        # settings, sun + sky, presets, shadow settings, room light, finishes.
+        # Pins its values, that both consumers use it and neither lights on
+        # its own, the spec shadow-frustum fit, and the finish texels.
+        run: node scripts/test-render-rig.mjs
+      - name: Spec harness -- iso view fits the item on phones, time-of-day control
+        run: node scripts/test-spec-three.mjs
       - name: Kitchen builders (corner, sink, LEDs, draw budget)
         # What the generic contract cannot see: runs beyond DEFAULTS, the L's
         # worktops meeting without overlap or gap, LED strips continuous round

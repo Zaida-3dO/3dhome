@@ -203,6 +203,7 @@ function buildRugModel(t, group, THREE) {
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 4.5), new THREE.MeshStandardMaterial({ color: 0x9c8b72, roughness: 0.9 }));
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
   floor.name = 'floor';
   group.add(floor);
 }

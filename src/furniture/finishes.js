@@ -43,8 +43,10 @@ export const FINISHES = Object.freeze(Object.keys(FINISH_PARAMS));
  * cabinets. The merged palette (merge.js makePaletteTexture) therefore draws
  * a mirror as a smooth, barely metallic light grey: it reads as silvered
  * glass and catches the room's highlights, at no cost (same texel lookup,
- * same program, no new draw). Spec pages, which DO install an environment
- * (specs/spec-three.jsx), keep the true mirror from makeFinish().
+ * same program, no new draw). Spec pages draw it the same way: they have no
+ * environment map either, and specs/spec-three.jsx applies these params to
+ * palette-finish parts (src/render-rig.js applyLiveFinishes). makeFinish()
+ * itself still makes the palette material, which merge.js compares against.
  *
  * `metal` has the same problem at a smaller scale: at metalness 0.9 only a
  * tenth of its colour is diffuse, so a light-grey handle, radiator fin or

@@ -156,6 +156,7 @@ function buildSofaModel(t, group, THREE) {
   const floor = new THREE.Mesh(new THREE.CircleGeometry(2.4, 48), new THREE.MeshStandardMaterial({ color: 0x8a7a64, roughness: 1 }));
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
   floor.name = 'floor';
   group.add(floor);
 }
@@ -360,6 +361,7 @@ function buildBedModel(t, group, THREE) {
   const floor = new THREE.Mesh(new THREE.CircleGeometry(1.6, 32), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
   floor.name = 'floor';
   group.add(floor);
 }
@@ -529,6 +531,7 @@ function buildOttomanModel(t, group, THREE) {
   const floor = new THREE.Mesh(new THREE.CircleGeometry(1.2, 32), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
   floor.name = 'floor';
   group.add(floor);
 }

@@ -317,6 +317,11 @@ window.cabinetModuleReady.then(() => {
   Object.assign(PRESETS, window.CabinetFurniture.MIRROR_CABINET_PRESETS);
 });
 
+// Which of the house's two kinds of room lighting each object stands under at
+// night (spec-three.jsx nightRoom): living-room pieces under a living room's
+// downlights, the rest under a bedroom's spot cluster.
+const NIGHT_ROOM = { 'tv-console': 'downlights', 'display-cabinet': 'downlights' };
+
 // OBJECT -> its VARIANTS (preset keys above), in picker order.
 const CABINET_OBJECTS = {
   'wardrobe':         ['mirroredWardrobe2Door', 'slidingWardrobe4Panel'],
@@ -404,9 +409,11 @@ function addLevelPreview(THREE, group, params, levels) {
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(0, -0.001, 0.5);
   floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
   const wall = new THREE.Mesh(new THREE.PlaneGeometry(3, 2.4), room);
   wall.position.set(0, 1.2, -0.01);
   wall.receiveShadow = true;
+  wall.userData.specBackdrop = 'wall'; // the house's own finish (spec-three.jsx (D))
   group.add(floor, wall);
   const boxes = window.CabinetFurniture.channelStripBoxes(params);
   const rows = channelRows(params);
@@ -597,6 +604,7 @@ function App() {
             t={viewT}
             buildModel={buildCabinet(params, levels)}
             heightOf={heightOfParams(params)}
+            nightRoom={NIGHT_ROOM[objectId] || 'spots'}
           />
         </div>
       </div>

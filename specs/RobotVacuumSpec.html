@@ -176,6 +176,7 @@ function buildVacuumModel(t, group, THREE) {
   const floor = new THREE.Mesh(new THREE.CircleGeometry(0.8, 32), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
   floor.name = 'floor';
   group.add(floor);
 }
