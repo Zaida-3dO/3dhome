@@ -632,6 +632,8 @@ jobs:
         run: node scripts/test-light-collapse.mjs
       - name: Tap popovers -- target resolution, nearest-visible occlusion, placement
         run: node scripts/test-tap-popovers.mjs
+      - name: Room click -- walls block and resolve to the side tapped, furniture passes through
+        run: node scripts/test-room-pick.mjs
       - name: Spec pages don't reference a module-scope import alias out of scope
         run: |
           # Item 059873ed, round-2 review: ClockSpec.html's furnitureJSON()

@@ -37,6 +37,7 @@ import {
 import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { rugPatternForBox } from './rug-pattern.js';
+import { pickRoom } from './room-pick.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
   solarPosition, solarNoon, sunDirection, daylightCurve, NIGHT,
@@ -4826,6 +4827,12 @@ export const Home3DScene = (() => {
     const _t0 = _homeTgt();
     const orb = { drag: false, pan: false, px: 0, py: 0, th: Math.PI * 0.22, ph: Math.PI * 0.32, r: _defaultDistance, tgt: _t0 };
     const clickStart = { x: 0, y: 0 };
+    // Room floors in house cm, the same shape the click-catchers are built
+    // from (the room's poly, else its rect). Read per tap: ROOMS is per house.
+    const roomPolys = () => Object.entries(ROOMS).map(([id, rm]) => ({
+      id,
+      poly: rm.poly || [[rm.x1, rm.y1], [rm.x2, rm.y1], [rm.x2, rm.y2], [rm.x1, rm.y2]]
+    }));
     const rc = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
@@ -5432,8 +5439,11 @@ export const Home3DScene = (() => {
       on(container, "click", e => {
         if (Math.abs(e.clientX - clickStart.x) > 5 || Math.abs(e.clientY - clickStart.y) > 5) return;
         rc.setFromCamera(mouse, cam);
-        const h = rc.intersectObjects(scene.children, true).find(x => x.object.userData.clickable);
-        if (h && onRoomClick) onRoomClick(h.object.userData.roomId);
+        // Walls block and resolve to the side tapped; furniture and
+        // see-through surfaces pass the tap on (src/room-pick.js).
+        const picked = pickRoom(rc.intersectObjects(scene.children, true), rc.ray.direction,
+          roomPolys(), (x, z) => [x / S + OX, z / S + OY]);
+        if (picked.roomId && onRoomClick) onRoomClick(picked.roomId);
       });
       on(container, "wheel", e => {
         e.preventDefault();
