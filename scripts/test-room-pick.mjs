@@ -202,6 +202,20 @@ console.log('2b. the step follows the tapped face, not the ray\'s tilt');
   const want = ln.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(obj.matrixWorld)).normalize();
   const got = R.stepBack({ point: new THREE.Vector3(), face: { normal: ln }, object: obj }, want.clone().negate());
   ok(Math.hypot(got.x - want.x, got.y - want.y, got.z - want.z) < 1e-9, 'a slanted face under non-uniform scale gets its true world normal', { got, want });
+  // A room polygon drawn 3 cm INTO the divider (real profiles do this):
+  // containment alone would hand that strip of the wall top to A.
+  const over = [{ id: 'room_a', poly: [[10, 10], [298, 10], [298, 275], [10, 275]] }, rooms[1]];
+  const top = tap(s, [tx(297), 10, mid(140)], [tx(297), 0, mid(140)]);
+  ok(top.hits[0] && top.hits[0].point.y === WALL_H && R.roomAt(over, 297, 140) === 'room_a',
+    'fixture: the tap lands on the wall top, over the overlapping polygon');
+  ok(R.pickRoom(top.hits, top.dir, over, toHouse).roomId === null, 'a wall top selects nothing even where a polygon overlaps it');
+  // ...while a floor-level solid (a rug) still resolves to its room.
+  const rug = new THREE.Mesh(new THREE.BoxGeometry(1, 0.01, 1), new THREE.MeshStandardMaterial());
+  rug.position.set(tx(150), 0.012, mid(60)); s.add(rug); s.updateMatrixWorld(true);
+  const onRug = tap(s, [tx(150), 6, mid(60)], [tx(150), 0, mid(60)]);
+  ok(onRug.hits[0] && onRug.hits[0].object === rug, 'fixture: nearest hit is the rug');
+  ok(onRug.pick.roomId === 'room_a' && onRug.pick.via === 'wall', 'a rug (up-facing, floor level) still selects its room', onRug.pick);
+  s.remove(rug);
   const nf = R.stepBack({ point: hw[0].point, object: hw[0].object }, { x: 0.6, y: -0.8, z: 0 });
   ok(nf.x === -0.6 && nf.y === 0.8 && nf.z === -0, 'a hit with no face steps back along the reversed ray', nf);
 }

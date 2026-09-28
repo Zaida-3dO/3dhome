@@ -18,8 +18,9 @@
  *   - anything else solid (a wall, pillar, door, frame, rug...) BLOCKS, and
  *     resolves to the side that was tapped: the hit point is stepped back
  *     STEP_BACK_M toward the camera and the room whose floor polygon (house
- *     cm) contains that point wins. No room -> the tap selects nothing (a
- *     wall top seen from above, the outside face of an exterior wall).
+ *     cm) contains that point wins. No room -> the tap selects nothing (the
+ *     outside face of an exterior wall). A solid TOP (facing up, above
+ *     TOP_MIN_M: a wall top seen from above) selects nothing outright.
  *
  * "Toward the camera" is along the tapped FACE's normal, turned to face the
  * camera, when the hit carries a face (every mesh hit does); along the
@@ -42,6 +43,16 @@ import { insidePoly } from './footstep-walk.js';
 
 /** How far (scene metres) a wall hit is stepped back toward the camera. */
 export const STEP_BACK_M = 0.05;
+
+/**
+ * An upward-facing solid surface higher than this (scene metres) is a TOP --
+ * a wall, pillar or door-frame top seen from above -- and selects nothing,
+ * whatever polygon it lies over. Real profiles draw room polygons a few cm
+ * into the walls in places, so containment alone let a strip along a wall
+ * top select the room beside it. Floor-level surfaces (a rug, decking) sit
+ * far below this and still resolve to their room.
+ */
+export const TOP_MIN_M = 0.5;
 
 /** True when the object or any ancestor is furniture (src/furniture.js tags). */
 export function isFurniture(obj) {
@@ -110,6 +121,7 @@ export function pickRoom(hits, direction, rooms, toHouse) {
     if (materialOpacity(o.material, h.face ? h.face.materialIndex : 0) < OPACITY_SOLID) continue;
     if (isFurniture(o)) continue;
     const s = stepBack(h, direction);
+    if (s.y > 0.9 && h.point.y > TOP_MIN_M) return { roomId: null, via: 'wall', hit: h };
     const [hx, hy] = toHouse(h.point.x + s.x * STEP_BACK_M, h.point.z + s.z * STEP_BACK_M);
     return { roomId: roomAt(rooms || [], hx, hy), via: 'wall', hit: h };
   }
