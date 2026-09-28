@@ -19,8 +19,10 @@
  *      the OPAQUE palette bucket -- the one that reads the texture. A metal
  *      part that went to a kept bucket would be drawn with its builder's own
  *      material (metalness 0.9) and the override would silently not apply.
- *   4. Spec pages DO have an environment map, so makeFinish() still makes
- *      the true palette metal there (metalness 0.9).
+ *   4. makeFinish() still makes the true palette metal (metalness 0.9): it is
+ *      what merge.js's isPaletteMaterial compares a part against. Spec pages
+ *      convert it to the live look themselves (src/render-rig.js
+ *      applyLiveFinishes, pinned by scripts/test-render-rig.mjs).
  *
  * MUTATION: set NO_ENV_FINISH_PARAMS.metal.metalness back to 0.9 (or delete
  * the entry) and checks 1 and 2 fail.
@@ -94,7 +96,7 @@ OPAQUE_LIVE.forEach(f => {
   check('some registered builder has metal parts (the check above is not vacuous)', metalParts > 0, metalParts);
 }
 
-// 4. Spec pages keep the true metal (they install an environment map).
+// 4. makeFinish keeps the palette metal (the reference merge.js compares against).
 {
   const m = Fin.makeFinish(THREE, 'metal', '#c3c6c9');
   check('makeFinish(metal) is still the palette metal', m.metalness === Fin.FINISH_PARAMS.metal.metalness && m.metalness >= 0.9, m.metalness);

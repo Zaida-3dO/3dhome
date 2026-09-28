@@ -39,13 +39,17 @@ import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
-  solarPosition, solarNoon, sunDirection, daylightCurve, NIGHT,
+  solarPosition, sunDirection, NIGHT,
   windowLightPieces, windowSegments, poolGainForFloor, colourBrightness
 } from './sun-position.js';
 import {
   FINISH_TYPES, makeFinishTexture, alongToMetres, finishRectOnBox, createFinishBatch, addLongFace,
   addCrossFace, buildFinishGeometry, revealEnds, finishKey, gridOriginY
 } from './wall-finish.js';
+import {
+  applyRendererSettings, createSkyRig, presetSun, applyDaylight, applyNight,
+  kelvinToHex, ROOM_LIGHT, createRoomShadowLight
+} from './render-rig.js';
 
 export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------
@@ -233,10 +237,8 @@ export const Home3DScene = (() => {
     return ang;
   }
 
-  function k2h(k) {
-    const t = Math.max(0, Math.min(1, (k - 2700) / 3800));
-    return (Math.round(255 - t * 30) << 16) | (Math.round(215 + t * 30) << 8) | Math.round(160 + t * 90);
-  }
+  // Colour temperature -> hex: shared with the spec pages (src/render-rig.js).
+  const k2h = kelvinToHex;
 
   // ---- Procedural floor textures (canvas-generated, no external files) ----
   function makeWoodTileTexture() {
@@ -1045,26 +1047,19 @@ export const Home3DScene = (() => {
     // undersides. It REPLACES the ambient one-for-one (same light count, a
     // couple of uniform rows more), and at night its sky and ground colours
     // are equal, which makes it exactly the old ambient.
-    const ambLight = new THREE.HemisphereLight(0xd9d9e6, 0xd9d9e6, 0.12);
+    // Both come from src/render-rig.js, which the spec pages light with too
+    // (colours, intensities and every shadow setting live there).
+    const skyRig = createSkyRig(THREE, { castShadow: quality.sunShadow, shadowMapScale: smScale });
+    const ambLight = skyRig.hemi;
     scene.add(ambLight);
-    const sun = new THREE.DirectionalLight(0xffeedd, 0.25);
+    const sun = skyRig.sun;
     // Where the sun is comes from updateSunlight() (real solar position). The
     // light and its target are both placed about the house centre, so the
-    // shadow frustum (+-15 m) is centred on the house rather than the world
-    // origin.
+    // shadow frustum (+-15 m, SUN_SHADOW.halfExtent) is centred on the house
+    // rather than the world origin.
     sun.position.set(tx(HOUSE.centre[0]) + 10, 18, tz(HOUSE.centre[1]) - 5);
     sun.target.position.set(tx(HOUSE.centre[0]), 0, tz(HOUSE.centre[1]));
     scene.add(sun.target);
-    sun.castShadow = quality.sunShadow;
-    sun.shadow.mapSize.width = Math.round(2048 * smScale);
-    sun.shadow.mapSize.height = Math.round(2048 * smScale);
-    sun.shadow.camera.left = -15;
-    sun.shadow.camera.right = 15;
-    sun.shadow.camera.top = 15;
-    sun.shadow.camera.bottom = -15;
-    sun.shadow.camera.near = 0.5;
-    sun.shadow.camera.far = 40;
-    sun.shadow.bias = -0.0005;
     scene.add(sun);
 
     // Ground (color updated by updateSunlight)
@@ -2532,29 +2527,23 @@ export const Home3DScene = (() => {
         // The three upward faces of the old cubemap rendered the ceiling slab
         // from above and contributed nothing a viewer can see; the cone keeps
         // the hemisphere that does the visible work.
-        const spotY = FY + WH - 0.15;
-        // Cone half-angle: wide enough to cover the room's own floor plan from
-        // ceiling height, with margin, then clamped. Derived from the room's
+        // Built by src/render-rig.js (createRoomShadowLight), which the spec
+        // pages' night room light uses too. Cone half-angle: wide enough to
+        // cover the room's own floor plan from ceiling height (WH - 0.15),
+        // with margin, clamped to ~80 deg; derived from the room's
         // half-diagonal so a long thin room still gets its corners lit rather
-        // than a circle inscribed in its short side.
-        const halfDiag = Math.sqrt(w * w + d * d) / 2;
-        const angle = Math.min(Math.atan2(halfDiag * 1.15, spotY) , 1.40); // <= ~80deg
-        const roomShadowLight = new THREE.SpotLight(0xfff4cc, 0.4, roomRange, angle, 0.8, 1.5);
-        roomShadowLight.position.set(cx, spotY, cz);
+        // than a circle inscribed in its short side. Range: 1.2 x the longer
+        // side (roomRange).
+        //
         // A SpotLight aims at its `target`, whose default is the origin -- so
-        // WITHOUT this every room's cone would point at the middle of the house
+        // WITHOUT one every room's cone would point at the middle of the house
         // instead of at its own floor. The target must also be IN THE SCENE
         // GRAPH: three reads target.matrixWorld, which is only updated for
         // objects the renderer walks. This is the single easiest way to get a
         // SpotLight conversion silently wrong.
-        roomShadowLight.target.position.set(cx, FY, cz);
+        const roomShadowLight = createRoomShadowLight(THREE,
+          { cx, cz, w, d, floorY: FY, ceiling: WH, shadowMapScale: smScale });
         scene.add(roomShadowLight.target);
-        roomShadowLight.castShadow = true;
-        roomShadowLight.shadow.mapSize.width = Math.round(1024 * smScale);
-        roomShadowLight.shadow.mapSize.height = Math.round(1024 * smScale);
-        roomShadowLight.shadow.bias = -0.0008;
-        roomShadowLight.shadow.camera.near = 0.1;
-        roomShadowLight.shadow.camera.far = roomRange;
         scene.add(roomShadowLight);
         mls.push(roomShadowLight);
       }
@@ -2578,7 +2567,8 @@ export const Home3DScene = (() => {
         b.userData = { roomId: id, clickable: true };
         scene.add(b);
         meshes.push(b);
-        lights.push({ x: px, y: py - 0.06, z: pz, intensity: 1, distance: Math.max(w, d) * 1.8, decay: 1.8 });
+        lights.push({ x: px, y: py - 0.06, z: pz, intensity: 1,
+          distance: Math.max(w, d) * ROOM_LIGHT.downlightDistanceK, decay: ROOM_LIGHT.downlightDecay });
       };
 
       // Surface-mounted spot: a small sphere. Historically a room's five spots
@@ -3685,8 +3675,9 @@ export const Home3DScene = (() => {
     ren.shadowMap.needsUpdate = wantShadows;
     // ─────────────────────────────────────────────────────────────────────────
 
-    ren.toneMapping = THREE.ACESFilmicToneMapping;
-    ren.toneMappingExposure = 0.85;
+    // Tone mapping, exposure, colour space and shadow type: src/render-rig.js,
+    // shared with the spec pages so an item looks the same on both.
+    applyRendererSettings(THREE, ren);
     ren.domElement.style.touchAction = 'none';
     container.appendChild(ren.domElement);
 
@@ -4771,7 +4762,7 @@ export const Home3DScene = (() => {
         const s = lightState[id];
         if (!s) return;
         const mc = k2h(s.main.temp), mb = s.main.on ? s.main.bri / 100 : 0;
-        (mainLights[id] || []).forEach(l => { l.intensity = mb * 0.6 * lightGain(l); l.color.setHex(mc); });
+        (mainLights[id] || []).forEach(l => { l.intensity = mb * ROOM_LIGHT.mainGain * lightGain(l); l.color.setHex(mc); });
         (mainMeshes[id] || []).forEach(m => {
           m.material.emissive.setHex(s.main.on ? mc : 0x222222);
           m.material.emissiveIntensity = s.main.on ? mb * 2 : 0.05;
@@ -4974,6 +4965,7 @@ export const Home3DScene = (() => {
     const HAS_SITE = HOUSE.site.present;
     const NORTH_OFFSET = HOUSE.site.northOffsetDegrees || 0;
     const HOUSE_CX = tx(HOUSE.centre[0]), HOUSE_CZ = tz(HOUSE.centre[1]);
+    const skyRig = { sun, hemi: ambLight };
     // With no site: the old fixed sun direction (from the +x/-z side, ~58 deg
     // up), full daylight.
     const NO_SITE_SUN = { azimuth: 63.4, elevation: 58 };
@@ -4990,19 +4982,10 @@ export const Home3DScene = (() => {
 
     function currentSun() {
       const now = sunTimeOverride ? new Date(sunTimeOverride.getTime()) : new Date();
-      if (sunMode === 'night') return { azimuth: 0, elevation: -20, source: 'preset' };
-      if (sunMode === 'morning' || sunMode === 'noon') {
-        if (!HAS_SITE) {
-          return sunMode === 'noon'
-            ? { azimuth: 180, elevation: 50, source: 'preset' }
-            : { azimuth: 110, elevation: 16, source: 'preset' };
-        }
-        // Solar noon, or 3.5 h before it: the same sun whatever clock the
-        // viewer is on.
-        const noon = solarNoon(now, LON);
-        const at = sunMode === 'noon' ? noon : new Date(noon.getTime() - 3.5 * 3600000);
-        return Object.assign(solarPosition(at, LAT, LON), { source: 'preset' });
-      }
+      // Settings presets (morning / noon / evening / night): src/render-rig.js,
+      // the same presets the spec pages' time-of-day control uses.
+      const preset = presetSun(sunMode, { hasSite: HAS_SITE, latitude: LAT, longitude: LON, now });
+      if (preset) return preset;
       if (sunTimeOverride) {
         return HAS_SITE ? Object.assign(solarPosition(now, LAT, LON), { source: 'time' })
           : Object.assign({}, NO_SITE_SUN, { source: 'fixed' });
@@ -5028,35 +5011,28 @@ export const Home3DScene = (() => {
         lastSun = null;
         updateDaylightPools();
         updateDaylight();
-        sun.intensity = 0;
-        ambLight.intensity = NIGHT.fill;
-        ambLight.color.setRGB(NIGHT.fillColor[0], NIGHT.fillColor[1], NIGHT.fillColor[2]);
-        ambLight.groundColor.copy(ambLight.color);
+        applyNight(skyRig);
         gndMat.color.setRGB(0x18/255, 0x18/255, 0x18/255);
         scene.background.setRGB(NIGHT.background[0], NIGHT.background[1], NIGHT.background[2]);
         clouds.forEach(c => { c.material.opacity = 0; });
         return;
       }
       const s = currentSun();
-      const c = daylightCurve(s.elevation);
+      // The sun light and the sky fill (hemisphere: cool from above, warm
+      // bounce from below), set by src/render-rig.js exactly as a spec page
+      // sets them. Without sun shadows (the low tier) nothing stops an
+      // unshadowed sun, so a low one would light interior walls straight
+      // through the building: applyDaylight holds it steep there -- azimuth
+      // still follows the day, and the pools carry the real angle. With
+      // shadows it is held above 3 deg, so the shadow camera is never edge-on
+      // to the floor (the light has faded out by then anyway).
+      const c = applyDaylight(skyRig, s, {
+        northOffset: NORTH_OFFSET, centre: [HOUSE_CX, HOUSE_CZ],
+        shadowed: quality.sunShadow && ren.shadowMap.enabled
+      });
       lastSun = Object.assign({}, s, { day: c.day, direct: c.direct });
       // The REAL direction drives the window pools on every tier.
       daylightToSun = sunDirection(s.azimuth, s.elevation, NORTH_OFFSET);
-      // The light itself. Without sun shadows (the low tier) nothing stops an
-      // unshadowed sun, so a low one would light interior walls straight
-      // through the building: hold it steep there -- azimuth still follows
-      // the day, and the pools carry the real angle. With shadows it is held
-      // above 3 deg, so the shadow camera is never edge-on to the floor (the
-      // light has faded out by then anyway).
-      const lightEl = (quality.sunShadow && ren.shadowMap.enabled) ? Math.max(s.elevation, 3) : Math.max(s.elevation, 60);
-      const ld = sunDirection(s.azimuth, lightEl, NORTH_OFFSET);
-      sun.position.set(HOUSE_CX + ld[0] * 25, ld[1] * 25, HOUSE_CZ + ld[2] * 25);
-      sun.intensity = c.sunIntensity;
-      sun.color.setRGB(c.sun[0], c.sun[1], c.sun[2]);
-      // Sky fill (hemisphere): cool from above, warm bounce from below.
-      ambLight.intensity = c.fill;
-      ambLight.color.setRGB(c.sky[0], c.sky[1], c.sky[2]);
-      ambLight.groundColor.setRGB(c.bounce[0], c.bounce[1], c.bounce[2]);
       gndMat.color.setRGB(c.ground[0], c.ground[1], c.ground[2]);
       scene.background.setRGB(c.background[0], c.background[1], c.background[2]);
       // Daylight through the windows follows the same sun, gated per window

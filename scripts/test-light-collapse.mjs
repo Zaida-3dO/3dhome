@@ -127,7 +127,8 @@ const E = (x, z, extra) => Object.assign({ x, y: 2.4, z, intensity: 1, distance:
   check('each channel collapses its emitters into gain-carrying lights',
     /collapseEmitters\(emitters, \{ minX: tx\(rm\.x1\)/.test(src) && /pl\.userData\.gain = m\.intensity;/.test(src));
   check('syncLights scales main AND accent lights by their gain',
-    /l\.intensity = mb \* 0\.6 \* lightGain\(l\)/.test(src) && /l\.intensity = ab \* 0\.3 \* lightGain\(l\)/.test(src));
+    // (0.6 is ROOM_LIGHT.mainGain in src/render-rig.js, pinned by test-render-rig.mjs)
+    /l\.intensity = mb \* ROOM_LIGHT\.mainGain \* lightGain\(l\)/.test(src) && /l\.intensity = ab \* 0\.3 \* lightGain\(l\)/.test(src));
   check('an unmerged light has gain 1', /const lightGain = l => \(l\.userData && l\.userData\.gain > 0 \? l\.userData\.gain : 1\);/.test(src));
   check('cornice: at most 2 per cornice below ultra, each carrying its share, on build and on every HA update',
     /cornicePerCornice: tier === 'ultra' \? null : 2,/.test(src) && /const gain = want\[i\] \/ counts\[i\];/.test(src) &&

@@ -211,8 +211,11 @@ console.log('index.html wiring');
   check('?time= / &date= are parsed and pinned', /parseSunTime\(\s*tParam\s*,\s*dParam\s*\)/.test(html) &&
     /params\.get\('time'\)/.test(html) && /params\.get\('date'\)/.test(html) && /home\.setSunTime\(at\)/.test(html));
   const scene = read('src/home3d-scene.js');
+  // The sky fill is built by the shared rig (src/render-rig.js createSkyRig).
+  const rig = read('src/render-rig.js');
   check('the scene fills with a HemisphereLight, not a flat AmbientLight',
-    /new THREE\.HemisphereLight\(/.test(scene) && !/new THREE\.AmbientLight\(/.test(scene));
+    /createSkyRig\(THREE/.test(scene) && /new THREE\.HemisphereLight\(/.test(rig) &&
+    !/new THREE\.AmbientLight\(/.test(scene) && !/new THREE\.AmbientLight\(/.test(rig));
 }
 
 console.log(`\n${passes} passed, ${failures} failed`);
