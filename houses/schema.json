@@ -27,13 +27,23 @@
     },
     "itemCard": {
       "type": "object",
-      "description": "One tap card for a furniture item: an optional title, an optional region of the item's width it answers for, and at least one row list. Needs rooms schemaVersion 1.6.",
+      "description": "One tap card for a furniture item: an optional title, an optional region of the item's width it answers for, and at least one row list. A `title` is RECOMMENDED: without one the card falls back to the furniture item's `label` cut at its first ' (' or ' - ', and in a real house a label is usually an authoring note. A TITLE-ONLY card ({ \"title\": \"Kitchen clock\" }) is for an item that needs no rows -- a `wall-clock` or a `radiator` -- and names its card. Needs rooms schemaVersion 1.6.",
       "additionalProperties": false,
       "anyOf": [
         {
           "required": [
             "media"
           ]
+        },
+        {
+          "required": [
+            "title"
+          ],
+          "not": {
+            "required": [
+              "region"
+            ]
+          }
         },
         {
           "required": [

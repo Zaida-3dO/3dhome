@@ -685,7 +685,7 @@
       "params": {"width": 45, "height": 55, "depth": 40, "fronts": [{"height": 27, "cells": [{"kind": "drawer"}]}, {"height": 28, "cells": [{"kind": "drawer"}]}], "plinth": {"type": "plinth", "height": 0}, "color": "#e8e2d6"},
       "label": "Bedside table", "notes": "Bound in rooms.json sensors.items: three light rows (sample lights here)." },
     { "id": "kitchen_clock", "room": "kitchen", "type": "wall-clock", "wall": 5, "centre": 150, "offset": 0, "elevation": 170,
-      "label": "Kitchen clock", "notes": "Any wall-clock opens a card with the local time. No binding." },
+      "label": "Wall clock (kitchen, over the worktop)", "notes": "Any wall-clock opens a card with the local time, titled <Room> clock -- never this label, which is an authoring note. No binding needed; a title-only sensors.items entry would name it." },
     { "id": "study_radiator", "room": "study", "type": "radiator", "wall": 2, "centre": 140, "offset": 0, "elevation": 15,
       "params": {"width": 80, "height": 60},
       "label": "Study radiator", "notes": "Any radiator opens its room's climate card (sensors.climate.study). No new binding." }

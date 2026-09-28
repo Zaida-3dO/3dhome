@@ -1073,6 +1073,11 @@ def check_item_binding(rooms_doc, geo, sensors, version, report):
         if iid not in furniture:
             report.error(where, f"item card bound to furniture item '{iid}', which has no matching item in geometry.json's furniture")
         cards = binding if isinstance(binding, list) else [binding]
+        ftype = (furniture.get(iid) or {}).get("type")
+        rowless = [c for c in cards if isinstance(c, dict) and not any(c.get(k) for k in ("media", "lights", "readings"))]
+        if rowless and (isinstance(binding, list) or ftype not in ("wall-clock", "radiator")):
+            report.warn(where, "a title-only card names a clock or a radiator; on any other item (or in a list) it has "
+                               "nothing to show and the item stays a plain furniture tap")
         width = ((furniture.get(iid) or {}).get("params") or {}).get("width")
         spans = []
         for i, card in enumerate(cards):
