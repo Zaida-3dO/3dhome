@@ -16,6 +16,7 @@
 import { colorFromAttributes, DEFAULT_ACCENT_COLOR } from './light-color.js';
 import { normaliseVacuumBindings, parseVacuum, vacuumCommand, vacuumSegmentCommand } from './vacuum-control.js';
 import { normalisePlantBindings, plantEntities, parsePlant } from './plant-status.js';
+import { normaliseItemBindings, itemBindingEntities } from './item-cards.js';
 
 /**
  * Slider value -> a `cover.set_cover_position` call, fanned out to every
@@ -546,6 +547,11 @@ export const HAClient = (() => {
     // OUT of parseClimate so its flapping never repaints the sidebar row).
     // Fires nothing; recording here changes no existing behaviour.
     const rawStates = new Map();
+    // ...and of every entity a furniture item's tap card reads (rooms.json
+    // sensors.items, src/item-cards.js): its media players, lights and
+    // readings are shown straight from the raw state, so recording them here
+    // is all the fold they need. The card repaints on its own 1 s tick.
+    const itemEntityIds = itemBindingEntities(normaliseItemBindings(sensors && sensors.items));
     // sun.sun -> cb({ azimuth, elevation }), degrees. Every HA install has
     // the entity; the scene points its sun from it. Fired only when either
     // value actually changed.
@@ -563,7 +569,7 @@ export const HAClient = (() => {
 
     function noteRaw(st) {
       if (!st || !st.entity_id) return;
-      if (!entityIndex.has(st.entity_id) && !climateIndex.has(st.entity_id)) return;
+      if (!entityIndex.has(st.entity_id) && !climateIndex.has(st.entity_id) && !itemEntityIds.has(st.entity_id)) return;
       rawStates.set(st.entity_id, { state: st.state, attributes: st.attributes || {} });
     }
 

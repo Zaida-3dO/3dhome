@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""rooms.json `sensors.items`: schema + validator checks.
+Run: python scripts/test-validate-items.py
+
+Needs `jsonschema`. Exits 1 on any failure. Every id here is synthetic, and
+single-quoted so the PII guard (which flags double-quoted entity ids) passes.
+
+WHAT THIS GUARDS
+  1. houses/schema.json: one card and a list of region cards validate; a card
+     with no rows, a row of the wrong domain, a region missing `to`, a negative
+     region start, an unknown role and an unknown key are rejected.
+  2. scripts/validate-house.py: a binding to a furniture item that does not
+     exist is an ERROR, as is a region with from >= to; a region past the
+     item's width and two overlapping regions are warned; a profile below
+     schemaVersion 1.6 is warned; a clean binding trips none.
+"""
+
+import copy
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+spec = importlib.util.spec_from_file_location("validate_house", ROOT / "scripts" / "validate-house.py")
+vh = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(vh)
+
+try:
+    import jsonschema  # noqa: F401
+except ImportError:
+    print("FAIL jsonschema is not installed -- pip install jsonschema")
+    sys.exit(1)
+
+SCHEMA = json.loads((ROOT / "houses" / "schema.json").read_text(encoding="utf-8"))
+
+passes = 0
+failures = 0
+
+
+def check(name, cond, detail=None):
+    global passes, failures
+    if cond:
+        passes += 1
+    else:
+        failures += 1
+        print(f"FAIL {name}" + (f" -- {detail}" if detail is not None else ""))
+
+
+CONSOLE = [
+    {"title": "Cupboard", "region": {"from": 0, "to": 50},
+     "readings": [{"entity": 'sensor.demo_a_temperature', "label": "A", "humidity": 'sensor.demo_a_humidity'}]},
+    {"region": {"from": 50, "to": 130},
+     "media": [{"entity": 'media_player.demo_receiver', "role": "receiver"}, {"entity": 'media_player.demo_cast', "role": "cast"}]},
+]
+TV = {"media": [{"entity": 'media_player.demo_tv', "role": "tv"}]}
+BEDSIDE = {"title": "Bedside", "lights": [{"entity": 'light.demo_bedside', "label": "All"}]}
+
+
+def rooms_doc(items, version="1.6"):
+    return {"kind": "rooms", "schemaVersion": version, "house": "t", "rooms": {},
+            "sensors": {"items": items}}
+
+
+def schema_errors(doc):
+    r = vh.Report("t")
+    vh.schema_validate(doc, SCHEMA, r, "rooms.json")
+    return r.errors
+
+
+GEO = {"furniture": [{"id": "console", "room": "room", "type": "cabinet", "at": [1, 1], "params": {"width": 180}},
+                     {"id": "tv", "room": "room", "type": "tv", "at": [1, 1]},
+                     {"id": "bedside", "room": "room", "type": "cabinet", "at": [1, 1]}],
+       "doors": [], "curtains": []}
+ROOM_IDS = {"room"}
+
+
+def run(doc):
+    r = vh.Report("t")
+    vh.check_sensor_binding(doc, GEO, ROOM_IDS, r)
+    return [f"{w}: {m}" for w, m in r.errors], [f"{w}: {m}" for w, m in r.warnings]
+
+
+GOOD = {"console": CONSOLE, "tv": TV, "bedside": BEDSIDE}
+
+# ---- 1. schema ---------------------------------------------------------------
+check("schema: one card and a list of region cards validate", schema_errors(rooms_doc(GOOD)) == [], schema_errors(rooms_doc(GOOD)))
+for label, b in [
+    ("a card with no rows", {"title": "Empty"}),
+    ("an empty list", []),
+    ("a light in a media row", {"media": [{"entity": 'light.demo_x'}]}),
+    ("a switch as a light", {"lights": [{"entity": 'switch.demo_x'}]}),
+    ("a binary_sensor reading", {"readings": [{"entity": 'binary_sensor.demo_x'}]}),
+    ("a light as the humidity partner", {"readings": [{"entity": 'sensor.demo_x', "humidity": 'light.demo_x'}]}),
+    ("a region missing to", {"region": {"from": 0}, "readings": [{"entity": 'sensor.demo_x'}]}),
+    ("a negative region start", {"region": {"from": -1, "to": 5}, "readings": [{"entity": 'sensor.demo_x'}]}),
+    ("an unknown role", {"media": [{"entity": 'media_player.demo_x', "role": "toaster"}]}),
+    ("an unknown key", dict(TV, colour="red")),
+]:
+    check(f"schema: rejects {label}", schema_errors(rooms_doc({"tv": b})) != [])
+
+# ---- 2. validator --------------------------------------------------------------
+errs, warns = run(rooms_doc(GOOD))
+check("validator: a clean binding trips nothing", errs == [] and warns == [], (errs, warns))
+errs, _ = run(rooms_doc({"ghost": TV}))
+check("validator: an unknown furniture item is an error", any("ghost" in e for e in errs), errs)
+errs, _ = run(rooms_doc({"console": [{"region": {"from": 60, "to": 60}, "readings": [{"entity": 'sensor.demo_x'}]}]}))
+check("validator: a region with from >= to is an error", any("from (60)" in e for e in errs), errs)
+_, warns = run(rooms_doc({"console": [{"region": {"from": 130, "to": 200}, "readings": [{"entity": 'sensor.demo_x'}]}]}))
+check("validator: a region past the item's width is warned", any("180 cm wide" in w for w in warns), warns)
+_, warns = run(rooms_doc({"console": [CONSOLE[0], dict(CONSOLE[1], region={"from": 40, "to": 130})]}))
+check("validator: overlapping regions are warned", any("overlaps card 0" in w for w in warns), warns)
+_, warns = run(rooms_doc(GOOD, version="1.5"))
+check("validator: below 1.6 is warned", any("1.6" in w for w in warns), warns)
+
+print(f"{'FAILED' if failures else 'ok'} -- {passes} passed, {failures} failed")
+sys.exit(1 if failures else 0)

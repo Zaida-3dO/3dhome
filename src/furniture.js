@@ -121,7 +121,11 @@ export function placeGroup(group, placement, tx, tz) {
  * from a build result's byId, grown by `pad` metres (default 1 cm) so a hit
  * exactly on a face counts. The SMALLEST containing box wins, so a robot on
  * a rug, or a lamp on a table, is found rather than what it stands on.
- * Returns { id, type } or null. Only items in `onlyIds` (a Set) when given.
+ * Returns { id, type, room, rotationDeg, origin, width } or null -- origin
+ * the placed group's world position (metres, the item's back-centre) and
+ * width its resolved params.width (cm), which is what lets a caller say WHERE
+ * along the item a tap landed (src/item-cards.js widthOffsetCm). Only items
+ * in `onlyIds` (a Set) when given.
  */
 export function furnitureItemAt(byId, point, onlyIds, pad) {
   if (!byId || !point) return null;
@@ -134,7 +138,12 @@ export function furnitureItemAt(byId, point, onlyIds, pad) {
     if (point.x < b.min[0] - p || point.x > b.max[0] + p || point.y < b.min[1] - p || point.y > b.max[1] + p ||
       point.z < b.min[2] - p || point.z > b.max[2] + p) return;
     const vol = (b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) * (b.max[2] - b.min[2]);
-    if (vol < bestVol) { bestVol = vol; best = { id, type: byId[id].type }; }
+    if (vol < bestVol) {
+      bestVol = vol;
+      const e = byId[id];
+      best = { id, type: e.type, room: e.room, rotationDeg: e.placement ? e.placement.rotationDeg : 0,
+        origin: e.origin || null, width: e.width != null ? e.width : null };
+    }
   });
   return best;
 }
@@ -330,7 +339,8 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
       dynamicGroup.userData = { furniture: 'dynamic', itemId: item.id, type: item.type };
     }
     disposeBuilt(group);
-    return { parts: flat.parts, warnings: flat.warnings, dynamicGroup: dynamicGroup, worldBox: worldBox };
+    return { parts: flat.parts, warnings: flat.warnings, dynamicGroup: dynamicGroup, worldBox: worldBox,
+      origin: group.position.toArray() };
   }
 
   // Room by room (stable within a room), so a slice boundary falls between
@@ -366,7 +376,8 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
     });
     byId[item.id] = { id: item.id, room: item.room, type: item.type, placement: placement,
       fadeWallId: fadeWallId, caster: caster, triangles: tris, parts: flat.parts.length,
-      dynamicParts: flat.dynamicGroup ? flat.dynamicGroup.children.length : 0, worldBox: flat.worldBox };
+      dynamicParts: flat.dynamicGroup ? flat.dynamicGroup.children.length : 0, worldBox: flat.worldBox,
+      origin: flat.origin, width: typeof params.width === 'number' ? params.width : null };
     if (caster && wantProxies) {
       if (!casters.has(item.room)) casters.set(item.room, []);
       casters.get(item.room).push({ item, builder, params, placement, parts: flat.parts });

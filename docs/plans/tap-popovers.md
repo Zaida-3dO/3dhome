@@ -56,15 +56,29 @@ A tap target is `{ kind, id, entities }`, resolved from the hit mesh by walking 
 | light | fixture mesh `userData.roomId` + `userData.lightChannel` | `rooms.json rooms[roomId][channel]` |
 | curtain | ancestor group named `curtain:<id>` (set by `wall-fittings.js`) | `sensors.curtains[id]` |
 | door | door mount `userData.doorProfileId` (`doorId` holds the display label, not the id) | `sensors.doors[id]` |
-| climate | **not tappable yet** — opens only through the `?debug=1` seam (`__home3dTap.openAt('climate', roomId, x, y)`) | `sensors.climate[room]`, one entity per room (the sidebar's binding) |
+| climate | a tap on any `radiator` furniture item, by where it landed (`home.furnitureItemAt`) — the room the item stands in; also the `?debug=1` seam (`__home3dTap.openAt('climate', roomId, x, y)`) | `sensors.climate[room]`, one entity per room (the sidebar's binding) |
+| vacuum / plant | a tap inside a bound furniture item's world box | `sensors.vacuums[itemId]` / `sensors.plants[itemId]` |
+| item | a tap inside a bound furniture item's world box, then WHERE along its width (a region card) | `sensors.items[itemId]` — one card or a list of region cards (`src/item-cards.js`) |
+| clock | a tap on any `wall-clock` furniture item | none — the local time |
 
 Only **bound** objects are targets. An unbound door or curtain falls through to the existing
 tap-a-room behaviour, so nothing that works today changes.
 
-**Why climate is not tappable.** Furniture renders merged per room, so a radiator mesh carries no
-identity. The route (item 647fc9bd) is a hit-point → oriented-footprint lookup against the
-`house.furniture[]` radiators standing in a room that `sensors.climate` binds — still derived, never
-a hand-written map. `src/furniture/radiator.js` carries the same note in its header.
+**How a radiator is tapped.** Furniture renders merged per room, so a radiator mesh carries no
+identity. A tap's first solid hit is looked up against the world boxes of the tappable furniture items
+(`home.furnitureItemAt`, the vacuum's route); a `radiator` item then opens the climate card of the
+room it stands in — derived from `sensors.climate`, never a hand-written map (item 647fc9bd, done).
+
+**Furniture item cards (`sensors.items`, rooms.json 1.6).** A bound item opens a composite card of
+media-player rows (power, volume, source, sound mode), light rows (on/off, brightness, colour) and
+read-only reading rows. An item may carry several cards, each scoped to a `region`: cm along the
+item's width from its LEFT edge as seen from its FRONT — the order a cabinet's `fronts[].cells` are
+listed in. `home.furnitureItemAt` returns the item's placed origin, rotation and width so the hit can
+be projected onto that axis (`widthOffsetCm`); a tap on a part no card covers is not a target, and the
+room click beneath handles it. A `wall-clock` item opens a read-only card with the local time. Writes
+go through the HA client under the same `writeBlocked` / `canSend` rules as every other card; with no
+HA configured the rows show samples the controls move. Pure logic and its tests:
+`src/item-cards.js`, `scripts/test-item-cards.mjs`.
 
 ## Picking — nearest visible hit only
 
@@ -192,5 +206,5 @@ This round implements the approved visual plan, taking its proposed answer on al
 - Curtain and climate writes go through the sidebar's `curtainSender` / `climateSender`, so drag
   locks, dedupe and availability guards are shared.
 
-**Climate is still not tappable.** Furniture renders merged into house-wide buckets, so a radiator
-mesh carries no identity. Resolving a hit point to an item's footprint remains the follow-up.
+**Climate was not tappable at this point.** It became tappable with the furniture item cards (see
+"How a radiator is tapped" above).

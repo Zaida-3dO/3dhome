@@ -1,6 +1,6 @@
 {
   "kind": "rooms",
-  "schemaVersion": "1.5",
+  "schemaVersion": "1.6",
   "house": "demo",
   "homeAssistant": {
     "enabled": false,
@@ -90,6 +90,91 @@
       },
       "hall_jade": {
         "watering": "sensor.demo_jade_watering_countdown"
+      }
+    },
+    "items": {
+      "bedroom_tv": {
+        "media": [
+          {
+            "entity": "media_player.demo_bedroom_tv",
+            "label": "TV",
+            "role": "tv"
+          },
+          {
+            "entity": "media_player.demo_bedroom_tv_cast",
+            "label": "TV cast",
+            "role": "cast"
+          }
+        ]
+      },
+      "bedroom_tv_console": [
+        {
+          "title": "Console cupboard",
+          "region": {
+            "from": 0,
+            "to": 50
+          },
+          "readings": [
+            {
+              "entity": "sensor.demo_router_temperature",
+              "label": "Router",
+              "humidity": "sensor.demo_router_humidity"
+            },
+            {
+              "entity": "sensor.demo_media_server_temperature",
+              "label": "Media server",
+              "humidity": "sensor.demo_media_server_humidity"
+            },
+            {
+              "entity": "sensor.demo_games_console_temperature",
+              "label": "Games console",
+              "humidity": "sensor.demo_games_console_humidity"
+            }
+          ]
+        },
+        {
+          "title": "Sound system",
+          "region": {
+            "from": 50,
+            "to": 130
+          },
+          "media": [
+            {
+              "entity": "media_player.demo_receiver",
+              "label": "Receiver",
+              "role": "receiver"
+            },
+            {
+              "entity": "media_player.demo_receiver_cast",
+              "label": "Receiver cast",
+              "role": "cast"
+            }
+          ],
+          "readings": [
+            {
+              "entity": "sensor.demo_receiver_shelf_temperature",
+              "label": "Shelf",
+              "humidity": "sensor.demo_receiver_shelf_humidity"
+            }
+          ]
+        }
+      ],
+      "bedroom_bedside": {
+        "title": "Bedside lights",
+        "lights": [
+          {
+            "entity": "light.demo_bedside_drawers",
+            "label": "All drawers"
+          },
+          {
+            "entity": "light.demo_bedside_top",
+            "label": "Top drawer"
+          },
+          {
+            "entity": "light.demo_bedside_bottom",
+            "label": "Bottom drawer"
+          }
+        ]
       }
     }
   }

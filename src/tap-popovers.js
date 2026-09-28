@@ -18,6 +18,10 @@
  *   climate  (room)                                -> sensors.climate[room]
  *   vacuum   a furniture item's world box          -> sensors.vacuums[itemId]
  *   plant    a furniture item's world box          -> sensors.plants[itemId]
+ *   item     a furniture item's world box (+ where -> sensors.items[itemId], one card
+ *            along its width the tap landed)          per region (src/item-cards.js)
+ *   clock    a `wall-clock` item's world box        -> nothing (local time)
+ *   climate  a `radiator` item's world box          -> sensors.climate[item's room]
  *
  * A robot vacuum is FURNITURE, and furniture renders merged into shared
  * buckets, so its meshes carry no identity. It is found by WHERE the tap
@@ -27,10 +31,18 @@
  * the same way; its card is READ-ONLY (moisture, status, battery) and sends
  * nothing.
  *
- * Climate is keyed by ROOM (rooms.json 1.3, the sidebar's binding). Nothing on
- * main can be tapped for it yet: furniture renders merged into shared buckets,
- * so a radiator mesh carries no identity -- see the plan. It opens through the
- * ?debug=1 seam (__home3dTap.openAt('climate', roomId, x, y)).
+ * Climate is keyed by ROOM (rooms.json 1.3, the sidebar's binding). A tap on
+ * any `radiator` furniture item opens its room's climate card, found by the
+ * same where-it-landed lookup (src/item-cards.js furnitureTapTarget); a room
+ * with no climate binding makes its radiator a plain furniture tap. The
+ * ?debug=1 seam still opens it directly (__home3dTap.openAt('climate', roomId, x, y)).
+ *
+ * An ITEM card (sensors.items, rooms.json 1.6) is a composite: media player
+ * rows (power, volume, source, sound mode), light rows (on/off, brightness,
+ * colour) and read-only reading rows, straight from each entity's raw state.
+ * Its writes go through the HA client's callService / callServiceDebounced
+ * under the same writeBlocked / canSend rules as every other card. A
+ * `wall-clock` item opens a read-only card with the local time.
  *
  * OCCLUSION: nearest drawn, non-see-through hit wins. A faded exterior wall
  * (opacity 0.05), the ceiling seen from above (0), the room click-catchers (0)
@@ -44,10 +56,13 @@
  */
 
 import { ICONS, svgIcon } from './ui-icons.js';
-import { isColorChannel, supportsColor, swatchColor } from './light-color.js';
+import { isColorChannel, supportsColor, swatchColor, colorFromAttributes } from './light-color.js';
 import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCommand, vacuumStatusText,
   MOCK_VACUUM_READINGS, mockVacuumAfter } from './vacuum-control.js';
 import { normalisePlantBindings, plantStatusText, agoText, batteryText, mockPlantReading } from './plant-status.js';
+import { normaliseItemBindings, furnitureTapTarget, tappableFurnitureIds, mediaRowModel, lightRowModel, readingRowModel,
+  rowLabel, mediaPowerCommand, mediaVolumeCommand, mediaSourceCommand, mediaSoundModeCommand, lightRowCommand,
+  applyCommand, mockItemState, clockText, cardEntities } from './item-cards.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -410,6 +425,7 @@ const STATUS = {
   offlineMock: ['bad', 'Not connected', 'No Home Assistant configured. Showing sample temperatures; changes only preview.'],
   offlineSample: ['bad', 'Not connected', 'No Home Assistant configured. Showing a sample robot; the buttons only preview.'],
   offlinePlant: ['bad', 'Not connected', 'No Home Assistant configured. Showing a sample plant reading.'],
+  offlineItem: ['bad', 'Not connected', 'No Home Assistant configured. Showing sample devices; changes only preview.'],
 };
 
 /**
@@ -626,6 +642,42 @@ export const STYLE = `
 .tp-pmeta .tp-batt { font-size: 11px; }
 .tp-pmeta .tp-batt svg { width: 12px; height: 12px; }
 .tp-pnote { margin-top: 5px; font-size: 11px; color: var(--ink-2); line-height: 1.3; }
+/* Furniture item card (src/item-cards.js): a stack of rows -- media players,
+   lights, readings -- each a label line with its own control, divided by a
+   hairline. */
+.tp-pop[data-kind=item] { --w: 252px; }
+.tp-pop[data-kind=item] .tp-name { flex: 1 1 auto; }
+.tp-irow { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--pop-border); }
+.tp-head + .tp-irow { border-top: 0; padding-top: 0; margin-top: 6px; }
+.tp-irow .tp-row { margin-top: 0; }
+.tp-ilab { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1 1 auto; }
+.tp-ilab > span { display: flex; flex-direction: column; min-width: 0; }
+/* Row labels wrap rather than ellipsise (the card's rule: never an ellipsis). */
+.tp-ilab b { font-size: 12px; font-weight: 600; color: var(--ink); line-height: 1.25; overflow-wrap: anywhere; }
+.tp-ilab small { font-size: 11px; color: var(--ink-2); line-height: 1.25; overflow-wrap: anywhere; }
+.tp-ilab small.on { color: var(--ok); }
+.tp-ilab .tp-ico { width: 18px; height: 18px; }
+.tp-ico.m-on { fill: var(--accent); }
+.tp-ireading { display: flex; align-items: baseline; gap: 6px; flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tp-ireading b { font-size: 14px; font-weight: 600; color: var(--ink); }
+.tp-ireading.muted b { font-size: 12px; color: var(--ink-2); font-weight: 500; }
+.tp-ireading .hum { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; color: var(--ink-2); }
+.tp-ireading .hum svg { width: 11px; height: 11px; fill: #60a5fa; }
+.tp-ivol { display: flex; align-items: center; gap: 6px; margin: 6px 0 -2px; }
+.tp-ivol svg { width: 14px; height: 14px; flex: none; fill: var(--ink-2); }
+.tp-ivol .tp-range { flex: 1 1 auto; width: auto; min-width: 0; margin: 0; }
+.tp-isel { display: flex; gap: 5px; margin-top: 7px; }
+.tp-select { flex: 1 1 0; min-width: 0; height: var(--ib-h); padding: 0 6px; border-radius: 7px; cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.07); color: var(--ink);
+  font: 12px/1.2 'Segoe UI', system-ui, sans-serif; }
+.tp-select:disabled { opacity: 0.35; cursor: not-allowed; }
+.tp-select:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
+/* Clock card (read-only): the time big, the date beneath. */
+.tp-pop[data-kind=clock] { --w: 200px; }
+.tp-clock { margin-top: 6px; font-variant-numeric: tabular-nums; }
+.tp-clock b { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+.tp-clock small { font-size: 15px; color: var(--ink-2); margin-left: 2px; }
+.tp-clock-date { font-size: 12px; color: var(--ink-2); margin-top: 1px; }
 .tp-pop.chip { width: auto; max-width: 240px; padding: 8px 10px; border-radius: 999px; }
 .tp-pop.chip .tp-name { flex: 0 1 auto; }
 .tp-pop.chip .sep { color: var(--ink-2); }
@@ -671,6 +723,9 @@ ${coarseRules('.tp-force-coarse')}
 :root[data-theme="light"] .tp-pst.ok { color: #166534; background: rgba(34,197,94,0.14); border-color: rgba(21,128,61,0.45); }
 :root[data-theme="light"] .tp-pst.dry, :root[data-theme="light"] .tp-pst.due { color: #92400e; background: rgba(245,158,11,0.16); border-color: rgba(180,83,9,0.45); }
 :root[data-theme="light"] .tp-pst.wet { color: #1e40af; background: rgba(59,130,246,0.14); border-color: rgba(29,78,216,0.45); }
+:root[data-theme="light"] .tp-select { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.16); }
+:root[data-theme="light"] .tp-ireading .hum svg { fill: #1d4ed8; }
+:root[data-theme="light"] .tp-ivol svg { fill: rgba(0,0,0,0.5); }
 `;
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -776,6 +831,67 @@ export const popoverHtml = {
       '<div class="tp-row">' + val + pill + '</div>' +
       (meta.length ? '<div class="tp-pmeta">' + meta.join('') + '</div>' : '') + note + offlineLine(m));
   },
+  /**
+   * Furniture item card (src/item-cards.js). m: { name, status, haOff,
+   * media: [row], lights: [row], readings: [row] } -- each row its label and
+   * its mediaRowModel / lightRowModel / readingRowModel fields. Every
+   * control carries data-a (what it does) and data-i (which row).
+   */
+  item(m, dot) {
+    const shell = shellWith(dot);
+    const off = m.haOff;
+    const rows = [];
+    const lab = (icon, label, sub, subOn) => '<span class="tp-ilab">' + icon + '<span><b>' + esc(label) + '</b>' +
+      (sub ? '<small' + (subOn ? ' class="on"' : '') + '>' + esc(sub) + '</small>' : '') + '</span></span>';
+    const sw = (a, i, on, dis, label) => '<button class="tp-sw' + (on ? ' on' : '') + '" data-a="' + a + '" data-i="' + i +
+      '" role="switch" aria-checked="' + !!on + '" aria-label="' + esc(label) + '"' + (dis ? ' disabled' : '') + '><i></i></button>';
+    const select = (a, i, list, cur, label) => '<select class="tp-select" data-a="' + a + '" data-i="' + i + '" aria-label="' + esc(label) + '"' +
+      (off ? ' disabled' : '') + '>' + (cur != null && list.indexOf(cur) === -1 ? '<option value="" selected disabled>' + esc(cur) + '</option>' : '') +
+      list.map(v => '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select>';
+    (m.media || []).forEach((r, i) => {
+      const icon = ico(r.role === 'receiver' || r.role === 'speaker' ? I.speaker : r.role === 'cast' ? I.cast : I.tv,
+        r.na ? 'dim' : r.on ? 'm-on' : '');
+      const sub = r.title ? r.stateText + ' · ' + r.title : r.stateText;
+      let body = '<div class="tp-row">' + lab(icon, r.label, sub, r.on && !r.na) +
+        sw('mpower', i, r.on, r.na || off || !r.canPower, 'Power: ' + r.label) + '</div>';
+      if (r.volume != null) {
+        body += '<div class="tp-ivol">' + svg(I.volume) + '<input class="tp-range" data-a="mvol" data-i="' + i +
+          '" type="range" min="0" max="100" value="' + r.volume + '" aria-label="Volume: ' + esc(r.label) + '"' + (off ? ' disabled' : '') + '></div>';
+      }
+      const sels = (r.sources.length ? select('msrc', i, r.sources, r.source, 'Source: ' + r.label) : '') +
+        (r.soundModes.length ? select('mmode', i, r.soundModes, r.soundMode, 'Sound mode: ' + r.label) : '');
+      if (sels) body += '<div class="tp-isel">' + sels + '</div>';
+      rows.push('<div class="tp-irow" data-row="media">' + body + '</div>');
+    });
+    (m.lights || []).forEach((r, i) => {
+      const on = r.on && !r.na;
+      const sub = r.na ? 'Unavailable' : r.on ? 'On · ' + r.bri + '%' : 'Off';
+      let body = '<div class="tp-row">' + lab(ico(on ? I.bulb : I.bulbOff, on ? 'light-on' : (r.na ? 'dim' : '')), r.label, sub, false) +
+        sw('lpower', i, r.on, r.na || off, 'Power: ' + r.label) + '</div>';
+      if (!r.na) {
+        const range = '<input class="tp-range' + (r.on ? '' : ' off') + '" data-a="lbri" data-i="' + i + '" type="range" min="5" max="100" value="' +
+          r.bri + '" aria-label="Brightness: ' + esc(r.label) + '"' + (off ? ' disabled' : '') + '>';
+        body += r.colorable
+          ? '<div class="tp-crow"><input class="tp-color" data-a="lcolor" data-i="' + i + '" type="color" value="' + esc(swatchColor(r.color)) +
+            '" aria-label="Colour: ' + esc(r.label) + '" title="Colour"' + (off ? ' disabled' : '') + '>' + range + '</div>'
+          : range;
+      }
+      rows.push('<div class="tp-irow" data-row="light">' + body + '</div>');
+    });
+    (m.readings || []).forEach(r => {
+      const val = '<span class="tp-ireading' + (r.na ? ' muted' : '') + '" data-v><b>' + esc(r.text) + '</b>' +
+        (r.humidity ? '<span class="hum" title="Humidity">' + svg(I.drop) + esc(r.humidity) + '</span>' : '') + '</span>';
+      rows.push('<div class="tp-irow" data-row="reading"><div class="tp-row">' + lab(ico(I.thermometer, r.na ? 'dim' : ''), r.label) + val + '</div></div>');
+    });
+    const first = (m.media || []).length ? I.tv : (m.lights || []).length ? I.bulb : I.thermometer;
+    return shell(ico(first), m.name, m.status, rows.join('') + offlineLine(m));
+  },
+  /** Clock (read-only, no Home Assistant). m: { name, time, seconds, date }. */
+  clock(m) {
+    return '<div class="tp-head">' + ico(I.clock) + nameHtml(m.name) + '</div>' +
+      '<div class="tp-clock" data-v><b>' + esc(m.time) + '</b><small>:' + esc(m.seconds) + '</small></div>' +
+      '<div class="tp-clock-date">' + esc(m.date) + '</div>';
+  },
   climate(m, dot) {
     const shell = shellWith(dot);
     const f = v => (typeof v === 'number' && isFinite(v) ? v.toFixed(1) + '°' : '–');
@@ -829,12 +945,22 @@ export function attachTapPopovers(o) {
   };
   const vacuums = normaliseVacuumBindings(o.sensors && o.sensors.vacuums);
   const plants = normalisePlantBindings(o.sensors && o.sensors.plants);
-  const deviceIds = new Set([...vacuums.keys(), ...plants.keys()]);
+  const itemBindings = normaliseItemBindings(o.sensors && o.sensors.items);
+  const climateBinding = (o.sensors && o.sensors.climate) || {};
+  const deviceIds = new Set([...vacuums.keys(), ...plants.keys(),
+    ...tappableFurnitureIds(o.house && o.house.furniture, itemBindings, climateBinding)]);
   const furnitureLabels = new Map(((o.house && o.house.furniture) || []).map(f => [f.id, f.label || null]));
-  // A robot vacuum or a plant is found by where the tap landed (see the header).
+  // A robot vacuum, a plant, a bound item, a clock or a radiator is found by
+  // where the tap landed (see the header). A vacuum / plant binding wins over
+  // an item binding on the same id; a bound item's tap that lands on a part
+  // of it no card covers is not a target.
   const deviceAt = !deviceIds.size || typeof home.furnitureItemAt !== 'function' ? null : h => {
     const it = h && h.point ? home.furnitureItemAt(h.point, deviceIds) : null;
-    return it ? deviceTarget(it.id, vacuums, plants, h.object) : null;
+    if (!it) return null;
+    const t = deviceTarget(it.id, vacuums, plants, h.object) ||
+      furnitureTapTarget(it, h.point, { items: itemBindings, climate: climateBinding });
+    if (t && !t.object) t.object = h.object;
+    return t;
   };
   const curtainNames = new Map(((o.house && o.house.curtains) || []).map(c => [c.id, c.name || c.id]));
   const doorNames = new Map(((o.house && o.house.doors) || []).map(d => [d.id, d.name || d.id]));
@@ -952,6 +1078,38 @@ export function attachTapPopovers(o) {
     if (h && h.getPlant) return h.getPlant(id);
     return null;
   };
+
+  // Furniture item cards: the raw state each row shows. With a client it is
+  // the client's raw cache (or the ?debug=1 seam's simulated state), briefly
+  // overridden after a send by what the command will make it (so a switch
+  // does not flick back before HA's echo lands); with no HA configured, a
+  // sample the controls move (src/item-cards.js mockItemState).
+  const itemMock = new Map();
+  const itemOptimistic = new Map();
+  const OPTIMISTIC_MS = 3000;
+  const itemMockMode = () => !ha() && sim.status === undefined;
+  function itemRaw(eid, kind, row, i) {
+    const opt = itemOptimistic.get(eid);
+    if (opt && opt.until > Date.now()) return opt.raw;
+    if (sim.raw.has(eid) || !itemMockMode()) return raw(eid);
+    if (!itemMock.has(eid)) itemMock.set(eid, mockItemState(kind, row, i));
+    return itemMock.get(eid);
+  }
+  /**
+   * Send one item-row command through the HA client -- or, with no HA
+   * configured, move the sample. Nothing while writeBlocked(). `delay` > 0
+   * debounces under `key` (a slider's input); a 0-delay send under the same
+   * key cancels a pending one (its release), as the sidebar's senders do.
+   */
+  function itemSend(command, key, delay) {
+    if (writeBlocked()) return;
+    const eid = command.target.entity_id;
+    const cur = itemRaw(eid);
+    if (itemMockMode()) { itemMock.set(eid, applyCommand(cur, command)); return; }
+    if (!canSend()) return;
+    ha().callServiceDebounced(command.domain, command.service, command.data, command.target, 'item:' + key + ':' + eid, delay || 0);
+    itemOptimistic.set(eid, { raw: applyCommand(cur, command), until: Date.now() + OPTIMISTIC_MS });
+  }
 
   const VIEWS = {
     light: {
@@ -1200,6 +1358,100 @@ export function attachTapPopovers(o) {
       bind() {},   // read-only: nothing to wire, nothing to send
     },
 
+    item: {
+      model(t) {
+        const c = conn();
+        const card = t.card;
+        const base = card.index * 3;
+        const media = card.media.map((row, i) => {
+          const r = itemRaw(row.entity, 'media', row, base + i);
+          return Object.assign({ entity: row.entity, role: row.role, label: rowLabel(row, r) }, mediaRowModel(r));
+        });
+        const lights = card.lights.map((row, i) => {
+          const r = itemRaw(row.entity, 'light', row, base + i);
+          const a = (r && r.attributes) || {};
+          // A colour square only for a light that SAYS it takes colour: an
+          // item row has no channel to fall back on (supportsColor treats
+          // "no modes reported" as yes, for the ambient channel's sake).
+          const colorable = Array.isArray(a.supported_color_modes) && supportsColor(a);
+          return Object.assign({ entity: row.entity, label: rowLabel(row, r) }, lightRowModel(r, colorable, colorFromAttributes(a)));
+        });
+        const readings = card.readings.map((row, i) => {
+          const r = itemRaw(row.entity, 'reading', row, base + i);
+          const hr = row.humidity ? itemRaw(row.humidity, 'humidity', row, base + i) : null;
+          return Object.assign({ entity: row.entity, label: rowLabel(row, r) }, readingRowModel(r, hr));
+        });
+        const anyNa = media.some(r => r.na) || lights.some(r => r.na) || readings.some(r => r.na);
+        const name = card.title || furnitureLabels.get(t.itemId) || sentenceCase(String(t.itemId).replace(/[_-]+/g, ' '));
+        return { status: itemMockMode() ? 'offlineItem' : statusKey('item', c, anyNa && isLive(c), false), haOff: haOfflineConn(c),
+          name, media, lights, readings };
+      },
+      html(m) { return popoverHtml.item(m, dot); },
+      bind(t, el, ctl) {
+        const card = t.card;
+        const at = (a, cb) => el.querySelectorAll('[data-a=' + a + ']').forEach(c => cb(c, +c.dataset.i));
+        const hold = c => {
+          // A drag / an open picker holds the card still: a rebuild would
+          // replace the control under the pointer (the light card's rule).
+          c.addEventListener('pointerdown', () => { ctl.dragging = true; });
+          const done = () => setTimeout(() => { if (ctl.dragging) { ctl.dragging = false; onChange(); ctl.refresh(); } }, 0);
+          c.addEventListener('change', done); c.addEventListener('blur', done);
+          c.addEventListener('pointerup', done); c.addEventListener('pointercancel', done);
+        };
+        const model = () => VIEWS.item.model(t);
+        at('mpower', (b, i) => b.addEventListener('click', () => {
+          const r = model().media[i]; if (!r || r.na) return;
+          itemSend(mediaPowerCommand(card.media[i].entity, !r.on), 'power', 0); onChange(); ctl.refresh(true);
+        }));
+        at('mvol', (r, i) => {
+          r.addEventListener('input', () => {
+            ctl.dragging = true; r.style.setProperty('--p', fillPct(r));
+            itemSend(mediaVolumeCommand(card.media[i].entity, +r.value), 'vol', 200);
+          });
+          r.addEventListener('change', () => itemSend(mediaVolumeCommand(card.media[i].entity, +r.value), 'vol', 0));
+          hold(r);
+        });
+        at('msrc', (sel, i) => {
+          sel.addEventListener('change', () => { if (sel.value) itemSend(mediaSourceCommand(card.media[i].entity, sel.value), 'src', 0); });
+          hold(sel); sel.addEventListener('focus', () => { ctl.dragging = true; });
+        });
+        at('mmode', (sel, i) => {
+          sel.addEventListener('change', () => { if (sel.value) itemSend(mediaSoundModeCommand(card.media[i].entity, sel.value), 'mode', 0); });
+          hold(sel); sel.addEventListener('focus', () => { ctl.dragging = true; });
+        });
+        at('lpower', (b, i) => b.addEventListener('click', () => {
+          const r = model().lights[i]; if (!r || r.na) return;
+          itemSend(lightRowCommand(card.lights[i].entity, { on: !r.on, bri: r.bri }), 'light', 0); onChange(); ctl.refresh(true);
+        }));
+        at('lbri', (r, i) => {
+          r.addEventListener('input', () => {
+            ctl.dragging = true; r.style.setProperty('--p', fillPct(r)); r.classList.remove('off');
+            itemSend(lightRowCommand(card.lights[i].entity, { on: true, bri: +r.value }), 'light', 200);
+            const sw = el.querySelector('[data-a=lpower][data-i="' + i + '"]');
+            if (sw) { sw.classList.add('on'); sw.setAttribute('aria-checked', 'true'); }
+          });
+          r.addEventListener('change', () => itemSend(lightRowCommand(card.lights[i].entity, { on: true, bri: +r.value }), 'light', 0));
+          hold(r);
+        });
+        at('lcolor', (cp, i) => {
+          cp.addEventListener('input', () => {
+            ctl.dragging = true;
+            const cur = model().lights[i] || {};
+            itemSend(lightRowCommand(card.lights[i].entity, { on: true, bri: cur.bri || 100, color: cp.value }, true), 'light', 200);
+          });
+          hold(cp);
+        });
+      },
+    },
+
+    clock: {
+      model(t) {
+        return Object.assign({ name: furnitureLabels.get(t.itemId) || 'Clock' }, clockText(new Date()));
+      },
+      html(m) { return popoverHtml.clock(m); },
+      bind() {},   // read-only
+    },
+
     door: {
       chip: true,
       model(t) {
@@ -1237,7 +1489,7 @@ export function attachTapPopovers(o) {
     }
   }
   // Focusable controls inside the card, in DOM order (disabled ones skipped).
-  const focusables = el => Array.from(el.querySelectorAll('button:not([disabled]), input:not([disabled])'));
+  const focusables = el => Array.from(el.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled])'));
   // The control keyboard focus lands on at open: the first real control, not
   // the status dot (which leads the header); the card itself for the
   // read-only door chip.
@@ -1300,6 +1552,7 @@ export function attachTapPopovers(o) {
     // A rebuild replaces every control: keep keyboard focus on the same one.
     const ae = document.activeElement;
     const refocus = pop.el.contains(ae) ? (ae === pop.el ? '' : (ae.dataset && ae.dataset.a) || '') : null;
+    const refocusI = refocus && ae.dataset && ae.dataset.i != null ? ae.dataset.i : null;
     pop.el.innerHTML = v.html(m) + '<span class="tp-arrow"></span>';
     pop.el.setAttribute('aria-label', m.name);
     pop.el.querySelectorAll('.tp-range').forEach(r => r.style.setProperty('--p', fillPct(r)));
@@ -1307,7 +1560,7 @@ export function attachTapPopovers(o) {
     fitTitle(pop);
     position();
     if (refocus !== null) {
-      const c = refocus && pop.el.querySelector('[data-a="' + refocus + '"]');
+      const c = refocus && pop.el.querySelector('[data-a="' + refocus + '"]' + (refocusI != null ? '[data-i="' + refocusI + '"]' : ''));
       (c && !c.disabled ? c : pop.el).focus({ preventScroll: true });
     }
   }
@@ -1456,7 +1709,6 @@ export function attachTapPopovers(o) {
     try { render(false); } catch (e) { /* never break the render loop */ }
   });
 
-  const climateBinding = (o.sensors && o.sensors.climate) || {};
   const api = {
     pickAt(x, y) {
       const r = pickAt(x, y);
@@ -1479,6 +1731,19 @@ export function attachTapPopovers(o) {
       else if (kind === 'climate') ents = typeof climateBinding[id] === 'string' ? [climateBinding[id]] : null;
       else if (kind === 'vacuum') ents = vacuums.has(id) ? [vacuums.get(id).entity] : null;
       else if (kind === 'plant') ents = plants.has(id) ? deviceTarget(id, null, plants).entities : null;
+      else if (kind === 'item' || kind === 'clock') {
+        // extra: { card: <the card's index in the binding's list> } picks a
+        // region card (the tap route picks it by where the tap landed).
+        let t = null;
+        if (kind === 'item' && itemBindings.has(id)) {
+          const cards = itemBindings.get(id);
+          const card = cards.find(c => c.index === ((extra && extra.card) || 0)) || cards[0];
+          t = { kind: 'item', id: cards.length > 1 ? id + '#' + card.index : id, itemId: id, card, entities: cardEntities(card) };
+        } else if (kind === 'clock') t = { kind: 'clock', id, itemId: id, entities: [] };
+        if (!t) return false;
+        open(t, x, y);
+        return true;
+      }
       else ents = (bindings[kind + 's'] || {})[id];
       if (!ents) return false;
       const t = Object.assign({ kind, id, entities: ents }, extra || {});

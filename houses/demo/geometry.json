@@ -674,7 +674,21 @@
       "label": "Crate", "notes": "priority minor: dropped on the low GPU tier." },
     { "id": "lounge_armchair", "room": "lounge", "type": "model", "at": [215, 190], "rotation": 90,
       "params": { "src": "models/test-armchair.glb", "width": 80, "depth": 78, "height": 82 },
-      "label": "Armchair", "notes": "A `model` item: drawn from a .glb in this profile (models/, CC0), fitted to width x depth x height. Its vertex-coloured frame joins the palette bucket; its textured cushion is one kept draw." }
+      "label": "Armchair", "notes": "A `model` item: drawn from a .glb in this profile (models/, CC0), fitted to width x depth x height. Its vertex-coloured frame joins the palette bucket; its textured cushion is one kept draw." },
+    { "id": "bedroom_tv_console", "room": "bedroom", "type": "cabinet", "wall": 14, "centre": 560, "offset": 0,
+      "params": {"width": 180, "height": 40, "depth": 40, "fronts": [{"height": 40, "cells": [{"kind": "door", "width": 50}, {"kind": "stack", "width": 80, "cells": [{"kind": "open", "height": 16}, {"kind": "drawer", "height": 24}]}, {"kind": "door", "width": 50}]}], "plinth": {"type": "plinth", "height": 0}, "color": "#f2f2f2", "topColor": "#3a3a3a"},
+      "label": "TV console", "notes": "Bound in rooms.json sensors.items with two REGION cards along its width, measured from its left edge as seen from the front (the order fronts[].cells are listed in): the left door (0-50) shows sample temperatures, the open shelf and drawer (50-130) a sample AV receiver. Nothing covers the right door, so a tap there is a plain furniture tap." },
+    { "id": "bedroom_tv", "room": "bedroom", "type": "tv", "wall": 14, "centre": 560, "offset": 0, "elevation": 85,
+      "params": {"width": 123, "height": 71},
+      "label": "TV", "notes": "Bound in rooms.json sensors.items: a TV and its cast device, each with a power switch." },
+    { "id": "bedroom_bedside", "room": "bedroom", "type": "cabinet", "wall": 11, "centre": 505, "offset": 0,
+      "params": {"width": 45, "height": 55, "depth": 40, "fronts": [{"height": 27, "cells": [{"kind": "drawer"}]}, {"height": 28, "cells": [{"kind": "drawer"}]}], "plinth": {"type": "plinth", "height": 0}, "color": "#e8e2d6"},
+      "label": "Bedside table", "notes": "Bound in rooms.json sensors.items: three light rows (sample lights here)." },
+    { "id": "kitchen_clock", "room": "kitchen", "type": "wall-clock", "wall": 5, "centre": 150, "offset": 0, "elevation": 170,
+      "label": "Kitchen clock", "notes": "Any wall-clock opens a card with the local time. No binding." },
+    { "id": "study_radiator", "room": "study", "type": "radiator", "wall": 2, "centre": 140, "offset": 0, "elevation": 15,
+      "params": {"width": 80, "height": 60},
+      "label": "Study radiator", "notes": "Any radiator opens its room's climate card (sensors.climate.study). No new binding." }
   ],
   "lights": [
     {

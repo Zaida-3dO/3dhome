@@ -1,0 +1,356 @@
+#!/usr/bin/env node
+/**
+ * Furniture item tap cards (src/item-cards.js), their fold into the client
+ * (src/ha-client.js), their markup (src/tap-popovers.js) and the demo
+ * house's bindings. Never a real HA: the client runs against
+ * scripts/fake-ha-websocket.mjs. No framework, no install:
+ * `node scripts/test-item-cards.mjs`.
+ *
+ *   1. normaliseItemBindings: one card or a list; wrong-domain rows dropped;
+ *      a bad region or a card with no rows dropped; the entities a card reads.
+ *   2. widthOffsetCm: the REGION CONVENTION -- cm from the item's LEFT edge
+ *      seen from its FRONT -- at four rotations, and against a real cabinet
+ *      built by src/furniture/cabinet.js and placed by src/furniture.js, so
+ *      the convention cannot drift from the order `fronts[].cells` are drawn.
+ *   3. pickItemCard / furnitureTapTarget: region cards, the whole-item card,
+ *      the uncovered part falling through, clocks, radiators -> climate.
+ *   4. Row models: a media player (power, volume, source, sound mode,
+ *      Offline), a light, a reading -- OFFLINE IS NOT 0.
+ *   5. Commands and applyCommand (the optimistic repaint / demo sample).
+ *   6. The card markup: controls enabled while connected, all disabled while
+ *      HA is offline; the clock card.
+ *   7. The client against the fake HA: an item entity's raw state is
+ *      recorded, an unbound one is not, and a light row's command goes out
+ *      as the right call_service.
+ *   8. The demo house binds every card kind, to furniture that exists.
+ *
+ * Each check names the one-line mutation it catches.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { installFakeHA } from './fake-ha-websocket.mjs';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const imp = rel => import(pathToFileURL(path.join(root, rel)).href);
+const IC = await imp('src/item-cards.js');
+
+let passes = 0, failures = 0;
+function check(name, ok, detail) {
+  if (ok) { passes++; return; }
+  failures++;
+  console.error('FAIL ' + name + (detail !== undefined ? ' -- ' + JSON.stringify(detail) : ''));
+}
+const near = (a, b, eps) => a != null && Math.abs(a - b) <= (eps == null ? 1e-6 : eps);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// A console like the one the design was written for: three cells, 50 | 80 | 50.
+const CONSOLE = [
+  { title: 'Cabinet', region: { from: 0, to: 50 }, readings: [
+    { entity: 'sensor.demo_a_temperature', label: 'Box A', humidity: 'sensor.demo_a_humidity' },
+    { entity: 'sensor.demo_b_temperature' }] },
+  { title: 'Sound', region: { from: 50, to: 130 }, media: [
+    { entity: 'media_player.demo_receiver', role: 'receiver' }, { entity: 'media_player.demo_cast', role: 'cast' }],
+    readings: [{ entity: 'sensor.demo_cab_temperature' }] },
+];
+
+// ---- 1. normalisation -----------------------------------------------------------
+{
+  const m = IC.normaliseItemBindings({
+    console: CONSOLE,
+    tv: { media: [{ entity: 'media_player.demo_tv', role: 'tv' }, { entity: 'media_player.demo_tv_cast' }] },
+    bedside: { lights: [{ entity: 'light.demo_bedside', label: 'All' }, { entity: 'switch.demo_nope' }] },
+    wrong: { media: [{ entity: 'light.demo_not_media' }] },
+    badregion: { region: { from: 50, to: 20 }, readings: [{ entity: 'sensor.demo_x' }] },
+    negregion: { region: { from: -5, to: 20 }, readings: [{ entity: 'sensor.demo_x' }] },
+    empty: {},
+    junk: 7,
+  });
+  check('normalise: valid items kept, a list stays a list', m.get('console').length === 2 && m.get('tv').length === 1, [...m.keys()]);
+  // Mutation: drop the domain check in normaliseRows -> 'wrong' survives -> fails.
+  check('normalise: a row of the wrong domain is dropped (and its empty card with it)', !m.has('wrong') && m.get('bedside')[0].lights.length === 1);
+  // Mutation: `from < to` -> `from <= to` or drop the region check -> fails.
+  check('normalise: a region with from >= to is dropped', !m.has('badregion'));
+  check('normalise: a negative region start is dropped', !m.has('negregion'));
+  check('normalise: a card with no rows / a non-object is dropped', !m.has('empty') && !m.has('junk'));
+  const c0 = m.get('console')[0], c1 = m.get('console')[1];
+  check('normalise: region, title and index kept', c0.region.from === 0 && c0.region.to === 50 && c0.title === 'Cabinet' && c1.index === 1);
+  check('normalise: a humidity partner kept, a missing one null', c0.readings[0].humidity === 'sensor.demo_a_humidity' && c0.readings[1].humidity === null);
+  check('normalise: media role kept', c1.media[0].role === 'receiver' && m.get('tv')[0].media[1].role === null);
+  // Mutation: forget the humidity entity in cardEntities -> fails.
+  check('cardEntities: rows and humidity partners', JSON.stringify(IC.cardEntities(c0)) ===
+    JSON.stringify(['sensor.demo_a_temperature', 'sensor.demo_a_humidity', 'sensor.demo_b_temperature']), IC.cardEntities(c0));
+  const all = IC.itemBindingEntities(m);
+  check('itemBindingEntities: every card of every item', all.has('media_player.demo_cast') && all.has('light.demo_bedside') && all.has('sensor.demo_a_humidity') && !all.has('switch.demo_nope'));
+  check('normalise: nothing -> empty map', IC.normaliseItemBindings(undefined).size === 0);
+}
+
+// ---- 2. the region convention ---------------------------------------------------
+{
+  // An item 180 cm wide whose back-centre stands at the world origin.
+  const item = r => ({ origin: [0, 0, 0], rotationDeg: r, width: 180 });
+  // Rotation 0: the front faces +z (plan south), the width runs along +x, and
+  // someone standing in front, facing it, has +x on their RIGHT. 65 cm left of
+  // centre is 25 cm from the left edge.
+  // Mutation: flip the convention (`w / 2 - localX * 100`) -> 155 -> fails.
+  check('offset r=0: left of centre (-x) is near the LEFT edge', near(IC.widthOffsetCm({ x: -0.65, y: 0.3, z: 0.2 }, item(0)), 25));
+  check('offset r=0: right of centre (+x) is near the right edge', near(IC.widthOffsetCm({ x: 0.65, y: 0.3, z: 0.2 }, item(0)), 155));
+  check('offset: depth and height do not move it', near(IC.widthOffsetCm({ x: -0.65, y: 1.5, z: 0.45 }, item(0)), 25));
+  // r=90: plan width vector (cos, sin) = (0, 1) -> world +z. Mutation: sign of
+  // the sin term flipped -> 155 -> fails.
+  check('offset r=90: the width runs along +z', near(IC.widthOffsetCm({ x: 0.2, y: 0, z: -0.65 }, item(90)), 25));
+  check('offset r=180: the width runs along -x', near(IC.widthOffsetCm({ x: 0.65, y: 0, z: -0.2 }, item(180)), 25));
+  check('offset r=270: the width runs along -z', near(IC.widthOffsetCm({ x: 0, y: 0, z: 0.65 }, item(270)), 25));
+  check('offset: relative to the origin', near(IC.widthOffsetCm({ x: 3.35, y: 0, z: 1 }, { origin: [4, 0, 1], rotationDeg: 0, width: 180 }), 25));
+  check('offset: unknown width -> null', IC.widthOffsetCm({ x: 0, y: 0, z: 0 }, { origin: [0, 0, 0], rotationDeg: 0 }) === null);
+
+  // Against the REAL cabinet builder and placement: a 30 | 150 two-door
+  // cabinet. The narrow door is cells[0]; wherever the cabinet stands and
+  // however it is turned, a point on that door must land in 0..30.
+  const THREE = await imp('vendor/three-r160/three.module.min.js');
+  const Cab = await imp('src/furniture/cabinet.js');
+  const F = await imp('src/furniture.js');
+  const params = Object.assign({}, Cab.DEFAULTS, { width: 180, height: 60, depth: 40, plinth: { height: 0 },
+    fronts: [{ height: 60, cells: [{ kind: 'door', width: 30 }, { kind: 'door', width: 150 }] }] });
+  for (const rot of [0, 90, 180, 270, 35]) {
+    const g = Cab.build(THREE, params, { detail: 'full' });
+    g.updateMatrixWorld(true);
+    const fronts = g.getObjectByName('cabinetFronts');
+    let narrow = null, wide = null;
+    fronts.traverse(o => {
+      if (!o.isMesh) return;
+      const s = new THREE.Box3().setFromObject(o).getSize(new THREE.Vector3());
+      if (s.y < 0.4) return;   // a handle, a hinge: only the leaves
+      if (s.x > 0.2 && s.x < 0.32 && !narrow) narrow = o;
+      if (s.x > 1.3 && s.x < 1.52 && !wide) wide = o;
+    });
+    check('cabinet r=' + rot + ': found both door leaves', !!narrow && !!wide);
+    if (!narrow || !wide) continue;
+    const placement = { x: 400, y: 300, rotationDeg: rot, elevation: 0 };
+    F.placeGroup(g, placement, x => (x - 100) * 0.01, y => (y - 50) * 0.01);
+    const it = { origin: g.position.toArray(), rotationDeg: rot, width: 180 };
+    const cN = new THREE.Box3().setFromObject(narrow).getCenter(new THREE.Vector3());
+    const cW = new THREE.Box3().setFromObject(wide).getCenter(new THREE.Vector3());
+    const oN = IC.widthOffsetCm(cN, it), oW = IC.widthOffsetCm(cW, it);
+    // Mutation: flip the convention in widthOffsetCm -> the narrow door reads ~165 -> fails.
+    check('cabinet r=' + rot + ': cells[0] (the narrow door) is at 0-30 from the left', oN > 0 && oN < 30, oN);
+    check('cabinet r=' + rot + ': cells[1] is at 30-180', oW > 30 && oW < 180, oW);
+  }
+}
+
+// ---- 3. picking ------------------------------------------------------------------
+{
+  const items = IC.normaliseItemBindings({
+    console: CONSOLE,
+    tv: { media: [{ entity: 'media_player.demo_tv' }] },
+    mixed: [{ region: { from: 0, to: 40 }, readings: [{ entity: 'sensor.demo_m1' }] }, { title: 'Rest', readings: [{ entity: 'sensor.demo_m2' }] }],
+  });
+  const cards = items.get('console');
+  // Mutation: `offsetCm >= c.region.from` -> `>` -> the 0 edge falls through -> fails.
+  check('pick: the left region at its left edge', IC.pickItemCard(cards, 0) === cards[0]);
+  check('pick: the left region', IC.pickItemCard(cards, 25) === cards[0]);
+  check('pick: the middle region', IC.pickItemCard(cards, 90) === cards[1]);
+  check('pick: a shared edge goes to the first listed', IC.pickItemCard(cards, 50) === cards[0]);
+  // Mutation: fall back to cards[0] when nothing matches -> fails.
+  check('pick: a part no card covers -> null (falls through)', IC.pickItemCard(cards, 155) === null);
+  check('pick: unknown offset, region cards only -> null', IC.pickItemCard(cards, null) === null);
+  const mixed = items.get('mixed');
+  check('pick: a region card beats the whole-item card', IC.pickItemCard(mixed, 10) === mixed[0]);
+  check('pick: outside every region -> the whole-item card', IC.pickItemCard(mixed, 100) === mixed[1]);
+  check('pick: unknown offset -> the whole-item card', IC.pickItemCard(mixed, null) === mixed[1]);
+
+  const climate = { lounge: 'climate.demo_lounge', study: 'climate.demo_study' };
+  const ctx = { items, climate };
+  const at = (id, type, x, room) => IC.furnitureTapTarget({ id, type, room, origin: [0, 0, 0], rotationDeg: 0, width: 180 }, { x, y: 0.2, z: 0.1 }, ctx);
+  const left = at('console', 'cabinet', -0.65), mid = at('console', 'cabinet', 0), right = at('console', 'cabinet', 0.65);
+  check('target: console left -> the readings card', left && left.kind === 'item' && left.card === cards[0] && left.itemId === 'console' &&
+    left.entities.indexOf('sensor.demo_a_humidity') !== -1, left);
+  check('target: console middle -> the media card', mid && mid.card === cards[1] && mid.id === 'console#1', mid);
+  check('target: region cards get distinct ids', left.id !== mid.id);
+  check('target: console right door -> null (a plain furniture tap)', right === null);
+  const tv = at('tv', 'tv', 0.8);
+  check('target: a single-card item, anywhere on it', tv && tv.kind === 'item' && tv.id === 'tv' && tv.entities[0] === 'media_player.demo_tv');
+  // Mutation: drop the wall-clock branch -> null -> fails.
+  const clock = at('hall_clock', 'wall-clock', 0);
+  check('target: a wall clock needs no binding', clock && clock.kind === 'clock' && clock.id === 'hall_clock' && clock.entities.length === 0, clock);
+  const rad = at('study_rad', 'radiator', 0, 'study');
+  // Mutation: key the climate lookup by the item id instead of its room -> fails.
+  check('target: a radiator opens its ROOM\'s climate card', rad && rad.kind === 'climate' && rad.id === 'study' && rad.entities[0] === 'climate.demo_study', rad);
+  check('target: a radiator in a room with no climate -> null', at('bath_rad', 'radiator', 0, 'bathroom') === null);
+  check('target: an unbound sofa -> null', at('sofa', 'sofa', 0) === null);
+  check('target: a bound clock is its binding, not a clock', at('tv', 'wall-clock', 0).kind === 'item');
+
+  const ids = IC.tappableFurnitureIds([
+    { id: 'hall_clock', type: 'wall-clock', room: 'hall' }, { id: 'study_rad', type: 'radiator', room: 'study' },
+    { id: 'bath_rad', type: 'radiator', room: 'bathroom' }, { id: 'sofa', type: 'sofa', room: 'lounge' }], items, climate);
+  check('tappable: bound items, clocks, radiators in bound rooms -- nothing else',
+    ids.has('console') && ids.has('tv') && ids.has('hall_clock') && ids.has('study_rad') && !ids.has('bath_rad') && !ids.has('sofa'), [...ids]);
+}
+
+// ---- 4. row models ---------------------------------------------------------------
+{
+  const F = IC.MEDIA_FEATURE;
+  const recv = { state: 'on', attributes: { supported_features: F.VOLUME_SET | F.TURN_ON | F.TURN_OFF | F.SELECT_SOURCE | F.SELECT_SOUND_MODE,
+    volume_level: 0.42, source: 'TV', source_list: ['TV', 'Game'], sound_mode: 'Stereo', sound_mode_list: ['Stereo', 'Night'] } };
+  const m = IC.mediaRowModel(recv);
+  check('media: a receiver -- on, volume %, sources, sound modes', m.on && m.volume === 42 && m.sources.length === 2 && m.source === 'TV' &&
+    m.soundModes[1] === 'Night' && m.canPower && !m.na, m);
+  const off = IC.mediaRowModel({ state: 'off', attributes: { supported_features: F.TURN_ON | F.TURN_OFF | F.VOLUME_SET } });
+  // Mutation: treat 'off' as on -> fails.
+  check('media: off -- no volume or pickers while off, power can turn it on', !off.on && off.stateText === 'Off' && off.volume === null && off.canPower, off);
+  check('media: standby counts as off', !IC.mediaRowModel({ state: 'standby', attributes: {} }).on);
+  const noOn = IC.mediaRowModel({ state: 'off', attributes: { supported_features: F.TURN_OFF } });
+  check('media: a device that cannot be turned on says so', noOn.canPower === false);
+  const playing = IC.mediaRowModel({ state: 'playing', attributes: { media_title: 'News', supported_features: F.TURN_OFF } });
+  check('media: playing shows its title', playing.on && playing.stateText === 'Playing' && playing.title === 'News');
+  check('media: idle shows no title', IC.mediaRowModel({ state: 'idle', attributes: { media_title: 'Old' } }).title === null);
+  check('media: no volume support, no level -> no slider', IC.mediaRowModel({ state: 'on', attributes: { supported_features: F.TURN_OFF } }).volume === null);
+  check('media: sources not offered without SELECT_SOURCE', IC.mediaRowModel({ state: 'on', attributes: { supported_features: F.TURN_OFF, source_list: ['A'] } }).sources.length === 0);
+  const un = IC.mediaRowModel({ state: 'unavailable', attributes: {} });
+  check('media: unavailable -> Offline, no controls', un.na && un.stateText === 'Offline' && !un.canPower && un.volume === null);
+  check('media: never heard from -> Unavailable', IC.mediaRowModel(null).stateText === 'Unavailable');
+
+  const r = IC.readingRowModel({ state: '38.24', attributes: { unit_of_measurement: '°C' } }, { state: '45.6', attributes: {} });
+  check('reading: value + unit, humidity rounded', r.text === '38.2°C' && r.humidity === '46%' && !r.na, r);
+  check('reading: an integer stays an integer', IC.readingRowModel({ state: '21', attributes: { unit_of_measurement: 'W' } }).text === '21 W');
+  const ro = IC.readingRowModel({ state: 'unavailable', attributes: { unit_of_measurement: '°C' } }, { state: 'unavailable' });
+  // Mutation: render Number(state) || 0 -> '0°C' -> fails.
+  check('reading: OFFLINE, never 0', ro.na && ro.text === 'Offline' && ro.humidity === null && !/\d/.test(ro.text), ro);
+  check('reading: unknown -> Unavailable', IC.readingRowModel({ state: 'unknown', attributes: {} }).text === 'Unavailable');
+  check('reading: never heard from -> No reading', IC.readingRowModel(null).text === 'No reading');
+
+  const l = IC.lightRowModel({ state: 'on', attributes: { brightness: 128 } }, false, null);
+  check('light: brightness 128 -> 50%', l.on && l.bri === 50 && !l.colorable, l);
+  check('light: off keeps a 100% slider position', IC.lightRowModel({ state: 'off', attributes: {} }).bri === 100);
+  check('light: unavailable', IC.lightRowModel({ state: 'unavailable', attributes: {} }).na);
+  check('light: colour only when told it is colourable', IC.lightRowModel({ state: 'on', attributes: {} }, true, '#ff0000').color === '#ff0000');
+  check('rowLabel: label, then friendly_name, then the id', IC.rowLabel({ entity: 'light.a_b', label: 'Top' }) === 'Top' &&
+    IC.rowLabel({ entity: 'light.a_b' }, { attributes: { friendly_name: 'Drawer' } }) === 'Drawer' && IC.rowLabel({ entity: 'light.a_b' }, null) === 'A b');
+}
+
+// ---- 5. commands -----------------------------------------------------------------
+{
+  const p = IC.mediaPowerCommand('media_player.demo_tv', true);
+  check('command: media power on', p.domain === 'media_player' && p.service === 'turn_on' && p.target.entity_id === 'media_player.demo_tv');
+  check('command: media power off', IC.mediaPowerCommand('media_player.demo_tv', false).service === 'turn_off');
+  check('command: volume % -> volume_level', IC.mediaVolumeCommand('media_player.x', 37).data.volume_level === 0.37 &&
+    IC.mediaVolumeCommand('media_player.x', 140).data.volume_level === 1);
+  check('command: source / sound mode', IC.mediaSourceCommand('media_player.x', 'Game').data.source === 'Game' &&
+    IC.mediaSoundModeCommand('media_player.x', 'Night').service === 'select_sound_mode');
+  const lon = IC.lightRowCommand('light.x', { on: true, bri: 50 });
+  // Mutation: forget the * 2.55 -> brightness 50 -> fails.
+  check('command: light on at 50% -> brightness 127 (the sidebar rounding)', lon.service === 'turn_on' && lon.data.brightness === 127 && !lon.data.rgb_color, lon);
+  check('command: light off', IC.lightRowCommand('light.x', { on: false, bri: 50 }).service === 'turn_off');
+  check('command: colour only when asked', JSON.stringify(IC.lightRowCommand('light.x', { on: true, bri: 100, color: '#ff8000' }, true).data.rgb_color) === '[255,128,0]');
+
+  const s0 = { state: 'off', attributes: { volume_level: 0.1 } };
+  const s1 = IC.applyCommand(s0, IC.mediaPowerCommand('media_player.x', true));
+  check('applyCommand: power on, input not mutated', s1.state === 'on' && s0.state === 'off');
+  check('applyCommand: volume', IC.applyCommand(s1, IC.mediaVolumeCommand('media_player.x', 60)).attributes.volume_level === 0.6);
+  check('applyCommand: light on with brightness', IC.applyCommand({ state: 'off', attributes: {} }, lon).attributes.brightness === 127);
+  check('applyCommand: an unknown command changes nothing', IC.applyCommand(s0, { domain: 'x', service: 'y' }) === s0);
+  check('clockText: 24-hour, zero-padded', (() => { const c = IC.clockText(new Date(2026, 0, 5, 7, 4, 9), 'en-GB');
+    return c.time === '07:04' && c.seconds === '09' && /5/.test(c.date) && /January/.test(c.date); })());
+  check('mock: a receiver sample has sources', IC.mockItemState('media', { role: 'receiver' }, 0).attributes.source_list.length > 0);
+  check('mock: readings are numbers, never 0', ['reading', 'humidity'].every(k => +IC.mockItemState(k, {}, 3).state > 0));
+}
+
+// ---- 6. markup -------------------------------------------------------------------
+{
+  const T = await imp('src/tap-popovers.js');
+  const dot = k => '<i data-st="' + k + '"></i>';
+  const F = IC.MEDIA_FEATURE;
+  const recv = IC.mediaRowModel({ state: 'on', attributes: { supported_features: F.VOLUME_SET | F.TURN_ON | F.TURN_OFF | F.SELECT_SOURCE | F.SELECT_SOUND_MODE,
+    volume_level: 0.3, source: 'TV', source_list: ['TV', 'Game'], sound_mode: 'Stereo', sound_mode_list: ['Stereo', 'Night'] } });
+  const model = haOff => ({ name: 'Console', status: 'ok', haOff,
+    media: [Object.assign({ label: 'Receiver', role: 'receiver' }, recv)],
+    lights: [Object.assign({ label: 'Top' }, IC.lightRowModel({ state: 'on', attributes: { brightness: 255 } }, false))],
+    readings: [Object.assign({ label: 'Box' }, IC.readingRowModel({ state: 'unavailable' }))] });
+  const on = T.popoverHtml.item(model(false), dot), offl = T.popoverHtml.item(model(true), dot);
+  const controls = h => h.match(/<(button class="tp-sw|input|select)[^>]*>/g) || [];
+  check('card: power, volume, source, sound mode, light power and brightness', controls(on).length === 6 &&
+    /data-a="mpower"/.test(on) && /data-a="mvol"/.test(on) && /data-a="msrc"/.test(on) && /data-a="mmode"/.test(on) &&
+    /data-a="lpower"/.test(on) && /data-a="lbri"/.test(on), controls(on));
+  check('card: every control enabled while connected', controls(on).every(c => !/\sdisabled\b/.test(c)), controls(on));
+  // Mutation: drop `(off ? ' disabled' : '')` from any control -> fails.
+  check('card: every control DISABLED while HA offline', controls(offl).length === 6 && controls(offl).every(c => /\sdisabled\b/.test(c)),
+    controls(offl).filter(c => !/\sdisabled\b/.test(c)));
+  check('card: HA offline line only while offline', /data-offline>HA offline</.test(offl) && !/data-offline/.test(on));
+  check('card: the current source is selected', /<option value="TV" selected>/.test(on));
+  check('card: an offline reading says Offline, no number', /<b>Offline<\/b>/.test(on));
+  const tv = T.popoverHtml.item({ name: 'TV', status: 'ok', haOff: false, lights: [], readings: [],
+    media: [Object.assign({ label: 'Television', role: 'tv' }, IC.mediaRowModel({ state: 'off', attributes: { supported_features: F.TURN_ON | F.TURN_OFF } }))] }, dot);
+  check('card: an off TV -- a power switch, no volume', /data-a="mpower"[^>]*aria-checked="false"/.test(tv) && !/data-a="mvol"/.test(tv) && !/\sdisabled/.test(tv), tv);
+  const esc = T.popoverHtml.item({ name: '<b>x</b>', status: 'ok', haOff: false, media: [], lights: [],
+    readings: [Object.assign({ label: '<img>' }, IC.readingRowModel({ state: '20', attributes: {} }))] }, dot);
+  check('card: names are escaped', esc.indexOf('<img>') === -1 && esc.indexOf('<b>x</b>') === -1);
+  const clock = T.popoverHtml.clock({ name: 'Kitchen clock', time: '07:04', seconds: '09', date: 'Monday 5 January 2026' });
+  check('clock card: time, seconds and date, no controls', /<b>07:04<\/b><small>:09<\/small>/.test(clock) && /Monday 5 January 2026/.test(clock) &&
+    !/<(button|input|select)\b/.test(clock), clock);
+}
+
+// ---- 7. the client, against the fake HA ------------------------------------------
+{
+  const { HAClient } = await imp('src/ha-client.js');
+  const st = (entity_id, state, attributes) => ({ entity_id, state: String(state), attributes: attributes || {}, last_changed: '', last_updated: '' });
+  const states = [st('light.demo_bedside_top', 'on', { brightness: 200 }), st('sensor.demo_a_temperature', '36.5', { unit_of_measurement: '°C' }),
+    st('media_player.demo_tv', 'off'), st('sensor.demo_unrelated', '5')];
+  const fake = installFakeHA({ states });
+  const log = console.log, warn = console.warn;
+  console.log = () => {}; console.warn = () => {};
+  try {
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: {}, wsReconnectMs: 15,
+      sensors: { items: {
+        bedside: { lights: [{ entity: 'light.demo_bedside_top' }] },
+        console: CONSOLE,
+        tv: { media: [{ entity: 'media_player.demo_tv' }] },
+      } } });
+    ha.connect();
+    await fake.whenConnected(ha);
+    // Mutation: drop `itemEntityIds.has(...)` from noteRaw -> null -> fails.
+    check('client: an item light\'s raw state is recorded', (ha.getRawState('light.demo_bedside_top') || {}).state === 'on');
+    check('client: an item reading and media player too', (ha.getRawState('sensor.demo_a_temperature') || {}).state === '36.5' &&
+      (ha.getRawState('media_player.demo_tv') || {}).state === 'off');
+    check('client: an unbound entity is not', ha.getRawState('sensor.demo_unrelated') === null);
+    fake.sockets[fake.sockets.length - 1].emitStateChanged(st('media_player.demo_tv', 'on'));
+    await sleep(10);
+    check('client: a live change updates the raw state', ha.getRawState('media_player.demo_tv').state === 'on');
+    // The card sends through the client exactly like this (tap-popovers.js itemSend).
+    const c = IC.lightRowCommand('light.demo_bedside_top', { on: true, bri: 40 });
+    ha.callServiceDebounced(c.domain, c.service, c.data, c.target, 'item:light:light.demo_bedside_top', 0);
+    const off = IC.lightRowCommand('light.demo_bedside_top', { on: false });
+    ha.callServiceDebounced(off.domain, off.service, off.data, off.target, 'item:light:light.demo_bedside_top', 0);
+    await sleep(10);
+    const calls = fake.calls;
+    check('client: the light row\'s commands reach HA as light.turn_on / turn_off', calls.length === 2 &&
+      calls[0].service === 'light/turn_on' && calls[0].body.brightness === 102 && calls[0].body.entity_id === 'light.demo_bedside_top' &&
+      calls[1].service === 'light/turn_off', calls);
+    check('client: nothing over REST', fake.fetches.length === 0);
+    ha.disconnect();
+  } finally {
+    console.log = log; console.warn = warn;
+    fake.restore();
+  }
+}
+
+// ---- 8. the demo house -----------------------------------------------------------
+{
+  const read = rel => JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
+  const rooms = read('houses/demo/rooms.json'), geo = read('houses/demo/geometry.json');
+  const items = IC.normaliseItemBindings(rooms.sensors && rooms.sensors.items);
+  const byId = new Map((geo.furniture || []).map(f => [f.id, f]));
+  const raw = (rooms.sensors && rooms.sensors.items) || {};
+  check('demo: every sensors.items id is a furniture item', Object.keys(raw).length > 0 && Object.keys(raw).every(id => byId.has(id)), Object.keys(raw));
+  check('demo: no binding was dropped by normalisation', Object.keys(raw).every(id => items.has(id) &&
+    items.get(id).length === (Array.isArray(raw[id]) ? raw[id].length : 1)));
+  const cards = [...items.values()].flat();
+  check('demo: media, lights, readings and a region card are all bound', cards.some(c => c.media.length) && cards.some(c => c.lights.length) &&
+    cards.some(c => c.readings.length) && cards.some(c => c.region) && cards.some(c => c.media.some(m => m.role === 'receiver')));
+  const climate = (rooms.sensors && rooms.sensors.climate) || {};
+  check('demo: a wall clock and a radiator in a climate-bound room', (geo.furniture || []).some(f => f.type === 'wall-clock') &&
+    (geo.furniture || []).some(f => f.type === 'radiator' && typeof climate[f.room] === 'string'));
+  check('demo: rooms.json declares 1.6 for sensors.items', rooms.schemaVersion === '1.6');
+}
+
+console.log(failures ? 'FAILED -- ' + failures + ' failed, ' + passes + ' passed' : 'ok -- ' + passes + ' passed, 0 failed');
+process.exit(failures ? 1 : 0);

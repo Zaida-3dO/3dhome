@@ -96,14 +96,14 @@
  * same way. Adjacent parts meet edge-to-edge or with a small real gap; the
  * test suite checks every pair of box/plane meshes for it.
  *
- * NOT TAPPABLE (YET) FOR THE CLIMATE POPOVER. Furniture renders MERGED per
- * room (src/furniture.js / furniture/merge.js), so a hit on a radiator lands
- * on a shared bucket mesh with no per-item identity. Making it tappable needs
- * a hit-point -> oriented-footprint lookup against the climate-bound
- * `house.furniture[]` radiators (a room that rooms.json binds a thermostat to
- * through `sensors.climate[room]`). Until then the climate popover opens only
- * through the ?debug=1 seam. See docs/plans/tap-popovers.md and Agent Standup
- * item 647fc9bd.
+ * TAPPABLE FOR THE CLIMATE POPOVER. Furniture renders MERGED per room
+ * (src/furniture.js / furniture/merge.js), so a hit on a radiator lands on a
+ * shared bucket mesh with no per-item identity; the tap is resolved by WHERE
+ * it landed instead (home.furnitureItemAt, the robot vacuum's route). Any
+ * `radiator` item then opens the climate card of the room it stands in
+ * (rooms.json `sensors.climate[room]`), with no binding of its own; a room
+ * with none makes it a plain furniture tap. See src/item-cards.js
+ * furnitureTapTarget and docs/plans/tap-popovers.md.
  */
 
 export const TYPE = 'radiator';
