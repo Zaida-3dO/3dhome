@@ -262,7 +262,7 @@ const CONSOLE = [
 // ---- 5b. card copy: titles, icon, first-row label ------------------------------
 {
   // Mutation: return the whole label from shortLabel -> fails.
-  check('shortLabel: an authoring note is cut at the first " ("', IC.shortLabel('Word clock (office, above the ottoman)') === 'Word clock');
+  check('shortLabel: an authoring note is cut at the first " ("', IC.shortLabel('Word clock (study, above the desk)') === 'Word clock');
   check('shortLabel: ... or at the first " - "', IC.shortLabel('Frame TV, 43-inch - PHOTO-DERIVED POSITION') === 'Frame TV, 43-inch');
   check('shortLabel: whichever comes first', IC.shortLabel('Frame TV, 43-inch (art mode) - PHOTO-DERIVED') === 'Frame TV, 43-inch');
   check('shortLabel: a plain label is kept, nothing -> empty', IC.shortLabel('Sideboard') === 'Sideboard' && IC.shortLabel(undefined) === '');

@@ -316,7 +316,7 @@ export function readingRowModel(raw, humRaw) {
 
 /**
  * A furniture `label` shortened for a card title. In a real house the label
- * is an authoring note ("Word clock (office, above the ottoman)", "Frame TV,
+ * is an authoring note ("Word clock (study, above the desk)", "Frame TV,
  * 43-inch (...) - PHOTO-DERIVED POSITION"): keep what comes before the first
  * " (" or " - ". A binding's own `title` is the proper fix; this is the
  * fallback.
