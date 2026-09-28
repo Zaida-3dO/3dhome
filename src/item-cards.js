@@ -278,6 +278,9 @@ export function lightRowModel(raw, colorable, color) {
 }
 
 const fmtNumber = v => (Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : v.toFixed(1));
+// A temperature always carries one decimal (31.0°C beside 33.7°C), as the
+// climate card does; any other unit drops a trailing .0.
+const isTemperatureUnit = u => u === '°C' || u === '°F';
 const unitText = u => (u === '°C' || u === '°F' || u === '%' ? u : ' ' + u);
 
 /**
@@ -296,7 +299,7 @@ export function readingRowModel(raw, humRaw) {
     const a = raw.attributes || {};
     unit = typeof a.unit_of_measurement === 'string' ? a.unit_of_measurement : null;
     const n = Number(st);
-    if (st !== '' && isFinite(n)) { value = n; text = fmtNumber(n) + (unit ? unitText(unit) : ''); na = false; }
+    if (st !== '' && isFinite(n)) { value = n; text = (isTemperatureUnit(unit) ? n.toFixed(1) : fmtNumber(n)) + (unit ? unitText(unit) : ''); na = false; }
     else { text = humanise(st); na = false; }
   }
   let humidity = null;
@@ -305,6 +308,78 @@ export function readingRowModel(raw, humRaw) {
     if (humRaw.state !== '' && isFinite(h)) humidity = Math.round(h) + '%';
   }
   return { na, text, value, unit, humidity };
+}
+
+// ---------------------------------------------------------------------------
+// Card copy: titles, the header icon, the first row's label
+// ---------------------------------------------------------------------------
+
+/**
+ * A furniture `label` shortened for a card title. In a real house the label
+ * is an authoring note ("Word clock (office, above the ottoman)", "Frame TV,
+ * 43-inch (...) - PHOTO-DERIVED POSITION"): keep what comes before the first
+ * " (" or " - ". A binding's own `title` is the proper fix; this is the
+ * fallback.
+ */
+export function shortLabel(label) {
+  const s = typeof label === 'string' ? label.trim() : '';
+  if (!s) return '';
+  const cut = [' (', ' - ', ' – ', ' — '].map(sep => s.indexOf(sep)).filter(i => i > 0);
+  return (cut.length ? s.slice(0, Math.min(...cut)) : s).trim();
+}
+
+/** A bound card's title: its `title`, else the item's short label, else the id humanised. */
+export function cardTitle(card, label, itemId) {
+  if (card && card.title) return card.title;
+  return shortLabel(label) || humanise(String(itemId || '').replace(/[-]+/g, '_'));
+}
+
+/**
+ * The title-only binding of an item that needs no rows: `sensors.items[id]`
+ * as `{ "title": "Kitchen clock" }` names a clock or a radiator. null when
+ * there is none (or the binding is a list).
+ */
+export function bindingTitle(items, itemId) {
+  const b = items && typeof items === 'object' ? items[itemId] : null;
+  return b && !Array.isArray(b) && typeof b === 'object' ? str(b.title) : null;
+}
+
+/** A clock card's title: the binding's title, else "<Room> clock", else "Clock". Never the label. */
+export function clockTitle(title, roomName) {
+  if (title) return title;
+  const r = typeof roomName === 'string' ? roomName.trim() : '';
+  return r ? r + ' clock' : 'Clock';
+}
+
+/**
+ * The card header's icon, from its PRIMARY row: the first media row's role
+ * (a receiver or speaker is a speaker, a cast device a cast, else a TV),
+ * else a bulb for a lights card, else a thermometer.
+ * @returns 'speaker' | 'cast' | 'tv' | 'bulb' | 'thermometer'
+ */
+export function cardIcon(card) {
+  if (!card) return 'thermometer';
+  if (card.media && card.media.length) {
+    const role = card.media[0].role;
+    return role === 'receiver' || role === 'speaker' ? 'speaker' : role === 'cast' ? 'cast' : 'tv';
+  }
+  return card.lights && card.lights.length ? 'bulb' : 'thermometer';
+}
+
+/** What a row IS, for when its own label would only repeat the card title. */
+export const ROLE_NAMES = Object.freeze({ tv: 'Television', cast: 'Cast', receiver: 'Receiver', speaker: 'Speaker' });
+const KIND_NAMES = { media: 'Player', light: 'Light', reading: 'Reading' };
+
+/**
+ * The first row's label, unless it only repeats the card's title (a "TV"
+ * card whose first row is "TV"): then what the row is -- its role name, or
+ * its kind -- instead.
+ */
+export function rowLabelUnderTitle(label, title, role, kind) {
+  const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  if (!same(label, title)) return label;
+  const alt = (role && ROLE_NAMES[role]) || KIND_NAMES[kind] || label;
+  return same(alt, title) ? (KIND_NAMES[kind] || alt) : alt;
 }
 
 // ---------------------------------------------------------------------------

@@ -62,7 +62,8 @@ import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCom
 import { normalisePlantBindings, plantStatusText, agoText, batteryText, mockPlantReading } from './plant-status.js';
 import { normaliseItemBindings, furnitureTapTarget, tappableFurnitureIds, mediaRowModel, lightRowModel, readingRowModel,
   rowLabel, mediaPowerCommand, mediaVolumeCommand, mediaSourceCommand, mediaSoundModeCommand, lightRowCommand,
-  applyCommand, mockItemState, clockText, cardEntities } from './item-cards.js';
+  applyCommand, mockItemState, clockText, cardEntities, cardTitle, cardIcon, rowLabelUnderTitle, bindingTitle,
+  clockTitle } from './item-cards.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -667,6 +668,9 @@ export const STYLE = `
 .tp-ivol svg { width: 14px; height: 14px; flex: none; fill: var(--ink-2); }
 .tp-ivol .tp-range { flex: 1 1 auto; width: auto; min-width: 0; margin: 0; }
 .tp-isel { display: flex; gap: 5px; margin-top: 7px; }
+.tp-selw { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tp-selw > span { font-size: 11px; color: var(--ink-2); line-height: 1.2; }
+.tp-selw .tp-select { flex: none; width: 100%; }
 .tp-select { flex: 1 1 0; min-width: 0; height: var(--ib-h); padding: 0 6px; border-radius: 7px; cursor: pointer;
   border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.07); color: var(--ink);
   font: 12px/1.2 'Segoe UI', system-ui, sans-serif; }
@@ -846,9 +850,12 @@ export const popoverHtml = {
       (sub ? '<small' + (subOn ? ' class="on"' : '') + '>' + esc(sub) + '</small>' : '') + '</span></span>';
     const sw = (a, i, on, dis, label) => '<button class="tp-sw' + (on ? ' on' : '') + '" data-a="' + a + '" data-i="' + i +
       '" role="switch" aria-checked="' + !!on + '" aria-label="' + esc(label) + '"' + (dis ? ' disabled' : '') + '><i></i></button>';
-    const select = (a, i, list, cur, label) => '<select class="tp-select" data-a="' + a + '" data-i="' + i + '" aria-label="' + esc(label) + '"' +
+    // Each picker sits under a small visible caption (its <label>), so a
+    // source list and a sound-mode list are told apart without a tooltip.
+    const select = (a, i, list, cur, label, caption) => '<label class="tp-selw"><span>' + esc(caption) + '</span>' +
+      '<select class="tp-select" data-a="' + a + '" data-i="' + i + '" aria-label="' + esc(label) + '"' +
       (off ? ' disabled' : '') + '>' + (cur != null && list.indexOf(cur) === -1 ? '<option value="" selected disabled>' + esc(cur) + '</option>' : '') +
-      list.map(v => '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select>';
+      list.map(v => '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select></label>';
     (m.media || []).forEach((r, i) => {
       const icon = ico(r.role === 'receiver' || r.role === 'speaker' ? I.speaker : r.role === 'cast' ? I.cast : I.tv,
         r.na ? 'dim' : r.on ? 'm-on' : '');
@@ -859,8 +866,8 @@ export const popoverHtml = {
         body += '<div class="tp-ivol">' + svg(I.volume) + '<input class="tp-range" data-a="mvol" data-i="' + i +
           '" type="range" min="0" max="100" value="' + r.volume + '" aria-label="Volume: ' + esc(r.label) + '"' + (off ? ' disabled' : '') + '></div>';
       }
-      const sels = (r.sources.length ? select('msrc', i, r.sources, r.source, 'Source: ' + r.label) : '') +
-        (r.soundModes.length ? select('mmode', i, r.soundModes, r.soundMode, 'Sound mode: ' + r.label) : '');
+      const sels = (r.sources.length ? select('msrc', i, r.sources, r.source, 'Source: ' + r.label, 'Source') : '') +
+        (r.soundModes.length ? select('mmode', i, r.soundModes, r.soundMode, 'Sound mode: ' + r.label, 'Sound mode') : '');
       if (sels) body += '<div class="tp-isel">' + sels + '</div>';
       rows.push('<div class="tp-irow" data-row="media">' + body + '</div>');
     });
@@ -884,7 +891,7 @@ export const popoverHtml = {
         (r.humidity ? '<span class="hum" title="Humidity">' + svg(I.drop) + esc(r.humidity) + '</span>' : '') + '</span>';
       rows.push('<div class="tp-irow" data-row="reading"><div class="tp-row">' + lab(ico(I.thermometer, r.na ? 'dim' : ''), r.label) + val + '</div></div>');
     });
-    const first = (m.media || []).length ? I.tv : (m.lights || []).length ? I.bulb : I.thermometer;
+    const first = I[m.icon] || ((m.media || []).length ? I.tv : (m.lights || []).length ? I.bulb : I.thermometer);
     return shell(ico(first), m.name, m.status, rows.join('') + offlineLine(m));
   },
   /** Clock (read-only, no Home Assistant). m: { name, time, seconds, date }. */
@@ -946,7 +953,9 @@ export function attachTapPopovers(o) {
   };
   const vacuums = normaliseVacuumBindings(o.sensors && o.sensors.vacuums);
   const plants = normalisePlantBindings(o.sensors && o.sensors.plants);
-  const itemBindings = normaliseItemBindings(o.sensors && o.sensors.items);
+  const rawItems = (o.sensors && o.sensors.items) || {};
+  const itemBindings = normaliseItemBindings(rawItems);
+  const furnitureRooms = new Map(((o.house && o.house.furniture) || []).map(f => [f.id, f.room || null]));
   const climateBinding = (o.sensors && o.sensors.climate) || {};
   const deviceIds = new Set([...vacuums.keys(), ...plants.keys(),
     ...tappableFurnitureIds(o.house && o.house.furniture, itemBindings, climateBinding)]);
@@ -961,6 +970,12 @@ export function attachTapPopovers(o) {
     const t = deviceTarget(it.id, vacuums, plants, h.object) ||
       furnitureTapTarget(it, h.point, { items: itemBindings, climate: climateBinding });
     if (t && !t.object) t.object = h.object;
+    // A clock or a radiator may carry a title-only binding ({ "title": ... }).
+    if (t && (t.kind === 'clock' || t.kind === 'climate')) {
+      const title = bindingTitle(rawItems, it.id);
+      if (title) t.label = title;
+      if (t.kind === 'clock') t.room = it.room;
+    }
     return t;
   };
   const curtainNames = new Map(((o.house && o.house.curtains) || []).map(c => [c.id, c.name || c.id]));
@@ -1383,9 +1398,12 @@ export function attachTapPopovers(o) {
           return Object.assign({ entity: row.entity, label: rowLabel(row, r) }, readingRowModel(r, hr));
         });
         const anyNa = media.some(r => r.na) || lights.some(r => r.na) || readings.some(r => r.na);
-        const name = card.title || furnitureLabels.get(t.itemId) || sentenceCase(String(t.itemId).replace(/[_-]+/g, ' '));
+        const name = cardTitle(card, furnitureLabels.get(t.itemId), t.itemId);
+        // The first row never just repeats the title ("TV" over "TV").
+        const lead = media[0] ? [media[0], 'media'] : lights[0] ? [lights[0], 'light'] : readings[0] ? [readings[0], 'reading'] : null;
+        if (lead) lead[0].label = rowLabelUnderTitle(lead[0].label, name, lead[0].role, lead[1]);
         return { status: itemMockMode() ? 'offlineItem' : statusKey('item', c, anyNa && isLive(c), false), haOff: haOfflineConn(c),
-          name, media, lights, readings };
+          name, icon: cardIcon(card), media, lights, readings };
       },
       html(m) { return popoverHtml.item(m, dot); },
       bind(t, el, ctl) {
@@ -1447,7 +1465,8 @@ export function attachTapPopovers(o) {
 
     clock: {
       model(t) {
-        return Object.assign({ name: furnitureLabels.get(t.itemId) || 'Clock' }, clockText(new Date()));
+        // Never the raw furniture label (an authoring note in a real house).
+        return Object.assign({ name: clockTitle(t.label, t.room ? roomName(t.room) : '') }, clockText(new Date()));
       },
       html(m) { return popoverHtml.clock(m); },
       bind() {},   // read-only
@@ -1740,7 +1759,11 @@ export function attachTapPopovers(o) {
           const cards = itemBindings.get(id);
           const card = cards.find(c => c.index === ((extra && extra.card) || 0)) || cards[0];
           t = { kind: 'item', id: cards.length > 1 ? id + '#' + card.index : id, itemId: id, card, entities: cardEntities(card) };
-        } else if (kind === 'clock') t = { kind: 'clock', id, itemId: id, entities: [] };
+        } else if (kind === 'clock') {
+          t = { kind: 'clock', id, itemId: id, entities: [], room: furnitureRooms.get(id) || null };
+          const title = bindingTitle(rawItems, id);
+          if (title) t.label = title;
+        }
         if (!t) return false;
         open(t, x, y);
         return true;

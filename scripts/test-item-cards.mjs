@@ -212,7 +212,11 @@ const CONSOLE = [
 
   const r = IC.readingRowModel({ state: '38.24', attributes: { unit_of_measurement: '°C' } }, { state: '45.6', attributes: {} });
   check('reading: value + unit, humidity rounded', r.text === '38.2°C' && r.humidity === '46%' && !r.na, r);
-  check('reading: an integer stays an integer', IC.readingRowModel({ state: '21', attributes: { unit_of_measurement: 'W' } }).text === '21 W');
+  check('reading: a non-temperature integer stays an integer', IC.readingRowModel({ state: '21', attributes: { unit_of_measurement: 'W' } }).text === '21 W');
+  // Mutation: drop the isTemperatureUnit branch (back to fmtNumber) -> '31°C' -> fails.
+  check('reading: a whole temperature keeps one decimal, as the climate card does',
+    IC.readingRowModel({ state: '31', attributes: { unit_of_measurement: '°C' } }).text === '31.0°C' &&
+    IC.readingRowModel({ state: '70', attributes: { unit_of_measurement: '°F' } }).text === '70.0°F');
   const ro = IC.readingRowModel({ state: 'unavailable', attributes: { unit_of_measurement: '°C' } }, { state: 'unavailable' });
   // Mutation: render Number(state) || 0 -> '0°C' -> fails.
   check('reading: OFFLINE, never 0', ro.na && ro.text === 'Offline' && ro.humidity === null && !/\d/.test(ro.text), ro);
@@ -255,6 +259,42 @@ const CONSOLE = [
   check('mock: readings are numbers, never 0', ['reading', 'humidity'].every(k => +IC.mockItemState(k, {}, 3).state > 0));
 }
 
+// ---- 5b. card copy: titles, icon, first-row label ------------------------------
+{
+  // Mutation: return the whole label from shortLabel -> fails.
+  check('shortLabel: an authoring note is cut at the first " ("', IC.shortLabel('Word clock (office, above the ottoman)') === 'Word clock');
+  check('shortLabel: ... or at the first " - "', IC.shortLabel('Frame TV, 43-inch - PHOTO-DERIVED POSITION') === 'Frame TV, 43-inch');
+  check('shortLabel: whichever comes first', IC.shortLabel('Frame TV, 43-inch (art mode) - PHOTO-DERIVED') === 'Frame TV, 43-inch');
+  check('shortLabel: a plain label is kept, nothing -> empty', IC.shortLabel('Sideboard') === 'Sideboard' && IC.shortLabel(undefined) === '');
+  check('shortLabel: a leading "(" is not a cut', IC.shortLabel('(spare) shelf') === '(spare) shelf');
+  // Mutation: prefer the label over card.title -> fails.
+  check('cardTitle: the binding title wins', IC.cardTitle({ title: 'Living room TV' }, 'TV, 75-inch (flat)', 'tv') === 'Living room TV');
+  check('cardTitle: no title -> the short label', IC.cardTitle({ title: null }, 'TV, 75-inch (flat, thin bezel)', 'tv') === 'TV, 75-inch');
+  check('cardTitle: no label either -> the id humanised', IC.cardTitle({}, null, 'hall_tv') === 'Hall tv');
+  const raw = { k_clock: { title: 'Kitchen clock' }, list: [{ title: 'x' }], tv: { media: [] } };
+  check('bindingTitle: a title-only binding', IC.bindingTitle(raw, 'k_clock') === 'Kitchen clock');
+  check('bindingTitle: a list or no title -> null', IC.bindingTitle(raw, 'list') === null && IC.bindingTitle(raw, 'tv') === null && IC.bindingTitle(null, 'x') === null);
+  // Mutation: fall back to the furniture label in clockTitle -> not reachable; a
+  // mutation returning 'Clock' always fails the room case.
+  check('clockTitle: binding title, else "<Room> clock", else "Clock"', IC.clockTitle('Gold clock', 'Office') === 'Gold clock' &&
+    IC.clockTitle(null, 'Office') === 'Office clock' && IC.clockTitle(null, '') === 'Clock');
+  const items = IC.normaliseItemBindings({ k_clock: { title: 'Kitchen clock' } });
+  check('a title-only binding is not a card: the clock stays a clock', !items.has('k_clock') &&
+    IC.furnitureTapTarget({ id: 'k_clock', type: 'wall-clock', room: 'kitchen' }, null, { items }).kind === 'clock');
+  const card = media => ({ media: media.map(role => ({ entity: 'media_player.demo_x', role })), lights: [], readings: [] });
+  // Mutation: always return 'tv' for a media card -> fails.
+  check('cardIcon: a receiver card gets the speaker', IC.cardIcon(card(['receiver', 'cast'])) === 'speaker');
+  check('cardIcon: speaker / cast / tv / no role', IC.cardIcon(card(['speaker'])) === 'speaker' && IC.cardIcon(card(['cast'])) === 'cast' &&
+    IC.cardIcon(card(['tv', 'cast'])) === 'tv' && IC.cardIcon(card([null])) === 'tv');
+  check('cardIcon: lights -> bulb, readings -> thermometer', IC.cardIcon({ media: [], lights: [{}], readings: [] }) === 'bulb' &&
+    IC.cardIcon({ media: [], lights: [], readings: [{}] }) === 'thermometer');
+  // Mutation: return the label unchanged -> 'TV' under 'TV' -> fails.
+  check('first row: a label equal to the title becomes its role', IC.rowLabelUnderTitle('Vader', 'vader', 'receiver', 'media') === 'Receiver');
+  check('first row: a TV under a "TV" title reads Television', IC.rowLabelUnderTitle('TV', 'TV', 'tv', 'media') === 'Television');
+  check('first row: a different label is kept', IC.rowLabelUnderTitle('TV', 'Living room', 'tv', 'media') === 'TV');
+  check('first row: no role -> the kind', IC.rowLabelUnderTitle('Lamp', 'Lamp', null, 'light') === 'Light');
+}
+
 // ---- 6. markup -------------------------------------------------------------------
 {
   const T = await imp('src/tap-popovers.js');
@@ -277,6 +317,12 @@ const CONSOLE = [
     controls(offl).filter(c => !/\sdisabled\b/.test(c)));
   check('card: HA offline line only while offline', /data-offline>HA offline</.test(offl) && !/data-offline/.test(on));
   check('card: the current source is selected', /<option value="TV" selected>/.test(on));
+  // Mutation: drop the caption span from select() -> fails.
+  check('card: each picker has a visible caption in its <label>', /<label class="tp-selw"><span>Source<\/span><select[^>]*data-a="msrc"/.test(on) &&
+    /<label class="tp-selw"><span>Sound mode<\/span><select[^>]*data-a="mmode"/.test(on), on);
+  const iconOf = h => (h.match(/<div class="tp-head"><svg[^>]*><path d="([^"]+)"/) || [])[1];
+  const ICONS = (await imp('src/ui-icons.js')).ICONS;
+  check('card: the header icon is the model icon', iconOf(T.popoverHtml.item(Object.assign(model(false), { icon: 'speaker' }), dot)) === ICONS.speaker);
   check('card: an offline reading says Offline, no number', /<b>Offline<\/b>/.test(on));
   const tv = T.popoverHtml.item({ name: 'TV', status: 'ok', haOff: false, lights: [], readings: [],
     media: [Object.assign({ label: 'Television', role: 'tv' }, IC.mediaRowModel({ state: 'off', attributes: { supported_features: F.TURN_ON | F.TURN_OFF } }))] }, dot);

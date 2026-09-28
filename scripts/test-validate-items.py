@@ -6,8 +6,8 @@ Needs `jsonschema`. Exits 1 on any failure. Every id here is synthetic, and
 single-quoted so the PII guard (which flags double-quoted entity ids) passes.
 
 WHAT THIS GUARDS
-  1. houses/schema.json: one card and a list of region cards validate; a card
-     with no rows, a row of the wrong domain, a region missing `to`, a negative
+  1. houses/schema.json: one card, a list of region cards and a title-only
+     card validate; a card with neither rows nor a title, a region card with no rows, a row of the wrong domain, a region missing `to`, a negative
      region start, an unknown role and an unknown key are rejected.
   2. scripts/validate-house.py: a binding to a furniture item that does not
      exist is an ERROR, as is a region with from >= to; a region past the
@@ -68,7 +68,7 @@ def schema_errors(doc):
     return r.errors
 
 
-GEO = {"furniture": [{"id": "console", "room": "room", "type": "cabinet", "at": [1, 1], "params": {"width": 180}},
+GEO = {"furniture": [{"id": "clock", "room": "room", "type": "wall-clock", "at": [1, 1]},{"id": "console", "room": "room", "type": "cabinet", "at": [1, 1], "params": {"width": 180}},
                      {"id": "tv", "room": "room", "type": "tv", "at": [1, 1]},
                      {"id": "bedside", "room": "room", "type": "cabinet", "at": [1, 1]}],
        "doors": [], "curtains": []}
@@ -86,7 +86,8 @@ GOOD = {"console": CONSOLE, "tv": TV, "bedside": BEDSIDE}
 # ---- 1. schema ---------------------------------------------------------------
 check("schema: one card and a list of region cards validate", schema_errors(rooms_doc(GOOD)) == [], schema_errors(rooms_doc(GOOD)))
 for label, b in [
-    ("a card with no rows", {"title": "Empty"}),
+    ("a card with no rows and no title", {"label": "Empty"}),
+    ("a region card with no rows", {"title": "Left", "region": {"from": 0, "to": 5}}),
     ("an empty list", []),
     ("a light in a media row", {"media": [{"entity": 'light.demo_x'}]}),
     ("a switch as a light", {"lights": [{"entity": 'switch.demo_x'}]}),
@@ -99,6 +100,8 @@ for label, b in [
 ]:
     check(f"schema: rejects {label}", schema_errors(rooms_doc({"tv": b})) != [])
 
+check("schema: a title-only card (a clock's name) validates", schema_errors(rooms_doc({"clock": {"title": "Kitchen clock"}})) == [])
+
 # ---- 2. validator --------------------------------------------------------------
 errs, warns = run(rooms_doc(GOOD))
 check("validator: a clean binding trips nothing", errs == [] and warns == [], (errs, warns))
@@ -110,6 +113,11 @@ _, warns = run(rooms_doc({"console": [{"region": {"from": 130, "to": 200}, "read
 check("validator: a region past the item's width is warned", any("180 cm wide" in w for w in warns), warns)
 _, warns = run(rooms_doc({"console": [CONSOLE[0], dict(CONSOLE[1], region={"from": 40, "to": 130})]}))
 check("validator: overlapping regions are warned", any("overlaps card 0" in w for w in warns), warns)
+_, warns = run(rooms_doc(dict(GOOD, clock={"title": "Kitchen clock"})))
+check("validator: a title-only card on a clock is clean", not any("title-only" in w for w in warns), warns)
+_, warns = run(rooms_doc({"tv": {"title": "Living room TV"}}))
+# Mutation: drop the ftype check -> no warning -> fails.
+check("validator: a title-only card on anything else is warned", any("title-only" in w for w in warns), warns)
 _, warns = run(rooms_doc(GOOD, version="1.5"))
 check("validator: below 1.6 is warned", any("1.6" in w for w in warns), warns)
 

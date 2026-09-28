@@ -1372,8 +1372,13 @@ not have and on `dryBelow` not below `wetAbove`.
 
 Keyed by the **furniture item** that is tapped, found by where the tap lands,
 exactly like a robot vacuum. The value is **one card**, or a **list of cards**
-each scoped to a `region` of the item. A card has an optional `title` (else the
-item's `label`) and any of three row lists, at least one of them:
+each scoped to a `region` of the item. A card has a `title` and any of three row
+lists, at least one of them. **Give every card a short `title`** ("Living room
+TV", "Sound system"): without one the card falls back to the item's `label` cut
+at its first ` (` or ` - `, and a real house's labels are usually authoring
+notes. When the first row's label would only repeat the title, the row shows
+what it is instead (Television, Cast, Receiver). The header icon follows the
+first row (a receiver card gets a speaker, not a TV). The rows:
 
 - **`media`** -- a `media_player.*` row: its state (Off / On / Idle / Playing
   with the title / **Offline**), a **power switch** (`media_player.turn_on` /
@@ -1398,9 +1403,13 @@ on a part no card covers is a plain furniture tap and selects the room as
 before.
 
 Two kinds of furniture need **no entry here**: any `wall-clock` item opens a
-card with the local time and date, and any `radiator` item opens the climate
-card of the room it stands in (`climate` above; nothing if that room has
-none). A light channel drawn on an item (a bedside table's LED strip) is still
+card with the local time and date, titled "<Room> clock" (never the item's
+label), and any `radiator` item opens the climate card of the room it stands in
+(`climate` above; nothing if that room has none). To name either, give it a
+**title-only** entry: `"office_clock": { "title": "Gold clock" }` (the
+validator warns about a title-only entry on any other item, where it has nothing
+to show). Temperatures read with one decimal (`31.0°C`), as the climate card
+does. A light channel drawn on an item (a bedside table's LED strip) is still
 its own light tap and wins over the item's card.
 
 Every control is disabled while Home Assistant is offline and nothing is sent;
