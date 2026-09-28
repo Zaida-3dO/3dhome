@@ -723,6 +723,7 @@ ${coarseRules('.tp-force-coarse')}
 :root[data-theme="light"] .tp-pst.ok { color: #166534; background: rgba(34,197,94,0.14); border-color: rgba(21,128,61,0.45); }
 :root[data-theme="light"] .tp-pst.dry, :root[data-theme="light"] .tp-pst.due { color: #92400e; background: rgba(245,158,11,0.16); border-color: rgba(180,83,9,0.45); }
 :root[data-theme="light"] .tp-pst.wet { color: #1e40af; background: rgba(59,130,246,0.14); border-color: rgba(29,78,216,0.45); }
+:root[data-theme="light"] .tp-ico.m-on { fill: var(--accent); }
 :root[data-theme="light"] .tp-select { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.16); }
 :root[data-theme="light"] .tp-ireading .hum svg { fill: #1d4ed8; }
 :root[data-theme="light"] .tp-ivol svg { fill: rgba(0,0,0,0.5); }
