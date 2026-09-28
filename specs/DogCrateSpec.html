@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dog crate — Spec</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  pre.json { font-size:10px; background:#f7f5f0; border:1px solid #ece8e0; border-radius:4px; padding:8px; margin-top:10px; white-space:pre-wrap; word-break:break-all; }
+  @media (max-width: 760px) {
+    body { padding:12px; }
+    .grid { grid-template-columns:1fr; }
+    #c3d { height:420px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Dog crate",
+  "description": "All units cm. A folding two-door wire dog crate: black wire mesh on every side and the top with rounded top edges, a side door and an end door with slide-bolt latches, a black plastic tray and a carry handle. An optional fabric cover. Pick a variant, then fine-tune in the Tweaks panel.",
+  "objects": [
+    { "id": "dog-crate", "label": "Dog crate", "types": ["dog-crate"] }
+  ]
+}
+</script>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. React is the production build; Babel is required because the .jsx below is transpiled in-browser at runtime. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<!-- The crate lives in src/furniture/dog-crate.js -- the SAME pure builder
+     module the house scene calls, following the furniture builder contract
+     (ESM, THREE injected, TYPE/DEFAULTS/build, metres, back face at z=0,
+     bottom at y=0). Loaded as a real ES module and stashed on window so the
+     Babel-transpiled app below can call it. -->
+<script type="module">
+  import * as M from '../src/furniture/dog-crate.js';
+  window.FurnitureDogCrate = M;
+  window.dispatchEvent(new Event('furniture-dog-crate-ready'));
+</script>
+<!-- Shared harness: tweaks-panel.jsx (tweaks machinery) + reusable ThreeView -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   DOG CRATE SPEC   ·   folding two-door wire crate, optional cover
+
+   ── DIMENSIONS ARE ILLUSTRATIVE ──────────────────────────────────────
+   Every dimension below is a DEFAULT, not a survey: a common 42-inch
+   two-door crate. Measure your own and drive the geometry from the
+   Tweaks panel.
+   ─────────────────────────────────────────────────────────────────────
+
+   Frame: `width` is the crate's LENGTH (the long side runs along x),
+   `depth` front to back, `height` floor to top. The BACK (z = 0) is the
+   side that goes against a wall; the side door is on the FRONT. Left and
+   right are as seen from the front (+x is right).
+
+   The grey wall drawn behind the crate is page context only; it is not
+   part of the builder's output.
+
+   The geometry is NOT built here -- it lives in src/furniture/dog-crate.js
+   and is unit-tested by scripts/test-dog-crate.mjs.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "width": 109,
+  "depth": 72,
+  "height": 76,
+  "wirePitch": 2.5,
+  "rowPitch": 5,
+  "sideDoor": "right",
+  "endDoor": "left",
+  "cover": false,
+  "wireColor": "#1b1b1d",
+  "panColor": "#141415",
+  "handleColor": "#1f1f21",
+  "coverColor": "#2a2a2d",
+  "detail": "full"
+}/*EDITMODE-END*/;
+
+// The crate's VARIANTS (same controls, different values), picked from the
+// shared picker bar (<SpecVariants>). Each names every door and cover key,
+// so picking one never inherits another's.
+const PRESETS = [
+  { name: 'Two-door wire crate', edits: { sideDoor: 'right', endDoor: 'left', cover: false } },
+  // The cover is OPTIONAL and off by default: a fabric cover over the top,
+  // back and ends, its front flap rolled up over the side door.
+  { name: 'With a fabric cover', edits: { sideDoor: 'right', endDoor: 'left', cover: true } },
+  { name: 'Single door (end only)', edits: { sideDoor: 'none', endDoor: 'left', cover: false } },
+];
+
+function paramsOf(t) {
+  const { detail, ...p } = t;
+  return p;
+}
+
+// Set by App during render (see BedSpec.html for why it is not an effect).
+let reportTriangles = null;
+
+function buildCrateModel(t, group, THREE) {
+  const M = window.FurnitureDogCrate;
+  const item = M.build(THREE, paramsOf(t), { detail: t.detail });
+  const b = new THREE.Box3().setFromObject(item);
+  const dz = -(b.min.z + b.max.z) / 2;
+  item.position.z = dz;
+  group.add(item);
+  let tris = 0;
+  item.traverse(o => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  if (reportTriangles) reportTriangles(tris);
+  // context only: a floor, and a wall behind the crate (not builder output)
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), new THREE.MeshStandardMaterial({ color: 0x8a7a64, roughness: 1 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = -0.001;
+  floor.receiveShadow = true;
+  floor.name = 'context-floor';
+  group.add(floor);
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(t.width * 0.01 + 1.2, 1.6, 0.05), new THREE.MeshStandardMaterial({ color: 0xd9d6cf, roughness: 1 }));
+  wall.position.set(0, 0.8, dz - 0.025 - 0.01);
+  wall.receiveShadow = true;
+  wall.name = 'context-wall';
+  group.add(wall);
+}
+
+// ============== App ==============
+function App() {
+  const M = window.FurnitureDogCrate;
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [copied, setCopied] = React.useState('');
+  const [triangles, setTriangles] = React.useState(null);
+  reportTriangles = setTriangles;
+  // The shared ThreeView opens 3.8 m out, sized for a door; a crate is about
+  // a metre long, so zoom in once on mount (its own wheel handler).
+  React.useEffect(() => {
+    const c = document.getElementById('c3d');
+    if (c) c.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, cancelable: true }));
+  }, []);
+  const json = M ? JSON.stringify(M.toFurnitureJSON(paramsOf(t)), null, 2) : '';
+  const copy = () => {
+    const done = () => { setCopied('copied'); setTimeout(() => setCopied(''), 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
+    else setCopied('clipboard unavailable — select the JSON below');
+  };
+  const L = M ? M.layout(paramsOf(t)) : null;
+  const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const door = d => d ? (d.x1 !== undefined ? (d.x1 - d.x0) : (d.z1 - d.z0)).toFixed(0) + ' × ' + (d.y1 - d.y0).toFixed(0) : '—';
+  return (
+    <SpecPage>
+      <SpecVariants values={t} onSelect={id => setTweak(PRESETS.find(p => slug(p.name) === id).edits)}
+        variants={PRESETS.map(p => ({ id: slug(p.name), label: p.name, params: p.edits }))} />
+
+      <div className="grid">
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Length <span style={{opacity:0.6}}>(width, along x)</span></td><td className="num">{t.width.toFixed(0)}</td><td><b>Variable</b> -- over the latches and handle</td></tr>
+              <tr><td>Depth <span style={{opacity:0.6}}>(back to front)</span></td><td className="num">{t.depth.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Height</td><td className="num">{t.height.toFixed(0)}</td><td><b>Variable</b></td></tr>
+              <tr><td>Wire cage <span style={{opacity:0.6}}>(inside the latches)</span></td><td className="num">{L ? (L.xr - L.xl).toFixed(0) + ' × ' + (L.zf - L.zb).toFixed(0) : '—'}</td><td>derived: 1 cm in from every side</td></tr>
+              <tr><td>Wire mesh <span style={{opacity:0.6}}>(vertical × horizontal pitch)</span></td><td className="num">{t.wirePitch.toFixed(1) + ' × ' + t.rowPitch.toFixed(1)}</td><td><b>Variable</b> (typical, not measured)</td></tr>
+              <tr><td>Side door <span style={{opacity:0.6}}>(w × h)</span></td><td className="num">{door(L && L.side)}</td><td>derived; toward the {t.sideDoor} end</td></tr>
+              <tr><td>End door <span style={{opacity:0.6}}>(w × h)</span></td><td className="num">{door(L && L.end)}</td><td>derived; on the {t.endDoor} end</td></tr>
+              <tr><td>Tray rim</td><td className="num">3.5</td><td>fixed (typical, not measured)</td></tr>
+              <tr><td>Rounded top edges <span style={{opacity:0.6}}>(radius)</span></td><td className="num">{L ? L.r.toFixed(1) : '—'}</td><td>fixed 3.5, smaller on a tiny crate</td></tr>
+              <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail (caps 1000 full / 200 low)</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            Each wire panel is ONE flat plane with a see-through wire texture (an alpha cutout), not a cylinder per
+            wire, so the whole cage is a few hundred triangles. From far away the holes close up and the crate reads
+            as a dark box.
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Look</h2>
+          <div className="legend">
+            Black epoxy-coated wire mesh on all four sides and the top: close vertical wires crossed by horizontal
+            wires twice as far apart, with open holes you see straight through. The four top edges are rounded, the
+            wire running on over them, and heavier frame wires outline every panel. The side door is on the front
+            long side toward one end, the end door on one short end; each is its own wire frame with two slide-bolt
+            latches on its free edge. A black plastic tray fills the base, its rim a black band round the bottom and
+            its top the crate's floor. A black plastic carry handle sits high on the front. The optional fabric
+            cover (off by default) drapes over the top, back and both ends to the floor, with its front flap rolled
+            up over the side door. Low detail draws the tray and five flat mesh planes, with no frame, latches or
+            handle.
+          </div>
+          <div className="row">
+            <button className="btn" onClick={copy}>Copy as furniture JSON</button>
+            {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
+          </div>
+          <pre className="json">{json}</pre>
+        </div>
+
+        <div className="card full">
+          <h2>3D — dog crate</h2>
+          <ThreeView
+            t={t}
+            buildModel={buildCrateModel}
+            heightOf={tt => tt.height * 0.01}
+          />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Size" />
+        <TweakSlider label="Length (width)" value={t.width} min={50} max={130} step={1} unit="cm"
+          onChange={v => setTweak('width', v)} />
+        <TweakSlider label="Depth" value={t.depth} min={35} max={90} step={1} unit="cm"
+          onChange={v => setTweak('depth', v)} />
+        <TweakSlider label="Height" value={t.height} min={35} max={100} step={1} unit="cm"
+          onChange={v => setTweak('height', v)} />
+
+        <TweakSection label="Wire mesh" />
+        <TweakSlider label="Vertical-wire pitch" value={t.wirePitch} min={1.5} max={6} step={0.1} unit="cm"
+          onChange={v => setTweak('wirePitch', v)} />
+        <TweakSlider label="Horizontal-wire pitch" value={t.rowPitch} min={2} max={12} step={0.5} unit="cm"
+          onChange={v => setTweak('rowPitch', v)} />
+
+        <TweakSection label="Doors (seen from the front)" />
+        <TweakRadio label="Side door" value={t.sideDoor} options={['left', 'right', 'none']}
+          onChange={v => setTweak('sideDoor', v)} />
+        <TweakRadio label="End door" value={t.endDoor} options={['left', 'right', 'none']}
+          onChange={v => setTweak('endDoor', v)} />
+
+        <TweakSection label="Cover" />
+        <TweakToggle label="Fabric cover" value={t.cover} onChange={v => setTweak('cover', v)} />
+
+        <TweakSection label="Colours" />
+        <TweakColor label="Wire" value={t.wireColor}
+          onChange={v => setTweak('wireColor', v)} />
+        <TweakColor label="Tray" value={t.panColor}
+          onChange={v => setTweak('panColor', v)} />
+        <TweakColor label="Handle" value={t.handleColor}
+          onChange={v => setTweak('handleColor', v)} />
+        <TweakColor label="Cover" value={t.coverColor}
+          onChange={v => setTweak('coverColor', v)} />
+
+        <TweakSection label="Render" />
+        <TweakRadio label="Detail" value={t.detail} options={['full', 'low']}
+          onChange={v => setTweak('detail', v)} />
+      </TweaksPanel>
+    </SpecPage>
+  );
+}
+
+// The builder module is an ES module script; wait for it if Babel got here first.
+function mount() { ReactDOM.createRoot(document.getElementById('root')).render(<App />); }
+if (window.FurnitureDogCrate) mount();
+else window.addEventListener('furniture-dog-crate-ready', mount, { once: true });
+
+// Standalone viewing: the shared TweaksPanel stays closed until it receives
+// __activate_edit_mode. Self-post it so the panel is visible with no host.
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>

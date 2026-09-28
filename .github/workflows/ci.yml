@@ -362,6 +362,16 @@ jobs:
           # 0.6 x full).
           set -euo pipefail
           node scripts/test-balcony.mjs
+      - name: Dog crate builder envelope, wire cutout, doors, cover and caps
+        run: |
+          # Asserts src/furniture/dog-crate.js beyond the generic contract: the
+          # envelope with and without the cover and each door, the wire mesh
+          # as one kept alpha-cutout mesh (tile, max-alpha mips, uv pitch),
+          # mitred rounded top edges, door frames and latches where the
+          # params put them, the cover off by default, and the caps (1000
+          # full / 200 low, low <= 0.3 x full).
+          set -euo pipefail
+          node scripts/test-dog-crate.mjs
       - name: Desk strip as a room light channel; Ambient row comes from rooms.json
         run: |
           # Asserts a named light channel (a desk LED strip bound in rooms.json
