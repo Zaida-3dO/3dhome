@@ -141,6 +141,10 @@ check('first build frames the item with isoDistance()',
 check('the four presets, in order, default noon',
   /const SPEC_SUN_PRESETS = \['morning', 'noon', 'evening', 'night'\];/.test(src) &&
   /return 'noon';\s*\n\}/.test(src));
+check('a page may open on another preset (initialSun), still validated, ?sun= first',
+  /if \(SPEC_SUN_PRESETS\.indexOf\(pageDefault\) !== -1\) return pageDefault;/.test(src) &&
+  /React\.useState\(\(\) => specInitialSun\(initialSun\)\)/.test(src) &&
+  src.indexOf("get('sun')") < src.indexOf('return pageDefault;'));
 check('?sun=<preset> pins the opening preset (validated against the list)',
   /get\('sun'\)[\s\S]{0,80}SPEC_SUN_PRESETS\.indexOf\(q\) !== -1\) return q;/.test(src));
 check('a button per preset drives setSunPreset, the active one marked',

@@ -109,7 +109,8 @@
    The strip is built by src/strip-light.js (unit-tested by
    scripts/test-strip-light.mjs). This page is a harness around it:
 
-   * CLOSE-UP (spec-three.jsx ThreeView, spec lighting with its env map):
+   * CLOSE-UP (spec-three.jsx ThreeView, lit with the house's own rig and
+     its time-of-day control -- src/render-rig.js):
      the four techniques side by side under four shelves, A B C D left to
      right.
    * PLAYGROUND (its own renderer, so it can emulate the house): floor,
@@ -121,7 +122,9 @@
    * LIGHTING MODE: "house" is the live scene's rig (ACES tone mapping at
      0.85, the hemisphere fill, NO environment map, the live finishes for
      metal/mirror) so colours read as they will in the house; "spec" is the
-     spec pages' rig (ambient + key + fill + an env cube).
+     spec pages' OLD rig (ambient + key + fill + an env cube), kept here
+     for comparison only -- the playground only; the close-up views no
+     longer have it.
    * TIER emulates the house's quality tiers: pixel ratio, shadows, and the
      strip caps (low: no strip lights at all, as the house drops ambient
      strips on low today; mid: B capped at MID_MAX_N lights per strip --
@@ -719,9 +722,9 @@ function App() {
           <div className="legend">
             Close-up below: the same shelf, strip and counter four times, one technique per view -- each its own scene, so
             nothing spills between them and every light keeps its full 2.5 m reach. The camera sits just below the shelf
-            (the tube shows) and above the counter (its wash shows); drag any view to orbit it. Both the close-up and the
-            playground follow the Lighting control: "house" is the live scene's night rig (no environment map), "spec" the
-            spec pages' own. D's glow cards carry the shared colour times the colour of the surface they lie on (a grey
+            (the tube shows) and above the counter (its wash shows); drag any view to orbit it. The close-up is lit as the
+            house is, with its own time-of-day buttons (night for the strips); the playground follows the Lighting control:
+            "house" is the live scene's night rig (no environment map), "spec" the spec pages' old rig. D's glow cards carry the shared colour times the colour of the surface they lie on (a grey
             worktop glows dimmer than a white wall); a different surface inside a card's area (a black hob) is painted as if
             it were the worktop -- the limit of a decal. The variants above are the owner's ladder: <b>C</b> recommended,
             <b>B N=1</b> the real-light fallback, <b>D</b> the last resort; "Strips only" turns the main light and the sun
@@ -757,13 +760,13 @@ function App() {
 
         {t.closeup && (
           <div className="card full">
-            <h2>Close-up — one bay per technique (follows the Lighting control)</h2>
+            <h2>Close-up — one bay per technique (lit as in the house)</h2>
             <div className="bays">
               {SL.TECHNIQUES.map(tech => (
                 <div key={tech}>
                   <div className="bay-label">{SL.TECHNIQUE_LABELS[tech]}</div>
                   <ThreeView t={t} buildModel={BAY_BUILDERS[tech]} heightOf={() => 1.1}
-                    initialView={BAY_VIEW} rigOf={tt => tt.lighting} />
+                    initialView={BAY_VIEW} initialSun="night" />
                 </div>
               ))}
             </div>

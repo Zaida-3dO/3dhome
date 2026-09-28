@@ -48,6 +48,11 @@
        which has to look UP at tubes mounted under shelves. Pages that do
        not pass it are unaffected.
 
+   initialSun  [optional]
+       'morning' | 'noon' | 'evening' | 'night': the time of day the view
+       opens on (default noon; ?sun= in the URL beats it). StripLightSpec's
+       close-up opens on night, where strip lights are judged.
+
    rigOf(t)  [retired, ignored]
        Chose between the old spec lights and a copy of the house's night
        rig. Every view now renders with the house's own rig (below), so there
@@ -189,22 +194,24 @@ const SPEC_RIG_READY = (function loadSpecRig() {
   return window.specRenderRigReady;
 })();
 
-/** The time-of-day preset a view opens on: ?sun=<preset>, else noon. */
-function specInitialSun() {
+/** The time-of-day preset a view opens on: ?sun=<preset>, else the page's
+    initialSun prop, else noon. */
+function specInitialSun(pageDefault) {
   try {
     const q = new URLSearchParams(window.location.search).get('sun');
     if (SPEC_SUN_PRESETS.indexOf(q) !== -1) return q;
   } catch (e) { /* no location: the default */ }
+  if (SPEC_SUN_PRESETS.indexOf(pageDefault) !== -1) return pageDefault;
   return 'noon';
 }
 
-function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeight, initialView, rigOf }) {
+function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeight, initialView, initialSun, rigOf }) {
   const canvasRef = React.useRef(null);
   const stateRef = React.useRef({});
   // keep latest callbacks without re-running the init effect
   const cbRef = React.useRef({});
   cbRef.current = { buildModel, animate, heightOf, backgroundOf, initialView };
-  const [sunPreset, setSunPreset] = React.useState(specInitialSun);
+  const [sunPreset, setSunPreset] = React.useState(() => specInitialSun(initialSun));
 
   // ---- initialise scene once ----------------------------------------
   React.useEffect(() => {
@@ -454,6 +461,9 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
       applyFinishes: () => { if (lit.rig) lit.rig.applyLiveFinishes(sceneRoot); },
       _shellWalls: [], _ceiling: null,
     };
+    // For browser checks (the canvas cannot be read back from outside a
+    // frame): the view's state, its lights included.
+    canvas.specView = stateRef.current;
     lit.preset = SPEC_SUN_PRESETS.indexOf(sunPreset) !== -1 ? sunPreset : 'noon';
     let disposed = false;
     if (window.specRenderRig) attachRig(window.specRenderRig);
