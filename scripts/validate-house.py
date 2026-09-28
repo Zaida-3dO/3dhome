@@ -1045,6 +1045,53 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
     check_climate_binding(rooms_doc, sensors, geo_room_ids, (major, minor), report)
     check_vacuum_binding(rooms_doc, geo, sensors, geo_room_ids, (major, minor), report)
     check_plant_binding(rooms_doc, geo, sensors, (major, minor), report)
+    check_item_binding(rooms_doc, geo, sensors, (major, minor), report)
+
+
+def check_item_binding(rooms_doc, geo, sensors, version, report):
+    """`sensors.items`: furniture item id -> one tap card or a list of cards,
+    each optionally scoped to a `region` of the item's width (src/item-cards.js).
+    The item is what gets tapped, so an id with no furniture item behind it can
+    never be reached -- an error; so is a region whose `from` is not below its
+    `to` (the engine drops that card). A region reaching past the item's
+    authored `params.width` is warned (that part can never be tapped), as are
+    two regions of one item that overlap (the first listed wins there). The
+    schema already enforces the shape and the domains.
+    """
+    items = sensors.get("items") or {}
+    if not items:
+        return
+    if version < (1, 6):
+        report.warn(
+            "rooms.json/schemaVersion",
+            "`sensors.items` needs schemaVersion 1.6 or newer, but this profile "
+            f"declares '{rooms_doc.get('schemaVersion')}' -- bump it; nothing else enforces this coupling",
+        )
+    furniture = {f.get("id"): f for f in geo.get("furniture", [])}
+    for iid, binding in items.items():
+        where = f"rooms.json/sensors/items/{iid}"
+        if iid not in furniture:
+            report.error(where, f"item card bound to furniture item '{iid}', which has no matching item in geometry.json's furniture")
+        cards = binding if isinstance(binding, list) else [binding]
+        width = ((furniture.get(iid) or {}).get("params") or {}).get("width")
+        spans = []
+        for i, card in enumerate(cards):
+            region = (card or {}).get("region") if isinstance(card, dict) else None
+            if not isinstance(region, dict):
+                continue
+            lo, hi = region.get("from"), region.get("to")
+            if not (isinstance(lo, (int, float)) and isinstance(hi, (int, float))):
+                continue
+            here = f"{where}/{i}/region" if isinstance(binding, list) else f"{where}/region"
+            if not lo < hi:
+                report.error(here, f"region from ({lo}) must be below to ({hi}); the engine drops this card")
+                continue
+            if isinstance(width, (int, float)) and hi > width + 1e-9:
+                report.warn(here, f"region reaches {hi} cm but the item is {width} cm wide; the part past its width can never be tapped")
+            for (plo, phi, pi) in spans:
+                if lo < phi and plo < hi:
+                    report.warn(here, f"region {lo}-{hi} overlaps card {pi}'s region {plo}-{phi}; taps in the overlap open card {pi}")
+            spans.append((lo, hi, i))
 
 
 def check_plant_binding(rooms_doc, geo, sensors, version, report):

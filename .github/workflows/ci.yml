@@ -350,6 +350,17 @@ jobs:
           # and a card with no controls. Runs against scripts/fake-ha-websocket.mjs.
           set -euo pipefail
           node scripts/test-plant-status.mjs
+      - name: Furniture item tap cards (fake HA)
+        run: |
+          # src/item-cards.js + the client's raw-state record + the card
+          # markup: sensors.items bindings, the region convention (cm from the
+          # item's LEFT edge seen from its FRONT, pinned against the real
+          # cabinet builder), region picking and fall-through, clocks and
+          # radiators, media / light / reading rows (Offline, never 0), every
+          # control disabled offline, and a light row's command reaching HA.
+          # Runs against scripts/fake-ha-websocket.mjs.
+          set -euo pipefail
+          node scripts/test-item-cards.mjs
       - name: Balcony builder envelope, bar gap, side modes and caps
         run: |
           # Asserts src/furniture/balcony.js beyond the generic contract: the
@@ -750,6 +761,8 @@ jobs:
         run: python scripts/test-validate-vacuum.py
       - name: sensors.plants schema and validator checks (moisture or watering, unknown furniture item, thresholds, version)
         run: python scripts/test-validate-plant.py
+      - name: sensors.items schema and validator checks (row domains, regions, unknown furniture item, version)
+        run: python scripts/test-validate-items.py
       - name: sh3d-furniture / furniture-apply tests
         run: python scripts/test-sh3d-furniture.py
 

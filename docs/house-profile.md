@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.5"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key and `1.5` its `plants` key. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.6"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key and `1.6` its `items` key. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -1339,6 +1339,77 @@ lists every bound plant with the same reading. A house with no Home Assistant
 `schemaVersion` `"1.5"`; the validator errors on an item id the geometry does
 not have and on `dryBelow` not below `wetAbove`.
 
+#### Furniture item cards
+
+```json
+"sensors": {
+  "items": {
+    "bedroom_tv": {
+      "media": [
+        { "entity": "media_player.example_tv",      "label": "TV",   "role": "tv" },
+        { "entity": "media_player.example_tv_cast", "label": "Cast", "role": "cast" }
+      ]
+    },
+    "lounge_tv_console": [
+      { "title": "Cupboard", "region": { "from": 0, "to": 50 },
+        "readings": [
+          { "entity": "sensor.example_router_temperature", "label": "Router",
+            "humidity": "sensor.example_router_humidity" }
+        ] },
+      { "title": "Sound system", "region": { "from": 50, "to": 130 },
+        "media": [ { "entity": "media_player.example_receiver", "role": "receiver" } ],
+        "readings": [ { "entity": "sensor.example_shelf_temperature" } ] }
+    ],
+    "bedroom_bedside": {
+      "lights": [
+        { "entity": "light.example_bedside_all", "label": "All drawers" },
+        { "entity": "light.example_bedside_top", "label": "Top drawer" }
+      ]
+    }
+  }
+}
+```
+
+Keyed by the **furniture item** that is tapped, found by where the tap lands,
+exactly like a robot vacuum. The value is **one card**, or a **list of cards**
+each scoped to a `region` of the item. A card has an optional `title` (else the
+item's `label`) and any of three row lists, at least one of them:
+
+- **`media`** -- a `media_player.*` row: its state (Off / On / Idle / Playing
+  with the title / **Offline**), a **power switch** (`media_player.turn_on` /
+  `turn_off`, disabled when the device reports it cannot), a **volume** slider
+  while it is on and takes volume (`volume_set`), and **source** and **sound
+  mode** pickers when it lists them (`select_source`, `select_sound_mode` -- an
+  AV receiver). `role` (`tv` / `cast` / `receiver` / `speaker`) picks the icon.
+- **`lights`** -- a `light.*` row: on/off and brightness, plus a colour square
+  when the light's `supported_color_modes` include a colour mode.
+- **`readings`** -- a read-only `sensor.*` row: the value with its
+  `unit_of_measurement`, and an optional `humidity` partner beside it. An
+  unavailable sensor reads **Offline**, never 0.
+
+**Regions.** `region: { from, to }` is in **cm along the item's width,
+measured from its LEFT edge as seen from its FRONT** -- standing in front of the
+item, facing it. That is the order a cabinet's `fronts[].cells` are listed in,
+so a 180 cm console authored as cells `[door 50, stack 80, door 50]` has its
+left door at `0`-`50`, the stack at `50`-`130` and its right door at
+`130`-`180`. A tap picks the card whose region holds it (the first listed on a
+shared edge), else a card with no region (the whole item), else nothing: a tap
+on a part no card covers is a plain furniture tap and selects the room as
+before.
+
+Two kinds of furniture need **no entry here**: any `wall-clock` item opens a
+card with the local time and date, and any `radiator` item opens the climate
+card of the room it stands in (`climate` above; nothing if that room has
+none). A light channel drawn on an item (a bedside table's LED strip) is still
+its own light tap and wins over the item's card.
+
+Every control is disabled while Home Assistant is offline and nothing is sent;
+a house with no Home Assistant (the demo) shows sample devices that the
+controls move. `items` needs `schemaVersion` `"1.6"`; the validator errors on
+an item id the geometry does not have and on a region whose `from` is not below
+its `to`, and warns on a region past the item's `params.width` and on two
+overlapping regions.
+
 Leave `url` and `fallbackUrl` out of a committed profile. A hostname in a
 tracked file discloses infrastructure; supply them through runtime config
 instead. And, again: **the token is never in this file.**
@@ -1492,6 +1563,9 @@ that a JSON Schema cannot express:
   declares `schemaVersion` 1.4+
 - `sensors.plants` item ids resolving against the geometry's furniture, `dryBelow`
   below `wetAbove`, and appearing only in a profile that declares `schemaVersion` 1.5+
+- `sensors.items` item ids resolving against the geometry's furniture, each
+  region's `from` below its `to` (a warning past the item's width or overlapping
+  another region), and appearing only in a profile that declares `schemaVersion` 1.6+
 - a `site.latitude` precise enough to locate a building rather than a city
 - which side of its wall each window, curtain and wall-anchored item faces,
   using the same probe the engine uses: **error** if the room is on neither

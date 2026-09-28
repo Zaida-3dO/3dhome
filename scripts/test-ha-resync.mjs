@@ -436,9 +436,10 @@ await quiet(async () => {
     /const press = cmd => \{\s*if \(writeBlocked\(\)\) return;/,                                          // curtain open/close
     /const apply = \(v, how\) => \{\s*if \(writeBlocked\(\)\) return;/,                                   // climate slider + steps
     /cp\.addEventListener\('input', \(\) => \{\s*if \(writeBlocked\(\)\) return;/,                      // accent colour square
+    /function itemSend\(command, key, delay\) \{\s*if \(writeBlocked\(\)\) return;/,                  // every furniture item-card control
   ];
   guards.forEach((re, i) => check('popover write handler ' + (i + 1) + '/' + guards.length + ' returns first while HA offline (no preview)', re.test(src)));
-  check('popover guard count: exactly the 6 write paths', (src.match(/if \(writeBlocked\(\)\) return;/g) || []).length === 6);
+  check('popover guard count: exactly the 7 write paths', (src.match(/if \(writeBlocked\(\)\) return;/g) || []).length === 7);
   check('popover climate samples only with no HA configured', /if \(c == null && !reading\) \{/.test(src) && !/offlineConn/.test(src));
   check('popover status table has no polling entry', !/\n  polling: \[/.test(src) && /\n  haOffline: \['bad', 'HA offline'/.test(src));
   const html = read('index.html');

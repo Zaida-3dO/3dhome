@@ -25,6 +25,167 @@
       "description": "A Home Assistant entity id, e.g. \"light.demo_kitchen_ceiling\" or \"binary_sensor.demo_hall_motion\". The domain prefix is what tells the engine how to read the state: a `light.*` is switched and dimmed, while a `binary_sensor.*` is read as on/off only.",
       "pattern": "^[a-z_]+\\.[a-z0-9_]+$"
     },
+    "itemCard": {
+      "type": "object",
+      "description": "One tap card for a furniture item: an optional title, an optional region of the item's width it answers for, and at least one row list. Needs rooms schemaVersion 1.6.",
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "media"
+          ]
+        },
+        {
+          "required": [
+            "lights"
+          ]
+        },
+        {
+          "required": [
+            "readings"
+          ]
+        }
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The card's title. Without it the furniture item's `label` is used."
+        },
+        "region": {
+          "type": "object",
+          "description": "The part of the item this card answers for, in cm along the item's WIDTH measured from its LEFT edge as seen from its FRONT (standing in front of it, facing it). This is the order a cabinet's `fronts[].cells` are listed in, so a console authored as cells [door 50, stack 80, door 50] has its left door at 0-50, the stack at 50-130 and the right door at 130-180. A tap picks the card whose region holds it (the first listed on a shared edge), else a card with no region, else nothing: a tap on a part no card covers is a plain furniture tap. `from` must be below `to`.",
+          "required": [
+            "from",
+            "to"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "from": {
+              "type": "number",
+              "minimum": 0,
+              "description": "cm from the item's left edge where the region starts."
+            },
+            "to": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "cm from the item's left edge where the region ends."
+            }
+          }
+        },
+        "media": {
+          "type": "array",
+          "minItems": 1,
+          "description": "media_player rows: the state (Off / On / Idle / Playing + the title / Offline), a power switch (media_player.turn_on / turn_off), a volume slider when the device takes volume, and source / sound-mode pickers when it lists them (an AV receiver).",
+          "items": {
+            "type": "object",
+            "required": [
+              "entity"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "entity": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/entityId"
+                  },
+                  {
+                    "pattern": "^media_player\\."
+                  }
+                ],
+                "description": "The `media_player.*` entity."
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional row label. Without it the entity's own friendly_name is shown."
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "tv",
+                  "cast",
+                  "receiver",
+                  "speaker"
+                ],
+                "description": "Optional: picks the row's icon (and, on the demo house, what the sample device can do)."
+              }
+            }
+          }
+        },
+        "lights": {
+          "type": "array",
+          "minItems": 1,
+          "description": "light rows: on/off, brightness, and a colour square for a light whose supported_color_modes include a colour mode.",
+          "items": {
+            "type": "object",
+            "required": [
+              "entity"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "entity": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/entityId"
+                  },
+                  {
+                    "pattern": "^light\\."
+                  }
+                ],
+                "description": "The `light.*` entity."
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional row label. Without it the entity's own friendly_name is shown."
+              }
+            }
+          }
+        },
+        "readings": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Read-only sensor rows: the value and its unit_of_measurement, optionally with a humidity partner. An unavailable sensor reads 'Offline', never 0.",
+          "items": {
+            "type": "object",
+            "required": [
+              "entity"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "entity": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/entityId"
+                  },
+                  {
+                    "pattern": "^sensor\\."
+                  }
+                ],
+                "description": "The `sensor.*` entity (a temperature, typically)."
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional row label. Without it the entity's own friendly_name is shown."
+              },
+              "humidity": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/entityId"
+                  },
+                  {
+                    "pattern": "^sensor\\."
+                  }
+                ],
+                "description": "Optional humidity `sensor.*` shown beside the reading."
+              }
+            }
+          }
+        }
+      }
+    },
     "hexColor": {
       "type": "string",
       "description": "An sRGB colour as a CSS hex string, e.g. \"#ece9e1\". Authored as a string (not a JS 0x number) so the file stays valid JSON and is greppable/diffable.",
@@ -4703,6 +4864,27 @@
                     "description": "Moisture % above which the status reads Wet, when no `status` helper decides."
                   }
                 }
+              }
+            },
+            "items": {
+              "type": "object",
+              "description": "Furniture item id -> one tap card, or a list of cards each scoped to a `region` of the item's width. The item id MUST exist in the paired geometry profile's `furniture[].id`. Tapping the item opens its card: media player rows, light rows and read-only reading rows, each bound to its own entity. A `wall-clock` item (the local time) and a `radiator` item (its room's `climate` card) are tappable with no entry here. Needs rooms schemaVersion 1.6.",
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_-]*$"
+              },
+              "additionalProperties": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/itemCard"
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "$ref": "#/$defs/itemCard"
+                    }
+                  }
+                ]
               }
             }
           },
