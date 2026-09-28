@@ -18,6 +18,9 @@
  *   2b. The step back follows the tapped face's world normal, so a tilted
  *      view cannot step a wall-top tap off the wall into a room, and a steep
  *      tap on a face still reaches a room polygon drawn a few cm short.
+ *   2c. A door keeps stepping (up to DOOR_REACH_M) out of its doorway gap
+ *      to the tapped side's room; a wall keeps the single step.
+ *   2d. A back face (DoubleSide panel) is stepped toward the camera.
  *   3. A faded (see-through) wall passes the tap to the room behind it.
  *   4. Furniture (a merged bucket, or a mesh under a tagged group) passes the
  *      tap to the floor of the room it stands in.
@@ -220,6 +223,65 @@ console.log('2b. the step follows the tapped face, not the ray\'s tilt');
   ok(nf.x === -0.6 && nf.y === 0.8 && nf.z === -0, 'a hit with no face steps back along the reversed ray', nf);
 }
 
+console.log('2c. a door steps on out of its doorway gap');
+{
+  // Two rooms whose polygons leave a 16 cm doorway gap (x 292..308) around a
+  // closed door leaf standing in the wall line at x=300 (4 cm thick). One
+  // 5 cm step from either face lands in the gap.
+  const gapRooms = [
+    { id: 'room_a', poly: [[10, 10], [292, 10], [292, 275], [10, 275]] },
+    { id: 'room_b', poly: [[308, 10], [555, 10], [555, 275], [308, 275]] },
+  ];
+  const doorScene = (profileId, tagged = true) => {
+    const sc = new THREE.Scene();
+    const mount = new THREE.Group();
+    mount.position.set(wallX, 0, mid(140));
+    if (tagged) mount.userData = { doorId: 'D', doorProfileId: profileId, maxAngleDeg: 90, swingSign: 1 };
+    const pivot = new THREE.Group();
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.04, 2.0, 0.8), new THREE.MeshStandardMaterial());
+    leaf.position.set(0, 1.0, 0);
+    pivot.add(leaf); mount.add(pivot); sc.add(mount);
+    sc.updateMatrixWorld(true);
+    return sc;
+  };
+  const fromA = [tx(150), 1.6, mid(140)], fromB = [tx(450), 1.6, mid(140)], onLeaf = [wallX, 1.0, mid(140)];
+  const d = doorScene('hall_door');
+  const a = tap(d, fromA, onLeaf), b = tap(d, fromB, onLeaf);
+  ok(a.hits[0] && R.isDoor(a.hits[0].object), 'fixture: the nearest hit is the door leaf');
+  const one = toHouse(a.hits[0].point.x - R.STEP_BACK_M, a.hits[0].point.z);
+  ok(R.roomAt(gapRooms, one[0], one[1]) === null, 'control: a single 5 cm step from the leaf lands in the gap');
+  ok(R.pickRoom(a.hits, a.dir, gapRooms, toHouse).roomId === 'room_a', 'a door tapped from A selects A');
+  ok(R.pickRoom(b.hits, b.dir, gapRooms, toHouse).roomId === 'room_b', 'the same door tapped from B selects B');
+  const unnamed = doorScene(null);
+  const u = tap(unnamed, fromA, onLeaf);
+  ok(R.pickRoom(u.hits, u.dir, gapRooms, toHouse).roomId === 'room_a', 'a door with no profile id (doorProfileId null) still steps on');
+  const plain = doorScene(null, false);
+  const w = tap(plain, fromA, onLeaf);
+  ok(R.pickRoom(w.hits, w.dir, gapRooms, toHouse).roomId === null, 'control: the same slab untagged is a wall and keeps the single step');
+  // Reach is bounded: a room 70 cm from the leaf is out of reach, 55 cm is in.
+  const far = [{ id: 'room_a', poly: [[10, 10], [228, 10], [228, 275], [10, 275]] }];
+  ok(R.pickRoom(a.hits, a.dir, far, toHouse).roomId === null, 'nothing within DOOR_REACH_M -> nothing');
+  const near = [{ id: 'room_a', poly: [[10, 10], [245, 10], [245, 275], [10, 275]] }];
+  ok(R.pickRoom(a.hits, a.dir, near, toHouse).roomId === 'room_a', 'a room ~55 cm from the leaf is within reach');
+}
+
+console.log('2d. a back face is stepped toward the camera, not through the panel');
+{
+  // A DoubleSide panel (a thin leaf, glass...) hit from its BACK: its own
+  // face normal points away from the camera and must be flipped.
+  const sc = new THREE.Scene();
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 2), new THREE.MeshStandardMaterial({ side: THREE.DoubleSide }));
+  panel.rotation.y = -Math.PI / 2;           // front face (+z local) now faces -x: toward room A
+  panel.position.set(wallX, 1, mid(140));
+  sc.add(panel); sc.updateMatrixWorld(true);
+  const t = tap(sc, [tx(450), 1.6, mid(140)], [wallX, 1.0, mid(140)]);   // from B: the back face
+  const n = t.hits[0].face.normal.clone().transformDirection(panel.matrixWorld);
+  ok(n.x < -0.99, 'fixture: the hit face\'s own normal points away from the camera (toward A)');
+  const sb = R.stepBack(t.hits[0], t.dir);
+  ok(sb.x > 0.99, 'stepBack turns it toward the camera (toward B)', sb);
+  ok(R.pickRoom(t.hits, t.dir, rooms, toHouse).roomId === 'room_b', 'so the back face selects B, the side tapped');
+}
+
 console.log('3. a faded wall passes the tap to the room behind it');
 {
   const s = build({ fadedDivider: true });
@@ -263,11 +325,29 @@ console.log('6. roomAt uses the house-cm polygons');
   ok(R.roomAt([{ id: 'bad', poly: null }], 0, 0) === null, 'a room without a polygon is skipped');
 }
 
+console.log('6b. roomPolygons and sceneToHouse, against the real loader');
+{
+  const { HouseLoader } = await imp('src/house-loader.js');
+  const geo = JSON.parse(fs.readFileSync(path.join(root, 'houses/demo/geometry.json'), 'utf8'));
+  const w = console.warn; console.warn = () => {};
+  let house; try { house = HouseLoader.compile(geo, ''); } finally { console.warn = w; }
+  const T = house.transform, back = R.sceneToHouse(T.S, T.OX, T.OY);
+  const [hx, hy] = back(T.tx(123.4), T.tz(567.8));
+  ok(Math.abs(hx - 123.4) < 1e-9 && Math.abs(hy - 567.8) < 1e-9, 'sceneToHouse inverts the loader\'s own tx/tz', [hx, hy]);
+  const polys = R.roomPolygons(house.rooms);
+  ok(polys.length === Object.keys(house.rooms).length && polys.length > 0 && polys.every(p => house.rooms[p.id].poly === p.poly),
+    'every compiled room keeps its own poly');
+  const rect = R.roomPolygons({ r: { x1: 1, y1: 2, x2: 3, y2: 4 } })[0];
+  ok(JSON.stringify(rect) === JSON.stringify({ id: 'r', poly: [[1, 2], [3, 2], [3, 4], [1, 4]] }), 'a room with no poly falls back to its rect', rect);
+  ok(R.roomAt([rect], 2, 3) === 'r' && R.roomAt([rect], 3.5, 3) === null, 'and the rect contains what it should');
+}
+
 console.log('7. the scene\'s room click is wired through pickRoom');
 {
   const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
-  ok(/import \{ pickRoom \} from '\.\/room-pick\.js';/.test(src), 'home3d-scene.js imports pickRoom');
-  ok(/pickRoom\(rc\.intersectObjects\(scene\.children, true\), rc\.ray\.direction/.test(src), 'the click handler calls it with the ray');
+  ok(/import \{ pickRoom, roomPolygons, sceneToHouse \} from '\.\/room-pick\.js';/.test(src), 'home3d-scene.js imports pickRoom and its helpers');
+  ok(/pickRoom\(rc\.intersectObjects\(scene\.children, true\), rc\.ray\.direction,\s*roomPolygons\(ROOMS\), sceneToHouse\(S, OX, OY\)\)/.test(src),
+    'the click handler calls it with the ray, the rooms and the current transform');
   ok(!/\.find\(x => x\.object\.userData\.clickable\)/.test(src), 'the old first-catcher rule is gone');
 }
 

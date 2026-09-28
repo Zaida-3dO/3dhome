@@ -20,7 +20,8 @@
  *     STEP_BACK_M toward the camera and the room whose floor polygon (house
  *     cm) contains that point wins. No room -> the tap selects nothing (the
  *     outside face of an exterior wall). A solid TOP (facing up, above
- *     TOP_MIN_M: a wall top seen from above) selects nothing outright.
+ *     TOP_MIN_M: a wall top seen from above) selects nothing outright. A
+ *     door keeps stepping, up to DOOR_REACH_M, out of its doorway gap.
  *
  * "Toward the camera" is along the tapped FACE's normal, turned to face the
  * camera, when the hit carries a face (every mesh hit does); along the
@@ -54,10 +55,47 @@ export const STEP_BACK_M = 0.05;
  */
 export const TOP_MIN_M = 0.5;
 
+/**
+ * A DOOR (leaf or frame) is stepped back further than a wall: repeated
+ * STEP_BACK_M steps along the same camera-facing normal, up to this far
+ * (scene metres), first room reached wins. A door stands in its doorway,
+ * the gap between two rooms' polygons, so one 5 cm step from the leaf
+ * usually lands in that gap -- in the real profile most open-door taps
+ * selected nothing. A wall keeps the single step: stepping further from a
+ * wall top or an exterior face would reach a room it does not bound.
+ */
+export const DOOR_REACH_M = 0.6;
+
+/** True when the object or any ancestor is a door assembly (home3d-scene tags its mount with doorProfileId). */
+export function isDoor(obj) {
+  for (let o = obj; o; o = o.parent) if (o.userData && o.userData.doorProfileId !== undefined) return true;
+  return false;
+}
+
 /** True when the object or any ancestor is furniture (src/furniture.js tags). */
 export function isFurniture(obj) {
   for (let o = obj; o; o = o.parent) if (o.userData && o.userData.furniture) return true;
   return false;
+}
+
+/**
+ * The scene's rooms as pickRoom's [{ id, poly }], in house cm: each room's
+ * poly, else its x1/y1/x2/y2 rect -- the same shape its floor click-catcher
+ * is built from.
+ */
+export function roomPolygons(rooms) {
+  return Object.keys(rooms || {}).map(id => {
+    const rm = rooms[id];
+    return { id, poly: rm.poly || [[rm.x1, rm.y1], [rm.x2, rm.y1], [rm.x2, rm.y2], [rm.x1, rm.y2]] };
+  });
+}
+
+/**
+ * The inverse of the scene transform tx = (x - OX) * S, tz = (y - OY) * S:
+ * scene (x, z) metres -> house [x, y] cm.
+ */
+export function sceneToHouse(S, OX, OY) {
+  return (x, z) => [x / S + OX, z / S + OY];
 }
 
 /** The room (by id) whose house-cm polygon contains (hx, hy), or null. */
@@ -122,8 +160,13 @@ export function pickRoom(hits, direction, rooms, toHouse) {
     if (isFurniture(o)) continue;
     const s = stepBack(h, direction);
     if (s.y > 0.9 && h.point.y > TOP_MIN_M) return { roomId: null, via: 'wall', hit: h };
-    const [hx, hy] = toHouse(h.point.x + s.x * STEP_BACK_M, h.point.z + s.z * STEP_BACK_M);
-    return { roomId: roomAt(rooms || [], hx, hy), via: 'wall', hit: h };
+    const steps = isDoor(o) ? Math.round(DOOR_REACH_M / STEP_BACK_M) : 1;
+    for (let k = 1; k <= steps; k++) {
+      const [hx, hy] = toHouse(h.point.x + s.x * STEP_BACK_M * k, h.point.z + s.z * STEP_BACK_M * k);
+      const roomId = roomAt(rooms || [], hx, hy);
+      if (roomId) return { roomId, via: 'wall', hit: h };
+    }
+    return { roomId: null, via: 'wall', hit: h };
   }
   return { roomId: null, via: 'none', hit: null };
 }
