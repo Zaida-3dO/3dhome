@@ -992,6 +992,8 @@
 
         { "if": { "properties": { "type": { "const": "dining-table" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_dining-table" } } } },
 
+        { "if": { "properties": { "type": { "const": "dog-crate" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_dog-crate" } } } },
+
         { "if": { "properties": { "type": { "const": "fridge-freezer" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_fridge-freezer" } } } },
 
         { "if": { "properties": { "type": { "const": "gaming-chair" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_gaming-chair" } } } },
@@ -1814,6 +1816,81 @@
           "exclusiveMinimum": 0,
           "default": 22,
           "description": "cm, floor to the crossbar frame's centre."
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "furnitureParams_dog-crate": {
+      "type": "object",
+      "description": "Params for `dog-crate` (src/furniture/dog-crate.js): a folding two-door wire dog crate -- black wire mesh panels (alpha-cutout planes, not a cylinder per wire) with rounded top edges, a side door on the FRONT long side and an end door, each with two slide-bolt latches, a black plastic tray and a carry handle. `width` is the crate's LENGTH (along x), `depth` back to front, `height` floor to top; the BACK (z = 0) is the side that goes against a wall. The envelope is ALWAYS width x depth x height: the wire cage sits 1 cm in from every side, so the latches and the handle stay inside it. Left and right are as seen from the front (+x is right). Each `default` equals dog-crate.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": {
+          "type": "number",
+          "minimum": 30,
+          "default": 109,
+          "description": "cm, the crate's length over the latches and handle. dog-crate.js floors this at 30."
+        },
+        "depth": {
+          "type": "number",
+          "minimum": 25,
+          "default": 72,
+          "description": "cm, back to front. dog-crate.js floors this at 25."
+        },
+        "height": {
+          "type": "number",
+          "minimum": 25,
+          "default": 76,
+          "description": "cm, floor to the top. dog-crate.js floors this at 25."
+        },
+        "wirePitch": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 2.5,
+          "description": "cm, the vertical wires' centre spacing along each panel (clamped 1-10). Typical, not measured."
+        },
+        "rowPitch": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 5,
+          "description": "cm, the horizontal wires' centre spacing up each panel (clamped 1-15). Typical, not measured."
+        },
+        "sideDoor": {
+          "type": "string",
+          "enum": ["left", "right", "none"],
+          "default": "right",
+          "description": "The side door on the front long side: toward the left or right end, or none."
+        },
+        "endDoor": {
+          "type": "string",
+          "enum": ["left", "right", "none"],
+          "default": "left",
+          "description": "The end door: on the left (-x) or right (+x) end, or none."
+        },
+        "cover": {
+          "type": "boolean",
+          "default": false,
+          "description": "true = a fabric crate cover over the top, back and both ends to the floor, its front flap rolled up over the side door. Off by default."
+        },
+        "wireColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1b1b1d",
+          "description": "The wire mesh, frame and door frames (satin); the latches (metal)."
+        },
+        "panColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#141415",
+          "description": "The plastic tray."
+        },
+        "handleColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#1f1f21",
+          "description": "The plastic carry handle."
+        },
+        "coverColor": {
+          "$ref": "#/$defs/hexColor",
+          "default": "#2a2a2d",
+          "description": "The optional cover's fabric."
         }
       },
       "additionalProperties": false

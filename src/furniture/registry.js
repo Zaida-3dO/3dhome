@@ -49,6 +49,8 @@ export const REGISTRY = Object.freeze({
 
   'dining-table': { path: 'dining.js', key: 'dining-table', spec: 'DiningSpec' },
 
+  'dog-crate': { path: 'dog-crate.js', key: null, spec: 'DogCrateSpec' },
+
   'fridge-freezer': { path: 'kitchen.js', key: 'fridge-freezer', spec: 'KitchenSpec' },
 
   'gaming-chair': { path: 'gaming-chair.js', key: null, spec: 'GamingChairSpec' },
