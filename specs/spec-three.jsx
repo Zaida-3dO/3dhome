@@ -53,6 +53,12 @@
        opens on (default noon; ?sun= in the URL beats it). StripLightSpec's
        close-up opens on night, where strip lights are judged.
 
+   nightRoom  [optional]
+       'spots' (default) | 'downlights': which of the house's two kinds of
+       room lighting the item stands under at night (GENERIC_ROOMS in
+       render-rig.js) -- a bedroom's single spot-cluster light, or a living
+       room's six downlights. ?room= in the URL beats it.
+
    rigOf(t)  [retired, ignored]
        Chose between the old spec lights and a copy of the house's night
        rig. Every view now renders with the house's own rig (below), so there
@@ -74,8 +80,10 @@
    A time-of-day row under the view buttons picks morning / noon /
    evening / night (default noon; `?sun=<preset>` pins it, for
    reproducible captures). Night is the house's night sky plus a generic
-   room light: one ceiling downlight and the room shadow spot over the
-   item, at 100% and 4000 K, built as the house builds a room's.
+   room's lights: its main ceiling light(s) and the room shadow spot, at
+   100% and 4000 K, built as the house builds a room's and hung in front of
+   the item, where a house room's lights sit relative to its furniture
+   (GENERIC_ROOMS in render-rig.js; the nightRoom prop picks the room).
 
    The sun's shadow uses the house's settings exactly (map size, depth
    bias, normal bias, near/far and the sun's distance, so the bias is
@@ -139,6 +147,14 @@
    (C) MIRRORS: no environment map any more (see LIGHTING above). The old
        env-cube capture is gone; userData.isMirror is still honoured by
        nothing here and harmless to set.
+
+   (D) BACKDROPS IN THE HOUSE'S FINISHES
+       Tag a staging floor or wall in buildModel with
+         mesh.userData.specBackdrop = 'floor';   // or 'wall'
+       and the harness gives it the house's own finish (src/room-finishes.js):
+       the Ashy Oak floor across the mesh's UV extent, or the painted wall.
+       Colours picked for the old bright rig read near-black under the house
+       rig and hid contact shadows (96db53af).
    ===================================================================== */
 
 /* SPEC-ISO-DISTANCE-BEGIN -- plain JS, no JSX: scripts/test-spec-three.mjs
@@ -182,6 +198,8 @@ if (typeof window !== 'undefined') window.specIsoDistance = specIsoDistance;
    window.specRenderRigReady the promise. A page that fails to load it logs
    why and keeps rendering unlit rather than throwing inside React. */
 const SPEC_SUN_PRESETS = ['morning', 'noon', 'evening', 'night'];
+/** The orbit's zoom limit (m): far enough for the balcony's iso fit on a phone. */
+const SPEC_MAX_DISTANCE = 20;
 const SPEC_RIG_READY = (function loadSpecRig() {
   if (typeof window === 'undefined') return Promise.resolve(null);
   if (window.specRenderRigReady) return window.specRenderRigReady;
@@ -205,12 +223,23 @@ function specInitialSun(pageDefault) {
   return 'noon';
 }
 
-function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeight, initialView, initialSun, rigOf }) {
+/** The night room a view's item stands in: ?room=<kind>, else the page's
+    nightRoom prop, else 'spots' (see GENERIC_ROOMS in render-rig.js). */
+function specNightRoom(pageDefault) {
+  const kinds = ['spots', 'downlights'];
+  try {
+    const q = new URLSearchParams(window.location.search).get('room');
+    if (kinds.indexOf(q) !== -1) return q;
+  } catch (e) { /* no location: the default */ }
+  return kinds.indexOf(pageDefault) !== -1 ? pageDefault : 'spots';
+}
+
+function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeight, initialView, initialSun, nightRoom, rigOf }) {
   const canvasRef = React.useRef(null);
   const stateRef = React.useRef({});
   // keep latest callbacks without re-running the init effect
   const cbRef = React.useRef({});
-  cbRef.current = { buildModel, animate, heightOf, backgroundOf, initialView };
+  cbRef.current = { buildModel, animate, heightOf, backgroundOf, initialView, nightRoom };
   const [sunPreset, setSunPreset] = React.useState(() => specInitialSun(initialSun));
 
   // ---- initialise scene once ----------------------------------------
@@ -249,7 +278,7 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
     syncCam();
 
     canvas.addEventListener('pointerdown', e => {
-      orb.drag = true; orb.px = e.clientX; orb.py = e.clientY;
+      orb.drag = true; orb.isoAuto = false; orb.px = e.clientX; orb.py = e.clientY;
       canvas.setPointerCapture(e.pointerId);
     });
     canvas.addEventListener('pointermove', e => {
@@ -266,7 +295,8 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
     });
     canvas.addEventListener('wheel', e => {
       e.preventDefault();
-      orb.r = Math.max(0.4, Math.min(10, orb.r + e.deltaY * 0.003));
+      orb.isoAuto = false;
+      orb.r = Math.max(0.4, Math.min(SPEC_MAX_DISTANCE, orb.r + e.deltaY * 0.003));
       syncCam();
     }, { passive: false });
 
@@ -274,6 +304,10 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
       const W = canvas.clientWidth, H = canvas.clientHeight;
       cam.aspect = W / H; cam.updateProjectionMatrix();
       renderer.setSize(W, H, false);
+      // Still on the automatic iso framing (nobody has orbited or zoomed):
+      // refit it to the new aspect, so a window narrowed to a phone's width
+      // or a rotated phone keeps the whole item in frame.
+      if (orb.isoAuto && stateRef.current.isoDistance) { orb.r = stateRef.current.isoDistance(); syncCam(); }
     };
     window.addEventListener('resize', onResize);
 
@@ -315,7 +349,7 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
       const W = canvas.clientWidth, H = canvas.clientHeight;
       const pts = itemCorners();
       const d = (pts.length && W > 0 && H > 0)
-        ? specIsoDistance(pts, orb.th, orb.ph, W / H, cam.fov, 3.8, 10, 0.92)
+        ? specIsoDistance(pts, orb.th, orb.ph, W / H, cam.fov, 3.8, SPEC_MAX_DISTANCE, 0.92)
         : 3.8;
       canvas.dataset.isoDistance = d.toFixed(3); // read by browser checks
       return d;
@@ -323,7 +357,8 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
 
     // ---- lighting: the house's rig (src/render-rig.js) -------------------
     // Built when the module arrives (attachRig); `lit` holds what it made.
-    const lit = { rig: null, sky: null, room: [], preset: 'noon', curve: null };
+    // backdrops: the house floor/wall materials, shared across rebuilds.
+    const lit = { rig: null, sky: null, room: [], preset: 'noon', curve: null, backdrops: new Map() };
     // Shadow casters for the sun's frustum: every visible caster, else (a
     // page whose meshes cast nothing) every mesh, so the frustum still sits
     // on the item.
@@ -352,12 +387,21 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
       lit.sky.sun.target.position.set(cx, 0, cz);
       lit.curve = R.applyDaylight(lit.sky, R.presetSun(lit.preset, { hasSite: false }),
         { centre: [cx, cz], shadowed: true });
+      // Night: the room's lights hang at the generic room's centre, in front
+      // of and beside the item (its front face is the casters' +z side), as
+      // a house room's main light sits relative to its furniture.
       const night = lit.preset === 'night';
-      for (const l of lit.room) {
-        l.visible = night;
-        l.position.x = cx; l.position.z = cz;
-        if (l.target) l.target.position.set(cx, 0, cz);
+      // (Re)build the room's lights when the page's room kind changes.
+      const kind = specNightRoom(cbRef.current.nightRoom);
+      if (kind !== lit.roomKind) {
+        for (const l of lit.room) { if (l.target) scene.remove(l.target); scene.remove(l); if (l.dispose) l.dispose(); }
+        lit.room = R.createGenericRoomLights(THREE, { kind });
+        for (const l of lit.room) { if (l.target) scene.add(l.target); scene.add(l); }
+        lit.roomKind = kind;
+        canvas.dataset.nightRoom = kind;   // read by browser checks
       }
+      R.placeGenericRoomLights(lit.room, cx, pts.length ? z1 : 0);
+      for (const l of lit.room) l.visible = night;
       if (!cbRef.current.backgroundOf) {
         const b = lit.curve.background;
         scene.background.setRGB(b[0], b[1], b[2]);
@@ -374,9 +418,8 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
       scene.add(lit.sky.hemi);
       scene.add(lit.sky.sun.target);
       scene.add(lit.sky.sun);
-      lit.room = R.createGenericRoomLights(THREE, {});
-      for (const l of lit.room) { if (l.target) scene.add(l.target); scene.add(l); }
       R.applyLiveFinishes(sceneRoot);
+      R.applyRoomBackdrops(THREE, sceneRoot, lit.backdrops);
       relight();
     }
     function setSunPresetNow(preset) {
@@ -458,7 +501,11 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
     stateRef.current = {
       scene, sceneRoot, cam, target, orb, syncCam, renderer, ctx, _h: 1.0,
       collectRoomMeshes, isoDistance, lit, relight, setSunPresetNow,
-      applyFinishes: () => { if (lit.rig) lit.rig.applyLiveFinishes(sceneRoot); },
+      applyFinishes: () => {
+        if (!lit.rig) return;
+        lit.rig.applyLiveFinishes(sceneRoot);
+        lit.rig.applyRoomBackdrops(THREE, sceneRoot, lit.backdrops);
+      },
       _shellWalls: [], _ceiling: null,
     };
     // For browser checks (the canvas cannot be read back from outside a
@@ -485,6 +532,7 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
       // iso stands back far enough to fit the whole item at THIS canvas's
       // aspect (after the target moves: the radius is measured from it).
       orb.r = v.r ?? isoDistance();
+      orb.isoAuto = v.r == null;
       syncCam();
     };
 
@@ -555,6 +603,7 @@ function ThreeView({ t, buildModel, animate, heightOf, backgroundOf, presetHeigh
       s._framed = true;
       if (!cbRef.current.initialView) {
         s.orb.r = s.isoDistance();
+        s.orb.isoAuto = true;
         s.syncCam();
       }
     }

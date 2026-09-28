@@ -25,6 +25,10 @@
 
 import { solarPosition, solarNoon, sunDirection, daylightCurve, NIGHT } from './sun-position.js';
 import { liveFinishParams, partFinish } from './furniture/finishes.js';
+import { collapseEmitters } from './light-merge.js';
+// The house's floor and wall finishes, for spec-page backdrops (re-exported so
+// the spec harness loads one module).
+export { ROOM_FINISH, makeFloorMaterial, makeWallMaterial, applyRoomBackdrops } from './room-finishes.js';
 
 // ---- Renderer ---------------------------------------------------------------
 
@@ -253,6 +257,10 @@ export const ROOM_LIGHT = Object.freeze({
   downlightDistanceK: 1.8,  // x the room's longer side
   downlightDecay: 1.8,
   downlightDrop: 0.08,      // below the ceiling
+  // A room's spot cluster shares ONE PointLight (home3d-scene.js addSpotMesh):
+  spotClusterDistanceK: 2,  // x the room's longer side
+  spotClusterDecay: 1.5,
+  spotClusterDrop: 0.18,    // below the ceiling
   shadow: Object.freeze({
     color: 0xfff4cc,
     intensity: 0.4,
@@ -294,22 +302,86 @@ export function createRoomShadowLight(THREE, o) {
 }
 
 /**
- * A spec page's generic night room: one ceiling downlight and the room shadow
- * light over (cx, cz), both ON at 100% and `temp` K, driven exactly as the
- * house's syncLights drives a room's main channel. Not added to a scene.
- * @returns {Array<THREE.Light>}  [downlight, shadowSpot]
+ * The rooms a spec page's item can stand in at night: the house's two kinds
+ * of room lighting, laid out as the house lays them out relative to its
+ * furniture, with the item's front face at z = 0 facing +z and its centre at
+ * x = 0. Lights directly OVER the item would leave every front face unlit
+ * (review 88739b91); a real room's lights hang in front of it.
+ *
+ *   spots      one ceiling spot cluster, which the house lights with ONE
+ *              PointLight (home3d-scene.js addSpotMesh), 1.0 m in front of
+ *              the item and 0.9 m aside -- a bedroom's main light relative
+ *              to its bedside table.
+ *   downlights six flush downlights on a 2 x 3 grid (1.3 m out from the
+ *              wall, 1.35 m along it), merged by collapseEmitters exactly as
+ *              the house merges a channel's fixtures -- a living room's main
+ *              light relative to its TV console.
+ *
+ * Both are 2.5 m high, with the room shadow spot at the room centre. All
+ * figures are illustrative round numbers for a typical room.
+ */
+export const GENERIC_ROOMS = Object.freeze({
+  spots: Object.freeze({ w: 2.8, d: 4.4, ceiling: 2.5, centre: Object.freeze([0.9, 1.0]),
+    // the room's floor, relative to the item: x along the wall, z out from it
+    box: Object.freeze([-1.3, 3.1, -0.4, 2.4]) }),
+  downlights: Object.freeze({ w: 3.4, d: 4.4, ceiling: 2.5, centre: Object.freeze([0, 1.3]),
+    box: Object.freeze([-2.2, 2.2, -0.4, 3.0]),
+    grid: Object.freeze({ along: Object.freeze([-1.35, 0, 1.35]), out: Object.freeze([0.55, 1.85]) }) })
+});
+export const GENERIC_ROOM_KINDS = Object.freeze(Object.keys(GENERIC_ROOMS));
+
+/**
+ * A spec page's night room lights, built exactly as the house builds a room's
+ * main channel and driven as syncLights drives it (ON at `bri`%, `temp` K):
+ * the room's main light(s) and the room shadow spot. Positions are relative
+ * to the item (front face at z = 0, centre x = 0); placeGenericRoomLights
+ * moves them onto the item. Not added to a scene.
+ * @param {string} [o.kind]  'spots' (default) | 'downlights'
+ * @returns {Array<THREE.Light>}  main light(s), then the shadow spot
  */
 export function createGenericRoomLights(THREE, o) {
-  const p = Object.assign({ cx: 0, cz: 0, w: 4, d: 4, ceiling: 2.5, temp: ROOM_LIGHT.defaultTemp, bri: 100 }, o || {});
+  const p = Object.assign({ kind: 'spots', temp: ROOM_LIGHT.defaultTemp, bri: 100 }, o || {});
+  const room = GENERIC_ROOMS[p.kind] || GENERIC_ROOMS.spots;
   const col = kelvinToHex(p.temp);
-  const intensity = (p.bri / 100) * ROOM_LIGHT.mainGain;
-  const down = new THREE.PointLight(col, intensity,
-    Math.max(p.w, p.d) * ROOM_LIGHT.downlightDistanceK, ROOM_LIGHT.downlightDecay);
-  down.position.set(p.cx, p.ceiling - ROOM_LIGHT.downlightDrop, p.cz);
-  const spot = createRoomShadowLight(THREE, p);
-  spot.intensity = intensity;
+  const mb = p.bri / 100;
+  const long = Math.max(room.w, room.d);
+  const lights = [];
+  if (room.grid) {
+    const emitters = [];
+    for (const x of room.grid.along) for (const z of room.grid.out) {
+      emitters.push({ x, y: room.ceiling - ROOM_LIGHT.downlightDrop, z, intensity: 1,
+        distance: long * ROOM_LIGHT.downlightDistanceK, decay: ROOM_LIGHT.downlightDecay });
+    }
+    const [x0, x1, z0, z1] = room.box;
+    collapseEmitters(emitters, { minX: x0, maxX: x1, minZ: z0, maxZ: z1 }, { merge: true, floorY: 0 }).forEach(m => {
+      const l = new THREE.PointLight(col, mb * ROOM_LIGHT.mainGain * m.intensity, m.distance, m.decay);
+      l.position.set(m.x, m.y, m.z);
+      l.userData.gain = m.intensity;
+      lights.push(l);
+    });
+  } else {
+    const l = new THREE.PointLight(col, mb * ROOM_LIGHT.mainGain, long * ROOM_LIGHT.spotClusterDistanceK, ROOM_LIGHT.spotClusterDecay);
+    l.position.set(room.centre[0], room.ceiling - ROOM_LIGHT.spotClusterDrop, room.centre[1]);
+    lights.push(l);
+  }
+  const spot = createRoomShadowLight(THREE, { cx: room.centre[0], cz: room.centre[1], w: room.w, d: room.d, ceiling: room.ceiling });
+  spot.intensity = mb * ROOM_LIGHT.mainGain;
   spot.color.setHex(col);
-  return [down, spot];
+  lights.push(spot);
+  for (const l of lights) l.userData.rel = [l.position.x, l.position.z];
+  return lights;
+}
+
+/**
+ * Move the generic room's lights onto an item whose front face is at
+ * z = frontZ, centred on x = cx. The shadow spot keeps aiming straight down.
+ */
+export function placeGenericRoomLights(lights, cx, frontZ) {
+  for (const l of lights) {
+    const r = l.userData.rel || [0, 0];
+    l.position.x = cx + r[0]; l.position.z = frontZ + r[1];
+    if (l.target) l.target.position.set(l.position.x, l.target.position.y, l.position.z);
+  }
 }
 
 // ---- Finishes ---------------------------------------------------------------

@@ -105,10 +105,34 @@ const near = (a, b, eps) => Math.abs(a - b) <= (eps || 1e-12);
   check('kelvinToHex is the house ramp', [2000, 2700, 3000, 4000, 5000, 6500, 9000].every(k => R.kelvinToHex(k) === k2h(k)));
   check('room main light gain 0.6, 4000 K default', R.ROOM_LIGHT.mainGain === 0.6 && R.ROOM_LIGHT.defaultTemp === 4000);
 
-  const [down, spot] = R.createGenericRoomLights(THREE, {});
-  check('generic night room: a downlight at the house main-light gain, 4000 K, and the shadow spot driven the same',
-    down.isPointLight && down.intensity === 0.6 && down.color.getHex() === k2h(4000) && down.decay === 1.8 &&
-    near(down.distance, 4 * 1.8) && spot.isSpotLight && spot.intensity === 0.6 && spot.color.getHex() === k2h(4000) && spot.castShadow);
+  // Night room 'spots': the house's spot-cluster light (ONE PointLight at
+  // intensity 0.6, range 2 x the longer side, decay 1.5, 18 cm under the
+  // ceiling -- home3d-scene.js addSpotMesh + syncLights) and the shadow spot.
+  const [main, spot] = R.createGenericRoomLights(THREE, { kind: 'spots' });
+  check('night room spots: the spot-cluster light at the house main gain, 4000 K, and the shadow spot driven the same',
+    main.isPointLight && main.intensity === 0.6 && main.color.getHex() === k2h(4000) && main.decay === 1.5 &&
+    near(main.distance, 4.4 * 2) && near(main.position.y, 2.5 - 0.18) &&
+    spot.isSpotLight && spot.intensity === 0.6 && spot.color.getHex() === k2h(4000) && spot.castShadow);
+  // In FRONT of the item (front face at z = 0, facing +z), never over it:
+  // a front face lit from over its own top gets nothing (review 88739b91).
+  for (const kind of ['spots', 'downlights']) {
+    const ls = R.createGenericRoomLights(THREE, { kind });
+    check(kind + ': every room light hangs >= 0.5 m in front of the item front, at ceiling height',
+      ls.every(l => l.position.z >= 0.5 && l.position.y > 2.2), ls.map(l => l.position.toArray()));
+    R.placeGenericRoomLights(ls, 2, -1);
+    check(kind + ': placing onto an item moves every light (and the spot target) by the item offset',
+      ls.every(l => near(l.position.x - 2, l.userData.rel[0]) && near(l.position.z + 1, l.userData.rel[1])) &&
+      ls.filter(l => l.target).every(l => near(l.target.position.x, l.position.x) && near(l.target.position.z, l.position.z)));
+  }
+  // 'downlights': six fixtures merged by collapseEmitters exactly as the house
+  // merges a channel -- here into two lights, one per end of the grid, each
+  // carrying its three fixtures' gain.
+  const dl = R.createGenericRoomLights(THREE, { kind: 'downlights' });
+  const mains = dl.filter(l => l.isPointLight);
+  check('downlights: two merged lights, decay 1.8, gain ~2.8 each (as the house merges six downlights)',
+    mains.length === 2 && mains.every(l => l.decay === 1.8 && l.userData.gain > 2.5 && l.userData.gain < 3.1 &&
+      near(l.intensity, 0.6 * l.userData.gain, 1e-9)), mains.map(l => [l.userData.gain, l.decay]));
+  check('downlights: the two sit either side of the item along the wall', mains[0].position.x * mains[1].position.x < 0);
 }
 
 // ------------------------------------------------------------ 2. both consumers

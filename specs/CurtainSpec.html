@@ -552,6 +552,7 @@ function buildCurtain(t, group, THREE, ctx) {
   // front (room-facing) face stays at z=0; the box grows backward (-z).
   wall.position.set(0, height / 2, -WALL_THICKNESS / 2);
   wall.receiveShadow = true;
+  wall.userData.specBackdrop = 'wall'; // the house's own finish (spec-three.jsx (D))
   group.add(wall);
 
   const ceiling = new THREE.Mesh(
@@ -575,6 +576,7 @@ function buildCurtain(t, group, THREE, ctx) {
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(0, 0, roomDepth / 2);
   floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
   group.add(floor);
 
   // lay out at the current eased open amount (persisted across rebuilds)

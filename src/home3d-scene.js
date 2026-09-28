@@ -50,6 +50,9 @@ import {
   applyRendererSettings, createSkyRig, presetSun, applyDaylight, applyNight,
   kelvinToHex, ROOM_LIGHT, createRoomShadowLight
 } from './render-rig.js';
+import {
+  makeAshyOakTexture as makeAshyOakTextureShared, makeWallRoughnessTexture as makeWallRoughnessTextureShared
+} from './room-finishes.js';
 
 export const Home3DScene = (() => {
   // ---- The active house profile -------------------------------------------
@@ -337,301 +340,13 @@ export const Home3DScene = (() => {
     return tex;
   }
 
-  // ---------------------------------------------------------------------------
-  // Ashy Oak LVT — the real house floor (Floored.co.uk "LVT Ashy Oak").
-  // Weathered/aged grey-toned OAK look with warm-beige undertones and a realistic
-  // flowing woodgrain, reproduced from floor close-up photos (2026-07-09)
-  // + the product's "modern grey toned oak finish" description.
-  //
-  // Real product: planks 18.5cm wide x 121.5cm long, matte, LOW-contrast, uniform.
-  // Long axis runs NORTH-SOUTH in the house.
-  //
-  // DESIGN INTENT (per review): the visual interest is the STAGGER (the semi-random
-  // row-offset pattern that "looks patterned for a few rows, then clearly isn't"),
-  // NOT the plank faces. All planks are the SAME LVT product, so their grain/colour
-  // is largely UNIFORM — only SUBTLE per-plank variation (real planks aren't
-  // identical, but they're close). Per-plank randomisation is deliberately gentle.
-  //
-  // This bakes the ENTIRE floor into ONE canvas mapped to cover the whole slab
-  // once (see the floor-material block for the world-space UV maths), so the plank
-  // stagger is genuinely non-repeating across the room — no tiling seam.
-  //
-  // Determinism: a stable 2D index-hash + a tiny seeded PRNG (mulberry32) drive
-  // every per-plank tint and the stagger — no Math.random, so the floor is
-  // pixel-identical on every reload.
-  function makeAshyOakTexture(widthM, depthM) {
-    const PLANK_W_CM = 18.5;   // plank width  (E-W / U)
-    const PLANK_L_CM = 121.5;  // plank length (N-S / V, the long axis)
-    // Knot/mineral-streak radius, in cm like every other dimension here (gibbs-knots
-    // fix, 2026-09-14): previously authored in raw canvas px, so the same knot covered
-    // MORE real-world area as the slab grew and pxPerCm shrank under the CAP below —
-    // a ~10cm blob in a big room instead of a subtle character mark. The drawn radius
-    // is kr * 2.2 (soft falloff), so kr = 0.23-0.46cm gives a ~1.0-2.0cm knot DIAMETER
-    // in every room regardless of slab size (target: ~1-2cm everywhere).
-    const KNOT_R_CM = 0.23;
-    const KNOT_R_CM_RAND = 0.23;
-    const wCm = widthM * 100, dCm = depthM * 100;
+  // Ashy Oak LVT floor texture: src/room-finishes.js (shared with the spec
+  // pages' backdrops; moved there verbatim).
+  function makeAshyOakTexture(widthM, depthM) { return makeAshyOakTextureShared(THREE, widthM, depthM); }
 
-    // ⚠️ SCALE — the canvas must map 1:1 to the SLAB extent (widthM x depthM), because
-    // the floor material maps ONE canvas copy across exactly the slab (repeat=1/extent).
-    // So size the canvas to the slab's real cm extent, and draw each plank cell at its
-    // TRUE cm size (PLANK_W_CM x PLANK_L_CM * pxPerCm). Planks then render at exactly
-    // 18.5 x 121.5 cm in world space. (Bug history: previously the canvas was sized to
-    // nCols x nRows *rounded-up* plank counts, so the bleed planks got squeezed into the
-    // slab extent by the repeat mapping, shrinking every plank — gibbs-r4b.)
-    const pxPerCm0 = 3.6;
-    // Cap the LONG edge so the GPU upload stays small; scale pxPerCm down if needed.
-    const CAP = 2048;
-    const longCm = Math.max(wCm, dCm);
-    const pxPerCm = Math.min(pxPerCm0, CAP / longCm);
-    const cw = Math.round(wCm * pxPerCm);  // canvas width  == slab E-W extent
-    const ch = Math.round(dCm * pxPerCm);  // canvas height == slab N-S extent
-    // Fixed real-size plank cells (px), independent of how many fit.
-    const plankPxW = PLANK_W_CM * pxPerCm; // == 18.5cm in px
-    const plankPxH = PLANK_L_CM * pxPerCm; // == 121.5cm in px
-    // How many cells to draw to cover the canvas (+1 bleed so edges fill; extra cells
-    // simply draw partly off-canvas, they do NOT change plank size).
-    const nCols = Math.ceil(cw / plankPxW) + 1;
-    const nRows = Math.ceil(ch / plankPxH) + 1;
-
-    const c = document.createElement("canvas");
-    c.width = cw; c.height = ch;
-    const ctx = c.getContext("2d");
-
-    function mulberry32(a) {
-      return function () {
-        a |= 0; a = (a + 0x6D2B79F5) | 0;
-        let t = Math.imul(a ^ (a >>> 15), 1 | a);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-    }
-    const hash2 = (x, y) => {
-      let h = (x * 374761393 + y * 668265263) | 0;
-      h = (h ^ (h >>> 13)) | 0; h = Math.imul(h, 1274126177) | 0;
-      return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-    };
-    const clamp = v => Math.max(0, Math.min(255, Math.round(v)));
-
-    // Weathered grey-oak base colour (sampled from reference photos): a warm-neutral
-    // grey-beige, LOW contrast. All planks share this base; per-plank variation is
-    // only a few RGB points around it (see drawPlank). Grain lines sit a little
-    // darker (cool) with the occasional warmer-beige streak.
-    const BASE = [178, 170, 158];   // dominant plank tone (weathered grey-beige oak)
-    const GRAIN_DARK = [132, 124, 112]; // grain line / cathedral figure (deeper contrast)
-    const GRAIN_WARM = [190, 176, 155]; // occasional warm-beige streak
-
-    // Base fill = plank BASE tone (not a seam colour). LVT is tightly butted, so
-    // the background should read as floor, NOT as a fat grout gap showing through.
-    // The hairline seams are drawn per-plank inside drawPlank (a single ~1px line),
-    // so there's no wide bevel bleeding around every plank.
-    ctx.fillStyle = `rgb(${BASE[0]},${BASE[1]},${BASE[2]})`;
-    ctx.fillRect(0, 0, cw, ch);
-
-    // --- LAYOUT: planks run N-S. Floor = vertical STRIPS (columns) running N-S,
-    // each strip plankPxW (18.5cm) wide E-W, filled by a stack of planks laid
-    // end-to-end down the N-S axis, each plankPxH (121.5cm) long.
-    //
-    // THE STAGGER (Bug-1 fix): each STRIP starts at its own N-S offset, so the
-    // horizontal plank-END seams do NOT line up column-to-column — they zig-zag
-    // instead of forming continuous horizontal grout lines across the floor.
-    // (Previously the stagger was on the E-W axis with a fixed y per row, which
-    // made every plank-end align on the same horizontal lines → the grid seen in review.)
-    // The vertical seams (plank LONG edges, between strips) stay continuous
-    // straight N-S lines — correct for real plank flooring.
-    for (let col = -1; col <= nCols; col++) {
-      const x0 = Math.round(col * plankPxW);
-      const x1 = Math.round((col + 1) * plankPxW);
-      if (x1 <= 0 || x0 >= cw) continue;
-
-      // --- SEMI-RANDOM PER-COLUMN N-S START OFFSET (the important characteristic) --
-      // Each strip's vertical start is a fraction of a plank LENGTH from a stable
-      // per-column hash, quantised to 1/6-plank steps so some columns SHARE a
-      // cross-seam (aligned) and others are well offset — "looks patterned for a
-      // few strips, then clearly isn't". Deliberately NOT a clean 1/2 or 1/3 bond.
-      const rawOff = hash2(col * 2 + 101, 7);
-      const colOffset = (Math.round(rawOff * 6) / 6) * plankPxH; // 0 .. 5/6 plank length
-      // Tiny sub-plank nudge so "aligned" columns aren't pixel-perfect — a few mm.
-      const microNudge = (hash2(col + 55, 3) - 0.5) * plankPxH * 0.03;
-      // Start one plank above the top so the offset strip fills the top edge.
-      const startY = -colOffset + microNudge;
-
-      for (let row = -1; row <= nRows; row++) {
-        const y0 = Math.round(startY + row * plankPxH);
-        const y1 = Math.round(startY + (row + 1) * plankPxH);
-        if (y1 <= 0 || y0 >= ch) continue;
-        drawPlank(ctx, x0, y0, x1 - x0, y1 - y0, col, row);
-      }
-    }
-
-    // Faint large-scale mottle so lighting isn't perfectly even tile-to-tile
-    // (matches the slightly uneven wear in the photos). Very low alpha.
-    const grimeRnd = mulberry32(9001);
-    ctx.save();
-    ctx.globalCompositeOperation = "multiply";
-    for (let i = 0; i < 30; i++) {
-      const gx = grimeRnd() * cw, gy = grimeRnd() * ch;
-      const gr = (0.1 + grimeRnd() * 0.16) * cw;
-      const grd = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr);
-      const a = 0.02 + grimeRnd() * 0.03;
-      grd.addColorStop(0, `rgba(150,146,140,${a})`);
-      grd.addColorStop(1, "rgba(150,146,140,0)");
-      ctx.fillStyle = grd;
-      ctx.fillRect(0, 0, cw, ch);
-    }
-    ctx.restore();
-
-    const tex = new THREE.CanvasTexture(c);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.anisotropy = 8;
-    return tex;
-
-    // --- per-plank painter -------------------------------------------------
-    function drawPlank(g, px, py, pw, ph, col, row) {
-      if (pw <= 0 || ph <= 0) return;
-      const seed = ((col + 128) * 92821 + (row + 128)) | 0;
-      const rnd = mulberry32(seed);
-
-      // SUBTLE per-plank tint: a few RGB points of warm<->cool + light<->dark
-      // around the shared BASE, so no two planks are identical but they clearly
-      // read as the same product. (Intentionally gentle — the interest is the
-      // stagger, not the faces.)
-      const warm = (hash2(col + 17, row + 4) - 0.5) * 7;  // beige<->grey, +/-3.5
-      const light = (hash2(col + 8, row + 21) - 0.5) * 9; // brightness, +/-4.5
-      const br = clamp(BASE[0] + warm + light);
-      const bg = clamp(BASE[1] + light);
-      const bb = clamp(BASE[2] - warm * 0.6 + light);
-
-      // HAIRLINE seam (Bug-2 fix): tightly-butted LVT has only a fine joint, not a
-      // fat grout gap. Inset the plank fill by a single ~1px on the left+top so the
-      // (slightly darker) base tone shows through as a hairline seam — no wide
-      // bevel, no fill-through background. gap is clamped to 1px regardless of scale.
-      const gap = 1;
-      g.fillStyle = `rgb(${br},${bg},${bb})`;
-      g.fillRect(px + gap, py + gap, pw - gap, ph - gap);
-
-      g.save();
-      g.beginPath(); g.rect(px + gap, py + gap, pw - gap, ph - gap); g.clip();
-
-      // Gentle length-wise light falloff (planks have a faint sheen change end
-      // to end). Low alpha.
-      const lg = g.createLinearGradient(0, py, 0, py + ph);
-      lg.addColorStop(0, `rgba(245,242,236,${0.02 + rnd() * 0.02})`);
-      lg.addColorStop(0.5, "rgba(0,0,0,0)");
-      lg.addColorStop(1, `rgba(0,0,0,${0.03 + rnd() * 0.035})`);
-      g.fillStyle = lg; g.fillRect(px + gap, py, pw - gap, ph);
-
-      // --- Woodgrain: straight-ish striations running the plank length (N-S) ---
-      // Consistent count/style across planks (same product). BOLDER grain pass
-      // (2026-07-11, monty-grain): design intent: a stronger cathedral-oak figure, so
-      // the striations are a notch more visible — a little more amplitude/wobble,
-      // slightly darker+wider lines, higher alpha. Still matte, weathered-grey oak
-      // (NOT high-contrast/cartoonish): the alpha bump is modest so faces stay
-      // realistic, just clearly reading as wood grain now.
-      const nFine = 18 + Math.floor(rnd() * 7); // 18..24 (was 16..21) — a touch denser
-      for (let i = 0; i < nFine; i++) {
-        const fx = px + gap + rnd() * (pw - gap);
-        const amp = 1.0 + rnd() * 2.6;   // was 0.8..2.8 — slightly more figure sweep
-        const wob = 0.7 + rnd() * 1.4;   // was 0.6..1.8
-        const warmLine = rnd() < 0.18; // occasional warm-beige streak
-        const dk = warmLine ? GRAIN_WARM : GRAIN_DARK;
-        const a = warmLine ? (0.10 + rnd() * 0.07) : (0.14 + rnd() * 0.12); // was 0.07..0.13 / 0.09..0.19
-        g.strokeStyle = `rgba(${clamp(dk[0] + warm)},${clamp(dk[1] + light)},${clamp(dk[2] - warm * 0.6)},${a})`;
-        g.lineWidth = 0.6 + rnd() * 1.1; // was 0.5..1.4 — a hair wider
-        g.beginPath();
-        const steps = 10;
-        for (let s = 0; s <= steps; s++) {
-          const t = s / steps;
-          const yy = py + t * ph;
-          const xx = fx + Math.sin(t * Math.PI * wob + i) * amp;
-          if (s === 0) g.moveTo(xx, yy); else g.lineTo(xx, yy);
-        }
-        g.stroke();
-      }
-
-      // --- Cathedral / flowing grain figure: 2-3 looping streaks -------------
-      // The wide "flame"/cathedral arcs visible in the photos — this is THE oak-
-      // figure signature as intended stronger (2026-07-11, monty-grain). Boldened:
-      // 2-3 nested-arc bundles (was 1-2), each a wider 7-line bundle (k -3..3, was
-      // -2..2), a bit more spread, darker (-14 vs -8), and higher alpha so the
-      // cathedral sweeps clearly read as oak. Deeper-arc bezier (control points
-      // pulled further left) gives a rounder, more pronounced cathedral curve.
-      // Still soft-edged + matte — a clear step up in figure, not a garish jump.
-      const nCath = 2 + Math.floor(rnd() * 2); // 2..3 (was 1..2)
-      for (let i = 0; i < nCath; i++) {
-        const cxp = px + gap + (0.22 + rnd() * 0.56) * (pw - gap);
-        const spread = 2.5 + rnd() * 5; // was 2..6 — slightly wider figure
-        const yTop = py + rnd() * ph * 0.4;
-        const yBot = yTop + (0.32 + rnd() * 0.5) * ph; // slightly taller arcs
-        g.strokeStyle = `rgba(${clamp(GRAIN_DARK[0] + warm - 14)},${clamp(GRAIN_DARK[1] + light - 14)},${clamp(GRAIN_DARK[2] - 14)},${0.10 + rnd() * 0.07})`; // was -8 / 0.06..0.11
-        g.lineWidth = 1.1 + rnd() * 2.0; // was 1..2.8
-        for (let k = -3; k <= 3; k++) { // 7-line bundle (was 5, k -2..2)
-          g.beginPath();
-          const off = k * spread;
-          g.moveTo(cxp + off, yTop);
-          g.bezierCurveTo(
-            cxp + off - spread * 1.9, yTop + (yBot - yTop) * 0.33, // deeper cathedral curve (was 1.5)
-            cxp + off - spread * 1.9, yTop + (yBot - yTop) * 0.66,
-            cxp + off, yBot
-          );
-          g.stroke();
-        }
-      }
-
-      // Rare small knot / mineral streak (weathered-oak character) — low freq.
-      // Radius authored in CM (KNOT_R_CM above) and converted via pxPerCm, same as
-      // every other dimension in this texture — NOT raw px (gibbs-knots, 2026-09-14).
-      if (rnd() < 0.12) {
-        const kx = px + gap + rnd() * (pw - gap);
-        const ky = py + rnd() * ph;
-        const kr = (KNOT_R_CM + rnd() * KNOT_R_CM_RAND) * pxPerCm;
-        const kg = g.createRadialGradient(kx, ky, 0, kx, ky, kr * 2.2);
-        kg.addColorStop(0, `rgba(${clamp(GRAIN_DARK[0] - 30)},${clamp(GRAIN_DARK[1] - 30)},${clamp(GRAIN_DARK[2] - 28)},0.4)`);
-        kg.addColorStop(1, "rgba(0,0,0,0)");
-        g.fillStyle = kg;
-        g.beginPath(); g.arc(kx, ky, kr * 2.2, 0, Math.PI * 2); g.fill();
-      }
-      g.restore();
-
-      // HAIRLINE seam lines (Bug-2 fix): a single thin ~1px line on the left edge
-      // (plank LONG seam) and the top edge (plank END seam), soft and only a little
-      // darker than the plank so it reads as a fine joint — NOT the old fat 3-stroke
-      // bevel. Tightly-butted LVT: fine seam, not wide grout.
-      g.strokeStyle = "rgba(118,113,106,0.35)";
-      g.lineWidth = 1;
-      g.beginPath(); g.moveTo(px + 0.5, py + gap); g.lineTo(px + 0.5, py + ph); g.stroke();
-      g.beginPath(); g.moveTo(px + gap, py + 0.5); g.lineTo(px + pw, py + 0.5); g.stroke();
-    }
-  }
-
-  // Subtle matte-plaster roughness texture for painted walls — a fine, low-
-  // contrast noise (not a colour map) so painted plasterboard reads as a real
-  // wall instead of a flat shader, without adding a second texture unit's
-  // worth of visible cost. One shared Texture instance is created per scene
-  // and reused by every wall material (same pattern as `cloudTex` below) —
-  // a single ~32x32 canvas + single GPU upload no matter how many wall
-  // segments reference it. Skipped entirely on the 'low' GPU tier (see
-  // quality.tier in buildScene) — same tier gate as ambientStrips.
-  function makeWallRoughnessTexture() {
-    const size = 32;
-    const c = document.createElement("canvas");
-    c.width = c.height = size;
-    const ctx = c.getContext("2d");
-    ctx.fillStyle = "#d9d9d9";
-    ctx.fillRect(0, 0, size, size);
-    const id = ctx.getImageData(0, 0, size, size);
-    const data = id.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const noise = (Math.random() - 0.5) * 40; // gentle micro-variation, not carpet-grade
-      const v = Math.max(0, Math.min(255, 217 + noise));
-      data[i] = data[i + 1] = data[i + 2] = v;
-    }
-    ctx.putImageData(id, 0, 0);
-    const tex = new THREE.CanvasTexture(c);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(6, 3); // fine tiling frequency, reads as texture not visible tiles
-    return tex;
-  }
+  // Matte-plaster wall roughness texture: src/room-finishes.js (shared with
+  // the spec pages' backdrops; moved there verbatim).
+  function makeWallRoughnessTexture() { return makeWallRoughnessTextureShared(THREE); }
 
   // Procedural oak-grain roughness map for the acoustic slat panels — subtle
   // low-contrast vertical streaks, tiled a few times up the ~2.5m slat height.
@@ -2753,8 +2468,8 @@ export const Home3DScene = (() => {
             g.positions.forEach(pos => { sx += tx(pos.at[0]); sz += tz(pos.at[1]); });
             lx = sx / g.positions.length; lz = sz / g.positions.length;
           }
-          const pl = new THREE.PointLight(tint, 1.0, Math.max(w, d) * 2, 1.5);
-          pl.position.set(lx, FY + WH - 0.18, lz);
+          const pl = new THREE.PointLight(tint, 1.0, Math.max(w, d) * ROOM_LIGHT.spotClusterDistanceK, ROOM_LIGHT.spotClusterDecay);
+          pl.position.set(lx, FY + WH - ROOM_LIGHT.spotClusterDrop, lz);
           scene.add(pl);
           ls.push(pl);
         }

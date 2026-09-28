@@ -128,7 +128,7 @@ if (typeof iso === 'function') {
 // ------------------------------------------------------------ 2. wiring
 const isoFn = (src.match(/function isoDistance\(\) \{([\s\S]*?)\n    \}/) || [])[1] || '';
 check('isoDistance() passes the item corners, orbit angles, canvas aspect (W / H), fov and clamps',
-  /specIsoDistance\(\s*pts\s*,\s*orb\.th\s*,\s*orb\.ph\s*,\s*W\s*\/\s*H\s*,\s*cam\.fov\s*,\s*3\.8\s*,\s*10\s*,\s*0\.9\d*\s*\)/.test(isoFn), isoFn.trim().slice(0, 300));
+  /specIsoDistance\(\s*pts\s*,\s*orb\.th\s*,\s*orb\.ph\s*,\s*W\s*\/\s*H\s*,\s*cam\.fov\s*,\s*3\.8\s*,\s*SPEC_MAX_DISTANCE\s*,\s*0\.9\d*\s*\)/.test(isoFn), isoFn.trim().slice(0, 300));
 check('isoDistance() reads the canvas size', /canvas\.clientWidth/.test(isoFn) && /canvas\.clientHeight/.test(isoFn));
 check('iso preset takes its distance from isoDistance()',
   /iso:\s*\{[^}]*r:\s*null/.test(src) && /orb\.r\s*=\s*v\.r\s*\?\?\s*isoDistance\(\)/.test(src));
@@ -152,6 +152,28 @@ check('a button per preset drives setSunPreset, the active one marked',
 check('a preset change relights the view (sun, room light, background, shadow fit)',
   /React\.useEffect\(\(\) => \{[\s\S]*?s\.setSunPresetNow\(sunPreset\);[\s\S]*?\}, \[sunPreset\]\);/.test(src) &&
   /function setSunPresetNow\(preset\) \{[\s\S]*?relight\(\);/.test(src));
+check('the zoom limit is the same SPEC_MAX_DISTANCE as the iso fit, and far enough for a balcony (>= 15 m)',
+  /const SPEC_MAX_DISTANCE = (\d+);/.test(src) && Number(src.match(/const SPEC_MAX_DISTANCE = (\d+);/)[1]) >= 15 &&
+  /Math\.min\(SPEC_MAX_DISTANCE, orb\.r \+ e\.deltaY/.test(src));
+check('a resize refits the iso view while it is still the automatic framing, and a drag or zoom stops that',
+  /if \(orb\.isoAuto && stateRef\.current\.isoDistance\) \{ orb\.r = stateRef\.current\.isoDistance\(\); syncCam\(\); \}/.test(src) &&
+  /orb\.drag = true; orb\.isoAuto = false;/.test(src) && /orb\.isoAuto = false;\s*\n\s*orb\.r = Math\.max\(0\.4/.test(src) &&
+  /s\.orb\.isoAuto = true;/.test(src) && /orb\.isoAuto = v\.r == null;/.test(src));
+check('the night room lights hang in front of the item (placed on its front face, never on its centre)',
+  /R\.placeGenericRoomLights\(lit\.room, cx, pts\.length \? z1 : 0\)/.test(src) && !/l\.position\.x = cx; l\.position\.z = cz;/.test(src));
+check('the page picks the night room (nightRoom prop, ?room= first), and a change rebuilds the lights',
+  /get\('room'\)/.test(src) && /kind !== lit\.roomKind/.test(src) && /R\.createGenericRoomLights\(THREE, \{ kind \}\)/.test(src));
+check('backdrops get the house finishes on every rebuild and when the rig arrives',
+  (src.match(/applyRoomBackdrops\(THREE, sceneRoot, lit\.backdrops\)/g) || []).length === 2);
+{
+  // every page the review named tags its staging (item 96db53af)
+  const pages = { Bed: 3, DigitalPiano: 1, GamingChair: 1, RobotVacuum: 1, Radiator: 2, Balcony: 1, Curtain: 2, BathroomFittings: 1 };
+  for (const [pg, n] of Object.entries(pages)) {
+    const html = fs.readFileSync(path.join(root, 'specs', pg + 'Spec.html'), 'utf8');
+    const got = (html.match(/\.userData\.specBackdrop = '(floor|wall)'/g) || []).length;
+    check(pg + 'Spec tags its ' + n + ' backdrop(s) for the house finish', got >= n, got);
+  }
+}
 check('night switches the generic room light on, day off', /const night = lit\.preset === 'night';[\s\S]*?l\.visible = night;/.test(src));
 check('every rebuild re-applies the house finishes and relights', /s\.applyFinishes\(\);[\s\S]*?s\.relight\(\);/.test(src));
 check('the render-rig import is not a literal import() (Babel turns that into require)',
