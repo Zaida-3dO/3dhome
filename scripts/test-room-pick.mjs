@@ -15,6 +15,9 @@
  *      sides, and a steep downward tap near the wall's base.
  *   2. A wall top seen from straight above selects nothing; so does the
  *      outside face of an exterior wall.
+ *   2b. The step back follows the tapped face's world normal, so a tilted
+ *      view cannot step a wall-top tap off the wall into a room, and a steep
+ *      tap on a face still reaches a room polygon drawn a few cm short.
  *   3. A faded (see-through) wall passes the tap to the room behind it.
  *   4. Furniture (a merged bucket, or a mesh under a tagged group) passes the
  *      tap to the floor of the room it stands in.
@@ -152,6 +155,55 @@ console.log('2. a wall top from above, and an exterior wall from outside, select
   const u = tap(s, [tx(150), 1.6, tz(-400)], [tx(150), 0.4, tz(0)]);
   ok(oldRule(u.hits) !== null, 'the old rule would have tapped through the exterior wall', oldRule(u.hits));
   ok(u.pick.roomId === null, 'the outside face of an exterior wall selects nothing', u.pick);
+}
+
+console.log('2b. the step follows the tapped face, not the ray\'s tilt');
+{
+  const s = build();
+  // Default-ish 3/4 view from over room A: the ray lands on the divider's
+  // TOP, 2 cm in from A's face. Stepped back 5 cm along the ray, about 4 cm
+  // of that is horizontal and would carry the point off the wall into A.
+  const target = [tx(297), WALL_H, mid(140)];
+  const from = [tx(297) - 3, WALL_H + 5, mid(140)];
+  const t = tap(s, from, target);
+  ok(t.hits.length && Math.abs(t.hits[0].point.y - WALL_H) < 1e-6 && Math.abs(t.hits[0].point.x - tx(297)) < 1e-6,
+    'nearest hit is the divider top, 2 cm from A\'s face');
+  const alongRay = toHouse(t.hits[0].point.x - t.dir.x * R.STEP_BACK_M, t.hits[0].point.z - t.dir.z * R.STEP_BACK_M);
+  ok(R.roomAt(rooms, alongRay[0], alongRay[1]) === 'room_a', 'control: a step along the ray WOULD land in A');
+  ok(t.pick.roomId === null, 'a wall top tapped from a tilted view selects nothing', t.pick);
+
+  // A steep tap on a wall face whose room polygon stops 3 cm short of it
+  // (real profiles are drawn that loosely): along the ray the step moves
+  // under a centimetre sideways and misses the room; along the face normal
+  // it moves the full 5 cm.
+  const inset = [{ id: 'room_a', poly: [[10, 10], [292, 10], [292, 275], [10, 275]] }, rooms[1]];
+  const v = tap(s, [tx(295) - 0.6, 6, mid(140)], [tx(295), 0.3, mid(140)]);
+  ok(v.hits[0] && v.hits[0].face.normal.x === -1, 'steep tap: nearest hit is A\'s face of the divider');
+  ok(R.pickRoom(v.hits, v.dir, inset, toHouse).roomId === 'room_a', 'a steep tap reaches a room drawn 3 cm short of the wall');
+
+  // A rotated, non-uniformly scaled wall: world normals, not local ones.
+  const s2 = new THREE.Scene();
+  const w = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial());
+  w.scale.set(2.8, WALL_H, 0.1);          // long along local x, thin along local z
+  w.rotation.y = Math.PI / 2;             // ...turned to run north-south
+  w.position.set(wallX, WALL_H / 2, mid(140));
+  s2.add(w); s2.updateMatrixWorld(true);
+  const r1 = new THREE.Raycaster(new THREE.Vector3(tx(100), 1.6, mid(140)),
+    new THREE.Vector3(wallX, 0.4, mid(140)).sub(new THREE.Vector3(tx(100), 1.6, mid(140))).normalize());
+  const hw = r1.intersectObjects(s2.children, true);
+  const sb = R.stepBack(hw[0], r1.ray.direction);
+  ok(Math.abs(sb.x + 1) < 1e-9 && Math.abs(sb.y) < 1e-9 && Math.abs(sb.z) < 1e-9, 'a rotated, scaled wall steps straight back west', sb);
+  ok(R.pickRoom(hw, r1.ray.direction, rooms, toHouse).roomId === 'room_a', 'and selects A');
+  // A slanted face under non-uniform scale: only the inverse-transpose keeps
+  // it a true normal. THREE's own normal matrix is the oracle.
+  const obj = new THREE.Object3D();
+  obj.scale.set(1, 3, 0.5); obj.rotation.y = 0.5; obj.updateMatrixWorld(true);
+  const ln = new THREE.Vector3(1, 1, 1).normalize();
+  const want = ln.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(obj.matrixWorld)).normalize();
+  const got = R.stepBack({ point: new THREE.Vector3(), face: { normal: ln }, object: obj }, want.clone().negate());
+  ok(Math.hypot(got.x - want.x, got.y - want.y, got.z - want.z) < 1e-9, 'a slanted face under non-uniform scale gets its true world normal', { got, want });
+  const nf = R.stepBack({ point: hw[0].point, object: hw[0].object }, { x: 0.6, y: -0.8, z: 0 });
+  ok(nf.x === -0.6 && nf.y === 0.8 && nf.z === -0, 'a hit with no face steps back along the reversed ray', nf);
 }
 
 console.log('3. a faded wall passes the tap to the room behind it');
