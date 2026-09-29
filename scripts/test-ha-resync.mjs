@@ -406,7 +406,9 @@ await quiet(async () => {
   const models = haOff => ({
     light: { status: haOff ? 'haOffline' : 'ok', na: false, haOff, on: true, bri: 60, name: 'Lounge main' },
     ambient: { status: haOff ? 'haOffline' : 'ok', na: false, haOff, on: true, bri: 60, colorable: true, color: '#00ccff', name: 'Lounge ambience' },
-    curtain: { status: haOff ? 'haOffline' : 'ok', na: false, haOff, pct: 100, name: 'Lounge curtain' },
+    curtain: { status: haOff ? 'haOffline' : 'ok', haOff, name: 'Lounge curtains',
+      lights: [{ id: 'lounge_curtain', label: 'Lounge curtain light', na: false, on: true, bri: 60 }],
+      covers: [{ id: 'lounge_curtain', label: 'Lounge curtain', na: false, pct: 100 }, { id: 'lounge_sheer', label: 'Lounge sheer', na: false, pct: 0 }] },
     climate: { status: haOff ? 'haOffline' : 'ok', na: false, mock: false, off: false, haOff, current: 20.4, target: 21,
       min: 7, max: 30, step: 0.5, activity: 'idle', name: 'Lounge radiator' },
   });
@@ -433,12 +435,17 @@ await quiet(async () => {
     /sw\.addEventListener\('click', \(\) => \{\s*if \(writeBlocked\(\)\) return;/,                         // light power
     /r\.addEventListener\('input', \(\) => \{\s*if \(writeBlocked\(\)\) return;\s*const st = s\(\);/,      // light brightness
     /r\.addEventListener\('input', \(\) => \{\s*if \(writeBlocked\(\)\) return;\s*ctl\.dragging = true;\s*const pct/, // curtain slider
-    /const press = cmd => \{\s*if \(writeBlocked\(\)\) return;/,                                          // curtain open/close
+    /const press = \(cv, cmd\) => \{\s*if \(writeBlocked\(\)\) return;/,                                   // curtain open/close
+    /r\.addEventListener\('input', \(\) => \{\s*if \(writeBlocked\(\)\) return;\s*ctl\.dragging = true; r\.style\.setProperty\('--p', fillPct\(r\)\); r\.classList\.remove\('off', 'unknown'\);[^\n]*\s*sendCornice/, // cornice brightness
     /const apply = \(v, how\) => \{\s*if \(writeBlocked\(\)\) return;/,                                   // climate slider + steps
     /cp\.addEventListener\('input', \(\) => \{\s*if \(writeBlocked\(\)\) return;/,                      // accent colour square
   ];
   guards.forEach((re, i) => check('popover write handler ' + (i + 1) + '/' + guards.length + ' returns first while HA offline (no preview)', re.test(src)));
-  check('popover guard count: exactly the 6 write paths', (src.match(/if \(writeBlocked\(\)\) return;/g) || []).length === 6);
+  check('popover guard count: exactly the 7 write paths', (src.match(/if \(writeBlocked\(\)\) return;/g) || []).length === 7);
+  // The cornice light rows send through createCorniceSender (unit-tested in
+  // scripts/test-item-cards.mjs, section 11), built from the same guards.
+  check('cornice sender returns first while HA offline (no preview)', /return function sendCornice\(curtainId, entities, state, power, delay\) \{\s*if \(d\.writeBlocked\(\)\) return;/.test(src));
+  check('cornice sender is built from the popover writeBlocked / canSend', /const sendCornice = createCorniceSender\(\{ writeBlocked, canSend, ha,/.test(src));
   // Every furniture item-card control sends through createItemSender, whose
   // gates are unit-tested in scripts/test-item-cards.mjs (section 9); pinned
   // here: it returns first while blocked, and the runtime hands it the same

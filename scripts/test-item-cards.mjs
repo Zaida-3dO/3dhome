@@ -31,6 +31,12 @@
  *      patching its time in place instead of rebuilding every second.
  *  10. A light row's power switch turns on with NO brightness (HA restores
  *      the last level); only the slider sends one.
+ *  11. `switches` rows: a switch / input_boolean toggle with its power
+ *      sensor's live draw; binding, model, command, markup, the client.
+ *  12. The curtains card: one card per ROOM (every bound cover plus the
+ *      cornice lights), its cornice sender's gates and commands, its markup.
+ *  13. Last-known level: a light switched on (or given a colour while off)
+ *      shows the level it will come back at, or "unknown" -- never 100%.
  *
  * Each check names the one-line mutation it catches.
  */
@@ -429,7 +435,9 @@ const CONSOLE = [
   const climate = (rooms.sensors && rooms.sensors.climate) || {};
   check('demo: a wall clock and a radiator in a climate-bound room', (geo.furniture || []).some(f => f.type === 'wall-clock') &&
     (geo.furniture || []).some(f => f.type === 'radiator' && typeof climate[f.room] === 'string'));
-  check('demo: rooms.json declares 1.6 or newer for sensors.items', /^1\.([6-9]|\d\d+)$/.test(rooms.schemaVersion), rooms.schemaVersion);
+  const ver = String(rooms.schemaVersion).split('.').map(Number);
+  check('demo: rooms.json declares at least 1.8 (sensors.items with switches)', ver[0] > 1 || (ver[0] === 1 && ver[1] >= 8), rooms.schemaVersion);
+  check('demo: a switches card with a power partner is bound', cards.some(c => c.switches.length && c.switches.some(w => w.power)));
 }
 
 // ---- 9. the card wiring (pure parts of src/tap-popovers.js) --------------------------
@@ -483,8 +491,8 @@ const CONSOLE = [
   check('wiring: deviceAt is furnitureTarget', /return it \? furnitureTarget\(it, h\.point, h\.object, deviceCtx\) : null;/.test(tpSrc));
   check('wiring: the climate card title is climateCardName', /name: climateCardName\(t, roomName\) \};/.test(tpSrc));
   check('wiring: the clock card title is clockCardName', /name: clockCardName\(t, roomName\) \}, clockText\(new Date\(\)\)/.test(tpSrc));
-  check('wiring: the item card head is itemCardHead', /const head = itemCardHead\(card, \{ media, lights, readings \}, furnitureLabels\.get\(t\.itemId\), t\.itemId\);/.test(tpSrc) &&
-    /name: head\.name, icon: head\.icon, media, lights, readings \};/.test(tpSrc));
+  check('wiring: the item card head is itemCardHead', /const head = itemCardHead\(card, \{ media, lights, switches, readings \}, furnitureLabels\.get\(t\.itemId\), t\.itemId\);/.test(tpSrc) &&
+    /name: head\.name, icon: head\.icon, media, lights, switches, readings \};/.test(tpSrc));
 
   // The item sender's gates.
   const cmd = IC.mediaPowerCommand('media_player.demo_tv', true);
@@ -546,6 +554,232 @@ const CONSOLE = [
   check('wiring: the item card slider sends its value as brightness', /itemSend\(lightRowCommand\(card\.lights\[i\]\.entity, \{ on: true, bri: \+r\.value \}\), 'light', 200\)/.test(tpSrc));
   const after = IC.applyCommand({ state: 'off', attributes: { brightness: 90 } }, on);
   check('light switch: the optimistic state keeps the known level', after.state === 'on' && after.attributes.brightness === 90, after);
+}
+
+// ---- 11. switches rows ---------------------------------------------------------
+{
+  const T = await imp('src/tap-popovers.js');
+  const tpSrc = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
+  const card = IC.normaliseCard({ title: 'Desk', switches: [
+    { entity: 'switch.demo_desk_a', label: 'Monitor', power: 'sensor.demo_desk_a_power' },
+    { entity: 'input_boolean.demo_desk_b', power: 'light.demo_wrong' },
+    { entity: 'light.demo_not_a_switch' }] }, 0);
+  // Mutation: drop 'input_boolean' from SWITCH_DOMAINS -> 1 row -> fails; accept any domain -> 3 rows -> fails.
+  check('switches: switch and input_boolean rows kept, a light dropped', card && card.switches.length === 2 &&
+    card.switches[0].power === 'sensor.demo_desk_a_power' && card.switches[1].power === null, card);
+  check('switches: a card of only switches is a card', !!IC.normaliseCard({ switches: [{ entity: 'switch.demo_x' }] }));
+  check('switches: the card reads the switch and its power sensor', IC.cardEntities(card).join() === 'switch.demo_desk_a,sensor.demo_desk_a_power,input_boolean.demo_desk_b');
+  const on = IC.switchRowModel({ state: 'on', attributes: {} }, { state: '41.53', attributes: { unit_of_measurement: 'W' } });
+  // Mutation: drop the power text -> null -> fails.
+  check('switch row: on, with the live draw to one decimal', on.on && !on.na && on.stateText === 'On' && on.power === '41.5 W', on);
+  check('switch row: off at 0 W reads 0.0 W (a real reading)', IC.switchRowModel({ state: 'off' }, { state: '0', attributes: {} }).power === '0.0 W');
+  const offPow = IC.switchRowModel({ state: 'on', attributes: {} }, { state: 'unavailable', attributes: { unit_of_measurement: 'W' } });
+  // Mutation: Number(state) || 0 -> '0.0 W' -> fails.
+  check('switch row: an offline power sensor shows nothing, never 0 W', offPow.power === null && offPow.on, offPow);
+  check('switch row: no partner -> no power', IC.switchRowModel({ state: 'off', attributes: {} }, null).power === null);
+  const un = IC.switchRowModel({ state: 'unavailable', attributes: {} }, null);
+  check('switch row: unavailable -> Offline', un.na && !un.on && un.stateText === 'Offline');
+  const c1 = IC.switchCommand('switch.demo_desk_a', true), c2 = IC.switchCommand('input_boolean.demo_desk_b', false);
+  // Mutation: hard-code the 'switch' domain -> input_boolean fails.
+  check('switch command: its own domain, turn_on / turn_off', c1.domain === 'switch' && c1.service === 'turn_on' && c1.target.entity_id === 'switch.demo_desk_a' &&
+    c2.domain === 'input_boolean' && c2.service === 'turn_off', [c1, c2]);
+  check('applyCommand: a switch goes on and off', IC.applyCommand({ state: 'off', attributes: {} }, c1).state === 'on' &&
+    IC.applyCommand({ state: 'on', attributes: {} }, c2).state === 'off');
+  check('cardIcon: a switches card is a plug', IC.cardIcon(card) === 'plug');
+  const rows = { media: [], lights: [], switches: [{ label: 'Desk' }], readings: [{ label: 'x' }] };
+  T.itemCardHead({ title: 'Desk', media: [], lights: [], switches: [{}], readings: [{}] }, rows, null, 'd');
+  check('item head: a switch can be the lead row', rows.switches[0].label === 'Switch' && rows.readings[0].label === 'x', rows);
+  const dot = () => '';
+  const sw = (extra, haOff) => T.popoverHtml.item({ name: 'Desk', status: 'ok', haOff: !!haOff, media: [], lights: [], readings: [],
+    switches: [Object.assign({ label: 'Monitor' }, extra)] }, dot);
+  const hOn = sw(on), hOff = sw(on, true), hNoPow = sw(IC.switchRowModel({ state: 'off', attributes: {} }, null));
+  check('switch markup: a switch control, on, with the draw beside it', /data-a="spower" data-i="0" role="switch" aria-checked="true"/.test(hOn) &&
+    /data-power[^>]*>.*41\.5 W<\/span>/.test(hOn) && !/\sdisabled/.test(hOn), hOn);
+  check('switch markup: disabled while HA is offline', /data-a="spower"[^>]*\sdisabled/.test(hOff));
+  check('switch markup: no power span with no reading', !/data-power/.test(hNoPow) && /aria-checked="false"/.test(hNoPow));
+  check('switch markup: an unavailable switch is disabled', /data-a="spower"[^>]*\sdisabled/.test(sw(un)));
+  check('wiring: the switch sends switchCommand through itemSend', /itemSend\(switchCommand\(card\.switches\[i\]\.entity, !r\.on\), 'switch', 0\)/.test(tpSrc));
+  check('wiring: the item model builds switch rows from switchRowModel', /switchRowModel\(r, pr\)/.test(tpSrc) &&
+    /name: head\.name, icon: head\.icon, media, lights, switches, readings \};/.test(tpSrc));
+
+  // The client records a switch and its power sensor; a toggle reaches HA.
+  const { HAClient } = await imp('src/ha-client.js');
+  const st = (entity_id, state, attributes) => ({ entity_id, state: String(state), attributes: attributes || {}, last_changed: '', last_updated: '' });
+  const fake = installFakeHA({ states: [st('switch.demo_desk_a', 'off'), st('sensor.demo_desk_a_power', '12.5', { unit_of_measurement: 'W' })] });
+  const log = console.log, warn = console.warn;
+  console.log = () => {}; console.warn = () => {};
+  try {
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: {}, wsReconnectMs: 15,
+      sensors: { items: { desk: { switches: [{ entity: 'switch.demo_desk_a', power: 'sensor.demo_desk_a_power' }] } } } });
+    ha.connect();
+    await fake.whenConnected(ha);
+    check('client: a switch and its power sensor are recorded', (ha.getRawState('switch.demo_desk_a') || {}).state === 'off' &&
+      (ha.getRawState('sensor.demo_desk_a_power') || {}).state === '12.5');
+    const c = IC.switchCommand('switch.demo_desk_a', true);
+    ha.callServiceDebounced(c.domain, c.service, c.data, c.target, 'item:switch:switch.demo_desk_a', 0);
+    await sleep(10);
+    check('client: the toggle reaches HA as switch.turn_on', fake.calls.length === 1 && fake.calls[0].service === 'switch/turn_on' &&
+      fake.calls[0].body.entity_id === 'switch.demo_desk_a', fake.calls);
+    ha.disconnect();
+  } finally {
+    console.log = log; console.warn = warn;
+    fake.restore();
+  }
+}
+
+// ---- 12. the curtains card -------------------------------------------------------
+{
+  const T = await imp('src/tap-popovers.js');
+  const tpSrc = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
+  const curtains = [{ id: 'lr_sheer', name: 'Living sheer', room: 'living' }, { id: 'lr_curtain', name: 'Living curtain', room: 'living' },
+    { id: 'lr_spare', name: 'Spare', room: 'living' }, { id: 'bed_curtain', name: 'Bed curtain', room: 'bed' }, { id: 'loose', name: 'Loose' }];
+  const covers = { lr_sheer: ['cover.demo_lr_sheer'], lr_curtain: ['cover.demo_lr_a', 'cover.demo_lr_b'], bed_curtain: ['cover.demo_bed'], loose: ['cover.demo_loose'] };
+  const cornice = { lr_curtain: ['light.demo_lr_cornice'], bed_curtain: ['light.demo_bed_cornice'] };
+  const g = T.curtainRoomGroup('lr_sheer', curtains, covers, cornice);
+  // Mutation: members = only the tapped curtain -> one cover -> fails.
+  check('curtains card: every bound cover in the room, profile order', g.room === 'living' && g.covers.map(c => c.id).join() === 'lr_sheer,lr_curtain' &&
+    g.covers[1].entities.length === 2, g);
+  // Mutation: lights from the tapped curtain only -> none (the sheer has none) -> fails.
+  check('curtains card: the room\'s cornice light, whichever curtain was tapped', g.lights.length === 1 && g.lights[0].id === 'lr_curtain' &&
+    g.lights[0].entities[0] === 'light.demo_lr_cornice', g.lights);
+  const b = T.curtainRoomGroup('bed_curtain', curtains, covers, cornice);
+  check('curtains card: a one-curtain room is the same card, one cover and its light', b.covers.length === 1 && b.lights.length === 1 && b.room === 'bed');
+  const l = T.curtainRoomGroup('loose', curtains, covers, cornice);
+  check('curtains card: a curtain with no room is its own card', l.room === null && l.covers.length === 1 && l.covers[0].id === 'loose' && !l.lights.length);
+  check('curtains card: the entity lists are copies', (g.covers[1].entities.push('x'), covers.lr_curtain.length === 2));
+  check('curtains card title: "<Room> curtains", else the curtain', T.curtainCardTitle('Living Room', 'x') === 'Living room curtains' &&
+    T.curtainCardTitle('', 'Loose curtain') === 'Loose curtain');
+
+  const pw = T.corniceCommand(['light.demo_a', 'light.demo_b'], { on: true, bri: 40 }, true);
+  // Mutation: pass `power: false` -> brightness 102 -> fails.
+  check('cornice switch: turn_on with NO brightness, to every cornice entity', pw.domain === 'light' && pw.service === 'turn_on' &&
+    !('brightness' in pw.data) && pw.target.entity_id.join() === 'light.demo_a,light.demo_b', pw);
+  check('cornice slider: sends its brightness', T.corniceCommand(['light.demo_a'], { on: true, bri: 40 }, false).data.brightness === 102);
+  check('cornice off: turn_off', T.corniceCommand(['light.demo_a'], { on: false }, true).service === 'turn_off');
+  const mk = over => {
+    const log = { calls: [], previews: [] };
+    const d = Object.assign({ writeBlocked: () => false, canSend: () => true,
+      ha: () => ({ callServiceDebounced: (...a) => log.calls.push(a) }), preview: (...a) => log.previews.push(a) }, over);
+    return { send: T.createCorniceSender(d), log };
+  };
+  let x = mk({});
+  x.send('lr_curtain', ['light.demo_lr_cornice'], { on: true }, true, 0);
+  check('cornice sender: connected -> preview then one call under cornice-<id>', x.log.previews.length === 1 && x.log.calls.length === 1 &&
+    x.log.calls[0][0] === 'light' && x.log.calls[0][1] === 'turn_on' && !('brightness' in x.log.calls[0][2]) && x.log.calls[0][4] === 'cornice-lr_curtain' &&
+    x.log.calls[0][5] === 0, x.log);
+  x = mk({ canSend: () => false });
+  x.send('lr_curtain', ['light.demo_lr_cornice'], { on: true, bri: 30 }, false, 200);
+  // Mutation: delete `if (!d.canSend()) return;` -> a call -> fails.
+  check('cornice sender: no connected client -> a preview only, nothing sent', x.log.previews.length === 1 && x.log.calls.length === 0, x.log);
+  x = mk({ writeBlocked: () => true });
+  x.send('lr_curtain', ['light.demo_lr_cornice'], { on: true }, true, 0);
+  // Mutation: delete the writeBlocked line -> preview + call -> fails.
+  check('cornice sender: HA offline -> nothing at all', x.log.previews.length === 0 && x.log.calls.length === 0, x.log);
+
+  const dot = () => '';
+  const m = haOff => ({ name: 'Living room curtains', status: 'ok', haOff,
+    lights: [{ id: 'lr_curtain', label: 'Living curtain light', na: false, on: true, bri: 60 }],
+    covers: [{ id: 'lr_sheer', label: 'Living sheer', na: false, pct: 30 }, { id: 'lr_curtain', label: 'Living curtain', na: true, pct: 0 }] });
+  const h = T.popoverHtml.curtain(m(false), dot), hOff = T.popoverHtml.curtain(m(true), dot);
+  check('curtains markup: the light first, then the covers', h.indexOf('data-row="cornice"') > -1 && h.indexOf('data-row="cornice"') < h.indexOf('data-row="cover"') &&
+    (h.match(/data-row="cover"/g) || []).length === 2, h);
+  check('curtains markup: each cover its own slider and buttons, keyed by curtain', /data-a="pos" data-c="lr_sheer"[^>]*value="30"/.test(h) &&
+    /data-a="close" data-c="lr_sheer"/.test(h) && /data-a="open" data-c="lr_sheer"/.test(h), h);
+  check('curtains markup: a cover whose motor is down says so, no slider, buttons disabled', /Motor unavailable/.test(h) &&
+    !/data-a="pos" data-c="lr_curtain"/.test(h) && /data-a="open" data-c="lr_curtain"[^>]*\sdisabled/.test(h), h);
+  check('curtains markup: the cornice light has its switch and brightness', /data-a="cpower" data-c="lr_curtain"[^>]*aria-checked="true"/.test(h) &&
+    /data-a="cbri" data-c="lr_curtain"[^>]*value="60"/.test(h));
+  const ctl = html => (html.match(/<(button class="tp-(sw|ib)|input)[^>]*>/g) || []);
+  check('curtains markup: every control disabled while HA is offline', ctl(hOff).length === 7 && ctl(hOff).every(c => /\sdisabled\b/.test(c)), ctl(hOff));
+  check('wiring: the curtain view is built from curtainRoomGroup', /const curtainGroup = t => curtainRoomGroup\(t\.id, o\.house && o\.house\.curtains, bindings\.curtains, corniceBindings\);/.test(tpSrc) &&
+    /name: curtainCardTitle\(g\.room \? roomName\(g\.room\) : '', curtainNames\.get\(t\.id\) \|\| t\.id\), lights, covers \};/.test(tpSrc));
+  // Mutation: the switch passes `false` (not a power switch) -> fails.
+  check('wiring: the cornice switch is a power switch, the slider is not', /sendCornice\(l\.id, l\.entities, \{ on: !st\.on \}, true, 0\);/.test(tpSrc) &&
+    /sendCornice\(l\.id, l\.entities, \{ on: true, bri: \+r\.value \}, false, 200\);/.test(tpSrc));
+  check('wiring: covers go through the sidebar sender, per curtain', /sender\.input\(id, pct\)/.test(tpSrc) && /sender\.commit\(id, \+r\.value\)/.test(tpSrc) &&
+    /sender\.press\(cv\.id, o\.HAClient\.coverOpenCloseCommand\(cmd, cv\.entities\)\)/.test(tpSrc));
+
+  // The client records a cornice light's raw state (the row's 'unavailable').
+  const { HAClient } = await imp('src/ha-client.js');
+  const st = (entity_id, state, attributes) => ({ entity_id, state: String(state), attributes: attributes || {}, last_changed: '', last_updated: '' });
+  const fake = installFakeHA({ states: [st('light.demo_lr_cornice', 'unavailable')] });
+  const log = console.log, warn = console.warn;
+  console.log = () => {}; console.warn = () => {};
+  try {
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: {}, wsReconnectMs: 15,
+      sensors: { corniceLights: { lr_curtain: ['light.demo_lr_cornice'] } } });
+    ha.connect();
+    await fake.whenConnected(ha);
+    // Mutation: drop `!fittingIndex.has(...)` from noteRaw -> null -> fails.
+    check('client: a cornice light\'s raw state is recorded', (ha.getRawState('light.demo_lr_cornice') || {}).state === 'unavailable');
+    ha.disconnect();
+  } finally {
+    console.log = log; console.warn = warn;
+    fake.restore();
+  }
+}
+
+// ---- 13. last-known level --------------------------------------------------------
+{
+  const T = await imp('src/tap-popovers.js');
+  const tpSrc = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
+  // The review's case: an off light (HA reports brightness null), switched on.
+  const offRaw = { state: 'off', attributes: { brightness: null } };
+  const after = IC.applyCommand(offRaw, IC.lightRowToggleCommand('light.demo_x', IC.lightRowModel(offRaw)));
+  const shown = IC.lightRowModel(after, false, null, 40);
+  // Mutation: ignore lastBri (back to 100) -> fails.
+  check('level: switched on, HA not echoed yet -> the last known level, not 100', shown.on && shown.bri === 40 && !shown.briUnknown, shown);
+  const blind = IC.lightRowModel(after, false, null, null);
+  check('level: ... and with none known, UNKNOWN (never a made-up 100%)', blind.on && blind.briUnknown === true, blind);
+  check('level: HA\'s own brightness wins over the memory', IC.lightRowModel({ state: 'on', attributes: { brightness: 255 } }, false, null, 40).bri === 100);
+  check('level: an off light\'s slider rests at its last level', IC.lightRowModel(offRaw, false, null, 25).bri === 25 && !IC.lightRowModel(offRaw, false, null, 25).briUnknown);
+
+  // Colour picks.
+  const offRow = IC.lightRowModel(offRaw, true, '#ff0000');
+  const pick = IC.lightColorCommand('light.demo_x', offRow, '#ff8000', true);
+  // Mutation: send row.bri while restoring -> brightness 255 -> fails.
+  check('colour pick on an OFF light: the colour, no brightness', pick.service === 'turn_on' && !('brightness' in pick.data) &&
+    JSON.stringify(pick.data.rgb_color) === '[255,128,0]', pick);
+  const onRow = IC.lightRowModel({ state: 'on', attributes: { brightness: 102 } }, true, '#ff0000');
+  check('colour pick on an ON light: keeps the level it shows', IC.lightColorCommand('light.demo_x', onRow, '#ff8000', false).data.brightness === 102);
+  check('colour pick while the level is unknown: no brightness', !('brightness' in IC.lightColorCommand('light.demo_x', blind, '#ff8000', false).data));
+
+  // The memory.
+  let now = 1000;
+  const L = T.createLevelMemory(() => now);
+  L.see('k', true, 60); L.see('k', false, 0); L.see('k', true, 0);
+  check('memory: remembers the last level seen ON (off / 0 never overwrite it)', L.last('k') === 60 && L.last('other') === null);
+  L.pend('p', 100, 3000);
+  L.see('p', true, 100);
+  // Mutation: remember the stand-in -> last('p') === 100 -> fails.
+  check('memory: the stand-in level is never remembered, and reads unknown', L.last('p') === null && L.unknown('p', true, 100) && !L.unknown('p', false, 100));
+  L.see('p', true, 35);
+  check('memory: the light reporting a real level ends the unknown', L.last('p') === 35 && !L.unknown('p', true, 100));
+  L.pend('q', 100, 3000); now += 3001;
+  check('memory: ... as does time running out', !L.unknown('q', true, 100));
+  L.pend('r', 100, 3000); L.clear('r');
+  check('memory: a level the user set ends it', !L.unknown('r', true, 100));
+
+  // Markup.
+  const dot = () => '';
+  const item = T.popoverHtml.item({ name: 'Lamp', status: 'ok', haOff: false, media: [], switches: [], readings: [],
+    lights: [Object.assign({ label: 'Lamp' }, blind)] }, dot);
+  check('item light markup: an unknown level reads "On", an indeterminate slider', /<small>On<\/small>/.test(item) &&
+    /class="tp-range unknown" data-a="lbri"[^>]*aria-valuetext="Unknown"/.test(item) && !/On · 100%/.test(item), item);
+  const pop = T.popoverHtml.light({ status: 'ok', na: false, haOff: false, on: true, bri: 100, briUnknown: true, name: 'Hall light' }, dot);
+  check('light card markup: an unknown level reads "On", an indeterminate slider', /<b>On<\/b><\/span>/.test(pop) && /class="tp-range unknown" data-a="bri"/.test(pop), pop);
+  const cor = T.popoverHtml.curtain({ name: 'x', status: 'ok', haOff: false, covers: [],
+    lights: [{ id: 'c', label: 'Cornice', na: false, on: true, bri: 100, briUnknown: true }] }, dot);
+  check('cornice markup: an unknown level reads "On", an indeterminate slider', /<small data-v>On<\/small>/.test(cor) && /class="tp-range unknown" data-a="cbri"/.test(cor), cor);
+
+  // Wiring.
+  check('wiring: the item light rows are given the last level', /lightRowModel\(r, colorable, colorFromAttributes\(a\), levels\.last\(key\)\)/.test(tpSrc));
+  check('wiring: the item colour pick uses lightColorCommand with the pick\'s restoring flag',
+    /itemSend\(lightColorCommand\(card\.lights\[i\]\.entity, cur, cp\.value, restoring\), 'light', 200\)/.test(tpSrc) && /if \(restoring === null\) restoring = !cur\.on;/.test(tpSrc));
+  check('wiring: the light card colour pick on an off light is a no-brightness send', /o\.sendLight\(t\.roomId, t\.channel, st, 200, true, restoring\);/.test(tpSrc) &&
+    /if \(restoring === null\) restoring = !st\.on;/.test(tpSrc));
+  check('wiring: the light card switch-on restores the last level', /if \(st\.on && !st\.bri\) restoreLevel\(st\);/.test(tpSrc) &&
+    /briUnknown: levels\.unknown\(key, !!st\.on, st\.bri\),/.test(tpSrc));
 }
 
 console.log(failures ? 'FAILED -- ' + failures + ' failed, ' + passes + ' passed' : 'ok -- ' + passes + ' passed, 0 failed');

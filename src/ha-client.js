@@ -551,6 +551,8 @@ export const HAClient = (() => {
     // sensors.items, src/item-cards.js): its media players, lights and
     // readings are shown straight from the raw state, so recording them here
     // is all the fold they need. The card repaints on its own 1 s tick.
+    // Curtain covers and cornice lights (fittingIndex) too: the curtains
+    // card's cornice-light row needs the light's own 'unavailable'.
     const itemEntityIds = itemBindingEntities(normaliseItemBindings(sensors && sensors.items));
     // sun.sun -> cb({ azimuth, elevation }), degrees. Every HA install has
     // the entity; the scene points its sun from it. Fired only when either
@@ -574,7 +576,8 @@ export const HAClient = (() => {
     const itemEntityCallbacks = [];
     function noteRaw(st) {
       if (!st || !st.entity_id) return;
-      if (!entityIndex.has(st.entity_id) && !climateIndex.has(st.entity_id) && !itemEntityIds.has(st.entity_id)) return;
+      if (!entityIndex.has(st.entity_id) && !climateIndex.has(st.entity_id) && !itemEntityIds.has(st.entity_id) &&
+        !fittingIndex.has(st.entity_id)) return;
       const prev = rawStates.get(st.entity_id);
       const raw = { state: st.state, attributes: st.attributes || {} };
       rawStates.set(st.entity_id, raw);

@@ -13,7 +13,9 @@
  * the scene already tags on its meshes, and bound through rooms.json:
  *
  *   light    mesh.userData.{roomId, lightChannel}  -> rooms[roomId][channel]
- *   curtain  ancestor group named 'curtain:<id>'   -> sensors.curtains[id]
+ *   curtain  ancestor group named 'curtain:<id>'   -> sensors.curtains[id]; the
+ *            card is the ROOM's: every bound cover in the curtain's room plus
+ *            their cornice lights (sensors.corniceLights), see curtainRoomGroup
  *   door     ancestor userData.doorProfileId       -> sensors.doors[id]
  *   climate  (room)                                -> sensors.climate[room]
  *   vacuum   a furniture item's world box          -> sensors.vacuums[itemId]
@@ -56,14 +58,14 @@
  */
 
 import { ICONS, svgIcon } from './ui-icons.js';
-import { isColorChannel, supportsColor, swatchColor, colorFromAttributes } from './light-color.js';
+import { isColorChannel, supportsColor, swatchColor, colorFromAttributes, lightServiceCall } from './light-color.js';
 import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCommand, vacuumStatusText,
   MOCK_VACUUM_READINGS, mockVacuumAfter } from './vacuum-control.js';
 import { normalisePlantBindings, plantStatusText, agoText, batteryText, mockPlantReading } from './plant-status.js';
 import { normaliseItemBindings, furnitureTapTarget, tappableFurnitureIds, mediaRowModel, lightRowModel, readingRowModel,
   rowLabel, mediaPowerCommand, mediaVolumeCommand, mediaSourceCommand, mediaSoundModeCommand, lightRowCommand,
-  lightRowToggleCommand, applyCommand, mockItemState, clockText, cardEntities, cardTitle, cardIcon, rowLabelUnderTitle, bindingTitle,
-  clockTitle, radiatorTitle } from './item-cards.js';
+  lightRowToggleCommand, lightColorCommand, applyCommand, mockItemState, clockText, cardEntities, cardTitle, cardIcon, rowLabelUnderTitle, bindingTitle,
+  clockTitle, radiatorTitle, roomThingTitle, switchRowModel, switchCommand } from './item-cards.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -171,14 +173,15 @@ export function furnitureTarget(it, point, object, ctx) {
  * The title and header icon of a furniture item card, from its row models
  * (the item view's model). The title is the binding's title, else the
  * item's short label, else its id; the LEAD row (first media, else light,
- * else reading) is relabelled in place when its label only repeats the title.
- * @param rows  { media, lights, readings } -- row models carrying `label` (and `role`)
+ * else switch, else reading) is relabelled in place when its label only
+ * repeats the title.
+ * @param rows  { media, lights, switches, readings } -- row models carrying `label` (and `role`)
  */
 export function itemCardHead(card, rows, furnitureLabel, itemId) {
   const name = cardTitle(card, furnitureLabel, itemId);
   const r = rows || {};
   const lead = (r.media || [])[0] ? [r.media[0], 'media'] : (r.lights || [])[0] ? [r.lights[0], 'light']
-    : (r.readings || [])[0] ? [r.readings[0], 'reading'] : null;
+    : (r.switches || [])[0] ? [r.switches[0], 'switch'] : (r.readings || [])[0] ? [r.readings[0], 'reading'] : null;
   if (lead) lead[0].label = rowLabelUnderTitle(lead[0].label, name, lead[0].role, lead[1]);
   return { name, icon: cardIcon(card) };
 }
@@ -215,6 +218,95 @@ export function createItemSender(d) {
     if (!d.canSend()) return;
     d.ha().callServiceDebounced(command.domain, command.service, command.data, command.target, 'item:' + key + ':' + eid, delay || 0);
     d.setOptimistic(eid, applyCommand(cur, command));
+  };
+}
+
+/**
+ * The last level each light was seen ON at, so a light switched on with no
+ * brightness (HA restores its last level) shows that level straight away --
+ * never a made-up 100%. Keyed by the caller ('light:<room>/<channel>',
+ * 'cornice:<curtain>', 'item:<entity>').
+ *
+ *   see(key, on, bri)   note a level the light REPORTED (or the user set)
+ *   last(key)           that level, or null
+ *   pend(key, v, ms)    a light switched on with no known level: `v` is the
+ *                       stand-in the scene shows; for `ms` (or until another
+ *                       level is seen) the card shows the level as unknown,
+ *                       and `v` itself is never remembered as a level
+ *   unknown(key, on, v) is it still that stand-in?
+ *   clear(key)          the user set a level: no longer unknown
+ */
+export function createLevelMemory(clock) {
+  const now = clock || (() => Date.now());
+  const last = new Map(), pending = new Map();
+  const isPending = (key, v) => { const p = pending.get(key); return !!p && p.until > now() && p.value === v; };
+  return {
+    see(key, on, bri) {
+      if (!on || !(typeof bri === 'number' && bri > 0)) return;
+      if (isPending(key, bri)) return;
+      pending.delete(key);
+      last.set(key, bri);
+    },
+    last: key => (last.has(key) ? last.get(key) : null),
+    pend(key, value, ms) { pending.set(key, { value, until: now() + ms }); },
+    unknown: (key, on, value) => !!on && isPending(key, value),
+    clear(key) { pending.delete(key); },
+  };
+}
+
+/**
+ * The curtains card a tapped curtain opens: the ROOM's. Every curtain in the
+ * tapped one's room (house.curtains `room`) that binds a cover
+ * (sensors.curtains) is a cover row, and every one that binds a cornice light
+ * (sensors.corniceLights) is a light row -- in profile order. A curtain with
+ * no room is a room of its own.
+ *
+ * @param curtains        house.curtains: [{ id, name, room }] (the loader's)
+ * @param coverBindings   sensors.curtains: id -> [cover entity]
+ * @param corniceBindings sensors.corniceLights: id -> [light entity]
+ * @returns { room, covers: [{ id, name, entities }], lights: [{ id, name, entities }] }
+ */
+export function curtainRoomGroup(curtainId, curtains, coverBindings, corniceBindings) {
+  const list = (Array.isArray(curtains) ? curtains : []).filter(c => c && c.id);
+  const me = list.find(c => c.id === curtainId);
+  const room = me && me.room ? me.room : null;
+  const members = list.filter(c => (room ? c.room === room : c.id === curtainId));
+  if (!me) members.push({ id: curtainId, name: curtainId });
+  const ents = (b, id) => { const e = b ? b[id] : null; return Array.isArray(e) && e.length ? e.slice() : null; };
+  const rows = b => members.filter(c => ents(b, c.id)).map(c => ({ id: c.id, name: c.name || c.id, entities: ents(b, c.id) }));
+  return { room, covers: rows(coverBindings), lights: rows(corniceBindings) };
+}
+
+/** The curtains card title: "<Room> curtains", else the tapped curtain's own name. */
+export function curtainCardTitle(roomName, curtainName) {
+  return roomName ? roomThingTitle(roomName, 'curtains') : sentenceCase(curtainName || 'Curtains');
+}
+
+/**
+ * A cornice light's HA call (every entity bound to that curtain's cornice).
+ * `power`: the on/off switch -- turn_on with no brightness, so the light
+ * comes back at its last level (lightServiceCall); the slider sends one.
+ */
+export function corniceCommand(entities, state, power) {
+  const c = lightServiceCall('cornice', state, { power: !!power });
+  return { domain: 'light', service: c.service, data: c.data, target: { entity_id: (entities || []).slice() } };
+}
+
+/**
+ * The cornice rows' send path, gates injected (as createItemSender): nothing
+ * while `writeBlocked()`; the model is previewed (the scene's cornice strip,
+ * the row's optimistic state) and only then, with `canSend()` -- a fully
+ * connected client -- the command goes out, debounced under
+ * 'cornice-<curtainId>' for `delay` ms.
+ * @param d  { writeBlocked, canSend, ha, preview(curtainId, state, power) }
+ */
+export function createCorniceSender(d) {
+  return function sendCornice(curtainId, entities, state, power, delay) {
+    if (d.writeBlocked()) return;
+    d.preview(curtainId, state, power);
+    if (!d.canSend()) return;
+    const c = corniceCommand(entities, state, power);
+    d.ha().callServiceDebounced(c.domain, c.service, c.data, c.target, 'cornice-' + curtainId, delay || 0);
   };
 }
 
@@ -570,7 +662,7 @@ ${sel} .tp-pop.chip { padding: 10px 12px; }`;
 export const STYLE = `
 .tp-pop { --w:200px; --ib-w:30px; --ib-h:${GF.ibH}px; --sw-w:36px; --sw-h:${GF.swH}px; --thumb:20px; --track-h:6px;
   --ink:#fff; --ink-2:rgba(255,255,255,0.62); --accent:#6366f1; --ok:#22c55e; --warn:#eab308; --bad:#ef4444;
-  --amber:#ffd43b; --heat:#ff8a3d; --door-open:#f59e0b;
+  --amber:#ffd43b; --heat:#ff8a3d; --door-open:#f59e0b; --wet:#60a5fa;
   /* The card and its pointer diamond paint from these same two variables. */
   --pop-bg: rgba(10,10,20,0.94); --pop-border: rgba(255,255,255,0.10);
   /* Range parts -- see the .tp-range block below. */
@@ -726,7 +818,7 @@ export const STYLE = `
 .tp-pop[data-kind=plant] { --w: 220px; }
 .tp-ico.p-ok { fill: var(--ok); }
 .tp-ico.p-dry, .tp-ico.p-due { fill: var(--door-open); }
-.tp-ico.p-wet { fill: #60a5fa; }
+.tp-ico.p-wet { fill: var(--wet); }
 .tp-pmoist { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; min-width: 0; }
 .tp-pmoist svg { width: 16px; height: 16px; flex: none; fill: #60a5fa; }
 .tp-pmoist b { font-size: 20px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
@@ -757,6 +849,13 @@ export const STYLE = `
 .tp-ilab small.on { color: var(--ok); }
 .tp-ilab .tp-ico { width: 18px; height: 18px; }
 .tp-ico.m-on { fill: var(--accent); }
+.tp-ico.sw-on { fill: var(--ok); }
+.tp-ipow { display: inline-flex; align-items: center; gap: 2px; flex: none; font-size: 11px; color: var(--ink-2);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tp-ipow svg { width: 12px; height: 12px; fill: var(--amber); }
+/* Curtains card: the room's cornice light(s) then its covers, one row each. */
+.tp-pop[data-kind=curtain] { --w: 236px; }
+.tp-pop[data-kind=curtain] .tp-name { flex: 1 1 auto; }
 .tp-ireading { display: flex; align-items: baseline; gap: 6px; flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tp-ireading b { font-size: 14px; font-weight: 600; color: var(--ink); }
 .tp-ireading.muted b { font-size: 12px; color: var(--ink-2); font-weight: 500; }
@@ -801,7 +900,8 @@ ${coarseRules('.tp-force-coarse')}
    of it; the rest re-colours the literal white-on-dark parts. The diamond
    follows the card through --pop-bg / --pop-border. */
 :root[data-theme="light"] .tp-pop { color-scheme: only light;
-  --ink:#1a1d29; --ink-2:rgba(26,29,41,0.64); --amber:#d99a00; --heat:#e8590c; --door-open:#c77700; --ok:#16a34a;
+  /* State colours darkened to at least 3:1 on the near-white card. */
+  --ink:#1a1d29; --ink-2:rgba(26,29,41,0.64); --amber:#b37f00; --heat:#e8590c; --door-open:#c77700; --ok:#16a34a; --wet:#3b82f6;
   --pop-bg: rgba(250,251,253,0.96); --pop-border: rgba(0,0,0,0.12); --range-track: rgba(0,0,0,0.18);
   box-shadow: 0 6px 20px rgba(0,0,0,0.22); }
 /* :where() keeps this at .tp-ico's own weight (0,1,0): it re-colours the
@@ -858,10 +958,11 @@ export const popoverHtml = {
   light(m, dot) {
     const shell = shellWith(dot);
     const on = m.on && !m.na;
+    // Just switched on with no level known yet: "On", an indeterminate slider.
     const val = m.na ? '<span class="tp-val muted"><b>Unavailable</b></span>'
-      : '<span class="tp-val" data-v><b>' + (m.on ? 'On' : 'Off') + '</b>' + (m.on ? ' · ' + m.bri + '%' : '') + '</span>';
-    const range = '<input class="tp-range' + (m.on ? '' : ' off') + '" data-a="bri" type="range" min="5" max="100" value="' +
-      m.bri + '" aria-label="Brightness"' + (m.haOff ? ' disabled' : '') + '>';
+      : '<span class="tp-val" data-v><b>' + (m.on ? 'On' : 'Off') + '</b>' + (m.on && !m.briUnknown ? ' · ' + m.bri + '%' : '') + '</span>';
+    const range = '<input class="tp-range' + (m.on ? (m.briUnknown ? ' unknown' : '') : ' off') + '" data-a="bri" type="range" min="5" max="100" value="' +
+      m.bri + '"' + (m.on && m.briUnknown ? ' aria-valuetext="Unknown"' : '') + ' aria-label="Brightness"' + (m.haOff ? ' disabled' : '') + '>';
     // Accent channels: the colour square sits inline, left of the slider.
     const colour = m.colorable
       ? '<input class="tp-color" data-a="color" type="color" value="' + esc(swatchColor(m.color)) +
@@ -872,18 +973,46 @@ export const popoverHtml = {
       m.on + '" aria-label="Power"' + (m.na || m.haOff ? ' disabled' : '') + '><i></i></button></div>' +
       (m.na ? '' : colour ? '<div class="tp-crow">' + colour + range + '</div>' : range) + offlineLine(m));
   },
+  /**
+   * The room's curtains card. m: { name, status, haOff, lights: [{ id, label,
+   * na, on, bri }], covers: [{ id, label, na, pct }] } -- the cornice lights
+   * first, then the covers. Every control carries data-a (what) and data-c
+   * (which curtain).
+   */
   curtain(m, dot) {
     const shell = shellWith(dot);
-    const dis = m.na || m.haOff ? ' disabled' : '';
-    const val = m.na ? '<span class="tp-val muted"><b>Motor unavailable</b></span>'
-      : '<span class="tp-val" data-v>Open <b>' + m.pct + '%</b></span>';
-    return shell(ico(m.pct > 0 ? I.curtains : I.curtainsClosed, m.na ? 'dim' : ''), m.name, m.status,
-      '<div class="tp-row">' + val + '<span class="tp-btns">' +
-      '<button class="tp-ib" data-a="close" data-tip="Close" aria-label="Close curtain"' + dis + '>' + svg(I.cClose) + '</button>' +
-      '<button class="tp-ib" data-a="open" data-tip="Open" aria-label="Open curtain"' + dis + '>' + svg(I.cOpen) + '</button>' +
-      '</span></div>' +
-      (m.na ? '' : '<input class="tp-range" data-a="pos" type="range" min="0" max="100" value="' + m.pct + '" aria-label="Open percentage"' + dis + '>') +
-      offlineLine(m));
+    const off = m.haOff;
+    const rows = [];
+    (m.lights || []).forEach(l => {
+      const c = ' data-c="' + esc(l.id) + '"';
+      const on = l.on && !l.na;
+      const unk = l.on && l.briUnknown;
+      const sub = l.na ? 'Unavailable' : l.on ? (unk ? 'On' : 'On · ' + l.bri + '%') : 'Off';
+      let body = '<div class="tp-row"><span class="tp-ilab">' + ico(on ? I.bulb : I.bulbOff, on ? 'light-on' : (l.na ? 'dim' : '')) +
+        '<span><b>' + esc(l.label) + '</b><small data-v>' + esc(sub) + '</small></span></span>' +
+        '<button class="tp-sw' + (l.on ? ' on' : '') + '" data-a="cpower"' + c + ' role="switch" aria-checked="' + !!l.on +
+        '" aria-label="Power: ' + esc(l.label) + '"' + (l.na || off ? ' disabled' : '') + '><i></i></button></div>';
+      if (!l.na) {
+        body += '<input class="tp-range' + (l.on ? (unk ? ' unknown' : '') : ' off') + '" data-a="cbri"' + c + ' type="range" min="5" max="100" value="' + l.bri +
+          '"' + (unk ? ' aria-valuetext="Unknown"' : '') + ' aria-label="Brightness: ' + esc(l.label) + '"' + (off ? ' disabled' : '') + '>';
+      }
+      rows.push('<div class="tp-irow" data-row="cornice"' + c + '>' + body + '</div>');
+    });
+    (m.covers || []).forEach(cv => {
+      const c = ' data-c="' + esc(cv.id) + '"';
+      const dis = cv.na || off ? ' disabled' : '';
+      const sub = cv.na ? '<small>Motor unavailable</small>' : '<small data-v>Open ' + cv.pct + '%</small>';
+      rows.push('<div class="tp-irow" data-row="cover"' + c + '><div class="tp-row"><span class="tp-ilab">' +
+        ico(cv.pct > 0 ? I.curtains : I.curtainsClosed, cv.na ? 'dim' : '') + '<span><b>' + esc(cv.label) + '</b>' + sub + '</span></span>' +
+        '<span class="tp-btns">' +
+        '<button class="tp-ib" data-a="close"' + c + ' data-tip="Close" aria-label="Close: ' + esc(cv.label) + '"' + dis + '>' + svg(I.cClose) + '</button>' +
+        '<button class="tp-ib" data-a="open"' + c + ' data-tip="Open" aria-label="Open: ' + esc(cv.label) + '"' + dis + '>' + svg(I.cOpen) + '</button>' +
+        '</span></div>' +
+        (cv.na ? '' : '<input class="tp-range" data-a="pos"' + c + ' type="range" min="0" max="100" value="' + cv.pct +
+          '" aria-label="Open percentage: ' + esc(cv.label) + '"' + dis + '>') + '</div>');
+    });
+    const anyOpen = (m.covers || []).some(cv => cv.pct > 0);
+    return shell(ico(anyOpen ? I.curtains : I.curtainsClosed), m.name, m.status, rows.join('') + offlineLine(m));
   },
   /**
    * Robot vacuum. m: { name, status, haOff, reading, actions, rooms:
@@ -946,8 +1075,9 @@ export const popoverHtml = {
   },
   /**
    * Furniture item card (src/item-cards.js). m: { name, status, haOff,
-   * media: [row], lights: [row], readings: [row] } -- each row its label and
-   * its mediaRowModel / lightRowModel / readingRowModel fields. Every
+   * media: [row], lights: [row], switches: [row], readings: [row] } -- each
+   * row its label and its mediaRowModel / lightRowModel / switchRowModel /
+   * readingRowModel fields. Every
    * control carries data-a (what it does) and data-i (which row).
    */
   item(m, dot) {
@@ -977,7 +1107,7 @@ export const popoverHtml = {
         // Takes a volume but has not reported one: UNKNOWN, never 0.
         body += '<div class="tp-ivol" data-vol-unknown>' + svg(I.volume) + '<input class="tp-range unknown" data-a="mvol" data-i="' + i +
           '" type="range" min="0" max="100" value="50" aria-valuetext="Unknown" aria-label="Volume (not reported): ' + esc(r.label) + '"' +
-          (off ? ' disabled' : '') + '><span class="tp-ivol-q" title="Volume not reported">?</span></div>';
+          (off ? ' disabled' : '') + '><span class="tp-ivol-q" role="img" aria-label="Volume not reported" title="Volume not reported">?</span></div>';
       }
       const sels = (r.sources.length ? select('msrc', i, r.sources, r.source, 'Source: ' + r.label, 'Source') : '') +
         (r.soundModes.length ? select('mmode', i, r.soundModes, r.soundMode, 'Sound mode: ' + r.label, 'Sound mode') : '');
@@ -986,18 +1116,26 @@ export const popoverHtml = {
     });
     (m.lights || []).forEach((r, i) => {
       const on = r.on && !r.na;
-      const sub = r.na ? 'Unavailable' : r.on ? 'On · ' + r.bri + '%' : 'Off';
+      const unk = r.on && r.briUnknown;
+      const sub = r.na ? 'Unavailable' : r.on ? (unk ? 'On' : 'On · ' + r.bri + '%') : 'Off';
       let body = '<div class="tp-row">' + lab(ico(on ? I.bulb : I.bulbOff, on ? 'light-on' : (r.na ? 'dim' : '')), r.label, sub, false) +
         sw('lpower', i, r.on, r.na || off, 'Power: ' + r.label) + '</div>';
       if (!r.na) {
-        const range = '<input class="tp-range' + (r.on ? '' : ' off') + '" data-a="lbri" data-i="' + i + '" type="range" min="5" max="100" value="' +
-          r.bri + '" aria-label="Brightness: ' + esc(r.label) + '"' + (off ? ' disabled' : '') + '>';
+        const range = '<input class="tp-range' + (r.on ? (unk ? ' unknown' : '') : ' off') + '" data-a="lbri" data-i="' + i + '" type="range" min="5" max="100" value="' +
+          r.bri + '"' + (unk ? ' aria-valuetext="Unknown"' : '') + ' aria-label="Brightness: ' + esc(r.label) + '"' + (off ? ' disabled' : '') + '>';
         body += r.colorable
           ? '<div class="tp-crow"><input class="tp-color" data-a="lcolor" data-i="' + i + '" type="color" value="' + esc(swatchColor(r.color)) +
             '" aria-label="Colour: ' + esc(r.label) + '" title="Colour"' + (off ? ' disabled' : '') + '>' + range + '</div>'
           : range;
       }
       rows.push('<div class="tp-irow" data-row="light">' + body + '</div>');
+    });
+    (m.switches || []).forEach((r, i) => {
+      const on = r.on && !r.na;
+      const pw = r.power ? '<span class="tp-ipow" data-power title="Power draw">' + svg(I.flash) + esc(r.power) + '</span>' : '';
+      rows.push('<div class="tp-irow" data-row="switch"><div class="tp-row">' +
+        lab(ico(I.plug, r.na ? 'dim' : on ? 'sw-on' : ''), r.label, r.stateText, on) + pw +
+        sw('spower', i, r.on, r.na || off, 'Power: ' + r.label) + '</div></div>');
     });
     (m.readings || []).forEach(r => {
       const val = '<span class="tp-ireading' + (r.na ? ' muted' : '') + '" data-v><b>' + esc(r.text) + '</b>' +
@@ -1221,6 +1359,12 @@ export function attachTapPopovers(o) {
   const itemOptimistic = new Map();
   const OPTIMISTIC_MS = 3000;
   const itemMockMode = () => !ha() && sim.status === undefined;
+  const levels = createLevelMemory();
+  const restoreSample = (eid, r) => {
+    if (!r || r.state !== 'on' || eid.indexOf('light.') !== 0 || typeof (r.attributes || {}).brightness === 'number') return r;
+    const last = levels.last('item:' + eid);
+    return { state: r.state, attributes: Object.assign({}, r.attributes, { brightness: Math.round((last != null ? last : 100) * 2.55) }) };
+  };
   function itemRaw(eid, kind, row, i) {
     const opt = itemOptimistic.get(eid);
     if (opt && opt.until > Date.now()) return opt.raw;
@@ -1231,8 +1375,46 @@ export function attachTapPopovers(o) {
   // Send one item-row command (createItemSender: the writeBlocked / mock /
   // canSend gates, then an optimistic repaint).
   const itemSend = createItemSender({ writeBlocked, canSend, mockMode: itemMockMode, ha,
-    getRaw: eid => itemRaw(eid), setMock: (eid, r) => itemMock.set(eid, r),
+    // A sample light switched on with no level restores its last one (else full), as HA would.
+    getRaw: eid => itemRaw(eid), setMock: (eid, r) => itemMock.set(eid, restoreSample(eid, r)),
     setOptimistic: (eid, r) => itemOptimistic.set(eid, { raw: r, until: Date.now() + OPTIMISTIC_MS }) });
+
+  // The curtains card (curtainRoomGroup): the tapped curtain's room.
+  const corniceBindings = (o.sensors && o.sensors.corniceLights) || {};
+  const curtainGroup = t => curtainRoomGroup(t.id, o.house && o.house.curtains, bindings.curtains, corniceBindings);
+  // A cornice light row: HA's raw state while live (its 'unavailable'
+  // included), else the scene's cornice strip -- the demo, or a configured
+  // HA that is offline (controls disabled; the last state shown). For a few
+  // seconds after a send, what was sent (until HA's echo lands).
+  const corniceOptimistic = new Map();
+  function corniceRow(l, c) {
+    const opt = corniceOptimistic.get(l.id);
+    const key = 'cornice:' + l.id, last = levels.last(key);
+    if (opt && opt.until > Date.now()) {
+      return { na: false, on: opt.on, bri: opt.bri != null ? opt.bri : (last != null ? last : 100), briUnknown: opt.on && opt.bri == null && last == null };
+    }
+    if (isLive(c)) {
+      const r = raw(l.entities[0]), a = (r && r.attributes) || {};
+      if (r && r.state === 'on' && typeof a.brightness === 'number') levels.see(key, true, Math.round(a.brightness / 2.55));
+      const m = lightRowModel(r, false, null, levels.last(key));
+      return { na: m.na, on: m.on, bri: m.bri, briUnknown: m.briUnknown };
+    }
+    const s = typeof home.getCorniceLight === 'function' ? home.getCorniceLight(l.id) : null;
+    if (s && s.on && s.bri > 0) levels.see(key, true, Math.round(s.bri));
+    return s ? { na: false, on: !!s.on, bri: s.on && s.bri > 0 ? Math.round(s.bri) : (last != null ? last : 100), briUnknown: false }
+      : { na: false, on: false, bri: 100, briUnknown: false };
+  }
+  const sendCornice = createCorniceSender({ writeBlocked, canSend, ha,
+    preview(id, st) {
+      const now = typeof home.getCorniceLight === 'function' ? home.getCorniceLight(id) : null;
+      // A switch-on carries no level: HA restores the last one. Show the last
+      // one seen; with none, the scene a stand-in and the card "unknown".
+      const key = 'cornice:' + id, last = levels.last(key);
+      if (st.bri != null) levels.see(key, true, st.bri);
+      const bri = st.bri != null ? st.bri : last;
+      if (typeof home.setCorniceLight === 'function') home.setCorniceLight(id, { on: !!st.on, bri: bri != null ? bri : 100, color: now ? now.color : null });
+      if (ha()) corniceOptimistic.set(id, { on: !!st.on, bri: st.on ? (bri != null ? Math.round(bri) : null) : 100, until: Date.now() + OPTIMISTIC_MS });
+    } });
 
   const VIEWS = {
     light: {
@@ -1242,7 +1424,10 @@ export function attachTapPopovers(o) {
         const r = raw(t.entities[0]);
         const na = lightUnavailable(c, r);
         const lc = ((Home3DScene.LIGHTS || {})[t.roomId] || {})[t.channel];
+        const key = 'light:' + t.id;
+        levels.see(key, !!st.on, st.bri);
         return { status: statusKey('light', c, na), na, haOff: haOfflineConn(c), on: !!st.on, bri: st.bri != null ? st.bri : 100,
+          briUnknown: levels.unknown(key, !!st.on, st.bri),
           // A colour square only for an accent channel whose entity can take
           // a colour (supported_color_modes; unknown counts as yes).
           colorable: isColorChannel(t.channel) && supportsColor(r && r.attributes),
@@ -1252,11 +1437,21 @@ export function attachTapPopovers(o) {
       html(m) { return popoverHtml.light(m, dot); },
       bind(t, el, ctl) {
         const s = () => (home.lightState[t.roomId] || {})[t.channel];
+        const key = 'light:' + t.id;
+        // Switched on with no level: the scene shows the last one seen (else
+        // 100) while HA restores the real one; with none seen, the card says
+        // the level is unknown until HA reports it.
+        const restoreLevel = st => {
+          const last = levels.last(key);
+          st.bri = last != null ? last : 100;
+          if (last == null && canSend()) levels.pend(key, st.bri, OPTIMISTIC_MS);
+        };
         const sw = el.querySelector('[data-a=power]');
         if (sw) sw.addEventListener('click', () => {
           if (writeBlocked()) return;
           const st = s(); if (!st) return;
-          st.on = !st.on; if (st.on && !st.bri) st.bri = 100;
+          st.on = !st.on;
+          if (st.on && !st.bri) restoreLevel(st);
           // power: turn_on with no brightness -- HA restores the last level.
           home.updateLights(); o.sendLight(t.roomId, t.channel, st, 0, false, true); onChange(); ctl.refresh(true);
         });
@@ -1266,9 +1461,9 @@ export function attachTapPopovers(o) {
             if (writeBlocked()) return;
             const st = s(); if (!st) return;
             ctl.dragging = true;
-            st.bri = +r.value; st.on = true;
+            st.bri = +r.value; st.on = true; levels.clear(key);
             home.updateLights(); o.sendLight(t.roomId, t.channel, st, 200);
-            r.style.setProperty('--p', fillPct(r)); r.classList.remove('off');
+            r.style.setProperty('--p', fillPct(r)); r.classList.remove('off', 'unknown'); r.removeAttribute('aria-valuetext');
             const v = el.querySelector('[data-v]'); if (v) v.innerHTML = '<b>On</b> · ' + st.bri + '%';
             sw.classList.add('on'); sw.setAttribute('aria-checked', 'true');
             const ic = el.querySelector('.tp-ico'); if (ic) ic.outerHTML = ico(I.bulb, 'light-on');
@@ -1291,17 +1486,22 @@ export function attachTapPopovers(o) {
         // picker. 'change' / blur end it.
         const cp = el.querySelector('[data-a=color]');
         if (cp) {
+          // A pick on a light that was OFF when it began turns it on at its
+          // LAST level: the colour goes out with no brightness (sendLight's
+          // power flag), for the whole pick.
+          let restoring = null;
           cp.addEventListener('input', () => {
             if (writeBlocked()) return;
             const st = s(); if (!st) return;
             ctl.dragging = true;
-            st.color = cp.value; st.on = true; if (!st.bri) st.bri = 100;
-            home.updateLights(); o.sendLight(t.roomId, t.channel, st, 200, true);
+            if (restoring === null) restoring = !st.on;
+            st.color = cp.value; st.on = true; if (!st.bri) restoreLevel(st);
+            home.updateLights(); o.sendLight(t.roomId, t.channel, st, 200, true, restoring);
             if (r) r.classList.remove('off');
-            const v = el.querySelector('[data-v]'); if (v) v.innerHTML = '<b>On</b> · ' + st.bri + '%';
+            const v = el.querySelector('[data-v]'); if (v) v.innerHTML = '<b>On</b>' + (levels.unknown(key, true, st.bri) ? '' : ' · ' + st.bri + '%');
             if (sw) { sw.classList.add('on'); sw.setAttribute('aria-checked', 'true'); }
           });
-          const done = () => { if (ctl.dragging) { ctl.dragging = false; onChange(); ctl.refresh(); } };
+          const done = () => { restoring = null; if (ctl.dragging) { ctl.dragging = false; onChange(); ctl.refresh(); } };
           cp.addEventListener('change', done);
           cp.addEventListener('blur', done);
         }
@@ -1311,45 +1511,83 @@ export function attachTapPopovers(o) {
     curtain: {
       model(t) {
         const c = conn();
-        const avail = S.curtainAvailable ? S.curtainAvailable(t.id) : null;
-        const na = curtainUnavailable(c, avail);
-        const pct = Math.round((S.curtainPct ? S.curtainPct(t.id) : home.getCurtainOpen(t.id)) || 0);
-        return { status: statusKey('curtain', c, na), na, haOff: haOfflineConn(c), pct, name: curtainNames.get(t.id) || t.id };
+        const g = curtainGroup(t);
+        const covers = g.covers.map(cv => {
+          const avail = S.curtainAvailable ? S.curtainAvailable(cv.id) : null;
+          return { id: cv.id, label: sentenceCase(cv.name), na: curtainUnavailable(c, avail),
+            pct: Math.round((S.curtainPct ? S.curtainPct(cv.id) : home.getCurtainOpen(cv.id)) || 0) };
+        });
+        const lights = g.lights.map(l => Object.assign({ id: l.id, label: sentenceCase(l.name + ' light') }, corniceRow(l, c)));
+        const coverNa = covers.some(r => r.na), lightNa = lights.some(r => r.na);
+        return { status: coverNa ? statusKey('curtain', c, true) : statusKey('light', c, lightNa), haOff: haOfflineConn(c),
+          name: curtainCardTitle(g.room ? roomName(g.room) : '', curtainNames.get(t.id) || t.id), lights, covers };
       },
       html(m) { return popoverHtml.curtain(m, dot); },
       bind(t, el, ctl) {
+        const g = curtainGroup(t);
         const sender = o.curtainSender;
-        const local = pct => { if (S.curtainLocal) S.curtainLocal(t.id, pct); else home.setCurtainOpen(t.id, pct, null); };
-        const r = el.querySelector('[data-a=pos]');
-        if (r) {
+        const rowOf = (c, id) => el.querySelector('[data-row="' + c + '"][data-c="' + id + '"]');
+        // Covers: the sidebar's own drag sender, per curtain id -- one lock,
+        // one dedupe, one debounce key, whichever surface moved it.
+        el.querySelectorAll('[data-a=pos]').forEach(r => {
+          const id = r.dataset.c;
+          if (!g.covers.some(cv => cv.id === id)) return;
+          const local = pct => { if (S.curtainLocal) S.curtainLocal(id, pct); else home.setCurtainOpen(id, pct, null); };
           r.addEventListener('input', () => {
             if (writeBlocked()) return;
             ctl.dragging = true;
             const pct = +r.value;
             local(pct);
-            if (canSend() && sender) sender.input(t.id, pct);
+            if (canSend() && sender) sender.input(id, pct);
             r.style.setProperty('--p', fillPct(r));
-            const v = el.querySelector('[data-v]'); if (v) v.innerHTML = 'Open <b>' + pct + '%</b>';
+            const row = rowOf('cover', id), v = row && row.querySelector('[data-v]'); if (v) v.textContent = 'Open ' + pct + '%';
           });
           r.addEventListener('change', () => {
-            if (canSend() && sender) sender.commit(t.id, +r.value);
+            if (canSend() && sender) sender.commit(id, +r.value);
             ctl.dragging = false; onChange(); ctl.refresh();
           });
           // Deferred a tick, as for the light: 'change' (commit) follows pointerup.
           const end = () => {
-            if (sender) sender.end(t.id);
+            if (sender) sender.end(id);
             setTimeout(() => { if (ctl.dragging) { ctl.dragging = false; ctl.refresh(); } }, 0);
           };
           r.addEventListener('pointerup', end); r.addEventListener('pointercancel', end);
-        }
-        const press = cmd => {
+        });
+        const press = (cv, cmd) => {
           if (writeBlocked()) return;
-          if (canSend() && sender) sender.press(t.id, o.HAClient.coverOpenCloseCommand(cmd, t.entities));
-          else local(cmd === 'open' ? 100 : 0);   // no HA configured (demo): preview on the model
+          if (canSend() && sender) sender.press(cv.id, o.HAClient.coverOpenCloseCommand(cmd, cv.entities));
+          else if (S.curtainLocal) S.curtainLocal(cv.id, cmd === 'open' ? 100 : 0);   // no HA configured (demo): preview on the model
+          else home.setCurtainOpen(cv.id, cmd === 'open' ? 100 : 0, null);
           onChange(); ctl.refresh(true);
         };
-        el.querySelectorAll('[data-a=open],[data-a=close]').forEach(b =>
-          b.addEventListener('click', () => { if (!b.disabled) press(b.dataset.a); }));
+        el.querySelectorAll('[data-a=open],[data-a=close]').forEach(b => {
+          const cv = g.covers.find(x => x.id === b.dataset.c);
+          if (cv) b.addEventListener('click', () => { if (!b.disabled) press(cv, b.dataset.a); });
+        });
+        // Cornice lights: the switch turns on at the last level; the slider sets one.
+        const cur = id => (VIEWS.curtain.model(t).lights.find(x => x.id === id) || null);
+        el.querySelectorAll('[data-a=cpower]').forEach(b => {
+          const l = g.lights.find(x => x.id === b.dataset.c);
+          if (l) b.addEventListener('click', () => {
+            const st = cur(l.id); if (!st || st.na) return;
+            sendCornice(l.id, l.entities, { on: !st.on }, true, 0); onChange(); ctl.refresh(true);
+          });
+        });
+        el.querySelectorAll('[data-a=cbri]').forEach(r => {
+          const l = g.lights.find(x => x.id === r.dataset.c);
+          if (!l) return;
+          r.addEventListener('input', () => {
+            if (writeBlocked()) return;
+            ctl.dragging = true; r.style.setProperty('--p', fillPct(r)); r.classList.remove('off', 'unknown'); r.removeAttribute('aria-valuetext');
+            sendCornice(l.id, l.entities, { on: true, bri: +r.value }, false, 200);
+            const row = rowOf('cornice', l.id);
+            const sw = row && row.querySelector('[data-a=cpower]'); if (sw) { sw.classList.add('on'); sw.setAttribute('aria-checked', 'true'); }
+            const v = row && row.querySelector('[data-v]'); if (v) v.textContent = 'On · ' + r.value + '%';
+          });
+          r.addEventListener('change', () => sendCornice(l.id, l.entities, { on: true, bri: +r.value }, false, 0));
+          const done = () => setTimeout(() => { if (ctl.dragging) { ctl.dragging = false; onChange(); ctl.refresh(); } }, 0);
+          r.addEventListener('change', done); r.addEventListener('pointerup', done); r.addEventListener('pointercancel', done);
+        });
       },
     },
 
@@ -1498,18 +1736,28 @@ export function attachTapPopovers(o) {
           // item row has no channel to fall back on (supportsColor treats
           // "no modes reported" as yes, for the ambient channel's sake).
           const colorable = Array.isArray(a.supported_color_modes) && supportsColor(a);
-          return Object.assign({ entity: row.entity, label: rowLabel(row, r) }, lightRowModel(r, colorable, colorFromAttributes(a)));
+          const key = 'item:' + row.entity;
+          const opt = itemOptimistic.get(row.entity);
+          if (!(opt && opt.until > Date.now()) && r && r.state === 'on' && typeof a.brightness === 'number') levels.see(key, true, Math.round(a.brightness / 2.55));
+          return Object.assign({ entity: row.entity, label: rowLabel(row, r) }, lightRowModel(r, colorable, colorFromAttributes(a), levels.last(key)));
+        });
+        const switches = (card.switches || []).map((row, i) => {
+          const r = itemRaw(row.entity, 'switch', row, base + i);
+          let pr = row.power ? itemRaw(row.power, 'power', row, base + i) : null;
+          // The demo's sample socket draws nothing while it is off.
+          if (pr && itemMockMode() && !sim.raw.has(row.power) && r && r.state === 'off') pr = { state: '0', attributes: pr.attributes };
+          return Object.assign({ entity: row.entity, label: rowLabel(row, r) }, switchRowModel(r, pr));
         });
         const readings = card.readings.map((row, i) => {
           const r = itemRaw(row.entity, 'reading', row, base + i);
           const hr = row.humidity ? itemRaw(row.humidity, 'humidity', row, base + i) : null;
           return Object.assign({ entity: row.entity, label: rowLabel(row, r) }, readingRowModel(r, hr));
         });
-        const anyNa = media.some(r => r.na) || lights.some(r => r.na) || readings.some(r => r.na);
+        const anyNa = media.some(r => r.na) || lights.some(r => r.na) || switches.some(r => r.na) || readings.some(r => r.na);
         // The first row never just repeats the title ("TV" over "TV").
-        const head = itemCardHead(card, { media, lights, readings }, furnitureLabels.get(t.itemId), t.itemId);
+        const head = itemCardHead(card, { media, lights, switches, readings }, furnitureLabels.get(t.itemId), t.itemId);
         return { status: itemMockMode() ? 'offlineItem' : statusKey('item', c, anyNa && isLive(c), false), haOff: haOfflineConn(c),
-          name: head.name, icon: head.icon, media, lights, readings };
+          name: head.name, icon: head.icon, media, lights, switches, readings };
       },
       html(m) { return popoverHtml.item(m, dot); },
       bind(t, el, ctl) {
@@ -1552,7 +1800,7 @@ export function attachTapPopovers(o) {
         }));
         at('lbri', (r, i) => {
           r.addEventListener('input', () => {
-            ctl.dragging = true; r.style.setProperty('--p', fillPct(r)); r.classList.remove('off');
+            ctl.dragging = true; r.style.setProperty('--p', fillPct(r)); r.classList.remove('off', 'unknown'); r.removeAttribute('aria-valuetext');
             itemSend(lightRowCommand(card.lights[i].entity, { on: true, bri: +r.value }), 'light', 200);
             const sw = el.querySelector('[data-a=lpower][data-i="' + i + '"]');
             if (sw) { sw.classList.add('on'); sw.setAttribute('aria-checked', 'true'); }
@@ -1560,12 +1808,21 @@ export function attachTapPopovers(o) {
           r.addEventListener('change', () => itemSend(lightRowCommand(card.lights[i].entity, { on: true, bri: +r.value }), 'light', 0));
           hold(r);
         });
+        at('spower', (b, i) => b.addEventListener('click', () => {
+          const r = model().switches[i]; if (!r || r.na) return;
+          itemSend(switchCommand(card.switches[i].entity, !r.on), 'switch', 0); onChange(); ctl.refresh(true);
+        }));
         at('lcolor', (cp, i) => {
+          // A pick on a light that was OFF when it began: no brightness (its last level), for the whole pick.
+          let restoring = null;
           cp.addEventListener('input', () => {
             ctl.dragging = true;
             const cur = model().lights[i] || {};
-            itemSend(lightRowCommand(card.lights[i].entity, { on: true, bri: cur.bri || 100, color: cp.value }, true), 'light', 200);
+            if (restoring === null) restoring = !cur.on;
+            itemSend(lightColorCommand(card.lights[i].entity, cur, cp.value, restoring), 'light', 200);
           });
+          const reset = () => { restoring = null; };
+          cp.addEventListener('change', reset); cp.addEventListener('blur', reset);
           hold(cp);
         });
       },
@@ -1835,7 +2092,17 @@ export function attachTapPopovers(o) {
     if (o.sidebar && o.sidebar.classList) sidebarOpen = o.sidebar.classList.contains('open');
   }
 
+  // Every frame the scene draws (a light change requests one), note each
+  // room light's level while it is on, so a light switched on later from a
+  // card shows the level it will come back at (createLevelMemory).
+  const noteLevels = () => {
+    const ls = home.lightState || {};
+    Object.keys(ls).forEach(rid => Object.keys(ls[rid] || {}).forEach(ch => {
+      const st = ls[rid][ch]; if (st) levels.see('light:' + rid + '/' + ch, !!st.on, st.bri);
+    }));
+  };
   const unsub = home.onRender(() => {
+    try { noteLevels(); } catch (e) { /* never break the render loop */ }
     if (!pop) return;
     if (camMoved(pop.camSnap)) { close(); return; }
     try { render(false); } catch (e) { /* never break the render loop */ }

@@ -132,6 +132,27 @@ _, warns = run(rooms_doc({"rad": {"title": "Radiator by the window"}}, climate={
 check("validator: a title-only radiator in a climate-bound room is clean", warns == [], warns)
 _, warns = run(rooms_doc({"rad": {"title": "Radiator by the window"}}, climate={"other": 'climate.demo_other'}))
 check("validator: another room's climate binding does not count", any("no sensors.climate binding" in w for w in warns), warns)
+# ---- switches rows (schemaVersion 1.8) ------------------------------------------
+DESK = {"title": "Desk", "switches": [{"entity": 'switch.demo_desk_a', "label": "Monitor", "power": 'sensor.demo_desk_a_power'},
+                                      {"entity": 'input_boolean.demo_desk_b'}]}
+check("schema: a switches card (switch + input_boolean, a power partner) validates",
+      schema_errors(rooms_doc({"tv": DESK}, version="1.8")) == [], schema_errors(rooms_doc({"tv": DESK}, version="1.8")))
+for label, b in [
+    ("a light as a switch", {"switches": [{"entity": 'light.demo_x'}]}),
+    ("a sensor as a switch", {"switches": [{"entity": 'sensor.demo_x'}]}),
+    ("a switch as the power partner", {"switches": [{"entity": 'switch.demo_x', "power": 'switch.demo_y'}]}),
+    ("an empty switches list", {"switches": []}),
+    ("an unknown key on a switch row", {"switches": [{"entity": 'switch.demo_x', "watts": 'sensor.demo_y'}]}),
+]:
+    # Mutation: widen the entity pattern to any domain -> accepted -> fails.
+    check(f"schema: rejects {label}", schema_errors(rooms_doc({"tv": b}, version="1.8")) != [])
+_, warns = run(rooms_doc({"tv": DESK}, version="1.8"))
+check("validator: a switches card at 1.8 is clean", warns == [], warns)
+_, warns = run(rooms_doc({"tv": DESK}, version="1.6"))
+# Mutation: drop the 1.8 check -> no warning -> fails.
+check("validator: switches below 1.8 are warned", any("1.8" in w and "switches" in w for w in warns), warns)
+_, warns = run(rooms_doc({"clock": {"title": "Kitchen clock"}, "tv": DESK}, version="1.8"))
+check("validator: a switches card is not mistaken for a title-only one", not any("title-only" in w for w in warns), warns)
 _, warns = run(rooms_doc(GOOD, version="1.5"))
 check("validator: below 1.6 is warned", any("1.6" in w for w in warns), warns)
 

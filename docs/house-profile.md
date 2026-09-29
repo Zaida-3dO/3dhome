@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.7"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key and `1.7` its `roomScripts` key. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.8"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key and `1.8` the `switches` rows of an item card. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -1108,6 +1108,14 @@ the cornice's **own** entity. If your cornice is also a member of a room
 channel for the room's other strips, and remove the cornice's own strip from
 that channel in `geometry.json`, so each light is drawn and driven exactly once.
 
+**Tapping a curtain** opens one card for its **room**: the cornice light of
+every curtain in that room first (on/off and brightness -- switching it on
+brings it back at its last level), then every bound cover in the room, each
+with its own position slider and Open / Close buttons, labelled with the
+curtain's `label`. So a room with a curtain and a blind on one window shows
+both, and its cornice light, whichever of them you tap. The card is titled
+"<Room> curtains".
+
 `curtains` and `corniceLights` need `schemaVersion` `"1.2"`: an engine older
 than that rejects the unknown keys, so upgrade the engine before the profile.
 
@@ -1375,7 +1383,7 @@ not have and on `dryBelow` not below `wetAbove`.
 
 Keyed by the **furniture item** that is tapped, found by where the tap lands,
 exactly like a robot vacuum. The value is **one card**, or a **list of cards**
-each scoped to a `region` of the item. A card has a `title` and any of three row
+each scoped to a `region` of the item. A card has a `title` and any of four row
 lists, at least one of them. **Give every card a short `title`** ("Living room
 TV", "Sound system"): without one the card falls back to the item's `label` cut
 at its first ` (` or ` - `, and a real house's labels are usually authoring
@@ -1397,7 +1405,21 @@ first row (a receiver card gets a speaker, not a TV). The rows:
 - **`lights`** -- a `light.*` row: on/off and brightness, plus a colour square
   when the light's `supported_color_modes` include a colour mode. Switching a
   light on sends no brightness, so it comes back at its last level (as the
-  room's own light switches do); only the slider sets a level.
+  room's own light switches do); only the slider sets a level. A colour picked
+  while it is off turns it on at its last level too. Until Home Assistant
+  reports the level back, the card shows the last level it saw the light at,
+  or "On" with an empty slider when it has seen none -- never a made-up 100%.
+- **`switches`** -- a `switch.*` (or `input_boolean.*`) row for a socket or a
+  device: its state (On / Off / **Offline**) and a **power switch**
+  (`turn_on` / `turn_off` in the entity's own domain). Bind `power` to its
+  power-draw `sensor.*` and the row shows the live draw (`41.5 W`); an offline
+  power sensor shows nothing, never 0 W. Needs `schemaVersion` `"1.8"`:
+
+  ```json
+  "desk": { "title": "Desk", "switches": [
+    { "entity": "switch.example_desk_monitor", "label": "Monitor", "power": "sensor.example_desk_monitor_power" }
+  ] }
+  ```
 - **`readings`** -- a read-only `sensor.*` row: the value with its
   `unit_of_measurement`, and an optional `humidity` partner beside it. An
   unavailable sensor reads **Offline**, never 0.

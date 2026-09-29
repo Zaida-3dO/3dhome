@@ -1,6 +1,6 @@
 {
   "kind": "rooms",
-  "schemaVersion": "1.7",
+  "schemaVersion": "1.8",
   "house": "demo",
   "homeAssistant": {
     "enabled": false,
@@ -173,6 +173,21 @@
           {
             "entity": "light.demo_bedside_bottom",
             "label": "Bottom drawer"
+          }
+        ]
+      },
+      "study_desk": {
+        "title": "Desk",
+        "switches": [
+          {
+            "entity": "switch.demo_desk_monitor",
+            "label": "Monitor",
+            "power": "sensor.demo_desk_monitor_power"
+          },
+          {
+            "entity": "switch.demo_desk_charger",
+            "label": "Charger",
+            "power": "sensor.demo_desk_charger_power"
           }
         ]
       }
