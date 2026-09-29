@@ -894,7 +894,8 @@ export const STYLE = `
    button, full width, one per action; a sent one turns green for a moment. */
 .tp-abtns { display: grid; grid-template-columns: 1fr; gap: 5px; }
 .tp-abtns .tp-vb { width: 100%; }
-.tp-vb.sent { background: var(--ok); border-color: transparent; color: #fff; }
+/* Sent: a deep green that keeps white text readable (5:1), both themes. */
+.tp-vb.sent { background: #15803d; border-color: transparent; color: #fff; }
 .tp-vb.failed { border-color: var(--bad); }
 .tp-vb[aria-disabled=true] { cursor: default; }
 .tp-vrooms-h { margin-top: 9px; font-size: 11px; color: var(--ink-2); }
@@ -1016,6 +1017,8 @@ ${coarseRules('.tp-force-coarse')}
 :root[data-theme="light"] .tp-ico.dim { fill: rgba(0,0,0,0.3); }
 :root[data-theme="light"] .tp-ib, :root[data-theme="light"] .tp-vb { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.14); color: #1a1d29; }
 :root[data-theme="light"] .tp-vb.primary:not(:disabled) { background: var(--accent); color: #fff; }
+:root[data-theme="light"] .tp-vb.sent { background: #15803d; border-color: transparent; color: #fff; }
+:root[data-theme="light"] .tp-vb.failed { border-color: var(--bad); }
 /* After the light .tp-ib rule, which would otherwise hide the pressed state. */
 :root[data-theme="light"] .tp-ib.tp-live[aria-pressed=true] { background: var(--bad); border-color: transparent; color: #fff; }
 :root[data-theme="light"] .tp-vroom { border-color: rgba(0,0,0,0.16); }
