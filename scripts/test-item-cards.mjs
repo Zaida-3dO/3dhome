@@ -880,8 +880,14 @@ const CONSOLE = [
   check('feed: after stop, no request and a late load is not shown', x.t.probes.length === 4 && x.t.shown.at(-1) === '');
 
   x = mk({});
-  x.feed.start(); x.t.probes[0].ok();
+  x.feed.start();
+  x.feed.hidden(false);   // a spurious "visible" while a load is pending
+  // Mutation: drop `pending` from tick's guard -> a second, overlapping load -> fails.
+  check('feed: never a second load while one is pending', x.t.probes.length === 1);
+  x.t.probes[0].ok();
   x.feed.hidden(true);
+  // Mutation: hidden() does not cancel -> a refresh timer is left armed -> fails.
+  check('feed: hidden cancels the armed refresh at once', x.t.timers.size === 0);
   x.advance(60000);
   // Mutation: hidden() does not cancel -> probes continue -> fails.
   check('feed: hidden -> no requests at all', x.t.probes.length === 1 && x.t.timers.size === 0);

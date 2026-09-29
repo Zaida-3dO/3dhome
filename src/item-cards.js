@@ -396,7 +396,7 @@ export function cameraStreamUrl(baseUrl, entity, raw) {
 export function createCameraFeed(d) {
   let running = false, live = false, isHidden = false, timer = null, pending = 0, failures = 0, seq = 0, lastGood = '';
   const cancel = () => { if (timer != null) { d.cancel(timer); timer = null; } };
-  const later = ms => { cancel(); timer = d.schedule(tick, ms); };
+  const later = ms => { cancel(); timer = d.schedule(() => { timer = null; tick(); }, ms); };
   const backoff = () => Math.min(60000, d.refreshMs * Math.pow(2, Math.min(failures, 10)));
   function settle(id, ok, src) {
     if (id !== pending) return;   // stale, stopped, or already timed out
@@ -406,7 +406,6 @@ export function createCameraFeed(d) {
     else { failures++; d.stale(true); later(backoff()); }
   }
   function tick() {
-    timer = null;
     if (!running || isHidden || live || pending) return;
     const src = d.snapshotUrl(d.now());
     if (!src) { failures++; d.stale(true); later(backoff()); return; }
