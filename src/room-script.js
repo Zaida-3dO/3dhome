@@ -35,6 +35,10 @@ export const DEFAULT_ROOM_SCRIPT_LABEL = 'Kill room';
 export const ARM_TIMEOUT_MS = 4000;
 export const RESULT_MS = 2500;
 export const MIN_ARM_MS = 400;
+// Non-key activations: the repeat guard in createTwoStepConfirm.
+export const BURST_WINDOW_MS = 1500;  // 3+ near-regular clicks inside this = a held repeat
+export const BURST_GAP_MS = 1000;     // after a burst, ignore clicks until a pause this long
+export const QUIET_MS = 500;          // a synthetic confirm waits this long for no further click
 
 const SCRIPT_ID = /^script\.[a-z0-9_]+$/;
 
@@ -86,20 +90,46 @@ export function roomScriptCommand(binding) {
  * tap, a screen reader's or switch device's synthetic activation, a scripted
  * el.click() -- is a plain press: it arms, and a second one past minArmMs
  * confirms. Those never deliver a keyup, so they must not wait for one.
+ *
+ * REPEAT GUARD (non-key clicks). An assistive-tech device may repeat its
+ * activation while its switch is held, with no key event reaching the page:
+ * the held-Enter hazard, for AT users. The page cannot see the switch, so
+ * the guard reads the click cadence instead:
+ *   - 3+ non-key clicks inside burstWindowMs (1.5 s) whose last two gaps are
+ *     within 2x of each other is a held repeat: the arm is CANCELLED (back
+ *     to idle) and every click is refused until a pause of burstGapMs (1 s)
+ *     with no click at all.
+ *   - A synthetic confirm (detail 0, no key) does not send at once: it waits
+ *     quietMs (0.5 s), and any click inside that window is a repeat -- the
+ *     confirm is cancelled and the burst lock applies. That catches a repeat
+ *     whose first auto-repeat comes after a delay longer than minArmMs,
+ *     which the cadence rule alone would let confirm.
+ * A deliberate pair (arm, then one more press 0.4-4 s later) still confirms.
+ * Pointer confirms stay immediate; pointer taps are still counted for bursts.
+ * NOT covered: a device repeating slower than quietMs, or one that emulates
+ * a pointer (detail >= 1) with a long initial delay. Neither has been
+ * verified against real hardware.
  */
 export function createTwoStepConfirm({
   send, writable, onChange,
   timeoutMs = ARM_TIMEOUT_MS, resultMs = RESULT_MS, minArmMs = MIN_ARM_MS,
+  burstWindowMs = BURST_WINDOW_MS, burstGapMs = BURST_GAP_MS, quietMs = QUIET_MS,
   now = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout
 }) {
   let state = 'idle';
   let armedAt = 0;
   let timer = null;
   let awaitKeyUp = false;
+  // Repeat guard (non-key activations only).
+  let clicks = [];          // recent non-key click times, inside burstWindowMs
+  let lastClickAt = -Infinity;
+  let locked = false;       // a burst was seen: refuse until a burstGapMs pause
+  let pending = false;      // a synthetic confirm waiting out quietMs
   const canWrite = () => typeof writable !== 'function' || writable() === true;
 
   function go(next, afterMs) {
     if (timer !== null) { clearTimer(timer); timer = null; }
+    pending = false;
     const changed = next !== state;
     state = next;
     if (next !== 'armed') awaitKeyUp = false;
@@ -107,31 +137,78 @@ export function createTwoStepConfirm({
     if (changed && typeof onChange === 'function') onChange(state);
   }
 
+  function fire() {
+    if (!canWrite()) { go('idle', 0); return false; }
+    let ok = false;
+    try { ok = send() === true; } catch (e) { ok = false; }
+    go(ok ? 'sent' : 'failed', resultMs);
+    return ok;
+  }
+
+  // Three or more clicks inside burstWindowMs whose last two gaps are within
+  // 2x of each other: the cadence of a held, auto-repeating activation.
+  function isBurst() {
+    if (clicks.length < 3) return false;
+    const n = clicks.length;
+    const a = clicks[n - 2] - clicks[n - 3], b = clicks[n - 1] - clicks[n - 2];
+    return Math.max(a, b) <= 2 * Math.max(1, Math.min(a, b));
+  }
+
+  function burst() {
+    locked = true;
+    clicks = [];
+    go('idle', 0);
+  }
+
   return {
     get state() { return state; },
-    /** A click. `opts.keyboard`: it came from a key (Enter / Space).
-     *  Returns true only on the press that sent the call. */
+    /**
+     * A click. `opts.keyboard`: a real Enter / Space drove it (createKeyIntent).
+     * `opts.synthetic`: no key and no pointer drove it (detail 0) -- a screen
+     * reader, a switch device, el.click(). Returns true only on a press that
+     * sent the call at once (a synthetic confirm sends after quietMs).
+     */
     press(opts) {
       const keyboard = !!(opts && opts.keyboard);
+      const synthetic = !keyboard && !!(opts && opts.synthetic);
       if (!canWrite()) { go('idle', 0); return false; }
+      if (!keyboard) {
+        const t = now();
+        const sinceLast = t - lastClickAt;
+        lastClickAt = t;
+        if (locked) {
+          if (sinceLast < burstGapMs) return false;   // the repeat is still going
+          locked = false;
+        }
+        clicks = clicks.filter(c => t - c <= burstWindowMs);
+        clicks.push(t);
+        if (pending) { burst(); return false; }       // a click inside the quiet window
+        if (isBurst()) { burst(); return false; }
+      }
       if (state !== 'armed') {
         armedAt = now();
         go('armed', timeoutMs);
         awaitKeyUp = keyboard;
         return false;
       }
-      if (now() - armedAt < minArmMs) return false; // one gesture, not a confirm
-      if (keyboard && awaitKeyUp) return false;     // the arming key is still held
-      let ok = false;
-      try { ok = send() === true; } catch (e) { ok = false; }
-      go(ok ? 'sent' : 'failed', resultMs);
-      return ok;
+      if (pending) return false;                      // (a key press while a synthetic confirm waits)
+      if (now() - armedAt < minArmMs) return false;   // one gesture, not a confirm
+      if (keyboard && awaitKeyUp) return false;       // the arming key is still held
+      if (synthetic) {
+        // Wait for quiet: a held switch's NEXT repeat lands inside quietMs
+        // and cancels this (above) instead of it having confirmed.
+        if (timer !== null) { clearTimer(timer); timer = null; }
+        pending = true;
+        timer = setTimer(() => { timer = null; if (pending) fire(); }, quietMs);
+        return false;
+      }
+      return fire();
     },
     /** A key was released on the button: the next keyboard press is fresh. */
     keyUp() { awaitKeyUp = false; },
     /** Back to idle, no send (HA went offline, the room was left, the panel
-     *  closed). */
-    reset() { go('idle', 0); },
+     *  closed). Also clears the repeat guard. */
+    reset() { locked = false; clicks = []; go('idle', 0); },
     dispose() { if (timer !== null) { clearTimer(timer); timer = null; } }
   };
 }

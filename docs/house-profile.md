@@ -1490,7 +1490,12 @@ announces "Armed" and then "Sent" to a screen reader. Holding Enter down never
 confirms: after a keyboard arm, the key has to be released before a keyboard
 press can count. A screen reader's or switch device's activation (no key
 events reach the page) works like a tap: the first arms, a second one
-confirms.
+confirms, sending after half a second with no further activation. Holding a
+switch that repeats its activation does not confirm. Three or more evenly
+spaced activations within 1.5 s, or any activation inside that half-second
+wait, cancel the arm, and nothing counts until activations pause for a full
+second. This guard is inferred from the timing of the clicks. It has **not**
+been verified with real NVDA, VoiceOver or switch-access hardware.
 
 `script.turn_on` rather than the script's own service (`script.<name>`):
 `turn_on` is Home Assistant's way to start a script **by entity id** with
