@@ -13,6 +13,8 @@
  *      named in the report.
  *   3. houses/demo/rooms.json keeps its rule: a demo_ id passes, a
  *      real-looking script id there fails.
+ *   4. A quoted filename whose stem is a domain ("script.js", "camera.json")
+ *      is not flagged, while a real id on the same line still is.
  *
  * It runs the REAL script against a scratch copy of the tracked files, so
  * nothing in the working tree is touched. The planted ids are assembled at
@@ -75,6 +77,19 @@ try {
     check('caught: ' + d + '.*', dirty.out.includes('(' + d + '.kitchen_main_unit)'), d);
   }
   fs.rmSync(planted);
+
+  // A quoted FILENAME whose stem is a domain is not an entity id.
+  const files = path.join(dir, 'src', 'planted-filenames.js');
+  const names = [q('script', 'js'), q('camera', 'json'), q('scene', 'html'), q('timer', 'mjs'), q('light', 'css')];
+  fs.writeFileSync(files, 'export const FILES = [' + names.join(', ') + '];\n');
+  const fn = guard(dir);
+  check('filenames ("script.js", "camera.json", ...) do not trip the guard', fn.code === 0, fn.out.slice(-400));
+  // ...but a real id on the same line as a filename still does.
+  fs.writeFileSync(files, 'export const FILES = [' + q('script', 'js') + ', ' + q('script', 'lounge_off') + '];\n');
+  const mixed = guard(dir);
+  check('a real id beside a filename is still caught', mixed.code !== 0 && mixed.out.includes('(script.lounge_off)') &&
+    !mixed.out.includes('(script.js)'), mixed.out.slice(-400));
+  fs.rmSync(files);
 
   // houses/demo/rooms.json: demo_ passes, a real-looking script id fails.
   const demoPath = path.join(dir, 'houses', 'demo', 'rooms.json');

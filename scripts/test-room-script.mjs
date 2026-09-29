@@ -21,6 +21,11 @@
  *      a keyboard arm needs a key release before a keyboard confirm counts,
  *      so a held Enter's auto-repeat never confirms; a deliberate second
  *      press (Enter or Space) does; pointer taps are unaffected.
+ *   3b. The three input paths, as index.html wires createKeyIntent into the
+ *      confirm: a REAL key (Enter / Space keydown on the button) is keyboard
+ *      and a held Enter never confirms; an assistive-tech or scripted click
+ *      (detail 0, no key events) arms and confirms like a tap; pointer taps
+ *      as before. Only Enter / Space keyups release; blur drops a stale key.
  *   4. End to end over the fake HA WebSocket, through the REAL
  *      HAClient.callService: two presses put exactly one call_service
  *      script/turn_on with the right target and variables on the socket; one
@@ -223,6 +228,87 @@ function harness(opts = {}) {
   check('pointer: two taps still confirm with no keyup at all', p.sends.length === 1, p.sends);
 }
 
+// ---- 3b. The button as index.html wires it: key intent + confirm ------------
+// Replays the DOM event sequences each input path produces, through the same
+// two objects the page uses (createKeyIntent per button, the confirm per room),
+// wired exactly as index.html wires them.
+function button() {
+  const h = harness();
+  const intent = RS.createKeyIntent();
+  const ev = {
+    keydown: key => intent.keyDown(key),
+    keyup: key => { if (intent.keyUp(key)) h.c.keyUp(); },
+    click: detail => h.c.press({ keyboard: intent.click(detail) }),
+    blur: () => intent.blur(),
+  };
+  return { h, ev };
+}
+{
+  // Path 1: a real key. Enter clicks on keydown.
+  const { h, ev } = button();
+  ev.keydown('Enter'); ev.click(0); ev.keyup('Enter');
+  check('key: Enter arms', h.c.state === 'armed' && h.sends.length === 0);
+  h.advance(600);
+  ev.keydown('Enter'); ev.click(0); ev.keyup('Enter');
+  check('key: a second, separate Enter confirms', h.sends.length === 1, h.sends);
+}
+{
+  // Path 1, held: auto-repeat keydowns, each driving a click, no keyup.
+  const { h, ev } = button();
+  ev.keydown('Enter'); ev.click(0);
+  for (let i = 0; i < 100; i++) { h.advance(30); ev.keydown('Enter'); ev.click(0); }
+  check('key: a held Enter (100 auto-repeats over 3 s) never confirms', h.sends.length === 0 && h.c.state === 'armed', h.sends);
+  ev.keyup('Shift');
+  h.advance(30); ev.keydown('Enter'); ev.click(0);
+  check('key: another key\'s keyup does not release the guard', h.sends.length === 0, h.sends);
+  ev.keyup('Enter');
+  h.advance(100); ev.keydown('Enter'); ev.click(0);
+  check('key: after the release, the next Enter confirms', h.sends.length === 1, h.sends);
+}
+{
+  // Space clicks on RELEASE: keydown, keyup, then click.
+  const { h, ev } = button();
+  ev.keydown(' '); ev.keyup(' '); ev.click(0);
+  check('key: Space arms', h.c.state === 'armed' && h.sends.length === 0);
+  h.advance(600);
+  ev.keydown(' '); ev.keyup(' '); ev.click(0);
+  check('key: a second Space confirms', h.sends.length === 1, h.sends);
+}
+{
+  // Path 2: assistive tech / scripted el.click(): detail 0, NO key events.
+  const { h, ev } = button();
+  ev.click(0);
+  check('synthetic: a detail-0 click with no key arms', h.c.state === 'armed' && h.sends.length === 0);
+  h.advance(100); ev.click(0);
+  check('synthetic: a second one inside 400 ms does not confirm', h.sends.length === 0);
+  h.advance(400); ev.click(0);
+  check('synthetic: a second one past 400 ms confirms (no keyup ever needed)', h.sends.length === 1, h.sends);
+}
+{
+  // A keydown whose click never came (focus moved on), then a synthetic click.
+  const { h, ev } = button();
+  ev.keydown('Enter'); ev.blur();
+  ev.click(0); h.advance(600); ev.click(0);
+  check('synthetic: a stale keydown dropped on blur does not strand the confirm', h.sends.length === 1, h.sends);
+}
+{
+  // Path 3: pointer.
+  const { h, ev } = button();
+  ev.click(1); h.advance(600); ev.click(1);
+  check('pointer: two taps confirm', h.sends.length === 1, h.sends);
+  const b = button();
+  b.ev.click(1); b.h.advance(200); b.ev.click(1);
+  check('pointer: a double-tap does not', b.h.sends.length === 0);
+}
+{
+  const ki = RS.createKeyIntent();
+  check('intent: a pointer click after a keydown is not keyboard', (ki.keyDown('Enter'), ki.click(1)) === false);
+  check('intent: a click consumes the key', (ki.keyDown('Enter'), ki.click(0), ki.click(0)) === false);
+  check('intent: other keys do not key a click', (ki.keyDown('a'), ki.click(0)) === false);
+  check('intent: blur drops a keydown whose click never came', (ki.keyDown('Enter'), ki.blur(), ki.click(0)) === false);
+  check('intent: a real Enter click is keyboard', (ki.keyDown('Enter'), ki.click(0)) === true);
+}
+
 // ---- 4. End to end over the fake HA WebSocket --------------------------------
 {
   const fake = installFakeHA({ states: [] });
@@ -316,10 +402,15 @@ function harness(opts = {}) {
   check('index: row key only for a bound room',
     /if \(roomScriptBindings\(\)\.has\(rid\)\) keys\.push\('room-script'\);/.test(html));
   const presses = html.match(/roomScriptConfirm\(rid\)\.press\(/g) || [];
-  const inClick = /onWrite\(el, 'click', e => \{\s*if \(!el\.disabled\) roomScriptConfirm\(rid\)\.press\(\{ keyboard: e\.detail === 0 \}\);\s*\}\);/.test(html);
-  check('index: press() called only from the click handler, flagged keyboard for a detail-0 click', presses.length === 1 && inClick, presses.length);
-  check('index: keyup on the button releases the keyboard guard',
-    /el\.addEventListener\('keyup', \(\) => roomScriptConfirm\(rid\)\.keyUp\(\)\);/.test(html));
+  const inClick = /const intent = createKeyIntent\(\);\s*onWrite\(el, 'click', e => \{\s*const keyboard = intent\.click\(e\.detail\);\s*if \(!el\.disabled\) roomScriptConfirm\(rid\)\.press\(\{ keyboard \}\);\s*\}\);/.test(html);
+  check('index: press() called only from the click handler, keyboard decided by the key-intent tracker', presses.length === 1 && inClick, presses.length);
+  check('index: keydown on the button feeds the tracker',
+    /el\.addEventListener\('keydown', e => intent\.keyDown\(e\.key\)\);/.test(html));
+  check('index: only an Enter / Space keyup releases the keyboard guard',
+    /el\.addEventListener\('keyup', e => \{ if \(intent\.keyUp\(e\.key\)\) roomScriptConfirm\(rid\)\.keyUp\(\); \}\);/.test(html));
+  check('index: blur drops a keydown whose click never came',
+    /el\.addEventListener\('blur', \(\) => intent\.blur\(\)\);/.test(html));
+  check('index: keyboard is no longer inferred from detail alone', !/keyboard: e\.detail === 0/.test(html));
   const closeFn = (html.match(/function closePanel\(\) \{[\s\S]*?\n      \}/) || [''])[0];
   check('index: closing the panel disarms every room script (both branches)',
     /^function closePanel\(\) \{[\s\S]*?disarmRoomScripts\(null\);\s*if \(isWideScreen\(\)\)/.test(closeFn), closeFn);
