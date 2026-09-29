@@ -16,6 +16,21 @@
  *     device, and built directly by the next create(). Nothing structural
  *     changes under a running scene.
  *
+ * WHICH GIVES FIRST (task e7e10870). A mobile GPU trades SHARPNESS before
+ * DETAIL: when it is too slow the pixel ratio falls all the way to the floor
+ * (1.0) before any level is proposed down, and a level is only proposed down
+ * when it is still failing AT the floor -- and, because a level-down blocks
+ * for a week, only once that has happened on two separate loads (a "strike"
+ * on the first; see floorFailure()). A desktop is unchanged: it proposes a
+ * level down as soon as its ratio falls below its start ratio. Measured on a
+ * wall tablet (Mali-G925): mid-lite and ultra-lite both hold 60 fps at DPR 1
+ * and fail at 1.5, so the old order settled it on `low` (simple furniture)
+ * at a sharp DPR; this order settles it on ultra-lite at DPR 1.
+ *
+ * A MANUAL level (Settings > Quality, stored under pinKey()) pins the level:
+ * the controller is created `locked`, proposes nothing, and only the pixel
+ * ratio adapts, so a pinned level still stays smooth.
+ *
  * Pure ESM: no DOM, no THREE, no clock of its own (every call takes `now`) and
  * storage is injected, so scripts/test-adaptive-quality.mjs drives it with
  * simulated frame-time series. home3d-scene.js gathers the samples and applies
@@ -252,10 +267,17 @@ export function thresholds(cadenceMs, vsyncMs) {
  *        load: this session never climbs past it
  * @param {number} [o.defaultLevel] the device's default level (coldFrame only
  *        steps down from ABOVE it, so a desktop's own build is never touched)
+ * @param {?{level:number, until:number}} [o.strike]  a floor failure recorded
+ *        at `level` on an earlier load (mobile only): a second one proposes down
+ * @param {boolean} [o.locked]  a manual level: never propose a level (up or
+ *        down) and never strike; only the pixel ratio moves
  */
 export function createController(o) {
   const floor = o.floor;
   const startRatio = Math.max(floor, Math.min(o.startRatio, o.maxRatio));
+  // Detail first: a mobile GPU gives up sharpness before detail.
+  const detailFirst = !!(o.ctx && o.ctx.mobile === true);
+  const locked = o.locked === true;
   const st = {
     ceiling: floor,
     sessionMax: o.dprCap > 0 ? Math.max(floor, Math.min(o.maxRatio, o.dprCap)) : o.maxRatio,
@@ -263,6 +285,9 @@ export function createController(o) {
     pending: null,            // the level proposed for the next load, or null
     pendingAt: 0,             // the ceiling an up-proposal was earned at
     blocked: o.blocked || null,
+    // Only a strike at THIS load's level counts; any other is dropped.
+    strike: o.strike && o.strike.level === o.level ? { level: o.strike.level, until: o.strike.until } : null,
+    struckThisLoad: false,
     upStreak: 0,
     downStreak: 0,
     quietUntil: 0,
@@ -287,25 +312,30 @@ export function createController(o) {
 
   function canGoUp(now) {
     if (st.ceiling < st.sessionMax - EPS) return true;
-    if (st.pending != null) return false;
+    if (locked || st.pending != null) return false;
     const n = nextDistinctLevel(st.level, +1, o.ctx);
     return n != null && !isBlocked(n, now);
   }
 
   function stepUp(now) {
     const d = { kind: 'up', from: st.ceiling, to: null, proposeLevel: null, revoke: false, block: null, cap: null };
+    // Sustained headroom at this level answers an EARLIER load's floor
+    // failure: that one was not the level's steady cost. (One recorded this
+    // load stands: a level that fails and holds by turns keeps its strike.)
+    if (st.strike && !st.struckThisLoad) { st.strike = null; d.strikeCleared = true; }
     const start = Math.min(startRatio, st.sessionMax);
     if (st.ceiling < start - EPS) {
       d.to = start;
     } else {
-      // Structure first, then pixels above the start ratio.
-      if (st.pending == null) {
+      // Structure first, then pixels above the start ratio. Never from a
+      // level that has failed at the floor this load.
+      if (st.pending == null && !locked && !st.struckThisLoad) {
         const n = nextDistinctLevel(st.level, +1, o.ctx);
         if (n != null && !isBlocked(n, now)) { st.pending = n; st.pendingAt = st.ceiling; d.proposeLevel = n; }
       }
       if (st.ceiling < st.sessionMax - EPS) d.to = round2(Math.min(st.ceiling + DPR_STEP, st.sessionMax));
     }
-    if (d.to == null && d.proposeLevel == null) return null;
+    if (d.to == null && d.proposeLevel == null && !d.strikeCleared) return null;
     if (d.to != null) st.ceiling = d.to;
     return d;
   }
@@ -322,6 +352,25 @@ export function createController(o) {
     d.proposeLevel = n;
     st.blocked = { level: n + 1, until: now + BLOCK_MS };
     d.block = st.blocked;
+    st.strike = null;
+  }
+
+  // Detail first (a mobile GPU): the level is failing at the floor, so
+  // sharpness has nothing left to give. A level-down blocks for a week, and
+  // one bad session is not a verdict on a level (the wall tablet's stored
+  // record shows a p95 of 133 ms at DPR 1 on a level the benchmark holds at
+  // 60 fps there), so the FIRST such failure is only recorded -- a strike,
+  // persisted -- and the level is proposed down when it fails at the floor
+  // again on a LATER load. Sustained headroom at the level clears the strike
+  // (stepUp). A level-up proposed this load is withdrawn either way.
+  function floorFailure(d, now) {
+    if (st.pending != null && st.pending < st.level) return;
+    if (st.pending != null && st.pending > st.level) { st.pending = null; d.revoke = true; }
+    if (st.strike && !st.struckThisLoad && now < st.strike.until) { proposeDown(d, now); return; }
+    if (st.struckThisLoad) return;
+    st.struckThisLoad = true;
+    st.strike = { level: st.level, until: now + BLOCK_MS };
+    d.strike = st.strike;
   }
 
   function stepDown(now) {
@@ -340,8 +389,16 @@ export function createController(o) {
       st.pending = null;
       d.revoke = true;
     }
-    if (st.ceiling < startRatio - EPS || d.to == null) proposeDown(d, now);
-    if (d.to == null && d.proposeLevel == null && !d.revoke) return null;
+    if (locked) {
+      // A manual level: only the pixel ratio moves.
+    } else if (detailFirst) {
+      // Sharpness first: no level is proposed while the ratio can still
+      // fall. `d.to == null` means the ceiling was ALREADY at the floor.
+      if (d.to == null) floorFailure(d, now);
+    } else if (st.ceiling < startRatio - EPS || d.to == null) {
+      proposeDown(d, now);
+    }
+    if (d.to == null && d.proposeLevel == null && !d.revoke && !d.strike) return null;
     return d;
   }
 
@@ -350,12 +407,28 @@ export function createController(o) {
    * cold shadow pass). Above COLD_FRAME_MS on a level above the device's
    * default: propose the level below and block this one. `wall` is
    * wall-clock ms (the block outlives the page). Returns the decision, or null.
+   *
+   * Detail first (a mobile GPU), on a level WITHOUT room-shadow lights: a
+   * cold frame there is a one-off shader compile or upload, which the
+   * browser's program cache does not repeat on the next load, not the
+   * level's steady cost -- so it is a strike (floorFailure), and proposes
+   * down only if the level fails again on a later load. A level WITH
+   * room-shadow lights pays its cold shadow pass on EVERY load (rendered,
+   * not cached), so that is refused at once, as before. Measured on the wall
+   * tablet (5 /diagnostics runs, 2026-09-28): the first frames after the
+   * furniture attaches took 17-42 ms at every level, ultra included --
+   * nowhere near COLD_FRAME_MS -- so on that device this path does not fire.
    */
   function coldFrame(ms, wall) {
     if (!(ms > COLD_FRAME_MS)) return null;
+    if (locked) return null;
     if (o.defaultLevel == null || st.level <= o.defaultLevel) return null;
     if (st.pending != null && st.pending < st.level) return null;
     const d = { kind: 'down', from: st.ceiling, to: null, proposeLevel: null, revoke: false, block: null, cap: null, cold: ms };
+    if (detailFirst && !levelConfig(st.level, o.ctx).roomShadowLights) {
+      floorFailure(d, wall);
+      return d.proposeLevel != null || d.strike || d.revoke ? d : null;
+    }
     if (st.pending != null) { st.pending = null; d.revoke = true; }
     proposeDown(d, wall);
     return d.proposeLevel != null ? d : null;
@@ -437,7 +510,7 @@ export function createController(o) {
      * Forget the pending next-load proposal and any block (Settings
      * "Re-measure"). The live pixel ratio is left where it is.
      */
-    forget() { st.pending = null; st.pendingAt = 0; st.blocked = null; },
+    forget() { st.pending = null; st.pendingAt = 0; st.blocked = null; st.strike = null; },
     /** Drop the window and go quiet (resume from hidden, furniture attach). */
     quiet(now, ms) { reset(now, ms); },
     /** Is there anything a probe could still gain? (`wall`: wall-clock ms) */
@@ -446,6 +519,9 @@ export function createController(o) {
     get sessionMax() { return st.sessionMax; },
     get pending() { return st.pending; },
     get blocked() { return st.blocked; },
+    /** An unanswered floor failure at this level (mobile), or null. */
+    get strike() { return st.strike; },
+    get locked() { return locked; },
     get lastP95() { return st.lastP95; },
     get lastSamples() { return st.lastSamples; },
     get lastThresholds() { return st.lastThresholds; },
@@ -565,14 +641,44 @@ export function createProbeScheduler(o) {
 
 // ---- persistence ------------------------------------------------------------
 
+/** Every key this module writes starts with this (diagnostics guards them all). */
+export const STORAGE_PREFIX = 'home3d.quality.';
+/**
+ * The adaptive record's format version, in both the key and the value. 2
+ * since the detail-first ladder (task e7e10870): a v1 record was written by
+ * the old sharpness-first order -- the wall tablet's says `low`, with mid-lite
+ * and above blocked for a week -- so it is not read at all, and a device
+ * starts from its default and re-learns under the new order on its next load,
+ * with nobody touching it. v1 keys are left where they are (nothing reads
+ * them); Settings > Re-measure clears the current one only.
+ */
+export const STATE_VERSION = 2;
+/** The current adaptive record's key prefix. */
+export const STATE_PREFIX = STORAGE_PREFIX + 'v' + STATE_VERSION + '|';
+const PIN_PREFIX = STORAGE_PREFIX + 'pin.v1|';
+
+function keyTail(gpuName, maxFragU, shadows) {
+  const name = String(gpuName || '').trim() || 'unknown';
+  return name + '|' + (maxFragU | 0) + '|' + (shadows || 'auto');
+}
+
 /**
  * One key per GPU, uniform budget and shadows= mode: the embed (shadows=low)
  * and the standalone page (auto) cost different amounts at the same level,
  * so each learns its own. A masked or missing name is 'unknown'.
  */
 export function storageKey(gpuName, maxFragU, shadows) {
-  const name = String(gpuName || '').trim() || 'unknown';
-  return 'home3d.quality.v1|' + name + '|' + (maxFragU | 0) + '|' + (shadows || 'auto');
+  return STATE_PREFIX + keyTail(gpuName, maxFragU, shadows);
+}
+
+/**
+ * The manual level (Settings > Quality), keyed exactly like the adaptive
+ * record -- so the page and the HA popup (?embed=1, shadows=low) each keep
+ * their own -- but separate from it: Auto resumes the ladder where it was,
+ * and Re-measure never clears a choice the user made.
+ */
+export function pinKey(gpuName, maxFragU, shadows) {
+  return PIN_PREFIX + keyTail(gpuName, maxFragU, shadows);
 }
 
 /**
@@ -586,8 +692,8 @@ export function loadState(storage, key, maxLevel) {
   if (typeof raw !== 'string') return null;
   let v;
   try { v = JSON.parse(raw); } catch (e) { return null; }
-  if (!v || typeof v !== 'object' || v.v !== 1) return null;
-  const out = { level: null, blocked: null, dprCap: null, settled: null };
+  if (!v || typeof v !== 'object' || v.v !== STATE_VERSION) return null;
+  const out = { level: null, blocked: null, dprCap: null, strike: null, settled: null };
   if (Number.isInteger(v.level)) out.level = Math.max(0, Math.min(maxLevel, v.level));
   const b = v.blocked;
   if (b && Number.isInteger(b.level) && Number.isFinite(b.until)) out.blocked = { level: b.level, until: b.until };
@@ -595,6 +701,8 @@ export function loadState(storage, key, maxLevel) {
   if (c && Number.isInteger(c.level) && c.ratio > 0 && Number.isFinite(c.until)) {
     out.dprCap = { level: c.level, ratio: c.ratio, until: c.until };
   }
+  const k = v.strike;
+  if (k && Number.isInteger(k.level) && Number.isFinite(k.until)) out.strike = { level: k.level, until: k.until };
   if (v.settled && typeof v.settled === 'object') out.settled = v.settled;
   return out;
 }
@@ -604,10 +712,11 @@ export function saveState(storage, key, state) {
   try {
     if (!storage) return false;
     storage.setItem(key, JSON.stringify({
-      v: 1,
+      v: STATE_VERSION,
       level: state.level,
       blocked: state.blocked || null,
       dprCap: state.dprCap || null,
+      strike: state.strike || null,
       settled: state.settled || null
     }));
     return true;
@@ -617,4 +726,112 @@ export function saveState(storage, key, state) {
 /** Forget this device's measurements. Never throws. */
 export function clearState(storage, key) {
   try { if (storage) storage.removeItem(key); return true; } catch (e) { return false; }
+}
+
+/**
+ * The manual level, or null (Auto). Never throws. A level above what this
+ * GPU compiles (a record from another build) is null, not clamped: a manual
+ * choice this device cannot honour falls back to Auto rather than to a level
+ * nobody picked.
+ */
+export function loadPin(storage, key, maxLevel) {
+  let raw = null;
+  try { raw = storage ? storage.getItem(key) : null; } catch (e) { return null; }
+  if (typeof raw !== 'string') return null;
+  let v;
+  try { v = JSON.parse(raw); } catch (e) { return null; }
+  if (!v || typeof v !== 'object' || v.v !== 1 || !Number.isInteger(v.level)) return null;
+  return v.level >= 0 && v.level <= maxLevel ? v.level : null;
+}
+
+/** Pin a level (an integer), or clear the pin (null: Auto). Never throws. */
+export function savePin(storage, key, level) {
+  try {
+    if (!storage) return false;
+    if (level == null) storage.removeItem(key);
+    else storage.setItem(key, JSON.stringify({ v: 1, level }));
+    return true;
+  } catch (e) { return false; }
+}
+
+// ---- the load: where it starts, and what it writes ---------------------------
+
+/**
+ * Where this load starts, from the stored records -- the scene's own logic,
+ * here so a test can drive load after load exactly as the scene does.
+ *
+ * @param {Object} o
+ * @param {?Object} o.stored   loadState()
+ * @param {?number} o.pin      loadPin(): a manual level wins, and locks the ladder
+ * @param {number} o.defaultLevel
+ * @param {number} o.wall      Date.now()
+ * @returns {{level:number, from:string, locked:boolean, blocked:?Object,
+ *            dprCap:?Object, strike:?Object}}
+ *   from: 'manual' | 'stored' | 'default'. dprCap and strike only when they
+ *   were learnt at this level and have not expired.
+ */
+export function resolveStart(o) {
+  const s = o.stored || null;
+  const manual = Number.isInteger(o.pin);
+  const level = manual ? o.pin : (s && s.level != null ? s.level : o.defaultLevel);
+  const from = manual ? 'manual' : (s && s.level != null ? 'stored' : 'default');
+  const live = r => (r && r.level === level && o.wall < r.until ? r : null);
+  return {
+    level, from, locked: manual,
+    blocked: s ? s.blocked : null,
+    dprCap: s ? live(s.dprCap) : null,
+    strike: manual || !s ? null : live(s.strike)
+  };
+}
+
+/**
+ * The record this load writes: the next load's level (a proposal, else this
+ * load's level), the block, the ratio cap and the strike. `ctl` is the
+ * controller; `dprCap` the cap the scene holds for this level. Nothing is
+ * written while a manual level is pinned -- the scene checks `locked`.
+ */
+export function recordFor(ctl, startLevel, dprCap, extra) {
+  return Object.assign({
+    level: ctl.pending != null ? ctl.pending : startLevel,
+    blocked: ctl.blocked,
+    dprCap: dprCap || null,
+    strike: ctl.strike
+  }, extra || {});
+}
+
+/** Plain-words names for Settings > Quality, by level. */
+export const LEVEL_LABELS = Object.freeze([
+  'Low',
+  'Medium – fewer small items',
+  'Medium',
+  'High',
+  'Max'
+]);
+
+/**
+ * The manual choices for Settings > Quality: every level, with whether this
+ * device can build it and why not. A level above what the uniform budget
+ * compiles is unavailable; so is one that builds exactly what a cheaper level
+ * builds under this shadows= mode (ultra is ultra-lite in the HA popup).
+ *
+ * @param {{maxLevel:number, mobile:boolean, shadows:string}} ctx
+ */
+export function levelOptions(ctx) {
+  return LEVELS.map((L, level) => {
+    const o = { level, name: L.name, label: LEVEL_LABELS[level], available: true, reason: null };
+    if (level > ctx.maxLevel) {
+      o.available = false;
+      o.reason = 'this GPU cannot compile it';
+      return o;
+    }
+    const here = configKey(levelConfig(level, ctx));
+    for (let l = level - 1; l >= 0; l--) {
+      if (configKey(levelConfig(l, ctx)) === here) {
+        o.available = false;
+        o.reason = 'same as ' + LEVEL_LABELS[l] + ' here';
+        break;
+      }
+    }
+    return o;
+  });
 }

@@ -19,7 +19,7 @@
  */
 
 import { detectMobileGpu, resolveTier } from '../quality-tier.js';
-import { maxLevelFor, defaultLevel, storageKey, loadState, levelConfig, LEVELS, MOBILE_START_RATIO } from '../adaptive-quality.js';
+import { maxLevelFor, defaultLevel, storageKey, loadState, levelConfig, LEVELS, MOBILE_START_RATIO, pinKey, loadPin, resolveStart } from '../adaptive-quality.js';
 
 /**
  * A probe: `get(path, fn)` runs fn and returns its value, or null -- and when
@@ -161,8 +161,16 @@ export function appDecision(env, webgl, probe, shadows) {
     });
   });
   const stored = storedStates[mode];
+  // Settings > Quality's manual level per mode (task e7e10870): it wins over
+  // the adaptive record, exactly as in the scene (resolveStart).
+  const pinKeys = { auto: pinKey(renderer, maxFragU, 'auto'), low: pinKey(renderer, maxFragU, 'low') };
+  if (!pinKeys[mode]) pinKeys[mode] = pinKey(renderer, maxFragU, mode);
+  const manualLevels = {};
+  Object.keys(pinKeys).forEach(m => { manualLevels[m] = loadPin(storage, pinKeys[m], maxLevel); });
+  const start = resolveStart({ stored: stored && typeof stored === 'object' && 'level' in stored ? stored : null,
+    pin: manualLevels[mode], defaultLevel: def, wall: Date.now() });
   const ctx = { maxLevel, mobile: t.mobileCaps === true, shadows: mode };
-  const current = stored && stored.level != null ? stored.level : def;
+  const current = start.level;
   const cfg = levelConfig(current, ctx);
   // The DPR the app is running: where adaptive quality last settled at this
   // level, else its start ratio (mobile 1.5, desktop min(dpr, 2)).
@@ -175,8 +183,9 @@ export function appDecision(env, webgl, probe, shadows) {
     shadowsMode: mode,
     storageKeys: keys,
     storedAdaptiveState: storedStates,
+    pinKeys, manualLevels,
     currentLevel: current, currentLevelName: LEVELS[current].name,
-    currentLevelFrom: stored && stored.level != null ? 'stored' : 'default',
+    currentLevelFrom: start.from,
     currentLevelConfig: Object.assign({}, cfg, { furnitureDetail: cfg.tier === 'low' ? 'low' : 'full' }),
     startDpr, currentDpr: settled || startDpr, currentDprFrom: settled ? 'stored settled' : 'app start ratio'
   };

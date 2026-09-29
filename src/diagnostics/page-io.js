@@ -16,6 +16,9 @@
  *                      every non-2xx the endpoint can return.
  */
 
+// The app's CURRENT adaptive record (the v2 key since task e7e10870).
+import { STATE_PREFIX as STATE_KEY_PREFIX, saveState } from '../adaptive-quality.js';
+
 export const ID_KEY = 'home3d.diagnostics.deviceId';
 export const NAME_KEY = 'home3d.diagnostics.deviceName';
 
@@ -125,15 +128,14 @@ export async function saveRun(win, url, doc) {
  */
 export function applyStoredLevel(win, key, level) {
   const s = storage(win);
-  if (!s || typeof key !== 'string' || key.indexOf('home3d.quality.v1|') !== 0 || !Number.isInteger(level)) {
+  if (!s || typeof key !== 'string' || key.indexOf(STATE_KEY_PREFIX) !== 0 || !Number.isInteger(level)) {
     return { ok: false, previousRaw: null, error: s ? 'bad key or level' : 'storage unavailable' };
   }
   let prev = null;
   try { prev = s.getItem(key); } catch (e) { return { ok: false, previousRaw: null, error: 'storage unreadable' }; }
-  try {
-    s.setItem(key, JSON.stringify({ v: 1, level, blocked: null, dprCap: null, settled: null }));
-    return { ok: true, previousRaw: prev };
-  } catch (e) { return { ok: false, previousRaw: prev, error: 'storage refused the write' }; }
+  // The app's own writer, so the format (and its version) cannot drift.
+  if (saveState(s, key, { level, blocked: null, dprCap: null, strike: null, settled: null })) return { ok: true, previousRaw: prev };
+  return { ok: false, previousRaw: prev, error: 'storage refused the write' };
 }
 
 /** Undo applyStoredLevel: put the previous raw value back (or remove the key). */

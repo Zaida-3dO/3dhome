@@ -141,9 +141,14 @@ check('app decision: nothing stored -> running the default level', f.app.current
   f.app.currentLevelConfig.dropMinorFurniture === true && f.app.currentLevelConfig.furnitureDetail === 'full', f.app);
 check('app decision: start ratio 1.5 on a mobile GPU', f.app.startDpr === 1.5 && f.app.currentDpr === 1.5);
 check('app decision: auto and low keys differ, and name the GPU', f.app.storageKeys.auto !== f.app.storageKeys.low &&
-  f.app.storageKeys.auto === 'home3d.quality.v1|Immortalis-G925 MC12|1024|auto', f.app.storageKeys);
+  f.app.storageKeys.auto === 'home3d.quality.v2|Immortalis-G925 MC12|1024|auto', f.app.storageKeys);
+// A stale v1 record (written by the old sharpness-first ladder) is not read
+// (task e7e10870): the device is reported at its default.
+store.set('home3d.quality.v1|Immortalis-G925 MC12|1024|low', JSON.stringify({ v: 1, level: 0, blocked: { level: 1, until: 9e15 } }));
+const fv1 = await D.collectDevice(full, { shadows: 'low' });
+check('a v1 record is ignored: running the default (mid-lite)', fv1.app.currentLevel === 1 && fv1.app.currentLevelFrom === 'default', fv1.app);
 // A stored level 0 (the owner's low-poly bed): read, never written.
-store.set(f.app.storageKeys.low, JSON.stringify({ v: 1, level: 0, blocked: { level: 1, until: 9e15 }, dprCap: null,
+store.set(f.app.storageKeys.low, JSON.stringify({ v: 2, level: 0, blocked: { level: 1, until: 9e15 }, dprCap: null,
   settled: { level: 0, dpr: 1.25, p95: 40, at: 1 } }));
 const before = JSON.stringify([...store]);
 const f2 = await D.collectDevice(full, { shadows: 'low' });
@@ -153,6 +158,13 @@ check('stored settled ratio is the current ratio', f2.app.currentDpr === 1.25 &&
 check('the stored record is reported', f2.app.storedAdaptiveState.low && f2.app.storedAdaptiveState.low.level === 0);
 check('reading the device never writes storage', JSON.stringify([...store]) === before);
 check('auto mode is unaffected by the low record', (await D.collectDevice(full)).app.currentLevelFrom === 'default');
+// Settings > Quality's manual level wins over the adaptive record, per mode.
+store.set('home3d.quality.pin.v1|Immortalis-G925 MC12|1024|low', JSON.stringify({ v: 1, level: 3 }));
+const fp = await D.collectDevice(full, { shadows: 'low' });
+check('a manual level in low mode -> running it (manual), over the stored record', fp.app.currentLevel === 3 &&
+  fp.app.currentLevelFrom === 'manual' && fp.app.manualLevels.low === 3 && fp.app.manualLevels.auto === null, fp.app);
+check('the manual level does not leak into auto mode', (await D.collectDevice(full)).app.currentLevelFrom === 'default');
+store.delete('home3d.quality.pin.v1|Immortalis-G925 MC12|1024|low');
 check('referrer is reduced to its origin', f.embedding.referrerOrigin === 'https://dash.example.test', f.embedding.referrerOrigin);
 check('the referrer path and query never appear', JSON.stringify(f).indexOf('secret-path') === -1 && JSON.stringify(f).indexOf('token=abc') === -1);
 const masked = Object.assign({}, full, { document: { createElement: () => ({ getContext: t => (t === 'webgl2' ? fakeGL({ renderer: 'x', maxFragU: 256, debug: false }) : null) }), referrer: '' } });
@@ -196,17 +208,19 @@ check('copy: both fail -> ok:false with both reasons', !c3.ok && /no Clipboard A
 const AQ = await imp('src/adaptive-quality.js');
 const qmem = new Map();
 const qw = { localStorage: { getItem: k => (qmem.has(k) ? qmem.get(k) : null), setItem: (k, v) => qmem.set(k, String(v)), removeItem: k => qmem.delete(k) } };
-const qkey = 'home3d.quality.v1|GPU|1024|low';
-const old = JSON.stringify({ v: 1, level: 0, blocked: { level: 1, until: 9e15 }, dprCap: null, settled: null });
+const qkey = 'home3d.quality.v2|GPU|1024|low';
+const old = JSON.stringify({ v: 2, level: 0, blocked: { level: 1, until: 9e15 }, dprCap: null, settled: null });
 qmem.set(qkey, old);
 const ap = IO.applyStoredLevel(qw, qkey, 2);
 check('apply: returns the previous raw value', ap.ok && ap.previousRaw === old, ap);
 const loaded = AQ.loadState(qw.localStorage, qkey, 4);
 check('apply: written in the app format (loadState reads level 2, no block)', loaded && loaded.level === 2 && loaded.blocked === null, loaded);
 check('undo: previous value restored exactly', IO.restoreStoredLevel(qw, qkey, ap.previousRaw) && qmem.get(qkey) === old);
-const ap2 = IO.applyStoredLevel(qw, 'home3d.quality.v1|NEW|1024|auto', 3);
-check('undo of a fresh key removes it', ap2.previousRaw === null && IO.restoreStoredLevel(qw, 'home3d.quality.v1|NEW|1024|auto', null) &&
-  !qmem.has('home3d.quality.v1|NEW|1024|auto'));
+const ap2 = IO.applyStoredLevel(qw, 'home3d.quality.v2|NEW|1024|auto', 3);
+check('undo of a fresh key removes it', ap2.previousRaw === null && IO.restoreStoredLevel(qw, 'home3d.quality.v2|NEW|1024|auto', null) &&
+  !qmem.has('home3d.quality.v2|NEW|1024|auto'));
+check('apply refuses a stale v1 key (the app no longer reads it)', IO.applyStoredLevel(qw, 'home3d.quality.v1|GPU|1024|low', 2).ok === false);
+check('apply refuses the manual-pin key (only Settings writes that)', IO.applyStoredLevel(qw, 'home3d.quality.pin.v1|GPU|1024|low', 2).ok === false);
 check('apply refuses a key that is not an adaptive-quality record', IO.applyStoredLevel(qw, 'home3d.diagnostics.deviceId', 1).ok === false);
 check('apply refuses a non-integer level', IO.applyStoredLevel(qw, qkey, 1.5).ok === false);
 check('apply with throwing storage fails cleanly', IO.applyStoredLevel({ get localStorage() { throw new Error('x'); } }, qkey, 1).ok === false);
@@ -234,20 +248,28 @@ function fakeLs(init) {
     getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) };
 }
 const QA = 'home3d.quality.v1|GPU|1024|auto', QL = 'home3d.quality.v1|GPU|1024|low';
-let ls = fakeLs({ [QA]: '{"v":1,"level":0}', [QL]: '{"v":1,"level":1}', other: 'x' });
-check('snapshot reads only adaptive keys', JSON.stringify(R.snapshotAdaptive(ls)) === JSON.stringify({ [QA]: '{"v":1,"level":0}', [QL]: '{"v":1,"level":1}' }));
+// The guard covers every home3d.quality.* key: v1 leftovers, v2 records and
+// the Settings > Quality manual pin (task e7e10870).
+const QP = 'home3d.quality.pin.v1|GPU|1024|low', QV2 = 'home3d.quality.v2|GPU|1024|low';
+let ls = fakeLs({ [QA]: '{"v":1,"level":0}', [QL]: '{"v":1,"level":1}', [QV2]: '{"v":2,"level":3}', [QP]: '{"v":1,"level":2}', other: 'x' });
+check('snapshot reads only quality keys (v1, v2 and the pin)', JSON.stringify(R.snapshotAdaptive(ls)) ===
+  JSON.stringify({ [QA]: '{"v":1,"level":0}', [QL]: '{"v":1,"level":1}', [QV2]: '{"v":2,"level":3}', [QP]: '{"v":1,"level":2}' }), R.snapshotAdaptive(ls));
 let g = R.guardAdaptive(ls);
 let st = g.finish();
-check('guard: untouched run reports untouched, restores nothing', st.untouched === true && st.restored === false && st.keysBefore === 2, st);
+check('guard: untouched run reports untouched, restores nothing', st.untouched === true && st.restored === false && st.keysBefore === 4, st);
 g = R.guardAdaptive(ls);
 ls.setItem(QA, '{"v":1,"level":4}');               // clobbered
 ls.removeItem(QL);                                  // deleted
 ls.setItem('home3d.quality.v1|NEW|1|auto', 'y');    // added
 ls.setItem('other', 'changed');                     // not ours
+ls.removeItem(QP);                                  // the manual pin cleared
+ls.setItem(QV2, '{"v":2,"level":0}');               // the v2 record clobbered
 st = g.finish();
 check('guard: a clobbered run is reported and restored', st.untouched === false && st.restored === true, st);
 check('guard: the clobbered record is back exactly', ls.getItem(QA) === '{"v":1,"level":0}');
 check('guard: a deleted record is back', ls.getItem(QL) === '{"v":1,"level":1}');
+check('guard: a cleared manual pin is back', ls.getItem(QP) === '{"v":1,"level":2}');
+check('guard: a clobbered v2 record is back', ls.getItem(QV2) === '{"v":2,"level":3}');
 check('guard: a record added during the run is removed', ls.getItem('home3d.quality.v1|NEW|1|auto') === null);
 check('guard: keys that are not adaptive records are never touched', ls.getItem('other') === 'changed');
 check('guard: finish() again finds nothing to do', (() => { const s2 = g.finish(); return s2.untouched === true && s2.restored === false; })());

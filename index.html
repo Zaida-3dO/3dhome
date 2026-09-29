@@ -469,6 +469,25 @@
     }
     .panel-toggle-label { font-size: 12px; font-weight: 500; opacity: 0.7; }
 
+    /* Settings > Quality: the choice, then a readout line under it. */
+    .quality-row { gap: 8px; border-bottom: none; padding-bottom: 4px; }
+    .quality-select {
+      max-width: 62%; padding: 5px 8px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.06); color: #fff;
+      font: inherit; font-size: 12px; cursor: pointer;
+      color-scheme: dark;
+    }
+    .quality-select option { background: #1e2130; color: #fff; }
+    .quality-select option:disabled { color: rgba(255,255,255,0.4); }
+    .quality-sub {
+      display: flex; align-items: center; gap: 8px;
+      padding: 0 16px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .quality-readout { flex: 1; font-size: 11px; opacity: 0.7; line-height: 1.35; }
+    .spec-btn.quality-btn { width: auto; padding: 4px 8px; font-size: 11px; flex: none; }
+
     /* Settings-page section heading + Specs button list */
     .panel-section-title {
       font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
@@ -515,6 +534,10 @@
     :root[data-theme="light"] .panel-header,
     :root[data-theme="light"] .panel-toggle-row { border-bottom-color: rgba(0,0,0,0.08); }
     :root[data-theme="light"] .panel-footer { border-top-color: rgba(0,0,0,0.08); }
+    :root[data-theme="light"] .quality-sub { border-bottom-color: rgba(0,0,0,0.08); }
+    :root[data-theme="light"] .quality-select { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.14); color: #1a1d29; color-scheme: light; }
+    :root[data-theme="light"] .quality-select option { background: #fff; color: #1a1d29; }
+    :root[data-theme="light"] .quality-select option:disabled { color: rgba(0,0,0,0.4); }
     :root[data-theme="light"] .panel-back,
     :root[data-theme="light"] .panel-close,
     :root[data-theme="light"] .panel-pin { color: #5b6070; }
@@ -2508,13 +2531,17 @@
       var qualityCleared = false;
       function qualityReadout(s) {
         if (!s) return '';
-        const bits = [s.levelName, 'DPR ' + s.dpr];
-        if (!s.adaptive) bits.push('fixed (' + s.reason + ')');
+        // Auto vs Manual first: the row must say who chose what is running.
+        const mode = s.mode === 'manual' ? 'Manual' : s.mode === 'auto' ? 'Auto' : 'Fixed';
+        const changed = s.canPin && (s.pinNext == null ? null : s.pinNext) !== (s.pin == null ? null : s.pin);
+        const bits = [mode, (s.levelLabel || s.levelName) + ' (' + s.levelName + ')', 'sharpness ' + s.dpr];
+        if (!s.adaptive) bits.push(s.mode === 'manual' ? 'sharpness fixed (' + s.reason + ')' : 'fixed (' + s.reason + ')');
         else {
           if (s.p95 != null) bits.push('p95 ' + s.p95 + ' ms');
           if (s.reason !== 'settled') bits.push(s.reason === 'measuring' ? 'measuring…' : s.reason);
-          bits.push('next load: ' + (s.nextLevelName || 'same'));
+          if (s.mode === 'auto' && !changed) bits.push('next load: ' + (s.nextLevelLabel || 'same'));
         }
+        if (changed) bits.push('next load: ' + (s.pinNext == null ? 'Auto' : 'Manual ' + s.levels[s.pinNext].label));
         // Wrap between items, never inside one ("p95 16.7 / ms").
         return bits.map(b => b.replace(/ /g, ' ')).join(' · ');
       }
@@ -2602,17 +2629,35 @@
               '</div>';
           }
 
-          // Quality readout (task 230713da): where adaptive quality has put
-          // this device and what the next load will use. Filled by textContent
-          // below and kept live by the scene's onQualityChange.
+          // Quality (tasks 230713da, e7e10870): a choice -- Auto (the adaptive
+          // ladder, the default) or a manual level for THIS device in THIS
+          // context (the page and the HA popup keep separate choices) -- and
+          // a readout of what is running (Auto vs Manual, the level, the
+          // sharpness) that the scene's onQualityChange keeps live. A change
+          // applies on the next load, never as a recompile under the running
+          // view: the row then offers Reload.
           if (typeof home.getQualityStatus === 'function') {
-            html += '<div class="panel-toggle-row" style="gap:8px;">' +
+            const qs = home.getQualityStatus();
+            const pendingChange = qs.canPin && (qs.pinNext == null ? null : qs.pinNext) !== (qs.pin == null ? null : qs.pin);
+            html += '<div class="panel-toggle-row quality-row">' +
               '<span class="panel-toggle-label">Quality</span>' +
-              '<span id="panel-quality-readout" style="flex:1;font-size:11px;opacity:0.7;text-align:right;line-height:1.35;"></span>' +
-              // No Re-measure when adaptation is off (?tier=, the preview, a
-              // low fps cap): nothing to forget, and ?tier= never touches storage.
-              (home.getQualityStatus().adaptive
-                ? '<button class="spec-btn" id="panel-quality-reset" style="width:auto;padding:4px 8px;font-size:11px;" ' +
+              (qs.canPin
+                ? '<select class="quality-select" id="panel-quality-select" aria-label="Quality">' +
+                  '<option value="auto"' + (qs.pinNext == null ? ' selected' : '') + '>Auto (recommended)</option>' +
+                  qs.levels.map(o => '<option value="' + o.level + '"' + (qs.pinNext === o.level ? ' selected' : '') +
+                    (o.available ? '' : ' disabled') + '>' + o.label + (o.available ? '' : ' (' + o.reason + ')') + '</option>').join('') +
+                  '</select>'
+                : '') +
+              '</div>' +
+              '<div class="quality-sub">' +
+              '<span id="panel-quality-readout" class="quality-readout"></span>' +
+              (pendingChange
+                ? '<button class="spec-btn quality-btn" id="panel-quality-reload" title="Reload the 3D view to build the chosen quality">Reload</button>'
+                : '') +
+              // Re-measure only in Auto with adaptation on: nothing to forget
+              // otherwise, and ?tier= never touches storage.
+              (qs.adaptive && qs.mode === 'auto' && !pendingChange
+                ? '<button class="spec-btn quality-btn" id="panel-quality-reset" ' +
                   'title="Forget this device\'s frame-time measurements; the next load starts from the default">Re-measure</button>'
                 : '') +
               '</div>';
@@ -2709,6 +2754,22 @@
               });
             }
           }
+          const panelQualitySelect = document.getElementById('panel-quality-select');
+          if (panelQualitySelect) {
+            panelQualitySelect.addEventListener('change', () => {
+              const v = panelQualitySelect.value;
+              const res = home.setQualityPin(v === 'auto' ? null : parseInt(v, 10));
+              if (!res.ok) {
+                const el = document.getElementById('panel-quality-readout');
+                if (el) el.textContent = 'Could not set: ' + res.reason + '.';
+                return;
+              }
+              qualityCleared = false;
+              renderPanel();
+            });
+          }
+          const panelQualityReload = document.getElementById('panel-quality-reload');
+          if (panelQualityReload) panelQualityReload.addEventListener('click', () => { location.reload(); });
           const panelQualityReset = document.getElementById('panel-quality-reset');
           if (panelQualityReset) {
             panelQualityReset.addEventListener('click', () => {

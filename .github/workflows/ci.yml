@@ -674,6 +674,8 @@ jobs:
         run: node scripts/test-quality-tier.mjs
       - name: Adaptive quality - level ladder, simulated frame-time series, hysteresis, storage
         run: node scripts/test-adaptive-quality.mjs
+      - name: Adaptive quality, load after load -- the wall tablet settles detail-first, desktop unchanged, manual pin
+        run: node scripts/test-adaptive-convergence.mjs
       - name: Room lights - per-channel collapse to one or two lights
         run: node scripts/test-light-collapse.mjs
       - name: Tap popovers -- target resolution, nearest-visible occlusion, placement

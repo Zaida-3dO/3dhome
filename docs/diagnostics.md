@@ -39,7 +39,8 @@ reduced — and by how much?*
   than the one the device runs): writes that level into the app's own adaptive-quality record for
   this device and mode, for the next load of the 3D view, and shows the previous value with an
   **Undo**. The app keeps measuring afterwards and steps down by itself if the device cannot hold
-  it. **Only the level is written**: the app ramps the pixel ratio itself, live, from what it
+  it. A manual level set in the 3D view's Settings > Quality wins over this record until Settings
+  goes back to Auto; the done screen says so when one is set. **Only the level is written**: the app ramps the pixel ratio itself, live, from what it
   measures (so a level that held at DPR 1 but not 1.5 is fine to apply). Nothing else in the
   benchmark writes that record (see *The app's own record* below).
 
@@ -60,9 +61,10 @@ default. The dev server imports the same validation file nginx runs, so Save beh
 Before anything runs, the device block records the app's **current decision** here, computed with
 the app's own functions (`quality-tier.js`, `adaptive-quality.js`) from the same inputs the scene
 reads: `compileTier`, `mobileGpu` and why, `maxLevel`, the default level, the adaptive-quality
-record for this GPU in **both** shadows modes (`storedAdaptiveState.auto` / `.low`, with their
-`storageKeys`), and from those the **level the device actually runs** (`currentLevel`,
-`currentLevelFrom`: `stored` or `default`), what that level builds (`currentLevelConfig`: tier,
+record for this GPU in **both** shadows modes (`storedAdaptiveState.auto` / `.low`, and any manual
+level in `manualLevels.auto` / `.low`, with their
+`storageKeys` and `pinKeys`), and from those the **level the device actually runs** (`currentLevel`,
+`currentLevelFrom`: `manual`, `stored` or `default`), what that level builds (`currentLevelConfig`: tier,
 room shadows, minor-furniture drop, `furnitureDetail` — `low` only at tier `low`, see
 `furnitureBuildSteps` in `src/furniture.js`) and the ratio it runs at (`currentDpr`: where the
 record last settled at this level, else the app's start ratio — 1.5 on a mobile GPU).
@@ -163,7 +165,8 @@ and more — `extensions`, `timerQuery`, `parallelShaderCompile`, `highpFragment
 (adapter info where exposed), and `app` — the app's own decision recomputed with its own
 functions: `mobileGpu`, `mobileReason`, `mobileCaps`, `compileTier`, `tier`, `maxLevel`,
 `defaultLevel`/`Name`, `shadowsMode`, `storageKeys` and `storedAdaptiveState` (per shadows mode:
-what adaptive quality has learnt on this device, if anything), `currentLevel`/`Name`,
+what adaptive quality has learnt on this device, if anything), `pinKeys` and `manualLevels` (per
+shadows mode: the Settings > Quality manual level, or null for Auto), `currentLevel`/`Name`,
 `currentLevelFrom`, `currentLevelConfig` (incl. `furnitureDetail`), `startDpr`, `currentDpr`,
 `currentDprFrom` — see *What the device runs today*.
 
@@ -227,10 +230,12 @@ The agent reading the result should re-derive from `stages`; the verdict is a fi
 ### The app's own adaptive-quality record
 
 The 3D view keeps what adaptive quality has learnt per device in `localStorage`
-(`home3d.quality.v1|<GPU>|<uniform vectors>|<shadows mode>`). The benchmark must not disturb it:
-every build pins its level (`opts.level`), which turns adaptive quality off for that build, so
-nothing is read from or written to the record by the scene. The runner snapshots every
-`home3d.quality.v1|` key before the run and compares after; `run.adaptiveState.untouched` says
+(`home3d.quality.v2|<GPU>|<uniform vectors>|<shadows mode>`; `v1` records from before the
+detail-first ladder are ignored). It keeps the Settings > Quality manual level beside it
+(`home3d.quality.pin.v1|…`, same key tail). The benchmark must not disturb either:
+every build pins its level (`opts.level`), which turns adaptive quality off for that build and
+skips the manual level, so the scene reads and writes neither. The runner snapshots every
+`home3d.quality.` key (v1, v2 and the pin) before the run and compares after; `run.adaptiveState.untouched` says
 whether anything moved, and if something did it is restored (`restored: true`). The only writer
 is the explicit **Apply recommended level** button, which the user presses, and which shows the
 previous value and offers Undo.

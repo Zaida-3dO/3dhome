@@ -13,6 +13,7 @@ import { detectMobileGpu, resolveTier } from './quality-tier.js';
 import {
   LEVELS, maxLevelFor, levelForTier, defaultLevel, levelConfig, createController,
   storageKey, loadState, saveState, clearState, estimateVsync, capCadence, rafThrottle,
+  pinKey, loadPin, savePin, resolveStart, recordFor, levelOptions, LEVEL_LABELS,
   MOBILE_START_RATIO, MIN_FPS_CAP, BLOCK_MS, COLD_FRAME_MS, createProbeScheduler
 } from './adaptive-quality.js';
 import { collapseEmitters } from './light-merge.js';
@@ -3317,12 +3318,20 @@ export const Home3DScene = (() => {
     const qKey = storageKey(gpuName, maxFragU, shadows);
     const maxLevel = tierInfo.overridden ? levelForTier(tierInfo.tier) : maxLevelFor(tierInfo.compileTier);
     const levelCtx = { maxLevel, mobile: mobileGpu === true, shadows };
+    // Settings > Quality (task e7e10870): a MANUAL level, per device and per
+    // shadows= mode (so the page and the HA popup each keep their own), read
+    // unless ?tier= or the diagnostics level pins the build, or this is the
+    // auto-rotating preview. It wins over the adaptive record and locks the
+    // ladder: only the pixel ratio adapts under it.
+    const qPinKey = pinKey(gpuName, maxFragU, shadows);
+    const pinAllowed = !tierInfo.overridden && !levelPinned && !autoRotate;
+    const manualLevel = pinAllowed ? loadPin(qStorage, qPinKey, maxLevel) : null;
     const stored = adaptiveOff ? null : loadState(qStorage, qKey, maxLevel);
+    const loadStart = resolveStart({ stored, pin: manualLevel, defaultLevel: defaultLevel(mobileGpu === true, maxLevel), wall: Date.now() });
     const startLevelIdx = tierInfo.overridden ? maxLevel
       : levelPinned ? Math.max(0, Math.min(maxLevel, opts.level))
-      : (stored && stored.level != null ? stored.level : defaultLevel(mobileGpu === true, maxLevel));
-    const levelFrom = tierInfo.overridden ? '?tier=' : levelPinned ? 'pinned'
-      : (stored && stored.level != null ? 'stored' : 'default');
+      : loadStart.level;
+    const levelFrom = tierInfo.overridden ? '?tier=' : levelPinned ? 'pinned' : loadStart.from;
     // The build. At a device's default level this is the pre-adaptive build
     // exactly (scripts/test-adaptive-quality.mjs compares every uniform tier
     // x shadows= value against the old formula): the `shadows` opt still
@@ -3996,13 +4005,18 @@ export const Home3DScene = (() => {
     const RESUME_QUIET_MS = 1000;
     // A ratio this level failed above on an earlier load (plan r2, M3): the
     // session starts under it instead of re-trying the failed notch.
-    const storedCap = stored && stored.dprCap && stored.dprCap.level === startLevelIdx &&
-      Date.now() < stored.dprCap.until ? stored.dprCap : null;
+    // resolveStart() keeps a cap only for the level it was learnt at.
+    const storedCap = loadStart.dprCap;
     const adaptive = adaptiveOff ? null : createController({
       floor: RAMP_START, startRatio: dprStart, maxRatio: basePixelRatio,
-      level: startLevelIdx, ctx: levelCtx, blocked: stored && stored.blocked,
+      level: startLevelIdx, ctx: levelCtx, blocked: loadStart.blocked,
       dprCap: storedCap ? storedCap.ratio : null,
-      defaultLevel: defaultLevel(mobileGpu === true, maxLevel)
+      defaultLevel: defaultLevel(mobileGpu === true, maxLevel),
+      // A floor failure at this level on an earlier load (mobile; see
+      // floorFailure() in src/adaptive-quality.js).
+      strike: loadStart.strike,
+      // A manual level: the ladder does not move, only the pixel ratio.
+      locked: loadStart.locked
     });
     // The cold frames (plan r2, M5): the ren.render() time of the first
     // rendered frames after onReady and after the furniture attaches -- the
@@ -4073,12 +4087,9 @@ export const Home3DScene = (() => {
     // probe that lands afterwards. The next load starts from the default.
     let qualityForgotten = false;
     function persistQuality(extra) {
-      if (!adaptive || qualityForgotten) return;
-      const ok = saveState(qStorage, qKey, Object.assign({
-        level: adaptive.pending != null ? adaptive.pending : startLevelIdx,
-        blocked: adaptive.blocked,
-        dprCap: dprCapState
-      }, extra || {}));
+      // A manual level writes nothing: Auto resumes from the record as it was.
+      if (!adaptive || qualityForgotten || adaptive.locked) return;
+      const ok = saveState(qStorage, qKey, recordFor(adaptive, startLevelIdx, dprCapState, extra));
       if (!ok && !storageWarned) {
         storageWarned = true;
         console.info('[Home3DScene] Adaptive quality: storage unavailable; adapting for this session only.');
@@ -4087,10 +4098,23 @@ export const Home3DScene = (() => {
     function qualityStatus() {
       const pending = adaptive && !qualityForgotten ? adaptive.pending : null;
       const blocked = adaptive && adaptive.blocked && Date.now() < adaptive.blocked.until ? adaptive.blocked : null;
+      const pinNext = pinAllowed ? loadPin(qStorage, qPinKey, maxLevel) : null;
       return {
         adaptive: !!adaptive,
         reason: adaptiveOff || (throttleNoted ? 'paused: the browser is throttling frames'
           : probes.wantProbe || probes.probing ? 'measuring' : 'settled'),
+        // Settings > Quality (task e7e10870). mode: 'manual' (a pinned
+        // level), 'auto' (the ladder), or 'fixed' (?tier=, diagnostics, the
+        // preview, or a low fps cap: nothing to choose). `pin` is what this
+        // load was built with, `pinNext` what the next load will use; they
+        // differ after a change until the reload. `levels`: the choices, with
+        // why an unavailable one is unavailable.
+        mode: levelFrom === 'manual' ? 'manual' : adaptive ? 'auto' : 'fixed',
+        canPin: pinAllowed,
+        pin: levelFrom === 'manual' ? startLevelIdx : null,
+        pinNext,
+        levelLabel: LEVEL_LABELS[startLevelIdx],
+        levels: pinAllowed ? levelOptions(levelCtx) : [],
         level: startLevelIdx, levelName: startLevel.name, levelFrom, maxLevel, tier,
         dpr: ceilingRatio, dprStart: adaptive ? dprStart : null, dprMax: basePixelRatio,
         dprCap: adaptive && adaptive.sessionMax < basePixelRatio ? adaptive.sessionMax : null,
@@ -4099,6 +4123,7 @@ export const Home3DScene = (() => {
           up: Math.round(adaptive.lastThresholds.up * 10) / 10, down: Math.round(adaptive.lastThresholds.down * 10) / 10 } : null,
         vsyncMs: vsyncMs ? Math.round(vsyncMs * 100) / 100 : null,
         nextLevel: pending, nextLevelName: levelName(pending),
+        nextLevelLabel: pending == null ? null : LEVEL_LABELS[pending],
         // Levels at or above this are not proposed until `until`.
         blockedFrom: blocked ? { level: blocked.level, levelName: levelName(blocked.level), until: blocked.until } : null
       };
@@ -4138,8 +4163,10 @@ export const Home3DScene = (() => {
       if (d.revoke) bits.push('next-load step up withdrawn');
       if (d.proposeLevel != null) bits.push(`next load: ${levelName(d.proposeLevel)}`);
       if (d.block) bits.push(`${levelName(d.block.level)} and above blocked for 7 days`);
+      if (d.strike) bits.push(`strike at ${levelName(d.strike.level)} (a second load failing at DPR ${adaptive.floor} steps it down)`);
+      if (d.strikeCleared) bits.push('earlier strike cleared');
       console.info(`[Home3DScene] Adaptive quality: ${why} at DPR ${d.from} (level ${startLevel.name}) -> ${bits.join('; ')}.`);
-      if (d.proposeLevel != null || d.revoke || d.block || d.cap != null) persistQuality();
+      if (d.proposeLevel != null || d.revoke || d.block || d.cap != null || d.strike || d.strikeCleared) persistQuality();
       // A step down after "settled" re-opens the record of where it settled.
       if (d.kind === 'down') adaptiveSettledLogged = false;
     }
@@ -5447,9 +5474,10 @@ export const Home3DScene = (() => {
       getFrameCount() { return framesRendered; },
       // Adaptive quality (task 230713da): where this device is and why.
       // { adaptive, reason ('measuring'|'settled'|why it is off), level,
-      //   levelName, levelFrom ('default'|'stored'|'?tier='), maxLevel, tier,
-      //   dpr, dprStart, dprMax, dprCap, p95, thresholds, vsyncMs,
-      //   nextLevel, nextLevelName, blockedFrom }
+      //   levelName, levelFrom ('default'|'stored'|'manual'|'?tier='|'pinned'),
+      //   maxLevel, tier, dpr, dprStart, dprMax, dprCap, p95, thresholds,
+      //   vsyncMs, nextLevel, nextLevelName, blockedFrom, and for Settings >
+      //   Quality: mode, canPin, pin, pinNext, levelLabel, levels }
       getQualityStatus() { return qualityStatus(); },
       // fn(status) on every adaptive decision or settle. Returns an unsubscribe.
       onQualityChange(fn) {
@@ -5469,6 +5497,26 @@ export const Home3DScene = (() => {
         const ok = clearState(qStorage, qKey);
         console.info('[Home3DScene] Adaptive quality: measurements cleared; the next load starts from the default level.');
         return ok;
+      },
+      // Settings > Quality (task e7e10870): pin a level for THIS device and
+      // shadows= mode (the page and the HA popup keep separate pins), or
+      // null for Auto. Nothing structural changes under the running scene:
+      // it applies on the next load, and the caller offers the reload.
+      // Refused (ok false, with a reason) when ?tier=, the diagnostics level
+      // or the preview decides the build, or for a level this device cannot
+      // build. { ok, reason?, needsReload }
+      setQualityPin(level) {
+        if (!pinAllowed) return { ok: false, reason: '?tier= or the page decides the quality here', needsReload: false };
+        if (level != null) {
+          const opt = Number.isInteger(level) ? levelOptions(levelCtx)[level] : null;
+          if (!opt || !opt.available) return { ok: false, reason: opt ? opt.reason : 'no such level', needsReload: false };
+        }
+        const ok = savePin(qStorage, qPinKey, level == null ? null : level);
+        if (!ok) return { ok: false, reason: 'storage unavailable', needsReload: false };
+        const now = levelFrom === 'manual' ? startLevelIdx : null;
+        console.info(`[Home3DScene] Quality: ${level == null ? 'Auto' : 'manual ' + LEVELS[level].name} from the next load.`);
+        notifyQuality();
+        return { ok: true, needsReload: (level == null ? null : level) !== now };
       },
       // What the exterior-fade loop is ACTUALLY doing, per outer wall. Same
       // reasoning as getFootstepDebug below: preserveDrawingBuffer is false, so
