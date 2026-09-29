@@ -958,5 +958,49 @@ const CONSOLE = [
   }
 }
 
+// ---- 15. the curtains card: one light one row; no invented cornice reading ------
+{
+  const T = await imp('src/tap-popovers.js');
+  const tpSrc = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
+  const curtains = [{ id: 'w_blind', name: 'Window blind', room: 'r' }, { id: 'w_curtain', name: 'Window curtain', room: 'r' },
+    { id: 'w_other', name: 'Other', room: 'r' }];
+  const covers = { w_blind: ['cover.demo_b'], w_curtain: ['cover.demo_c'], w_other: ['cover.demo_o'] };
+  const g = T.curtainRoomGroup('w_blind', curtains, covers,
+    { w_blind: ['light.demo_cornice'], w_curtain: ['light.demo_cornice'], w_other: ['light.demo_other'] });
+  // Mutation: back to one row per curtain -> 3 rows -> fails.
+  check('curtains card: one cornice light bound under two curtains is ONE row, marked shared', g.lights.length === 2 &&
+    g.lights[0].entities.join() === 'light.demo_cornice' && g.lights[0].shared === true && g.lights[1].shared === false, g.lights);
+  const sub = T.curtainRoomGroup('w_blind', curtains, covers, { w_blind: ['light.demo_a', 'light.demo_b'], w_curtain: ['light.demo_b'] });
+  check('curtains card: a curtain whose cornice is part of an earlier row adds none', sub.lights.length === 1 && sub.lights[0].shared);
+  const two = T.curtainRoomGroup('w_blind', curtains, covers, { w_blind: ['light.demo_a'], w_curtain: ['light.demo_a', 'light.demo_b'] });
+  check('curtains card: a cornice with a light of its own keeps its row', two.lights.length === 2);
+  check('wiring: a shared light is the room\'s curtain light; its preview reaches every curtain it lights',
+    /label: l\.shared && g\.room \? roomThingTitle\(roomName\(g\.room\), 'curtain light'\)/.test(tpSrc) &&
+    /same\.forEach\(k => home\.setCorniceLight\(k,/.test(tpSrc));
+
+  const REST = { on: true, bri: 100, color: null, rest: true };
+  const off = T.corniceRowState({ opt: null, now: 0, last: null, live: false, raw: null, scene: REST, haConfigured: true });
+  // Mutation: drop the rest check -> "On · 100%" and 100 remembered -> fails.
+  check('cornice: HA configured but offline, never reported -> Unknown, nothing remembered', off.row.na && off.row.noReading &&
+    !off.row.on && off.seen === null, off);
+  const demo = T.corniceRowState({ opt: null, now: 0, last: null, live: false, raw: null, scene: REST, haConfigured: false });
+  check('cornice: the demo (no HA) shows its sample rest state as before', !demo.row.na && demo.row.on && demo.row.bri === 100);
+  const known = T.corniceRowState({ opt: null, now: 0, last: null, live: false, raw: null, scene: { on: true, bri: 40, color: null }, haConfigured: true });
+  check('cornice: HA offline after a real reading -> that reading, remembered', known.row.on && known.row.bri === 40 && known.seen === 40);
+  const live = T.corniceRowState({ opt: null, now: 0, last: 30, live: true, raw: { state: 'on', attributes: {} }, scene: REST, haConfigured: true });
+  check('cornice: live, on with no level reported -> the last level, not 100', live.row.on && live.row.bri === 30 && live.seen === null, live);
+  const unav = T.corniceRowState({ opt: null, now: 0, last: null, live: true, raw: { state: 'unavailable', attributes: {} }, scene: REST, haConfigured: true });
+  check('cornice: live and unavailable -> Unavailable', unav.row.na && !unav.row.noReading);
+  const sent = T.corniceRowState({ opt: { on: true, bri: null, until: 10 }, now: 5, last: null, live: true, raw: null, scene: REST, haConfigured: true });
+  check('cornice: just switched on, no level known -> unknown', sent.row.on && sent.row.briUnknown);
+  const html = T.popoverHtml.curtain({ name: 'x', status: 'haOffline', haOff: true, covers: [],
+    lights: [Object.assign({ id: 'c', label: 'Cornice' }, off.row)] }, () => '');
+  check('cornice markup: no reading reads Unknown, no slider, the switch disabled', /<small data-v>Unknown<\/small>/.test(html) &&
+    !/data-a="cbri"/.test(html) && /data-a="cpower"[^>]*\sdisabled/.test(html) && !/100%/.test(html), html);
+  check('wiring: corniceRow is corniceRowState, feeding only real levels to the memory',
+    /const r = corniceRowState\(\{ opt: corniceOptimistic\.get\(l\.id\), now: Date\.now\(\), last: levels\.last\(key\), live: isLive\(c\),/.test(tpSrc) &&
+    /haConfigured: !!ha\(\) \}\);\s*if \(r\.seen != null\) levels\.see\(key, true, r\.seen\);/.test(tpSrc));
+}
+
 console.log(failures ? 'FAILED -- ' + failures + ' failed, ' + passes + ' passed' : 'ok -- ' + passes + ' passed, 0 failed');
 process.exit(failures ? 1 : 0);

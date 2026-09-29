@@ -288,6 +288,44 @@ export function curtainRoomGroup(curtainId, curtains, coverBindings, corniceBind
   return { room, covers: rows(coverBindings), lights };
 }
 
+/**
+ * A cornice light row's state, and the level (if any) it lets the level
+ * memory remember: { row: { na, on, bri, briUnknown, noReading? }, seen }.
+ *
+ *   just sent (opt, until HA's echo)  what was sent; a switch-on with no
+ *                                     level shows the last one, else unknown
+ *   HA live                           the light's raw state (lightRowModel)
+ *   otherwise                         the scene's cornice strip: the demo's
+ *                                     sample, or a configured HA's last
+ *                                     reading while it is offline
+ *
+ * A configured HA that never reported this cornice leaves the scene at its
+ * REST default ({ on: true, bri: 100, rest: true }): that is no reading, so the
+ * row says "Unknown" (noReading) and nothing is remembered -- never an
+ * invented "On · 100%".
+ *
+ * @param x { opt, now, last, live, raw, scene, haConfigured }
+ */
+export function corniceRowState(x) {
+  const last = x.last;
+  const lastOr100 = last != null ? last : 100;
+  if (x.opt && x.opt.until > x.now) {
+    return { row: { na: false, on: x.opt.on, bri: x.opt.bri != null ? x.opt.bri : lastOr100,
+      briUnknown: !!x.opt.on && x.opt.bri == null && last == null }, seen: null };
+  }
+  if (x.live) {
+    const a = (x.raw && x.raw.attributes) || {};
+    const seen = x.raw && x.raw.state === 'on' && typeof a.brightness === 'number' ? Math.round(a.brightness / 2.55) : null;
+    const m = lightRowModel(x.raw, false, null, seen != null ? seen : last);
+    return { row: { na: m.na, on: m.on, bri: m.bri, briUnknown: m.briUnknown }, seen };
+  }
+  const s = x.scene;
+  if (x.haConfigured && (!s || s.rest)) return { row: { na: true, noReading: true, on: false, bri: lastOr100, briUnknown: false }, seen: null };
+  if (!s) return { row: { na: false, on: false, bri: 100, briUnknown: false }, seen: null };
+  const seen = s.on && s.bri > 0 ? Math.round(s.bri) : null;
+  return { row: { na: false, on: !!s.on, bri: seen != null ? seen : lastOr100, briUnknown: false }, seen };
+}
+
 /** The curtains card title: "<Room> curtains", else the tapped curtain's own name. */
 export function curtainCardTitle(roomName, curtainName) {
   return roomName ? roomThingTitle(roomName, 'curtains') : sentenceCase(curtainName || 'Curtains');
@@ -1007,7 +1045,7 @@ export const popoverHtml = {
       const c = ' data-c="' + esc(l.id) + '"';
       const on = l.on && !l.na;
       const unk = l.on && l.briUnknown;
-      const sub = l.na ? 'Unavailable' : l.on ? (unk ? 'On' : 'On · ' + l.bri + '%') : 'Off';
+      const sub = l.na ? (l.noReading ? 'Unknown' : 'Unavailable') : l.on ? (unk ? 'On' : 'On · ' + l.bri + '%') : 'Off';
       let body = '<div class="tp-row"><span class="tp-ilab">' + ico(on ? I.bulb : I.bulbOff, on ? 'light-on' : (l.na ? 'dim' : '')) +
         '<span><b>' + esc(l.label) + '</b><small data-v>' + esc(sub) + '</small></span></span>' +
         '<button class="tp-sw' + (l.on ? ' on' : '') + '" data-a="cpower"' + c + ' role="switch" aria-checked="' + !!l.on +
@@ -1416,21 +1454,11 @@ export function attachTapPopovers(o) {
   // seconds after a send, what was sent (until HA's echo lands).
   const corniceOptimistic = new Map();
   function corniceRow(l, c) {
-    const opt = corniceOptimistic.get(l.id);
-    const key = 'cornice:' + l.id, last = levels.last(key);
-    if (opt && opt.until > Date.now()) {
-      return { na: false, on: opt.on, bri: opt.bri != null ? opt.bri : (last != null ? last : 100), briUnknown: opt.on && opt.bri == null && last == null };
-    }
-    if (isLive(c)) {
-      const r = raw(l.entities[0]), a = (r && r.attributes) || {};
-      if (r && r.state === 'on' && typeof a.brightness === 'number') levels.see(key, true, Math.round(a.brightness / 2.55));
-      const m = lightRowModel(r, false, null, levels.last(key));
-      return { na: m.na, on: m.on, bri: m.bri, briUnknown: m.briUnknown };
-    }
-    const s = typeof home.getCorniceLight === 'function' ? home.getCorniceLight(l.id) : null;
-    if (s && s.on && s.bri > 0) levels.see(key, true, Math.round(s.bri));
-    return s ? { na: false, on: !!s.on, bri: s.on && s.bri > 0 ? Math.round(s.bri) : (last != null ? last : 100), briUnknown: false }
-      : { na: false, on: false, bri: 100, briUnknown: false };
+    const key = 'cornice:' + l.id;
+    const r = corniceRowState({ opt: corniceOptimistic.get(l.id), now: Date.now(), last: levels.last(key), live: isLive(c),
+      raw: raw(l.entities[0]), scene: typeof home.getCorniceLight === 'function' ? home.getCorniceLight(l.id) : null, haConfigured: !!ha() });
+    if (r.seen != null) levels.see(key, true, r.seen);
+    return r.row;
   }
   const sendCornice = createCorniceSender({ writeBlocked, canSend, ha,
     preview(id, st) {
