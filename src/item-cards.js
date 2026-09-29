@@ -29,6 +29,7 @@
  *     media:    [{ entity: 'media_player.x', label?, role? }],
  *     lights:   [{ entity: 'light.x', label? }],
  *     switches: [{ entity: 'switch.x' | 'input_boolean.x', label?, power?: 'sensor.y' }],
+ *     cameras:  [{ entity: 'camera.x', label?, refreshMs? }],
  *     readings: [{ entity: 'sensor.x', label?, humidity?: 'sensor.y' }]
  *   }
  *
@@ -36,7 +37,9 @@
  * row (media_player / light / switch or input_boolean / sensor); a card left
  * with no rows, or with a region that is not 0 <= from < to, is dropped. A
  * switch row's `power` partner (a power-draw sensor, W) is shown on the row;
- * one of the wrong domain is dropped, the row kept.
+ * one of the wrong domain is dropped, the row kept. A camera row shows the
+ * camera's snapshot, refreshed every `refreshMs` (default 2000, clamped to
+ * 500-60000) while the card is open.
  *
  * REGION CONVENTION -- centimetres along the item's WIDTH, measured from the
  * item's LEFT edge as seen from its FRONT (standing in front of it, facing
@@ -88,8 +91,9 @@ export function normaliseCard(raw, index) {
   const lights = normaliseRows(raw.lights, 'light');
   const switches = normaliseRows(raw.switches, SWITCH_DOMAINS, r => ({ power: isEntity(r.power, 'sensor') ? r.power : null }));
   const readings = normaliseRows(raw.readings, 'sensor', r => ({ humidity: isEntity(r.humidity, 'sensor') ? r.humidity : null }));
-  if (!media.length && !lights.length && !switches.length && !readings.length) return null;
-  return { index: index || 0, title: str(raw.title), region, media, lights, switches, readings };
+  const cameras = normaliseRows(raw.cameras, 'camera', r => ({ refreshMs: cameraRefreshMs(r.refreshMs) }));
+  if (!media.length && !lights.length && !switches.length && !readings.length && !cameras.length) return null;
+  return { index: index || 0, title: str(raw.title), region, media, lights, switches, readings, cameras };
 }
 
 /**
@@ -116,6 +120,7 @@ export function cardEntities(card) {
   card.media.forEach(r => s.add(r.entity));
   card.lights.forEach(r => s.add(r.entity));
   (card.switches || []).forEach(r => { s.add(r.entity); if (r.power) s.add(r.power); });
+  (card.cameras || []).forEach(r => s.add(r.entity));
   card.readings.forEach(r => { s.add(r.entity); if (r.humidity) s.add(r.humidity); });
   return [...s];
 }
@@ -319,6 +324,131 @@ export function switchRowModel(raw, powerRaw) {
   return { na: false, on, stateText: on ? 'On' : st === 'off' ? 'Off' : humanise(st), power };
 }
 
+// ---------------------------------------------------------------------------
+// Cameras. A camera row shows a SNAPSHOT refreshed every refreshMs while the
+// card is open (and, optionally, HA's MJPEG proxy while "Live" is on). The
+// snapshot URL carries HA's short-lived, rotating access token, so it is
+// NEVER part of a row model: the card's render signature is the model, and a
+// token rotation must not rebuild the card. The URL is built only when an
+// image is actually loaded (cameraSnapshotUrl / cameraStreamUrl).
+// ---------------------------------------------------------------------------
+
+export const CAMERA_REFRESH_MS = 2000;
+/** A binding's refreshMs, clamped to 500-60000 ms (default 2000). */
+export function cameraRefreshMs(v) {
+  const n = num(v);
+  return n == null ? CAMERA_REFRESH_MS : Math.max(500, Math.min(60000, Math.round(n)));
+}
+
+/**
+ * A camera row: { na, stateText, canLive } -- no URL, no token (see above).
+ * `canLive`: HA gave the entity an access token, so its MJPEG stream can be
+ * opened.
+ */
+export function cameraRowModel(raw) {
+  const st = raw ? raw.state : undefined;
+  if (isUnavailable(st)) return { na: true, stateText: !raw ? 'No picture' : st === 'unavailable' ? 'Offline' : 'Unavailable', canLive: false };
+  const a = raw.attributes || {};
+  return { na: false, stateText: humanise(st), canLive: typeof a.access_token === 'string' && a.access_token !== '' };
+}
+
+const joinUrl = (base, p) => (/^https?:\/\//i.test(p) ? p : String(base || '').replace(/\/+$/, '') + (p.charAt(0) === '/' ? p : '/' + p));
+
+/**
+ * The snapshot URL: HA's base URL + the entity's `entity_picture`
+ * (/api/camera_proxy/<entity>?token=...), with `bust` appended so each refresh
+ * is a new request. null when the camera is unavailable or reports no picture.
+ */
+export function cameraSnapshotUrl(baseUrl, raw, bust) {
+  if (!raw || isUnavailable(raw.state)) return null;
+  const pic = (raw.attributes || {}).entity_picture;
+  if (typeof pic !== 'string' || !pic) return null;
+  const u = joinUrl(baseUrl, pic);
+  return bust == null ? u : u + (u.indexOf('?') === -1 ? '?' : '&') + '_=' + encodeURIComponent(String(bust));
+}
+
+/** The MJPEG stream URL (/api/camera_proxy_stream/<entity>?token=<access_token>), or null with no token. */
+export function cameraStreamUrl(baseUrl, entity, raw) {
+  const tok = raw && !isUnavailable(raw.state) ? (raw.attributes || {}).access_token : null;
+  if (typeof tok !== 'string' || !tok || !isEntity(entity, 'camera')) return null;
+  return joinUrl(baseUrl, '/api/camera_proxy_stream/' + entity + '?token=' + encodeURIComponent(tok));
+}
+
+/**
+ * One camera image's refresh loop, with every effect injected so its
+ * lifecycle is unit-testable (scripts/test-item-cards.mjs):
+ *
+ *   d.snapshotUrl(bust) -> string | null     a fresh snapshot URL
+ *   d.streamUrl()       -> string | null     the MJPEG URL (Live)
+ *   d.probe(src, ok, fail)                    load `src` OFF-screen (a new Image)
+ *   d.show(src)                               put `src` on the visible <img> ('' clears it)
+ *   d.stale(bool)                             dim the last frame (a load failed)
+ *   d.schedule(fn, ms) -> handle, d.cancel(handle), d.now()
+ *   d.refreshMs
+ *
+ * A snapshot is loaded off-screen and only shown once it has loaded, so a
+ * failed load never shows a broken image: the last good frame stays, dimmed.
+ * Failures back off (refreshMs x 2^n, at most 60 s) -- never a retry storm.
+ * One load at a time; a load that never settles counts as failed after 15 s.
+ * stop() cancels everything and clears the image, so no request is made
+ * after the card closes; hidden(true) pauses (and ends a Live stream).
+ */
+export function createCameraFeed(d) {
+  let running = false, live = false, isHidden = false, timer = null, pending = 0, failures = 0, seq = 0, lastGood = '';
+  const cancel = () => { if (timer != null) { d.cancel(timer); timer = null; } };
+  const later = ms => { cancel(); timer = d.schedule(tick, ms); };
+  const backoff = () => Math.min(60000, d.refreshMs * Math.pow(2, Math.min(failures, 10)));
+  function settle(id, ok, src) {
+    if (id !== pending) return;   // stale, stopped, or already timed out
+    pending = 0;
+    if (!running || isHidden || live) return;
+    if (ok) { failures = 0; lastGood = src; d.show(src); d.stale(false); later(d.refreshMs); }
+    else { failures++; d.stale(true); later(backoff()); }
+  }
+  function tick() {
+    timer = null;
+    if (!running || isHidden || live || pending) return;
+    const src = d.snapshotUrl(d.now());
+    if (!src) { failures++; d.stale(true); later(backoff()); return; }
+    const id = ++seq;
+    pending = id;
+    // The watchdog: if neither callback fires within 15 s, the load failed.
+    cancel();
+    timer = d.schedule(() => { timer = null; if (pending === id) settle(id, false, src); }, 15000);
+    d.probe(src, () => settle(id, true, src), () => settle(id, false, src));
+  }
+  function startLive() {
+    const src = d.streamUrl();
+    if (!src) { live = false; return false; }
+    d.show(src); d.stale(false);
+    return true;
+  }
+  return {
+    start() { if (running) return; running = true; failures = 0; if (!isHidden) tick(); },
+    stop() { running = false; live = false; pending = 0; cancel(); d.show(''); },
+    hidden(h) {
+      isHidden = !!h;
+      if (!running) return;
+      if (isHidden) { cancel(); pending = 0; if (live) d.show(lastGood); }
+      else if (live) { if (!startLive()) tick(); }
+      else tick();
+    },
+    setLive(on) {
+      if (!running) return false;
+      cancel(); pending = 0;
+      live = !!on;
+      if (live && !isHidden && startLive()) return true;
+      live = false;
+      if (lastGood) d.show(lastGood);   // ends the stream; the last frame stays
+      tick();
+      return false;
+    },
+    /** A Live stream failed (the <img> error event): back to snapshots, backing off. */
+    streamFailed() { if (!live) return; live = false; failures++; if (lastGood) d.show(lastGood); d.stale(true); later(backoff()); },
+    state: () => ({ running, live, hidden: isHidden, failures, pending: !!pending, scheduled: timer != null }),
+  };
+}
+
 const fmtNumber = v => (Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : v.toFixed(1));
 // A temperature always carries one decimal (31.0°C beside 33.7°C), as the
 // climate card does; any other unit drops a trailing .0.
@@ -413,8 +543,9 @@ export function radiatorTitle(title, roomName) {
 /**
  * The card header's icon, from its PRIMARY row: the first media row's role
  * (a receiver or speaker is a speaker, a cast device a cast, else a TV),
- * else a bulb for a lights card, a plug for a switches card, else a thermometer.
- * @returns 'speaker' | 'cast' | 'tv' | 'bulb' | 'plug' | 'thermometer'
+ * else a bulb for a lights card, a plug for a switches card, a camera for a
+ * cameras card, else a thermometer.
+ * @returns 'speaker' | 'cast' | 'tv' | 'bulb' | 'plug' | 'camera' | 'thermometer'
  */
 export function cardIcon(card) {
   if (!card) return 'thermometer';
@@ -423,12 +554,13 @@ export function cardIcon(card) {
     return role === 'receiver' || role === 'speaker' ? 'speaker' : role === 'cast' ? 'cast' : 'tv';
   }
   if (card.lights && card.lights.length) return 'bulb';
-  return card.switches && card.switches.length ? 'plug' : 'thermometer';
+  if (card.switches && card.switches.length) return 'plug';
+  return card.cameras && card.cameras.length ? 'camera' : 'thermometer';
 }
 
 /** What a row IS, for when its own label would only repeat the card title. */
 export const ROLE_NAMES = Object.freeze({ tv: 'Television', cast: 'Cast', receiver: 'Receiver', speaker: 'Speaker' });
-const KIND_NAMES = { media: 'Player', light: 'Light', switch: 'Switch', reading: 'Reading' };
+const KIND_NAMES = { media: 'Player', light: 'Light', switch: 'Switch', reading: 'Reading', camera: 'Camera' };
 
 /**
  * The first row's label, unless it only repeats the card's title (a "TV"
@@ -565,6 +697,8 @@ export function mockItemState(kind, row, index) {
   }
   if (kind === 'light') return i % 2 === 0 ? { state: 'on', attributes: { brightness: 153 } } : { state: 'off', attributes: {} };
   if (kind === 'switch') return { state: i % 2 === 0 ? 'on' : 'off', attributes: {} };
+  // The demo camera has no picture URL: tap-popovers.js draws its frames.
+  if (kind === 'camera') return { state: 'idle', attributes: {} };
   if (kind === 'power') return { state: (38.4 + (i * 17.3) % 60).toFixed(1), attributes: { unit_of_measurement: 'W', device_class: 'power' } };
   if (kind === 'humidity') return { state: String(40 + (i * 3) % 15), attributes: { unit_of_measurement: '%' } };
   return { state: (31 + (i * 2.7) % 12).toFixed(1), attributes: { unit_of_measurement: '°C', device_class: 'temperature' } };

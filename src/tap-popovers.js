@@ -65,7 +65,8 @@ import { normalisePlantBindings, plantStatusText, agoText, batteryText, mockPlan
 import { normaliseItemBindings, furnitureTapTarget, tappableFurnitureIds, mediaRowModel, lightRowModel, readingRowModel,
   rowLabel, mediaPowerCommand, mediaVolumeCommand, mediaSourceCommand, mediaSoundModeCommand, lightRowCommand,
   lightRowToggleCommand, lightColorCommand, applyCommand, mockItemState, clockText, cardEntities, cardTitle, cardIcon, rowLabelUnderTitle, bindingTitle,
-  clockTitle, radiatorTitle, roomThingTitle, switchRowModel, switchCommand } from './item-cards.js';
+  clockTitle, radiatorTitle, roomThingTitle, switchRowModel, switchCommand, cameraRowModel, cameraSnapshotUrl, cameraStreamUrl,
+  createCameraFeed } from './item-cards.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -181,7 +182,8 @@ export function itemCardHead(card, rows, furnitureLabel, itemId) {
   const name = cardTitle(card, furnitureLabel, itemId);
   const r = rows || {};
   const lead = (r.media || [])[0] ? [r.media[0], 'media'] : (r.lights || [])[0] ? [r.lights[0], 'light']
-    : (r.switches || [])[0] ? [r.switches[0], 'switch'] : (r.readings || [])[0] ? [r.readings[0], 'reading'] : null;
+    : (r.switches || [])[0] ? [r.switches[0], 'switch'] : (r.readings || [])[0] ? [r.readings[0], 'reading']
+    : (r.cameras || [])[0] ? [r.cameras[0], 'camera'] : null;
   if (lead) lead[0].label = rowLabelUnderTitle(lead[0].label, name, lead[0].role, lead[1]);
   return { name, icon: cardIcon(card) };
 }
@@ -853,6 +855,14 @@ export const STYLE = `
 .tp-ipow { display: inline-flex; align-items: center; gap: 2px; flex: none; font-size: 11px; color: var(--ink-2);
   font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tp-ipow svg { width: 12px; height: 12px; fill: var(--amber); }
+/* Camera row: the snapshot (or Live stream) in a 4:3 box. The <img> is the
+   runtime's own element, re-attached across rebuilds (see attachCameras). A
+   frame that could not be refreshed stays, dimmed; before the first frame
+   the box is empty -- never a broken-image icon. */
+.tp-cam { position: relative; margin-top: 6px; border-radius: 7px; overflow: hidden; aspect-ratio: 4 / 3; background: rgba(0,0,0,0.35); }
+.tp-cam img { display: block; width: 100%; height: 100%; object-fit: cover; transition: opacity .2s; }
+.tp-cam img.stale { opacity: 0.45; filter: grayscale(0.6); }
+.tp-ib.tp-live[aria-pressed=true] { background: var(--bad); border-color: transparent; color: #fff; }
 /* Curtains card: the room's cornice light(s) then its covers, one row each. */
 .tp-pop[data-kind=curtain] { --w: 236px; }
 .tp-pop[data-kind=curtain] .tp-name { flex: 1 1 auto; }
@@ -939,6 +949,7 @@ ${coarseRules('.tp-force-coarse')}
 :root[data-theme="light"] .tp-select { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.16); }
 :root[data-theme="light"] .tp-ireading .hum svg { fill: #1d4ed8; }
 :root[data-theme="light"] .tp-ivol svg { fill: rgba(0,0,0,0.5); }
+:root[data-theme="light"] .tp-cam { background: rgba(0,0,0,0.08); }
 `;
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1075,9 +1086,9 @@ export const popoverHtml = {
   },
   /**
    * Furniture item card (src/item-cards.js). m: { name, status, haOff,
-   * media: [row], lights: [row], switches: [row], readings: [row] } -- each
-   * row its label and its mediaRowModel / lightRowModel / switchRowModel /
-   * readingRowModel fields. Every
+   * media: [row], lights: [row], switches: [row], readings: [row], cameras:
+   * [row] } -- each row its label and its mediaRowModel / lightRowModel /
+   * switchRowModel / readingRowModel / cameraRowModel fields. Every
    * control carries data-a (what it does) and data-i (which row).
    */
   item(m, dot) {
@@ -1141,6 +1152,14 @@ export const popoverHtml = {
       const val = '<span class="tp-ireading' + (r.na ? ' muted' : '') + '" data-v><b>' + esc(r.text) + '</b>' +
         (r.humidity ? '<span class="hum" title="Humidity">' + svg(I.drop) + esc(r.humidity) + '</span>' : '') + '</span>';
       rows.push('<div class="tp-irow" data-row="reading"><div class="tp-row">' + lab(ico(I.thermometer, r.na ? 'dim' : ''), r.label) + val + '</div></div>');
+    });
+    // Camera rows: the label and a Live toggle; the picture goes in the
+    // [data-cam] box, filled by the runtime (no URL or token in this markup).
+    (m.cameras || []).forEach((r, i) => {
+      const liveBtn = r.canLive ? '<button class="tp-ib tp-live" data-a="clive" data-i="' + i + '" aria-pressed="false" data-tip="Live" aria-label="Live: ' +
+        esc(r.label) + '"' + (off ? ' disabled' : '') + '>' + svg(I.play) + '</button>' : '';
+      rows.push('<div class="tp-irow" data-row="camera"><div class="tp-row">' + lab(ico(I.camera, r.na ? 'dim' : ''), r.label, r.stateText) + liveBtn +
+        '</div><div class="tp-cam" data-cam="' + i + '"></div></div>');
     });
     const first = I[m.icon] || ((m.media || []).length ? I.tv : (m.lights || []).length ? I.bulb : I.thermometer);
     return shell(ico(first), m.name, m.status, rows.join('') + offlineLine(m));
@@ -1753,11 +1772,20 @@ export function attachTapPopovers(o) {
           const hr = row.humidity ? itemRaw(row.humidity, 'humidity', row, base + i) : null;
           return Object.assign({ entity: row.entity, label: rowLabel(row, r) }, readingRowModel(r, hr));
         });
-        const anyNa = media.some(r => r.na) || lights.some(r => r.na) || switches.some(r => r.na) || readings.some(r => r.na);
+        // A camera row carries no URL and no token (cameraRowModel): the
+        // token rotates, and the model is the card's render signature.
+        const cameras = (card.cameras || []).map((row, i) => {
+          const r = itemRaw(row.entity, 'camera', row, base + i);
+          const cm = cameraRowModel(r);
+          return Object.assign({ entity: row.entity, label: rowLabel(row, r) }, cm,
+            { canLive: cm.canLive && !itemMockMode() && c === 'connected' });
+        });
+        const anyNa = media.some(r => r.na) || lights.some(r => r.na) || switches.some(r => r.na) || readings.some(r => r.na) ||
+          cameras.some(r => r.na);
         // The first row never just repeats the title ("TV" over "TV").
-        const head = itemCardHead(card, { media, lights, switches, readings }, furnitureLabels.get(t.itemId), t.itemId);
+        const head = itemCardHead(card, { media, lights, switches, readings, cameras }, furnitureLabels.get(t.itemId), t.itemId);
         return { status: itemMockMode() ? 'offlineItem' : statusKey('item', c, anyNa && isLive(c), false), haOff: haOfflineConn(c),
-          name: head.name, icon: head.icon, media, lights, switches, readings };
+          name: head.name, icon: head.icon, media, lights, switches, readings, cameras };
       },
       html(m) { return popoverHtml.item(m, dot); },
       bind(t, el, ctl) {
@@ -1808,6 +1836,12 @@ export function attachTapPopovers(o) {
           r.addEventListener('change', () => itemSend(lightRowCommand(card.lights[i].entity, { on: true, bri: +r.value }), 'light', 0));
           hold(r);
         });
+        at('clive', (b, i) => b.addEventListener('click', () => {
+          const cam = pop && pop.cams && pop.cams.get(i);
+          if (!cam || b.disabled) return;
+          const on = cam.feed.setLive(!cam.feed.state().live);
+          b.setAttribute('aria-pressed', String(on));
+        }));
         at('spower', (b, i) => b.addEventListener('click', () => {
           const r = model().switches[i]; if (!r || r.na) return;
           itemSend(switchCommand(card.switches[i].entity, !r.on), 'switch', 0); onChange(); ctl.refresh(true);
@@ -1857,6 +1891,79 @@ export function attachTapPopovers(o) {
     },
   };
 
+  // ---- camera rows ------------------------------------------------------
+  // One persistent <img> and refresh loop (createCameraFeed) per camera row
+  // of the OPEN card, kept on `pop.cams` and re-attached to the card's
+  // [data-cam] box after every rebuild, so a rebuild never reloads the
+  // picture. Started when the card opens, stopped (image cleared, timers
+  // cancelled) when it closes, paused while the tab is hidden.
+  const CAM_W = 320, CAM_H = 240;
+  // The demo camera (no HA configured): a drawn frame with the time on it.
+  function demoCameraFrame(label, when) {
+    const cv = document.createElement('canvas');
+    cv.width = CAM_W; cv.height = CAM_H;
+    const g = cv.getContext('2d');
+    if (!g) return null;
+    const grad = g.createLinearGradient(0, 0, 0, CAM_H);
+    grad.addColorStop(0, '#2b2f36'); grad.addColorStop(1, '#14161a');
+    g.fillStyle = grad; g.fillRect(0, 0, CAM_W, CAM_H);
+    g.strokeStyle = '#8a8f98'; g.lineWidth = 3;
+    g.strokeRect(70, 70, 180, 120);
+    for (let x = 90; x < 250; x += 20) { g.beginPath(); g.moveTo(x, 70); g.lineTo(x, 190); g.stroke(); }
+    const s = when.getSeconds();
+    g.fillStyle = '#c9a26b'; g.beginPath(); g.ellipse(160 + 30 * Math.sin(s / 3), 165, 34, 16, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(0, CAM_H - 26, CAM_W, 26);
+    g.fillStyle = '#fff'; g.font = '14px system-ui, sans-serif';
+    g.fillText((label || 'Demo camera') + '  ' + when.toLocaleTimeString(), 8, CAM_H - 8);
+    return cv.toDataURL('image/jpeg', 0.7);
+  }
+  function makeCamera(row) {
+    const img = document.createElement('img');
+    img.alt = row.label || 'Camera';
+    img.draggable = false;
+    img.style.visibility = 'hidden';
+    const eid = row.entity;
+    const base = () => (ha() && ha().activeUrl) || '';
+    const feed = createCameraFeed({
+      refreshMs: row.refreshMs,
+      snapshotUrl: bust => (itemMockMode() ? demoCameraFrame(row.label, new Date(bust)) : ha() ? cameraSnapshotUrl(base(), raw(eid), bust) : null),
+      streamUrl: () => (!itemMockMode() && conn() === 'connected' ? cameraStreamUrl(base(), eid, raw(eid)) : null),
+      probe(src, ok, fail) { const im = new Image(); im.onload = ok; im.onerror = fail; im.src = src; },
+      show(src) { img.src = src || ''; img.style.visibility = src ? '' : 'hidden'; },
+      stale(s) { img.classList.toggle('stale', !!s); },
+      schedule: (fn, ms) => setTimeout(fn, ms),
+      cancel: h => clearTimeout(h),
+      now: () => Date.now(),
+    });
+    // Only a Live stream loads into the visible <img> directly; its failure
+    // drops back to snapshots (backing off). A snapshot never errors here: it
+    // is shown only after it loaded off-screen.
+    img.addEventListener('error', () => feed.streamFailed());
+    feed.hidden(document.hidden);
+    return { img, feed };
+  }
+  function attachCameras(p) {
+    const cams = p.target.kind === 'item' && p.target.card ? (p.target.card.cameras || []) : [];
+    if (!cams.length) return;
+    if (!p.cams) p.cams = new Map();
+    cams.forEach((row, i) => {
+      const box = p.el.querySelector('[data-cam="' + i + '"]');
+      if (!box) return;
+      let cam = p.cams.get(i);
+      if (!cam) { cam = makeCamera(row); p.cams.set(i, cam); cam.feed.start(); }
+      box.appendChild(cam.img);
+      const b = p.el.querySelector('[data-a=clive][data-i="' + i + '"]');
+      if (b) b.setAttribute('aria-pressed', String(cam.feed.state().live));
+    });
+  }
+  function stopCameras(p) {
+    if (!p || !p.cams) return;
+    p.cams.forEach(cam => cam.feed.stop());
+    p.cams = null;
+  }
+  const onVisibility = () => { if (pop && pop.cams) pop.cams.forEach(cam => cam.feed.hidden(document.hidden)); };
+  document.addEventListener('visibilitychange', onVisibility);
+
   // ---- popover lifecycle ------------------------------------------------
   let pop = null;          // { el, target, x, y, camSnap, sig, ctl, timer, returnTo }
   let tipOpen = false, tipTimer = 0;
@@ -1866,6 +1973,7 @@ export function attachTapPopovers(o) {
     if (!pop) return;
     const p = pop;
     clearInterval(p.timer); clearTimeout(tipTimer); tipOpen = false;
+    stopCameras(p);   // no camera request after the card closes
     if (p.marq) { p.marq.cancel(); p.marq = null; }
     const hadFocus = p.el.contains(document.activeElement);
     if (p.el.parentNode) p.el.parentNode.removeChild(p.el);
@@ -1946,6 +2054,7 @@ export function attachTapPopovers(o) {
     pop.el.setAttribute('aria-label', m.name);
     pop.el.querySelectorAll('.tp-range').forEach(r => r.style.setProperty('--p', fillPct(r)));
     v.bind(pop.target, pop.el, pop.ctl);
+    attachCameras(pop);   // the SAME <img> elements, never reloaded by a rebuild
     fitTitle(pop);
     position();
     if (refocus !== null) {
@@ -2194,6 +2303,7 @@ export function attachTapPopovers(o) {
       window.removeEventListener('wheel', onWheel, { capture: true });
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', onResize);
+      document.removeEventListener('visibilitychange', onVisibility);
       if (styleEl.parentNode) styleEl.parentNode.removeChild(styleEl);
       if (window.__home3dTap === api) delete window.__home3dTap;
       document.documentElement.classList.remove('tp-force-coarse');

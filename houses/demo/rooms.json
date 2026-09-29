@@ -1,6 +1,6 @@
 {
   "kind": "rooms",
-  "schemaVersion": "1.8",
+  "schemaVersion": "1.9",
   "house": "demo",
   "homeAssistant": {
     "enabled": false,
@@ -173,6 +173,16 @@
           {
             "entity": "light.demo_bedside_bottom",
             "label": "Bottom drawer"
+          }
+        ]
+      },
+      "store_crate": {
+        "title": "Store camera",
+        "cameras": [
+          {
+            "entity": "camera.demo_store",
+            "label": "Store",
+            "refreshMs": 2000
           }
         ]
       },

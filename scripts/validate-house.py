@@ -1083,7 +1083,7 @@ def check_item_binding(rooms_doc, geo, sensors, version, report):
     `to` (the engine drops that card). A region reaching past the item's
     authored `params.width` is warned (that part can never be tapped), as are
     two regions of one item that overlap (the first listed wins there), a
-    `switches` row in a profile below schemaVersion 1.8, and a
+    `switches` row below schemaVersion 1.8, a `cameras` row below 1.9, and a
     title-only card on a radiator whose room has no `sensors.climate` binding
     (nothing opens for it). The schema already enforces the shape and the
     domains.
@@ -1100,6 +1100,14 @@ def check_item_binding(rooms_doc, geo, sensors, version, report):
     furniture = {f.get("id"): f for f in geo.get("furniture", [])}
     uses_switches = any(isinstance(c, dict) and c.get("switches")
                         for b in items.values() for c in (b if isinstance(b, list) else [b]))
+    uses_cameras = any(isinstance(c, dict) and c.get("cameras")
+                       for b in items.values() for c in (b if isinstance(b, list) else [b]))
+    if uses_cameras and version < (1, 9):
+        report.warn(
+            "rooms.json/schemaVersion",
+            "`cameras` rows in `sensors.items` need schemaVersion 1.9 or newer, but this profile "
+            f"declares '{rooms_doc.get('schemaVersion')}' -- bump it; nothing else enforces this coupling",
+        )
     if uses_switches and version < (1, 8):
         report.warn(
             "rooms.json/schemaVersion",
@@ -1112,7 +1120,7 @@ def check_item_binding(rooms_doc, geo, sensors, version, report):
             report.error(where, f"item card bound to furniture item '{iid}', which has no matching item in geometry.json's furniture")
         cards = binding if isinstance(binding, list) else [binding]
         ftype = (furniture.get(iid) or {}).get("type")
-        rowless = [c for c in cards if isinstance(c, dict) and not any(c.get(k) for k in ("media", "lights", "switches", "readings"))]
+        rowless = [c for c in cards if isinstance(c, dict) and not any(c.get(k) for k in ("media", "lights", "switches", "readings", "cameras"))]
         if rowless and (isinstance(binding, list) or ftype not in ("wall-clock", "radiator")):
             report.warn(where, "a title-only card names a clock or a radiator; on any other item (or in a list) it has "
                                "nothing to show and the item stays a plain furniture tap")
