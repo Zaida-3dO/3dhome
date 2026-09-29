@@ -261,7 +261,10 @@ export function createLevelMemory(clock) {
  * tapped one's room (house.curtains `room`) that binds a cover
  * (sensors.curtains) is a cover row, and every one that binds a cornice light
  * (sensors.corniceLights) is a light row -- in profile order. A curtain with
- * no room is a room of its own.
+ * no room is a room of its own. ONE light is one row: a curtain whose cornice
+ * entities are all already on an earlier row (a curtain and a blind on one
+ * window, bound to the same cornice light) adds none, and marks that row
+ * `shared`.
  *
  * @param curtains        house.curtains: [{ id, name, room }] (the loader's)
  * @param coverBindings   sensors.curtains: id -> [cover entity]
@@ -276,7 +279,13 @@ export function curtainRoomGroup(curtainId, curtains, coverBindings, corniceBind
   if (!me) members.push({ id: curtainId, name: curtainId });
   const ents = (b, id) => { const e = b ? b[id] : null; return Array.isArray(e) && e.length ? e.slice() : null; };
   const rows = b => members.filter(c => ents(b, c.id)).map(c => ({ id: c.id, name: c.name || c.id, entities: ents(b, c.id) }));
-  return { room, covers: rows(coverBindings), lights: rows(corniceBindings) };
+  const lights = [];
+  rows(corniceBindings).forEach(l => {
+    const owner = lights.find(o => l.entities.every(e => o.entities.indexOf(e) !== -1));
+    if (owner) owner.shared = true;
+    else lights.push(Object.assign(l, { shared: false }));
+  });
+  return { room, covers: rows(coverBindings), lights };
 }
 
 /** The curtains card title: "<Room> curtains", else the tapped curtain's own name. */
@@ -1431,7 +1440,11 @@ export function attachTapPopovers(o) {
       const key = 'cornice:' + id, last = levels.last(key);
       if (st.bri != null) levels.see(key, true, st.bri);
       const bri = st.bri != null ? st.bri : last;
-      if (typeof home.setCorniceLight === 'function') home.setCorniceLight(id, { on: !!st.on, bri: bri != null ? bri : 100, color: now ? now.color : null });
+      // Every curtain whose cornice is this light (one light shared by a curtain and a blind).
+      const mine = corniceBindings[id] || [];
+      const same = Object.keys(corniceBindings).filter(k => k === id || ((corniceBindings[k] || []).length &&
+        corniceBindings[k].every(e => mine.indexOf(e) !== -1)));
+      if (typeof home.setCorniceLight === 'function') same.forEach(k => home.setCorniceLight(k, { on: !!st.on, bri: bri != null ? bri : 100, color: now ? now.color : null }));
       if (ha()) corniceOptimistic.set(id, { on: !!st.on, bri: st.on ? (bri != null ? Math.round(bri) : null) : 100, until: Date.now() + OPTIMISTIC_MS });
     } });
 
@@ -1536,7 +1549,9 @@ export function attachTapPopovers(o) {
           return { id: cv.id, label: sentenceCase(cv.name), na: curtainUnavailable(c, avail),
             pct: Math.round((S.curtainPct ? S.curtainPct(cv.id) : home.getCurtainOpen(cv.id)) || 0) };
         });
-        const lights = g.lights.map(l => Object.assign({ id: l.id, label: sentenceCase(l.name + ' light') }, corniceRow(l, c)));
+        // A light shared by several of the room's curtains is the room's curtain light.
+        const lights = g.lights.map(l => Object.assign({ id: l.id,
+          label: l.shared && g.room ? roomThingTitle(roomName(g.room), 'curtain light') : sentenceCase(l.name + ' light') }, corniceRow(l, c)));
         const coverNa = covers.some(r => r.na), lightNa = lights.some(r => r.na);
         return { status: coverNa ? statusKey('curtain', c, true) : statusKey('light', c, lightNa), haOff: haOfflineConn(c),
           name: curtainCardTitle(g.room ? roomName(g.room) : '', curtainNames.get(t.id) || t.id), lights, covers };
