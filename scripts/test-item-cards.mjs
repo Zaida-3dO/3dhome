@@ -483,8 +483,8 @@ const CONSOLE = [
   check('wiring: deviceAt is furnitureTarget', /return it \? furnitureTarget\(it, h\.point, h\.object, deviceCtx\) : null;/.test(tpSrc));
   check('wiring: the climate card title is climateCardName', /name: climateCardName\(t, roomName\) \};/.test(tpSrc));
   check('wiring: the clock card title is clockCardName', /name: clockCardName\(t, roomName\) \}, clockText\(new Date\(\)\)/.test(tpSrc));
-  check('wiring: the item card head is itemCardHead', /const head = itemCardHead\(card, \{ media, lights, readings \}, furnitureLabels\.get\(t\.itemId\), t\.itemId\);/.test(tpSrc) &&
-    /name: head\.name, icon: head\.icon, media, lights, readings \};/.test(tpSrc));
+  check('wiring: the item card head is itemCardHead', /const head = itemCardHead\(card, \{ media, lights, switches, readings \}, furnitureLabels\.get\(t\.itemId\), t\.itemId\);/.test(tpSrc) &&
+    /name: head\.name, icon: head\.icon, media, lights, switches, readings \};/.test(tpSrc));
 
   // The item sender's gates.
   const cmd = IC.mediaPowerCommand('media_player.demo_tv', true);

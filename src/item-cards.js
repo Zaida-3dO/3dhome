@@ -28,12 +28,15 @@
  *     region:   { from: 0, to: 50 },                     // optional, cm
  *     media:    [{ entity: 'media_player.x', label?, role? }],
  *     lights:   [{ entity: 'light.x', label? }],
+ *     switches: [{ entity: 'switch.x' | 'input_boolean.x', label?, power?: 'sensor.y' }],
  *     readings: [{ entity: 'sensor.x', label?, humidity?: 'sensor.y' }]
  *   }
  *
  * A card needs at least one row. An entity of the wrong domain drops that
- * row (media_player / light / sensor); a card left with no rows, or with a
- * region that is not 0 <= from < to, is dropped.
+ * row (media_player / light / switch or input_boolean / sensor); a card left
+ * with no rows, or with a region that is not 0 <= from < to, is dropped. A
+ * switch row's `power` partner (a power-draw sensor, W) is shown on the row;
+ * one of the wrong domain is dropped, the row kept.
  *
  * REGION CONVENTION -- centimetres along the item's WIDTH, measured from the
  * item's LEFT edge as seen from its FRONT (standing in front of it, facing
@@ -55,7 +58,10 @@ export const CLOCK_TYPE = 'wall-clock';
 export const RADIATOR_TYPE = 'radiator';
 
 const ENTITY_RE = /^[a-z_]+\.[a-z0-9_]+$/;
-const isEntity = (v, domain) => typeof v === 'string' && ENTITY_RE.test(v) && v.indexOf(domain + '.') === 0;
+const isEntity = (v, domain) => typeof v === 'string' && ENTITY_RE.test(v) &&
+  (Array.isArray(domain) ? domain : [domain]).some(d => v.indexOf(d + '.') === 0);
+/** The domains a `switches` row may bind: a switch, or a helper toggle. */
+export const SWITCH_DOMAINS = Object.freeze(['switch', 'input_boolean']);
 const str = v => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const num = v => (typeof v === 'number' && isFinite(v) ? v : null);
 
@@ -80,9 +86,10 @@ export function normaliseCard(raw, index) {
   }
   const media = normaliseRows(raw.media, 'media_player', r => ({ role: str(r.role) }));
   const lights = normaliseRows(raw.lights, 'light');
+  const switches = normaliseRows(raw.switches, SWITCH_DOMAINS, r => ({ power: isEntity(r.power, 'sensor') ? r.power : null }));
   const readings = normaliseRows(raw.readings, 'sensor', r => ({ humidity: isEntity(r.humidity, 'sensor') ? r.humidity : null }));
-  if (!media.length && !lights.length && !readings.length) return null;
-  return { index: index || 0, title: str(raw.title), region, media, lights, readings };
+  if (!media.length && !lights.length && !switches.length && !readings.length) return null;
+  return { index: index || 0, title: str(raw.title), region, media, lights, switches, readings };
 }
 
 /**
@@ -102,12 +109,13 @@ export function normaliseItemBindings(items) {
   return out;
 }
 
-/** Every entity a card reads (rows, then humidity partners), de-duplicated. */
+/** Every entity a card reads (rows, then power / humidity partners), de-duplicated. */
 export function cardEntities(card) {
   const s = new Set();
   if (!card) return [];
   card.media.forEach(r => s.add(r.entity));
   card.lights.forEach(r => s.add(r.entity));
+  (card.switches || []).forEach(r => { s.add(r.entity); if (r.power) s.add(r.power); });
   card.readings.forEach(r => { s.add(r.entity); if (r.humidity) s.add(r.humidity); });
   return [...s];
 }
@@ -267,18 +275,48 @@ export function mediaRowModel(raw) {
 }
 
 /**
- * A light row: { na, on, bri (5-100), colorable, color ('#rrggbb' | null) }.
+ * A light row: { na, on, bri (1-100), briUnknown, colorable, color ('#rrggbb' | null) }.
  * `colorable` is decided by the caller (light-color.js supportsColor) so this
  * module stays free of that dependency; the colour is passed in likewise.
+ *
+ * `lastBri` (1-100, optional) is the last level this light was seen ON at.
+ * A light that is on but reports no brightness -- just switched on, turn_on
+ * sent with no level so HA restores its last one, and HA has not echoed yet --
+ * shows that last level; with none known, `briUnknown` (never a made-up
+ * 100%). An off light's slider rests at its last level too (else 100).
  */
-export function lightRowModel(raw, colorable, color) {
+export function lightRowModel(raw, colorable, color, lastBri) {
   const st = raw ? raw.state : undefined;
-  if (isUnavailable(st)) return { na: true, on: false, bri: 100, colorable: false, color: null };
+  if (isUnavailable(st)) return { na: true, on: false, bri: 100, briUnknown: false, colorable: false, color: null };
   const a = raw.attributes || {};
   const on = st === 'on';
   const b = num(a.brightness);
-  const bri = on && b != null ? Math.max(1, Math.min(100, Math.round(b / 2.55))) : 100;
-  return { na: false, on, bri, colorable: !!colorable, color: colorable ? (color || null) : null };
+  const last = num(lastBri) != null && lastBri > 0 ? Math.max(1, Math.min(100, Math.round(lastBri))) : null;
+  const known = on && b != null ? Math.max(1, Math.min(100, Math.round(b / 2.55))) : last;
+  return { na: false, on, bri: known != null ? known : 100, briUnknown: on && known == null,
+    colorable: !!colorable, color: colorable ? (color || null) : null };
+}
+
+/**
+ * A switch row (a socket, or an input_boolean helper): { na, on, stateText,
+ * power (text | null) }. `power` is the paired power sensor's live draw, one
+ * decimal ('41.5 W'); null when there is no partner or it has no numeric
+ * reading -- an offline power sensor shows nothing, never 0 W.
+ */
+export function switchRowModel(raw, powerRaw) {
+  const st = raw ? raw.state : undefined;
+  let power = null;
+  if (powerRaw && !isUnavailable(powerRaw.state) && powerRaw.state !== '') {
+    const n = Number(powerRaw.state);
+    if (isFinite(n)) {
+      const a = powerRaw.attributes || {};
+      const u = typeof a.unit_of_measurement === 'string' && a.unit_of_measurement ? a.unit_of_measurement : 'W';
+      power = n.toFixed(1) + ' ' + u;
+    }
+  }
+  if (isUnavailable(st)) return { na: true, on: false, stateText: st === 'unavailable' ? 'Offline' : 'Unavailable', power };
+  const on = st === 'on';
+  return { na: false, on, stateText: on ? 'On' : st === 'off' ? 'Off' : humanise(st), power };
 }
 
 const fmtNumber = v => (Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : v.toFixed(1));
@@ -375,8 +413,8 @@ export function radiatorTitle(title, roomName) {
 /**
  * The card header's icon, from its PRIMARY row: the first media row's role
  * (a receiver or speaker is a speaker, a cast device a cast, else a TV),
- * else a bulb for a lights card, else a thermometer.
- * @returns 'speaker' | 'cast' | 'tv' | 'bulb' | 'thermometer'
+ * else a bulb for a lights card, a plug for a switches card, else a thermometer.
+ * @returns 'speaker' | 'cast' | 'tv' | 'bulb' | 'plug' | 'thermometer'
  */
 export function cardIcon(card) {
   if (!card) return 'thermometer';
@@ -384,12 +422,13 @@ export function cardIcon(card) {
     const role = card.media[0].role;
     return role === 'receiver' || role === 'speaker' ? 'speaker' : role === 'cast' ? 'cast' : 'tv';
   }
-  return card.lights && card.lights.length ? 'bulb' : 'thermometer';
+  if (card.lights && card.lights.length) return 'bulb';
+  return card.switches && card.switches.length ? 'plug' : 'thermometer';
 }
 
 /** What a row IS, for when its own label would only repeat the card title. */
 export const ROLE_NAMES = Object.freeze({ tv: 'Television', cast: 'Cast', receiver: 'Receiver', speaker: 'Speaker' });
-const KIND_NAMES = { media: 'Player', light: 'Light', reading: 'Reading' };
+const KIND_NAMES = { media: 'Player', light: 'Light', switch: 'Switch', reading: 'Reading' };
 
 /**
  * The first row's label, unless it only repeats the card's title (a "TV"
@@ -417,6 +456,11 @@ export function mediaVolumeCommand(entity, pct) {
 }
 export function mediaSourceCommand(entity, source) { return cmd('media_player', 'select_source', { source: String(source) }, entity); }
 export function mediaSoundModeCommand(entity, mode) { return cmd('media_player', 'select_sound_mode', { sound_mode: String(mode) }, entity); }
+/** A switch row's toggle: <domain>.turn_on / turn_off in the entity's own domain (switch or input_boolean). */
+export function switchCommand(entity, on) {
+  const domain = String(entity || '').split('.')[0];
+  return cmd(domain, on ? 'turn_on' : 'turn_off', {}, entity);
+}
 
 /**
  * A light row's command: turn_off, or turn_on with the brightness (and the
@@ -432,6 +476,19 @@ export function lightRowCommand(entity, state, withColor) {
     data.rgb_color = [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
   }
   return cmd('light', 'turn_on', data, entity);
+}
+
+/**
+ * A light row's colour pick. A pick on a light that was OFF when the pick
+ * began (`restoring`) turns it on at its LAST level: the colour goes out with
+ * no brightness. A light already on keeps the level it shows (none while that
+ * level is unknown).
+ * @param row  the row's lightRowModel ({ on, bri, briUnknown })
+ */
+export function lightColorCommand(entity, row, color, restoring) {
+  const r = row || {};
+  const keep = !restoring && r.on && !r.briUnknown;
+  return lightRowCommand(entity, { on: true, bri: keep ? r.bri : undefined, color }, true);
 }
 
 /**
@@ -461,6 +518,8 @@ export function applyCommand(raw, command) {
     case 'media_player.select_source': a.source = d.source; break;
     case 'media_player.select_sound_mode': a.sound_mode = d.sound_mode; break;
     case 'light.turn_off': st = 'off'; break;
+    case 'switch.turn_on': case 'input_boolean.turn_on': st = 'on'; break;
+    case 'switch.turn_off': case 'input_boolean.turn_off': st = 'off'; break;
     case 'light.turn_on':
       st = 'on';
       if (d.brightness != null) a.brightness = d.brightness;
@@ -505,6 +564,8 @@ export function mockItemState(kind, row, index) {
       : { state: 'playing', attributes: { supported_features: 4 | 128 | 256, volume_level: 0.2, media_title: 'Sample programme' } };
   }
   if (kind === 'light') return i % 2 === 0 ? { state: 'on', attributes: { brightness: 153 } } : { state: 'off', attributes: {} };
+  if (kind === 'switch') return { state: i % 2 === 0 ? 'on' : 'off', attributes: {} };
+  if (kind === 'power') return { state: (38.4 + (i * 17.3) % 60).toFixed(1), attributes: { unit_of_measurement: 'W', device_class: 'power' } };
   if (kind === 'humidity') return { state: String(40 + (i * 3) % 15), attributes: { unit_of_measurement: '%' } };
   return { state: (31 + (i * 2.7) % 12).toFixed(1), attributes: { unit_of_measurement: '°C', device_class: 'temperature' } };
 }
