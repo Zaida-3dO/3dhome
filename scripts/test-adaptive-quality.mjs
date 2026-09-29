@@ -19,6 +19,10 @@
  *   4. Persistence: throwing storage never throws, garbage is ignored, the
  *      level is clamped, and the key names the GPU.
  *   5. The scene wires it: ?tier= disables it, the loop feeds it.
+ *   6-7. The probe scheduler, end to end and gate by gate.
+ *   8. Detail first (task e7e10870): the v2 record, the strike, the manual
+ *      pin, resolveStart/recordFor and the Settings choices. Load after load:
+ *      scripts/test-adaptive-convergence.mjs.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -156,10 +160,23 @@ const W = A.WINDOW;
   check('slow: the level-up earned at 1.5 stands until the ceiling drops BELOW 1.5',
     revokeAt !== -1 && out[revokeAt].from === 1.5 && out[revokeAt].to === 1.25 && out.slice(0, revokeAt).every(d => !d.revoke), out);
   check('slow: it descends to the floor and no further', c.ceiling === 1, c.ceiling);
-  const lvl = out.find(d => d.proposeLevel != null);
-  check('slow: once below the start ratio it proposes the level below, and blocks everything above that',
-    lvl && lvl.proposeLevel === 2 && lvl.block && lvl.block.level === 3 && lvl.block.until > now + A.BLOCK_MS - 60000 && lvl.block.until <= now + A.BLOCK_MS, lvl);
-  check('slow: only one level proposal per load', out.filter(d => d.proposeLevel != null).length === 1, out);
+  // Task e7e10870 (detail first): this is a MOBILE controller, so the level
+  // is no longer proposed down on the way through 1.25 -- only once it fails
+  // AT the floor, and then first as a strike; a second load that fails at
+  // the floor again proposes it. (Was: proposed on crossing below 1.5.)
+  check('slow (mobile): nothing is proposed while the ratio can still fall',
+    out.filter(d => d.to != null).every(d => d.proposeLevel == null && !d.strike), out);
+  const strike = out.find(d => d.strike);
+  check('slow (mobile): failing at the floor records a strike at this level, not a proposal',
+    strike && strike.from === 1 && strike.to === null && strike.strike.level === 3 &&
+    out.every(d => d.proposeLevel == null) && c.pending === null && c.strike && c.strike.level === 3, out);
+  const again = tabletController({ level: 3, strike: c.strike });
+  const r2 = run(again, frames(45, 1000), 20000);
+  const lvl = r2.out.find(d => d.proposeLevel != null);
+  check('slow (mobile): failing at the floor again on the next load proposes the level below, and blocks everything above that',
+    lvl && lvl.proposeLevel === 2 && lvl.from === 1 && lvl.block && lvl.block.level === 3 &&
+    lvl.block.until > r2.now + A.BLOCK_MS - 60000 && lvl.block.until <= r2.now + A.BLOCK_MS, lvl);
+  check('slow: only one level proposal per load', r2.out.filter(d => d.proposeLevel != null).length === 1, r2.out);
 }
 { // the edges of the band, with no cadence known: < 20 ms is headroom, > 34 ms is slow
   const edge = ms => { const c = tabletController(); return run(c, frames(ms, 4 * W)).out.map(d => d.kind); };
@@ -233,7 +250,11 @@ const W = A.WINDOW;
 }
 { // plan r2 M4: under shadows=low a step down from ultra blocks its twin too
   const ctx = { maxLevel: 4, mobile: true, shadows: 'low' };
-  const c = A.createController({ floor: 1, startRatio: 1.5, maxRatio: 1.5, level: 4, ctx });
+  // Two loads failing at the floor (task e7e10870: a mobile level-down needs
+  // a strike first); the second is where the proposal and the block land.
+  const c0 = A.createController({ floor: 1, startRatio: 1.5, maxRatio: 1.5, level: 4, ctx });
+  run(c0, frames(50, 4 * W));
+  const c = A.createController({ floor: 1, startRatio: 1.5, maxRatio: 1.5, level: 4, ctx, strike: c0.strike });
   const { out } = run(c, frames(50, 4 * W));
   const d = out.find(x => x.proposeLevel != null);
   check('shadows=low: ultra falls back to mid (ultra-lite is its twin) and blocks 3 and up',
@@ -367,18 +388,19 @@ const W = A.WINDOW;
   const mem = () => { const m = new Map(); return { getItem: k => m.has(k) ? m.get(k) : null, setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k), m }; };
   const s = mem();
   const key = A.storageKey('ANGLE (ARM, Immortalis-G925 MC12, OpenGL ES 3.2)', 1024, 'low');
-  check('key names the GPU, the uniform budget and the shadows mode', key === 'home3d.quality.v1|ANGLE (ARM, Immortalis-G925 MC12, OpenGL ES 3.2)|1024|low', key);
+  // v2 since task e7e10870 (the detail-first ladder): see section 8.
+  check('key names the GPU, the uniform budget and the shadows mode', key === 'home3d.quality.v2|ANGLE (ARM, Immortalis-G925 MC12, OpenGL ES 3.2)|1024|low', key);
   check('embed (low) and standalone (auto) learn separately', A.storageKey('g', 1024, 'auto') !== A.storageKey('g', 1024, 'low'));
-  check('masked/empty name -> unknown', A.storageKey('', 512) === 'home3d.quality.v1|unknown|512|auto');
-  const full = { level: 3, blocked: { level: 4, until: 99 }, dprCap: { level: 3, ratio: 1.75, until: 99 }, settled: null };
+  check('masked/empty name -> unknown', A.storageKey('', 512) === 'home3d.quality.v2|unknown|512|auto');
+  const full = { level: 3, blocked: { level: 4, until: 99 }, dprCap: { level: 3, ratio: 1.75, until: 99 }, strike: { level: 3, at: 42 }, settled: null };
   check('save then load round-trips', A.saveState(s, key, full) === true &&
     JSON.stringify(A.loadState(s, key, 4)) === JSON.stringify(full), A.loadState(s, key, 4));
   check('stored level is clamped to what compiles', A.loadState(s, key, 2).level === 2);
   s.setItem(key, '{not json');
   check('garbage JSON -> null', A.loadState(s, key, 4) === null);
-  s.setItem(key, JSON.stringify({ v: 2, level: 4 }));
-  check('wrong version -> null', A.loadState(s, key, 4) === null);
-  s.setItem(key, JSON.stringify({ v: 1, level: 'ultra' }));
+  s.setItem(key, JSON.stringify({ v: 1, level: 4 }));
+  check('wrong version (a v1 value under the v2 key) -> null', A.loadState(s, key, 4) === null);
+  s.setItem(key, JSON.stringify({ v: 2, level: 'ultra' }));
   check('non-integer level -> no level', A.loadState(s, key, 4).level === null);
   const boom = { getItem() { throw new Error('SecurityError'); }, setItem() { throw new Error('QuotaExceeded'); }, removeItem() { throw new Error('x'); } };
   let threw = false;
@@ -420,18 +442,37 @@ const W = A.WINDOW;
     /if \(adaptive && \+\+gateIdleTicks >= 3 && lastTickDelta > 0\) \{\s*idleDeltas\.push\(lastTickDelta\);/.test(src) &&
     /gateIdleTicks = 0;/.test(src));
   check('scene: Re-measure cannot be undone later in the session (visual review r1 L1)',
-    /if \(!adaptive \|\| qualityForgotten\) return;/.test(src) &&
+    /if \(!adaptive \|\| qualityForgotten \|\| adaptive\.locked\) return;/.test(src) &&
     /qualityForgotten = true;\s*adaptive\.forget\(\);[^\n]*\n\s*dprCapState = null;\s*const ok = clearState/.test(src));
   check('scene: "capped from" only when this load is built below what compiles (visual review r1 L2)',
     /\$\{!tierInfo\.overridden && tier !== tierInfo\.compileTier \? '; capped from ' \+ tierInfo\.compileTier : ''\}/.test(src));
   check('scene: resetQuality touches nothing with adaptation off', /resetQuality\(\) \{\s*if \(!adaptive\) return false;/.test(src));
   const page = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-  check('page: Re-measure is only offered with adaptation on',
-    /\(home\.getQualityStatus\(\)\.adaptive\s*\? '<button class="spec-btn" id="panel-quality-reset"/.test(page));
+  check('page: Re-measure is only offered with adaptation on, in Auto',
+    /\(qs\.adaptive && qs\.mode === 'auto' && !pendingChange\s*\? '<button class="spec-btn quality-btn" id="panel-quality-reset"/.test(page));
   check('scene: pausing clears continuity', /if \(paused\) \{ frameContinuous = false; gateIdleTicks = 0; return; \}/.test(src));
   check('scene: with adaptation off the old ramp still runs', /\} else \{\s*sampleRampFrame\(frameNow, renderMs, interacting\);/.test(src));
-  check('scene: a stored DPR cap only applies to the level it was learned at',
-    /stored\.dprCap\.level === startLevelIdx/.test(src));
+  // resolveStart() is behaviour-tested in section 8; this pins that the
+  // scene takes the cap (and the block, strike and lock) from it.
+  check('scene: the stored DPR cap, block, strike and lock come from resolveStart',
+    /const loadStart = resolveStart\(\{ stored, pin: manualLevel,/.test(src) && /const storedCap = loadStart\.dprCap;/.test(src) &&
+    /blocked: loadStart\.blocked,/.test(src) && /strike: loadStart\.strike,/.test(src) && /locked: loadStart\.locked\s*\}\);/.test(src));
+  check('scene: the manual pin is read only when ?tier=, the diagnostics level and the preview leave the build open',
+    /const pinAllowed = !tierInfo\.overridden && !levelPinned && !autoRotate;/.test(src) &&
+    /const manualLevel = pinAllowed \? loadPin\(qStorage, qPinKey, maxLevel\) : null;/.test(src) &&
+    /const startLevelIdx = tierInfo\.overridden \? maxLevel\s*: levelPinned \? Math\.max\(0, Math\.min\(maxLevel, opts\.level\)\)\s*: loadStart\.level;/.test(src));
+  check('scene: the record written is recordFor() (level, block, cap and strike)',
+    /saveState\(qStorage, qKey, recordFor\(adaptive, startLevelIdx, dprCapState, extra\)\)/.test(src));
+  check('scene: a strike, or a cleared one, is persisted when it happens',
+    /if \(d\.proposeLevel != null \|\| d\.revoke \|\| d\.block \|\| d\.cap != null \|\| d\.strike \|\| d\.strikeCleared\) persistQuality\(\);/.test(src));
+  check('scene: setQualityPin refuses when the build is decided elsewhere, and an unavailable level',
+    /setQualityPin\(level\) \{\s*if \(!pinAllowed\) return \{ ok: false,/.test(src) &&
+    /if \(!opt \|\| !opt\.available\) return \{ ok: false,/.test(src));
+  check('page: the Quality choice sets the pin, and a pending change offers a Reload (never a live recompile)',
+    /home\.setQualityPin\(v === 'auto' \? null : parseInt\(v, 10\)\)/.test(page) &&
+    /\(pendingChange\s*\? '<button class="spec-btn quality-btn" id="panel-quality-reload"/.test(page) &&
+    /panelQualityReload\.addEventListener\('click', \(\) => \{ location\.reload\(\); \}\)/.test(page));
+  check('page: the readout leads with Auto / Manual', /const mode = s\.mode === 'manual' \? 'Manual' : s\.mode === 'auto' \? 'Auto' : 'Fixed';/.test(page));
   check('scene: cold frames are judged on the call time or the gap it left, whichever is longer',
     /sampleColdFrame\(Math\.max\(renderMs, frameContinuous && prevRenderAt \? tickTs - prevRenderAt : 0\)\);/.test(src) && /adaptive\.coldFrame\(renderMs, Date\.now\(\)\)/.test(src));
   check('scene: the on-demand gate and the first-frame gate clear continuity',
@@ -623,6 +664,157 @@ const W = A.WINDOW;
     const h = sched({ warmupMs: 3000 });
     const starts = drive(h, 0, 10000, null);
     check('load: the first probe waits out warm-up', starts.length > 0 && starts[0] >= 3000, starts);
+  }
+}
+
+// ---- 8. detail first, the v2 record and the manual level (task e7e10870) -------
+// The load-after-load behaviour is in scripts/test-adaptive-convergence.mjs;
+// these are the pieces, one at a time.
+{
+  const mem = () => { const m = new Map(); return { getItem: k => m.has(k) ? m.get(k) : null, setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k), m }; };
+  const gpu = 'Mali-G925-Immortalis MC12';
+
+  // The migration: a v1 record under the v1 key is simply not the key any more.
+  const s = mem();
+  const v1Key = 'home3d.quality.v1|' + gpu + '|4096|low';
+  s.setItem(v1Key, JSON.stringify({ v: 1, level: 0, blocked: { level: 1, until: 9e15 }, dprCap: null, settled: null }));
+  const v2Key = A.storageKey(gpu, 4096, 'low');
+  check('v2: the key moved off v1', v2Key.indexOf('home3d.quality.v2|') === 0 && v2Key !== v1Key, v2Key);
+  check('v2: the tablet\'s v1 record (low, mid-lite+ blocked) is not read', A.loadState(s, v2Key, 4) === null);
+  const st = A.resolveStart({ stored: A.loadState(s, v2Key, 4), pin: null, defaultLevel: 1, wall: 1000 });
+  check('v2: so the next load starts at the mobile default (mid-lite), unblocked', st.level === 1 && st.from === 'default' && st.blocked === null, st);
+  check('every key shares STORAGE_PREFIX (diagnostics guards them all)',
+    v2Key.indexOf(A.STORAGE_PREFIX) === 0 && A.pinKey(gpu, 4096, 'low').indexOf(A.STORAGE_PREFIX) === 0 && v1Key.indexOf(A.STORAGE_PREFIX) === 0);
+
+  // The pin: per GPU/budget/shadows mode, separate from the adaptive record.
+  const pk = A.pinKey(gpu, 4096, 'low');
+  check('pin: the popup (low) and the page (auto) keep separate pins', pk !== A.pinKey(gpu, 4096, 'auto') && pk !== v2Key, pk);
+  check('pin: nothing stored -> null (Auto)', A.loadPin(s, pk, 4) === null);
+  check('pin: save then load round-trips', A.savePin(s, pk, 3) === true && A.loadPin(s, pk, 4) === 3);
+  check('pin: the page is not pinned by the popup\'s choice', A.loadPin(s, A.pinKey(gpu, 4096, 'auto'), 4) === null);
+  check('pin: a level this GPU cannot compile -> null, not clamped', A.loadPin(s, pk, 2) === null);
+  check('pin: Auto (null) removes it', A.savePin(s, pk, null) === true && s.getItem(pk) === null && A.loadPin(s, pk, 4) === null);
+  s.setItem(pk, '{nope'); check('pin: garbage -> null', A.loadPin(s, pk, 4) === null);
+  s.setItem(pk, JSON.stringify({ v: 1, level: 'ultra' })); check('pin: non-integer -> null', A.loadPin(s, pk, 4) === null);
+  s.setItem(pk, JSON.stringify({ v: 2, level: 1 })); check('pin: unknown version -> null', A.loadPin(s, pk, 4) === null);
+  const boom = { getItem() { throw new Error('x'); }, setItem() { throw new Error('x'); }, removeItem() { throw new Error('x'); } };
+  check('pin: throwing storage never throws', A.loadPin(boom, pk, 4) === null && A.savePin(boom, pk, 1) === false && A.savePin(null, pk, 1) === false);
+  check('Re-measure (clearState on the adaptive key) leaves the pin alone',
+    (A.savePin(s, pk, 2), A.saveState(s, v2Key, { level: 3 }), A.clearState(s, v2Key), A.loadPin(s, pk, 4) === 2));
+
+  // resolveStart: the scene's start, exactly.
+  const stored = { level: 3, blocked: { level: 4, until: 5000 }, dprCap: { level: 3, ratio: 1, until: 5000 }, strike: { level: 3, at: 10 }, settled: null };
+  const a = A.resolveStart({ stored, pin: null, defaultLevel: 1, wall: 1000 });
+  check('resolveStart: the stored level, its cap, block and strike', a.level === 3 && a.from === 'stored' && !a.locked &&
+    a.dprCap === stored.dprCap && a.blocked === stored.blocked && a.strike === stored.strike, a);
+  const b = A.resolveStart({ stored, pin: 1, defaultLevel: 1, wall: 1000 });
+  check('resolveStart: a manual level wins, locks, and drops the strike and the other level\'s cap',
+    b.level === 1 && b.from === 'manual' && b.locked === true && b.strike === null && b.dprCap === null, b);
+  const b2 = A.resolveStart({ stored, pin: 3, defaultLevel: 1, wall: 1000 });
+  check('resolveStart: a manual level keeps the ratio cap learnt at that level', b2.dprCap === stored.dprCap && b2.strike === null, b2);
+  const c = A.resolveStart({ stored, pin: null, defaultLevel: 1, wall: 6000 });
+  check('resolveStart: an expired cap is dropped', c.dprCap === null && c.level === 3, c);
+  const c30 = A.resolveStart({ stored, pin: null, defaultLevel: 1, wall: 30 * 24 * 3600e3 });
+  check('resolveStart: a strike has no clock -- still there 30 days later (round 2)', c30.strike === stored.strike, c30);
+  const mb = A.resolveStart({ stored: Object.assign({}, stored, { blocked: { level: 4, until: 5000, loadsLeft: 3 } }), pin: null, defaultLevel: 1, wall: 1000 });
+  check('resolveStart: a mobile block counts this load (loadsLeft 3 -> 2), without touching the stored object',
+    mb.blocked.loadsLeft === 2 && mb.blocked.until === 5000 && mb.blocked !== stored.blocked, mb.blocked);
+  const mp = A.resolveStart({ stored: Object.assign({}, stored, { blocked: { level: 4, until: 5000, loadsLeft: 3 } }), pin: 3, defaultLevel: 1, wall: 1000 });
+  check('resolveStart: a manual load does not count against a block', mp.blocked.loadsLeft === 3, mp.blocked);
+  const e = A.resolveStart({ stored: Object.assign({}, stored, { level: 2 }), pin: null, defaultLevel: 1, wall: 1000 });
+  check('resolveStart: a cap or strike learnt at another level is dropped', e.level === 2 && e.dprCap === null && e.strike === null, e);
+  check('resolveStart: nothing stored -> the default', A.resolveStart({ stored: null, pin: null, defaultLevel: 4, wall: 0 }).level === 4);
+  check('resolveStart: pin 0 (Low) is a pin, not "nothing"', A.resolveStart({ stored, pin: 0, defaultLevel: 1, wall: 0 }).level === 0);
+
+  // recordFor
+  const ctl = tabletController({ level: 2 });
+  run(ctl, frames(8, 6 * W));
+  const rec = A.recordFor(ctl, 2, { level: 2, ratio: 1.5, until: 9 }, { settled: { level: 2 } });
+  check('recordFor: the proposal as the next level, the cap, the strike, extras', rec.level === ctl.pending && rec.level === 3 &&
+    rec.dprCap.ratio === 1.5 && rec.strike === null && rec.settled.level === 2, rec);
+  check('recordFor: with no proposal the level stays', A.recordFor(tabletController({ level: 2 }), 2, null).level === 2);
+
+  // The locked (manual) controller.
+  const lk = tabletController({ level: 3, locked: true });
+  const lr = run(lk, frames(8, 2000));
+  check('locked, fast: DPR climbs, no level proposal', lk.ceiling === 2 && lr.out.every(d => d.proposeLevel == null) && lk.pending === null, lr.out);
+  check('locked: canGoUp is false once the ratio is at the top', lk.canGoUp(1e9) === false);
+  const ls = tabletController({ level: 3, locked: true, strike: { level: 3, until: 1e15 } });
+  const lsr = run(ls, frames(60, 3000));
+  check('locked, slow: DPR falls to the floor and nothing else -- no proposal, no strike, no block',
+    ls.ceiling === 1 && lsr.out.every(d => d.proposeLevel == null && !d.strike && !d.block) && ls.blocked === null, lsr.out);
+  check('locked: a cold frame changes nothing', tabletController({ level: 4, locked: true, defaultLevel: 1 }).coldFrame(60000, 0) === null);
+
+  // The strike, one rule at a time.
+  const sk = tabletController({ level: 3, strike: { level: 3, until: 1e15 } });
+  const skr = run(sk, frames(8, 2 * W));
+  check('strike: sustained headroom at the level clears an earlier load\'s strike (and says so)',
+    sk.strike === null && skr.out[0] && skr.out[0].strikeCleared === true, skr.out);
+  const other = tabletController({ level: 2, strike: { level: 3, until: 1e15 } });
+  check('strike: one recorded at another level is ignored', other.strike === null);
+  // Round 2: a strike has no clock. Recorded long ago (a tablet reloaded
+  // monthly) it still confirms the next failure at the floor.
+  const exp = tabletController({ level: 3, strike: { level: 3, at: 5 } });
+  const er = run(exp, frames(60, 3000), 60 * 24 * 3600e3);
+  check('strike: an old one (60 days) still confirms -- proposed down and blocked',
+    er.out.some(d => d.proposeLevel === 2 && d.block && d.block.level === 3) && er.out.every(d => !d.strike), er.out);
+  // Round 2: on a mobile GPU a block also outlasts BLOCK_LOADS loads.
+  const blk = er.out.find(d => d.block).block;
+  check('block (mobile): carries BLOCK_LOADS loads as well as BLOCK_MS', blk.loadsLeft === A.BLOCK_LOADS && A.BLOCK_LOADS >= 2, blk);
+  const late = tabletController({ level: 2, dprCap: 1, blocked: { level: 3, until: 5, loadsLeft: 1 } });
+  run(late, frames(8, 3 * W), 1e9);
+  check('block (mobile): past BLOCK_MS but with loads left, still blocks', late.pending === null, late.pending);
+  const done = tabletController({ level: 2, dprCap: 1, blocked: { level: 3, until: 5 } });
+  run(done, frames(8, 3 * W), 1e9);
+  check('block (mobile): past BLOCK_MS and no loads left, expires', done.pending === 3, done.pending);
+  const deskBlk = A.createController({ floor: 1, startRatio: 1, maxRatio: 1, level: 4, ctx: { maxLevel: 4, mobile: false, shadows: 'auto' } });
+  const dbr = run(deskBlk, frames(50, 200)).out.find(d => d.block);
+  check('block (desktop): wall-clock only, as before -- no load count', dbr && dbr.block.loadsLeft === undefined, dbr);
+  const twice = tabletController({ level: 3 });
+  const tr = run(twice, frames(60, 6000));
+  check('strike: failing at the floor all session long is ONE strike, never a proposal in the same load',
+    tr.out.filter(d => d.strike).length === 1 && tr.out.every(d => d.proposeLevel == null), tr.out);
+  const up = tabletController({ level: 1 });
+  run(up, frames(8, 3 * W));                       // 1 -> 1.5
+  run(up, frames(50, 8 * W), 40000);               // 1.5 -> 1.25 -> 1, then strike
+  const upr = run(up, frames(8, 8 * W), 90000);    // holds at 1 again
+  check('strike: a level that failed at the floor this load proposes no level up this load',
+    up.strike && up.strike.level === 1 && up.pending === null && upr.out.every(d => d.proposeLevel == null), { out: upr.out, strike: up.strike });
+  // A stored cap of 1.0 puts the start ratio at the floor, so the level-up
+  // is earned there; then the floor fails.
+  const rv2 = tabletController({ level: 3, dprCap: 1 });
+  run(rv2, frames(8, 2 * W));                      // at the floor with headroom: proposes 4
+  const rvp = rv2.pending;
+  const rvr = run(rv2, frames(60, 4 * W), 50000);
+  check('strike: a floor failure withdraws a level-up proposed this load',
+    rvp === 4 && rv2.pending === null && rvr.out.some(d => d.revoke && d.strike), { rvp, out: rvr.out });
+
+  // levelOptions: what Settings offers.
+  const full = A.levelOptions({ maxLevel: 4, mobile: true, shadows: 'auto' });
+  check('options: five levels in ladder order with plain labels', full.map(o => o.label).join('|') === 'Low|Medium (lite)|Medium|High|Max' && full.every(o => typeof o.hint === 'string' && o.hint.length > 0) &&
+    full.map(o => o.name).join() === 'low,mid-lite,mid,ultra-lite,ultra', full);
+  check('options: all available on an ultra-compiling GPU on the page', full.every(o => o.available && o.reason === null), full);
+  const mid = A.levelOptions({ maxLevel: 2, mobile: true, shadows: 'auto' });
+  check('options: above what compiles -> disabled, with the reason', mid[3].available === false && mid[4].available === false &&
+    /cannot compile/.test(mid[3].reason) && mid[2].available === true, mid);
+  const popup = A.levelOptions({ maxLevel: 4, mobile: true, shadows: 'low' });
+  check('options: in the popup (shadows=low) Max builds what High builds -> disabled, says so',
+    popup[4].available === false && popup[4].reason === 'same as High here' && popup[3].available === true, popup);
+  // Round 2: a running level is NAMED as the cheapest level that builds the same thing.
+  check('equivalentLevel: ultra in the popup is High (ultra-lite)', A.equivalentLevel(4, { maxLevel: 4, mobile: false, shadows: 'low' }) === 3);
+  check('equivalentLevel: ultra on the page is itself', A.equivalentLevel(4, { maxLevel: 4, mobile: false, shadows: 'auto' }) === 4);
+  check('equivalentLevel: every other level is itself on the page',
+    [0, 1, 2, 3].every(l => A.equivalentLevel(l, { maxLevel: 4, mobile: true, shadows: 'auto' }) === l));
+  {
+    const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+    const page = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    check('scene: the readout label is the equivalent level\'s',
+      src.indexOf('levelLabel: LEVEL_LABELS[equivalentLevel(startLevelIdx, levelCtx)],') !== -1 &&
+      src.indexOf('levelLabelName: LEVELS[equivalentLevel(startLevelIdx, levelCtx)].name,') !== -1);
+    const BS = String.fromCharCode(92);
+    check('page: the readout keeps each item whole (no-break spaces, word joiner after - and the en dash)',
+      page.indexOf("b.replace(/ /g, '" + BS + "u00a0').replace(/([-" + BS + "u2013])/g, '$1" + BS + "u2060')") !== -1);
+    check('page: each option carries its hint as a tooltip', page.indexOf(`' title="' + o.hint + '">' + o.label`) !== -1);
   }
 }
 

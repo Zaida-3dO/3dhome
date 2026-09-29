@@ -29,10 +29,14 @@ import { collectDevice } from './device-info.js';
 import { computeVerdict, appStepDown } from './verdict.js';
 import { describeLevel } from './matrix.js';
 import { estimateLightVectors, measuredMaxUniformVectors } from './lights-budget.js';
-import { LEVELS } from '../adaptive-quality.js';
+import { LEVELS, STORAGE_PREFIX } from '../adaptive-quality.js';
 
-/** The app's adaptive-quality records (read-only here; see snapshotAdaptive). */
-const ADAPTIVE_PREFIX = 'home3d.quality.v1|';
+/**
+ * The app's quality records (read-only here; see snapshotAdaptive): every
+ * key under the module's prefix -- the adaptive record (v2, and any v1 left
+ * from before task e7e10870) and the Settings > Quality manual pin.
+ */
+const ADAPTIVE_PREFIX = STORAGE_PREFIX;
 import { assembleResult, fitToSize } from './result.js';
 import { rafThrottle } from '../adaptive-quality.js';
 
@@ -259,11 +263,13 @@ export function guardAdaptive(ls) {
     before,
     finish() {
       const after = snapshotAdaptive(ls);
-      const untouched = JSON.stringify(before) === JSON.stringify(after);
+      // Key order is storage order, which a delete-and-restore changes: compare sorted.
+      const canon = o => (o ? JSON.stringify(Object.keys(o).sort().map(k => [k, o[k]])) : String(o));
+      const untouched = canon(before) === canon(after);
       const restored = untouched ? false : restoreAdaptive(ls, before, after);
       return { untouched, restored, keysBefore: Object.keys(before || {}).length,
         note: before === null ? 'localStorage unavailable: nothing to protect'
-          : 'the app\'s home3d.quality.v1 records were compared before and after the run' };
+          : 'the app\'s ' + ADAPTIVE_PREFIX + '* records (adaptive and manual) were compared before and after the run' };
     }
   };
 }

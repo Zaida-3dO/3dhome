@@ -255,7 +255,9 @@
       $('apply-text').textContent = 'This device runs level ' + app.currentLevelName + ' (' + app.currentLevelFrom + '). ' +
         'The highest level that held the target here is ' + v.recommendedLevelName + '. Applying writes it into the quality record the 3D view keeps ' +
         'for this device (' + app.shadowsMode + ' shadows mode) for the next load; the app keeps measuring and ' +
-        'steps down by itself if it cannot hold it. Only the LEVEL is written: the app ramps the pixel ratio itself, live, from what it measures.';
+        'steps down by itself if it cannot hold it. Only the LEVEL is written: the app ramps the pixel ratio itself, live, from what it measures.' +
+        (app.currentLevelFrom === 'manual' ? ' NOTE: a manual level is set in the 3D view\'s Settings > Quality for this mode, and it wins over this record ' +
+          'until Settings > Quality is set back to Auto.' : '');
       $('apply').textContent = 'Apply recommended level: ' + v.recommendedLevelName + ' (was ' + app.currentLevelName + ')';
       $('apply').disabled = false;
       $('apply').onclick = () => {

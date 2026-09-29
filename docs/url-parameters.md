@@ -329,19 +329,61 @@ frame times. The GPU class only decides where a device starts.
   the full ratio elsewhere), then above it up to 2. The **level** is decided
   now and applied on the **next load**: changing lights or shadows under a
   running scene would recompile every material, which is a multi-second
-  freeze. A step down lowers the pixel ratio first; a level is only stepped
-  down once the ratio falls below the start ratio.
+  freeze. A step down always lowers the pixel ratio first. After that the
+  order depends on the GPU:
+  - **A mobile GPU gives up sharpness before detail.** The pixel ratio falls
+    all the way to 1.0 before any level is stepped down. A level is stepped
+    down only when it still fails **at 1.0**, and only when that happens on
+    **two separate loads**. The first failure is recorded as a *strike*, and
+    sustained headroom at that level on a later load clears it. A strike has
+    no expiry, so a tablet that reloads once a month still refuses a
+    too-heavy level on its second failing load. At 1.0 with
+    headroom, it proposes the next level up for the next load, as before.
+    Measured on a wall tablet (Mali-G925, 60 Hz): `mid-lite` and
+    `ultra-lite` both hold 60 fps at 1.0 and fail at 1.5, so it settles on
+    `ultra-lite` at 1.0. The old order settled it on `low` at a sharp ratio.
+  - **A desktop is unchanged.** A level is stepped down as soon as the ratio
+    falls below its start ratio.
 - **No flip-flop.** A pixel-ratio notch that failed is not tried again for
   this level for 7 days. A level stepped down from is blocked, along with
-  everything above it, for 7 days. A first frame that blocks for over a
-  second at a level above the device's default (a cold room-shadow pass)
-  counts as a step down on its own.
+  everything above it, for 7 days. On a mobile GPU the block also lasts at
+  least 10 loads (`BLOCK_LOADS`). A device that reloads rarely therefore
+  re-checks a refused level once every 10 loads, not on every load after a
+  week. A first frame that blocks for over a
+  second at a level above the device's default counts as a failure on its
+  own. That covers a cold room-shadow pass. On a desktop, and at a level
+  with room-shadow lights, it steps the level down at once: that pass is
+  rendered cold on every load. On a mobile GPU at a level without them,
+  it is a strike, because a one-off shader compile is cached for the next
+  load. The wall tablet's first frames measured 17–42 ms at every level, so
+  it never trips there.
+- **Settings > Quality.** **Auto (recommended)**, the default, runs the
+  ladder above. You can also pin a level: Low, Medium (lite)
+  (`mid-lite`, without the small items), Medium, High (`ultra-lite`) or Max
+  (`ultra`). Each option's tooltip says what it builds. The readout names a
+  running level by the cheapest level that builds the same thing, so
+  `ultra` in the popup reads High. A pin applies
+  to this device in this context only, so the page and the popup keep
+  separate pins (`home3d.quality.pin.v1|…`). It persists across loads. While
+  pinned, the ladder does not move the level, and the pixel ratio still
+  adapts down to 1.0 so the view stays smooth. A change applies on the next
+  load, and the row offers **Reload**. The dropdown disables any level the
+  GPU cannot compile, and any that builds the same thing as a cheaper one
+  here (Max in the popup), and says why. The readout under it says **Auto**,
+  **Manual** or **Fixed**, then the level and the current sharpness (pixel
+  ratio). `?tier=` still wins over both, and hides the choice.
 - **Desktop.** A desktop starts exactly where it did before. It only moves
   if it is measured as slow.
 - **Stored per device**, in `localStorage` under
-  `home3d.quality.v1|<GPU name>|<uniform budget>|<shadows mode>`. Settings >
-  Quality shows where the device is and what the next load will use;
-  **Re-measure** forgets it.
+  `home3d.quality.v2|<GPU name>|<uniform budget>|<shadows mode>`, so the page
+  and the HA popup (`?embed=1`) each keep their own. Records under the old
+  `v1` key were written by the sharpness-first order and are not read. A
+  device with one starts from its default and re-learns, with nobody
+  touching it. In Auto, **Re-measure** forgets the record. It does not
+  clear a manual pin.
+- Tests: `scripts/test-adaptive-quality.mjs` (the pieces) and
+  `scripts/test-adaptive-convergence.mjs` (load after load: the wall tablet
+  from its stale `v1` record, a desktop, the cold frame, a manual pin).
 
 `?tier=` wins over all of this: it pins the tier, turns adaptation off (no
 probes, nothing read or stored), and lifts the pixel-ratio ceiling and the
