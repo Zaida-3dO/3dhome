@@ -153,6 +153,21 @@ _, warns = run(rooms_doc({"tv": DESK}, version="1.6"))
 check("validator: switches below 1.8 are warned", any("1.8" in w and "switches" in w for w in warns), warns)
 _, warns = run(rooms_doc({"clock": {"title": "Kitchen clock"}, "tv": DESK}, version="1.8"))
 check("validator: a switches card is not mistaken for a title-only one", not any("title-only" in w for w in warns), warns)
+# ---- cameras rows (schemaVersion 1.9) -------------------------------------------
+CAM = {"title": "Crate", "cameras": [{"entity": 'camera.demo_crate', "label": "Crate cam", "refreshMs": 2000}]}
+check("schema: a cameras card validates", schema_errors(rooms_doc({"tv": CAM}, version="1.9")) == [],
+      schema_errors(rooms_doc({"tv": CAM}, version="1.9")))
+for label, b in [
+    ("a non-camera entity", {"cameras": [{"entity": 'image.demo_x'}]}),
+    ("a refreshMs below 500", {"cameras": [{"entity": 'camera.demo_x', "refreshMs": 100}]}),
+    ("an unknown key on a camera row", {"cameras": [{"entity": 'camera.demo_x', "stream": True}]}),
+]:
+    check(f"schema: rejects {label}", schema_errors(rooms_doc({"tv": b}, version="1.9")) != [])
+_, warns = run(rooms_doc({"tv": CAM}, version="1.9"))
+check("validator: a cameras card at 1.9 is clean", warns == [], warns)
+_, warns = run(rooms_doc({"tv": CAM}, version="1.8"))
+# Mutation: drop the 1.9 check -> no warning -> fails.
+check("validator: cameras below 1.9 are warned", any("1.9" in w and "cameras" in w for w in warns), warns)
 _, warns = run(rooms_doc(GOOD, version="1.5"))
 check("validator: below 1.6 is warned", any("1.6" in w for w in warns), warns)
 

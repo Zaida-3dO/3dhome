@@ -37,6 +37,10 @@
  *      cornice lights), its cornice sender's gates and commands, its markup.
  *  13. Last-known level: a light switched on (or given a colour while off)
  *      shows the level it will come back at, or "unknown" -- never 100%.
+ *  14. Camera rows: binding, URLs, a model free of the rotating token (so
+ *      a rotation never rebuilds the card), and the refresh loop's
+ *      lifecycle -- one load at a time, back-off, nothing after stop or
+ *      while hidden, Live only while on.
  *
  * Each check names the one-line mutation it catches.
  */
@@ -780,6 +784,178 @@ const CONSOLE = [
     /if \(restoring === null\) restoring = !st\.on;/.test(tpSrc));
   check('wiring: the light card switch-on restores the last level', /if \(st\.on && !st\.bri\) restoreLevel\(st\);/.test(tpSrc) &&
     /briUnknown: levels\.unknown\(key, !!st\.on, st\.bri\),/.test(tpSrc));
+}
+
+// ---- 14. camera rows -----------------------------------------------------------
+{
+  const T = await imp('src/tap-popovers.js');
+  const tpSrc = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
+  const icSrc = fs.readFileSync(path.join(root, 'src/item-cards.js'), 'utf8');
+  const card = IC.normaliseCard({ title: 'Crate', cameras: [{ entity: 'camera.demo_crate', label: 'Crate cam' },
+    { entity: 'camera.demo_fast', refreshMs: 100 }, { entity: 'camera.demo_slow', refreshMs: 999999 }, { entity: 'image.demo_not_a_camera' }] }, 0);
+  // Mutation: drop the cameras check from the empty-card test -> null -> fails.
+  check('camera: a cameras-only card is a card; a non-camera row dropped', card && card.cameras.length === 3, card);
+  // Mutation: no clamp -> 100 / 999999 -> fails.
+  check('camera: refreshMs defaults to 2000, clamped to 500-60000', card.cameras[0].refreshMs === 2000 && card.cameras[1].refreshMs === 500 &&
+    card.cameras[2].refreshMs === 60000, card.cameras);
+  check('camera: the card reads its camera entities (so the client records them)', IC.cardEntities(card).includes('camera.demo_crate'));
+  check('camera: a cameras card gets the camera icon', IC.cardIcon(card) === 'camera');
+
+  const rawA = { state: 'idle', attributes: { access_token: 'tokA', entity_picture: '/api/camera_proxy/camera.demo_crate?token=tokA', friendly_name: 'Crate' } };
+  const rawB = { state: 'idle', attributes: { access_token: 'tokB', entity_picture: '/api/camera_proxy/camera.demo_crate?token=tokB', friendly_name: 'Crate' } };
+  const mA = IC.cameraRowModel(rawA), mB = IC.cameraRowModel(rawB);
+  // Mutation: put the picture URL (or token) in the model -> the rotation changes it -> fails.
+  check('camera model: no URL, no token -- a token rotation leaves it identical', JSON.stringify(mA) === JSON.stringify(mB) &&
+    !/tok|camera_proxy/.test(JSON.stringify(mA)) && mA.canLive === true && mA.stateText === 'Idle', mA);
+  const sig = T.repaintAction({}, { cameras: [mA] }, null, false, true, false).sig;
+  check('camera: a token rotation never rebuilds the card', T.repaintAction({}, { cameras: [mB] }, sig, false, false, false).action === 'none');
+  check('camera model: offline / never heard from', IC.cameraRowModel({ state: 'unavailable', attributes: {} }).stateText === 'Offline' &&
+    IC.cameraRowModel(null).na && !IC.cameraRowModel({ state: 'idle', attributes: {} }).canLive);
+
+  const snap = IC.cameraSnapshotUrl('https://ha.invalid/', rawA, 123);
+  check('snapshot URL: HA base + entity_picture + a cache-bust', snap === 'https://ha.invalid/api/camera_proxy/camera.demo_crate?token=tokA&_=123', snap);
+  check('snapshot URL: an absolute picture is kept; no picture or unavailable -> null',
+    IC.cameraSnapshotUrl('https://ha.invalid', { state: 'idle', attributes: { entity_picture: 'https://cdn.invalid/p.jpg' } }, 1) === 'https://cdn.invalid/p.jpg?_=1' &&
+    IC.cameraSnapshotUrl('https://ha.invalid', { state: 'idle', attributes: {} }, 1) === null &&
+    IC.cameraSnapshotUrl('https://ha.invalid', { state: 'unavailable', attributes: rawA.attributes }, 1) === null);
+  const stream = IC.cameraStreamUrl('https://ha.invalid', 'camera.demo_crate', rawA);
+  check('stream URL: the MJPEG proxy with the access token', stream === 'https://ha.invalid/api/camera_proxy_stream/camera.demo_crate?token=tokA', stream);
+  check('stream URL: none without a token or for a non-camera', IC.cameraStreamUrl('https://ha.invalid', 'camera.demo_crate', { state: 'idle', attributes: {} }) === null &&
+    IC.cameraStreamUrl('https://ha.invalid', 'light.demo_x', rawA) === null);
+
+  // The refresh loop, on fake timers.
+  const mk = over => {
+    const t = { now: 0, id: 0, timers: new Map(), shown: [], probes: [], stale: [] };
+    const d = Object.assign({
+      refreshMs: 2000,
+      snapshotUrl: bust => 'https://ha.invalid/api/camera_proxy/camera.demo_x?token=T&_=' + bust,
+      streamUrl: () => 'https://ha.invalid/api/camera_proxy_stream/camera.demo_x?token=T',
+      probe: (src, ok, fail) => t.probes.push({ src, ok, fail }),
+      show: src => t.shown.push(src), stale: s => t.stale.push(s),
+      schedule: (fn, ms) => { const id = ++t.id; t.timers.set(id, { fn, at: t.now + ms }); return id; },
+      cancel: id => { t.timers.delete(id); }, now: () => t.now,
+    }, over);
+    const advance = ms => {
+      const end = t.now + ms;
+      for (;;) {
+        const due = [...t.timers].filter(([, v]) => v.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        t.timers.delete(due[0]); t.now = due[1].at; due[1].fn();
+      }
+      t.now = end;
+    };
+    return { feed: IC.createCameraFeed(d), t, advance };
+  };
+  let x = mk({});
+  x.feed.start();
+  check('feed: start loads a frame at once', x.t.probes.length === 1 && x.t.shown.length === 0);
+  x.t.probes[0].ok();
+  check('feed: a loaded frame is shown', x.t.shown[0] === x.t.probes[0].src && x.t.stale.at(-1) === false);
+  x.advance(1999);
+  // Mutation: schedule the next refresh at 0 -> a second probe -> fails.
+  check('feed: nothing before refreshMs', x.t.probes.length === 1);
+  x.advance(1);
+  check('feed: the next frame at refreshMs', x.t.probes.length === 2);
+  x.advance(10000);
+  check('feed: one load at a time (no new request while one is pending)', x.t.probes.length === 2);
+  x.advance(5000);   // 15 s after the second probe: the watchdog fails it
+  check('feed: a load that never settles fails after 15 s, the last frame dimmed', x.t.stale.at(-1) === true && x.t.probes.length === 2);
+  x.advance(3999);
+  check('feed: failures back off (2 x refreshMs)', x.t.probes.length === 2);
+  x.advance(1);
+  check('feed: ... then retries', x.t.probes.length === 3);
+  x.t.probes[2].fail();
+  x.advance(7999);
+  // Mutation: no back-off (retry at refreshMs) -> a 4th probe at 2000 -> fails.
+  check('feed: a second failure backs off further (4 x refreshMs)', x.t.probes.length === 3);
+  x.advance(1);
+  check('feed: ... then retries again', x.t.probes.length === 4);
+  check('feed: a failed frame is never shown (no broken image)', x.t.shown.length === 1);
+  x.feed.stop();
+  // Mutation: stop without clearing the image -> fails.
+  check('feed: stop clears the image and every timer', x.t.shown.at(-1) === '' && x.t.timers.size === 0);
+  x.t.probes[3].ok();
+  x.advance(120000);
+  // Mutation: stop() leaves the timer running -> more probes -> fails.
+  check('feed: after stop, no request and a late load is not shown', x.t.probes.length === 4 && x.t.shown.at(-1) === '');
+
+  x = mk({});
+  x.feed.start(); x.t.probes[0].ok();
+  x.feed.hidden(true);
+  x.advance(60000);
+  // Mutation: hidden() does not cancel -> probes continue -> fails.
+  check('feed: hidden -> no requests at all', x.t.probes.length === 1 && x.t.timers.size === 0);
+  x.feed.hidden(false);
+  check('feed: visible again -> a frame at once', x.t.probes.length === 2);
+  x.t.probes[1].ok();
+  const on = x.feed.setLive(true);
+  check('feed: Live shows the MJPEG stream and stops the snapshots', on && /camera_proxy_stream/.test(x.t.shown.at(-1)) && x.t.timers.size === 0);
+  x.advance(60000);
+  check('feed: no snapshot requests while Live', x.t.probes.length === 2);
+  x.feed.hidden(true);
+  // Mutation: keep the stream while hidden -> fails.
+  check('feed: hidden while Live ends the stream (the last frame put back)', !/stream/.test(x.t.shown.at(-1)));
+  x.feed.hidden(false);
+  check('feed: visible again resumes Live', /camera_proxy_stream/.test(x.t.shown.at(-1)));
+  x.feed.setLive(false);
+  check('feed: Live off ends the stream and goes back to snapshots', !/stream/.test(x.t.shown.at(-1)) && x.t.probes.length === 3);
+  x.feed.setLive(true); x.feed.streamFailed();
+  check('feed: a failed stream falls back to snapshots, dimmed, backing off', !x.feed.state().live && x.t.stale.at(-1) === true && x.t.probes.length === 3);
+  x.feed.setLive(true); x.feed.stop();
+  check('feed: close while Live ends the stream', x.t.shown.at(-1) === '' && !x.feed.state().live);
+  x = mk({ streamUrl: () => null });
+  x.feed.start();
+  check('feed: Live is refused with no stream URL', x.feed.setLive(true) === false && !x.feed.state().live);
+  x = mk({ snapshotUrl: () => null });
+  x.feed.start();
+  check('feed: no picture URL -> no request, dimmed, backing off', x.t.probes.length === 0 && x.t.stale.at(-1) === true && x.t.timers.size === 1);
+  x = mk({});
+  x.feed.hidden(true); x.feed.start();
+  check('feed: opened while hidden -> nothing until visible', x.t.probes.length === 0);
+
+  // Markup.
+  const dot = () => '';
+  const html = haOff => T.popoverHtml.item({ name: 'Crate', status: 'ok', haOff, media: [], lights: [], switches: [], readings: [],
+    cameras: [Object.assign({ entity: 'camera.demo_crate', label: 'Crate cam' }, mA)] }, dot);
+  const h = html(false);
+  check('camera markup: a picture box, and no image URL or token in the markup', /<div class="tp-cam" data-cam="0"><\/div>/.test(h) &&
+    !/<img|token|camera_proxy/.test(h), h);
+  check('camera markup: a Live toggle when the camera can stream; disabled while HA is offline', /data-a="clive" data-i="0" aria-pressed="false"/.test(h) &&
+    /data-a="clive"[^>]*\sdisabled/.test(html(true)));
+  check('camera markup: no Live toggle without a token', !/clive/.test(T.popoverHtml.item({ name: 'x', status: 'ok', haOff: false,
+    cameras: [Object.assign({ label: 'c' }, IC.cameraRowModel({ state: 'idle', attributes: {} }))] }, dot)));
+
+  // Wiring.
+  check('wiring: the camera rows are built from cameraRowModel only', /Object\.assign\(\{ entity: row\.entity, label: rowLabel\(row, r\) \}, cm,/.test(tpSrc));
+  check('wiring: close stops every camera', /stopCameras\(p\);/.test(tpSrc) && /p\.cams\.forEach\(cam => cam\.feed\.stop\(\)\);/.test(tpSrc));
+  check('wiring: a rebuild re-attaches the same <img>', /v\.bind\(pop\.target, pop\.el, pop\.ctl\);\s*attachCameras\(pop\);/.test(tpSrc) &&
+    /if \(!cam\) \{ cam = makeCamera\(row\); p\.cams\.set\(i, cam\); cam\.feed\.start\(\); \}\s*box\.appendChild\(cam\.img\);/.test(tpSrc));
+  check('wiring: the tab going hidden pauses the cameras (and the listener is removed on dispose)',
+    /document\.addEventListener\('visibilitychange', onVisibility\);/.test(tpSrc) && /document\.removeEventListener\('visibilitychange', onVisibility\);/.test(tpSrc) &&
+    /cam\.feed\.hidden\(document\.hidden\)/.test(tpSrc));
+  check('no fetch(), and nothing camera-related is logged', !/\bfetch\(/.test(tpSrc) && !/\bfetch\(/.test(icSrc) && !/console\./.test(icSrc) &&
+    !/console\.[a-z]+\([^)]*(token|src|Url)/i.test(tpSrc));
+
+  // The client records a camera's raw state (its picture and token).
+  const { HAClient } = await imp('src/ha-client.js');
+  const st = (entity_id, state, attributes) => ({ entity_id, state: String(state), attributes: attributes || {}, last_changed: '', last_updated: '' });
+  const fake = installFakeHA({ states: [st('camera.demo_crate', 'idle', rawA.attributes)] });
+  const log = console.log, warn = console.warn;
+  console.log = () => {}; console.warn = () => {};
+  try {
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: {}, wsReconnectMs: 15,
+      sensors: { items: { crate: { cameras: [{ entity: 'camera.demo_crate' }] } } } });
+    ha.connect();
+    await fake.whenConnected(ha);
+    check('client: a camera\'s raw state (picture, token) is recorded', ((ha.getRawState('camera.demo_crate') || {}).attributes || {}).entity_picture === rawA.attributes.entity_picture);
+    fake.sockets[fake.sockets.length - 1].emitStateChanged(st('camera.demo_crate', 'idle', rawB.attributes));
+    await sleep(10);
+    check('client: the rotated token replaces the old one', ha.getRawState('camera.demo_crate').attributes.access_token === 'tokB');
+    ha.disconnect();
+  } finally {
+    console.log = log; console.warn = warn;
+    fake.restore();
+  }
 }
 
 console.log(failures ? 'FAILED -- ' + failures + ' failed, ' + passes + ' passed' : 'ok -- ' + passes + ' passed, 0 failed');
