@@ -16,8 +16,16 @@
  *   5. ha-client: onItemEntityChange fires on the first report and on a
  *      state change of a sensors.items entity, never on an attribute-only
  *      republish -- against the fake HA socket, never a real HA.
- *   6. index.html wires those callbacks to setTvScreen through tvScreenOn,
- *      and the ?debug=1 seam can flip a TV.
+ *   6. The scene's TV controller (createTvScreens), driven for real: a
+ *      reading before the furniture attaches is applied on attach, and a
+ *      repaint is asked for only when a look actually changed. Then the
+ *      wiring that cannot run in Node (Home3DScene needs WebGL; index.html
+ *      is a page): the scene delegates to that controller, index.html feeds
+ *      it through tvScreenOn -- checked on whitespace-stripped source.
+ *   7. The off-glass sheen: a faint, neutral, uniform-driven term spliced
+ *      into the real three.js standard fragment shader, one program for
+ *      every TV, zero when on.
+ *   8. The spec page lights the TV by default (setTvScreensIn).
  *
  * Fictional entity ids only -- this repo is public.
  */
@@ -76,6 +84,12 @@ function quietly(fn) {
   });
   check('binding: the first role:"tv" row, not the cast row before it', b.get('lounge_tv') === 'media_player.demo_lounge_tv', [...b]);
   check('binding: found in a later card of a list', b.get('console') === 'media_player.demo_console_tv');
+  // Two cards on one item, each with a role:"tv" row: the FIRST card wins.
+  const two = TV.tvEntityBindings({ twin: [
+    { title: 'Panel', media: [{ entity: 'media_player.demo_first_tv', role: 'tv' }] },
+    { title: 'Again', media: [{ entity: 'media_player.demo_later_tv', role: 'tv' }] }
+  ] });
+  check('binding: the first card with a tv row wins over a later one', two.get('twin') === 'media_player.demo_first_tv', [...two]);
   check('binding: no tv row -> no binding', !b.has('speaker_only') && !b.has('no_role') && !b.has('empty'));
   check('binding: a non-media_player entity is ignored', !b.has('wrong_domain'));
   check('binding: nothing -> empty', TV.tvEntityBindings(null).size === 0 && TV.tvEntityBindings(undefined).size === 0);
@@ -87,7 +101,8 @@ const screensOf = g => { const out = []; g.traverse(o => { if (o.isMesh && o.use
 // between the two looks, flipping a TV would compile a new shader.
 const programShape = m => JSON.stringify({
   type: m.type, map: !!m.map, emissiveMap: m.emissiveMap && m.emissiveMap.uuid, transparent: m.transparent,
-  vertexColors: m.vertexColors, alphaTest: m.alphaTest, side: m.side, flatShading: m.flatShading, defines: m.defines || null
+  vertexColors: m.vertexColors, alphaTest: m.alphaTest, side: m.side, flatShading: m.flatShading, defines: m.defines || null,
+  key: m.customProgramCacheKey(), hook: String(m.onBeforeCompile)
 });
 const variants = [
   ['thin', {}], ['thin on a stand', { stand: true, height: 106 }],
@@ -241,19 +256,99 @@ check('the picture is 16:9', Math.abs(TV.HOME_W / TV.HOME_H - 16 / 9) < 0.01);
   } finally { fake.restore(); }
 }
 
-// ---- 6. index.html wiring (source level) -------------------------------------
+// ---- 6. the scene's TV controller, and the wiring around it -----------------
 {
-  const src = read('index.html');
+  const built = { a: SI.TYPES.tv.build(THREE, {}, { detail: 'full' }), b: SI.TYPES.tv.build(THREE, { bezelStyle: 'picture-frame' }, { detail: 'full' }) };
+  const dyn = { a: { group: built.a }, b: { group: built.b }, clock: { group: new THREE.Group() } };
+  const matOf = id => screensOf(built[id])[0].material;
+  let repaints = 0;
+  const tvs = TV.createTvScreens(() => { repaints++; });
+  tvs.set('a', true);   // HA reports before the furniture has attached
+  check('controller: a reading before attach paints nothing yet', repaints === 0 && matOf('a').emissiveIntensity === 0);
+  const changed = tvs.attach(dyn);
+  check('controller: attach applies the earlier reading', matOf('a').emissiveIntensity === TV.ON_INTENSITY && matOf('a').userData.tvOn === true);
+  check('controller: attach leaves an unreported TV dark', matOf('b').emissiveIntensity === 0 && matOf('b').userData.tvOn === false);
+  check('controller: attach reports that a look changed', changed === true);
+  check('controller: indexes exactly the screens', tvs.entries().map(e => e[0]).sort().join() === 'a,b', tvs.entries().map(e => e[0]));
+  repaints = 0;
+  tvs.set('a', true);
+  check('controller: the same reading again asks for no repaint', repaints === 0);
+  tvs.set('a', false);
+  check('controller: a real change repaints exactly once', repaints === 1 && matOf('a').emissiveIntensity === 0);
+  tvs.set('b', 'yes');   // truthy -> on
+  check('controller: another TV lights on its own', repaints === 2 && matOf('b').emissiveIntensity === TV.ON_INTENSITY &&
+    matOf('a').emissiveIntensity === 0);
+  tvs.set('nowhere', true);
+  check('controller: an id with no built TV asks for no repaint', repaints === 2);
+  check('controller: attaching the same state again changes nothing', tvs.attach(dyn) === false);
+  tvs.clear();
+  tvs.set('a', true);
+  check('controller: after clear, nothing is touched or repainted', repaints === 2 && matOf('a').emissiveIntensity === 0);
+  tvs.attach(dyn);
+  check('controller: ...and a re-attach applies what was reported meanwhile', matOf('a').emissiveIntensity === TV.ON_INTENSITY);
+  tvs.attach({ b: dyn.b });   // a rebuild without TV "a"
+  check('controller: a new build replaces the old index', tvs.entries().map(e => e[0]).join() === 'b', tvs.entries().map(e => e[0]));
+
+  // Wiring that cannot run in Node: Home3DScene needs a WebGL renderer and
+  // index.html is a page. Checked on source with all whitespace removed, so
+  // reformatting does not break it; the behaviour is the controller above.
+  const squash = t => t.replace(/\s+/g, '');
+  const scene = squash(read('src/home3d-scene.js'));
+  check('scene: builds the controller with requestRender as its repaint',
+    scene.includes("import{createTvScreens}from'./furniture/tv-screen.js'") &&
+    scene.includes('consttvScreens=createTvScreens(()=>requestRender());'));
+  check('scene: attach hands the build\'s dynamic parts to the controller', scene.includes('tvScreens.attach(result.dynamicByItemId);'));
+  check('scene: setTvScreen delegates to the controller', scene.includes('setTvScreen(itemId,on){tvScreens.set(itemId,on);}'));
+  check('scene: dispose forgets the screens', /disposeFurniture\(furnitureResult\);furnitureResult=null;\}tvScreens\.clear\(\);/.test(scene));
+  const src = squash(read('index.html'));
   check('index: imports the mapping and the binding',
-    /import \{ tvEntityBindings, tvScreenOn \} from '\.\/src\/furniture\/tv-screen\.js\?v=__VERSION__'/.test(src));
+    src.includes("import{tvEntityBindings,tvScreenOn}from'./src/furniture/tv-screen.js?v=__VERSION__';"));
   check('index: HA item changes drive setTvScreen through tvScreenOn',
-    /ha\.onItemEntityChange\(\(entityId, raw\) => tvBindings\.forEach\(\(tvEntity, itemId\) => \{\s*if \(tvEntity === entityId\) home\.setTvScreen\(itemId, tvScreenOn\(raw\)\);/.test(src));
-  check('index: the ?debug=1 seam can flip a TV', /\btv: \(itemId, on\) => home\.setTvScreen\(/.test(src));
-  const scene = read('src/home3d-scene.js');
-  check('scene: setTvScreen repaints only on a change',
-    /setTvScreen\(itemId, on\) \{\s*tvScreenOn\.set\(itemId, !!on\);\s*if \(applyTvScreen\(itemId\)\) requestRender\(\);/.test(scene));
-  check('scene: attach puts every built screen in its last-reported look',
-    /tvScreens\.set\(itemId, o\);[\s\S]{0,40}\}\);\s*applyTvScreen\(itemId\);/.test(scene));
+    src.includes('ha.onItemEntityChange((entityId,raw)=>tvBindings.forEach((tvEntity,itemId)=>{if(tvEntity===entityId)home.setTvScreen(itemId,tvScreenOn(raw));'));
+  check('index: the ?debug=1 seam can flip a TV', src.includes('tv:(itemId,on)=>home.setTvScreen(itemId,'));
+}
+
+// ---- 7. the off-glass sheen ------------------------------------------------------
+{
+  const g1 = SI.TYPES.tv.build(THREE, {}, { detail: 'full' }), g2 = SI.TYPES.tv.build(THREE, {}, { detail: 'low' });
+  const m1 = screensOf(g1)[0].material, m2 = screensOf(g2)[0].material;
+  const sh = m1.userData.tvSheen && m1.userData.tvSheen.value;
+  check('sheen: built off with OFF_SHEEN', !!sh && sh.r === TV.OFF_SHEEN && sh.g === TV.OFF_SHEEN && sh.b === TV.OFF_SHEEN);
+  check('sheen: faint -- at most a few sRGB levels even on the rim', TV.OFF_SHEEN > 0 && TV.OFF_SHEEN * 1.9 <= 0.012, TV.OFF_SHEEN);
+  check('sheen: each TV its own uniform', m1.userData.tvSheen !== m2.userData.tvSheen);
+  check('sheen: one program for every TV', m1.customProgramCacheKey() === m2.customProgramCacheKey());
+  TV.applyTvScreenLook(m1, true);
+  check('sheen: none while ON', sh.r === 0 && sh.g === 0 && sh.b === 0);
+  check('sheen: the other TV keeps its own', m2.userData.tvSheen.value.r === TV.OFF_SHEEN);
+  TV.applyTvScreenLook(m1, false);
+  check('sheen: back when OFF', sh.r === TV.OFF_SHEEN);
+  // Through onBeforeCompile, on the REAL three.js standard shader.
+  const shader = { uniforms: {}, vertexShader: THREE.ShaderLib.standard.vertexShader,
+    fragmentShader: THREE.ShaderLib.standard.fragmentShader };
+  m1.onBeforeCompile(shader);
+  check('sheen: the shader gets the material\'s own uniform', shader.uniforms.tvSheen === m1.userData.tvSheen);
+  const fs = shader.fragmentShader;
+  check('sheen: declares the uniform after <common>', fs.indexOf('uniform vec3 tvSheen;') > fs.indexOf('#include <common>'));
+  const at = fs.indexOf('#include <emissivemap_fragment>'), add = fs.indexOf('totalEmissiveRadiance += tvSheen');
+  check('sheen: added right after the emissive map, before lighting', at > 0 && add > at && add < fs.indexOf('#include <lights_fragment_begin>'), { at, add });
+  check('sheen: a shader without the anchor is left alone', TV.injectTvSheen('void main(){}') === 'void main(){}');
+  check('sheen: a TV screen still flips with a sheen and no program change', (() => {
+    const before = programShape(m2); TV.applyTvScreenLook(m2, true); const after = programShape(m2); TV.applyTvScreenLook(m2, false);
+    return before === after;
+  })());
+}
+
+// ---- 8. the spec page shows the TV ON ------------------------------------------
+{
+  const g = SI.TYPES.tv.build(THREE, { stand: true, height: 106 }, { detail: 'full' });
+  check('spec helper: lights every screen in a group', TV.setTvScreensIn(g, true) === 1 && screensOf(g)[0].material.emissiveIntensity === TV.ON_INTENSITY);
+  check('spec helper: and darkens them', TV.setTvScreensIn(g, false) === 1 && screensOf(g)[0].material.emissiveIntensity === 0);
+  check('spec helper: nothing to do on a group with no TV', TV.setTvScreensIn(new THREE.Group(), true) === 0 && TV.setTvScreensIn(null, true) === 0);
+  const spec = read('specs/SmallItemsSpec.html').replace(/\s+/g, '');
+  check('spec: loads tv-screen.js for the page', spec.includes("import*asTvScreenfrom'../src/furniture/tv-screen.js';window.TvScreen=TvScreen;"));
+  check('spec: the screen preview defaults to ON', spec.includes('const[tv,setTv]=React.useState({on:true});'));
+  check('spec: the build lights the screen from that state', spec.includes('if(t.tv&&window.TvScreen)window.TvScreen.setTvScreensIn(built,t.tv.on);'));
+  check('spec: only a TV carries the preview state', spec.includes("tv:type==='tv'?tv:null"));
 }
 
 console.log((failures ? 'FAIL' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');
