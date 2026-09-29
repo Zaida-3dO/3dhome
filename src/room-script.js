@@ -209,7 +209,18 @@ export function createTwoStepConfirm({
     /** Back to idle, no send (HA went offline, the room was left, the panel
      *  closed). Also clears the repeat guard. */
     reset() { locked = false; clicks = []; go('idle', 0); },
-    dispose() { if (timer !== null) { clearTimer(timer); timer = null; } }
+    /** Tear down: a full, SILENT reset (no onChange -- the row may already
+     *  be gone). Drops any pending synthetic confirm, so nothing is ever
+     *  sent by a timer set before this, and leaves no stale state behind to
+     *  swallow the next press if the controller is used again. */
+    dispose() {
+      if (timer !== null) { clearTimer(timer); timer = null; }
+      pending = false;
+      awaitKeyUp = false;
+      locked = false;
+      clicks = [];
+      state = 'idle';
+    }
   };
 }
 
