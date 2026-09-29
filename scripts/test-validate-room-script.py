@@ -15,7 +15,7 @@ WHAT THIS GUARDS
      have is an ERROR; a profile below schemaVersion 1.7 is warned; a clean
      binding -- including two rooms sharing identical variables -- trips none.
   3. Older rooms.json versions still validate against the schema (a 1.0 with
-     no sensors, a 1.6 with items), and the demo house is at 1.7.
+     no sensors, a 1.6 with items), and the demo house is at 1.7 or newer.
 """
 
 import importlib.util
@@ -111,7 +111,8 @@ errs, warns = run(old16)
 check("validator: a 1.6 profile without roomScripts is not warned about them",
       not any("roomScripts" in w for w in warns), warns)
 demo = json.loads((ROOT / "houses" / "demo" / "rooms.json").read_text(encoding="utf-8"))
-check("demo: rooms.json is at 1.7", demo.get("schemaVersion") == "1.7", demo.get("schemaVersion"))
+_demo_ver = tuple(int(x) for x in str(demo.get("schemaVersion") or "0.0").split("."))
+check("demo: rooms.json is at 1.7 or newer (roomScripts)", _demo_ver >= (1, 7), demo.get("schemaVersion"))
 check("demo: binds roomScripts", bool((demo.get("sensors") or {}).get("roomScripts")))
 
 print(f"{'FAILED' if failures else 'ok'} -- {passes} passed, {failures} failed")
