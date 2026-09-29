@@ -1387,6 +1387,10 @@ first row (a receiver card gets a speaker, not a TV). The rows:
   a level shows an empty slider marked **?** -- unknown, never 0), and **source** and **sound
   mode** pickers when it lists them (`select_source`, `select_sound_mode` -- an
   AV receiver). `role` (`tv` / `cast` / `receiver` / `speaker`) picks the icon.
+  On a `tv` item, the first `role: "tv"` row also drives the **screen**: lit
+  with a generic home screen while the set is `on`, `idle`, `playing`,
+  `paused` or `buffering`, and black glass when it is `off`, `standby`,
+  unavailable or has not reported (a TV with no such row stays dark).
 - **`lights`** -- a `light.*` row: on/off and brightness, plus a colour square
   when the light's `supported_color_modes` include a colour mode. Switching a
   light on sends no brightness, so it comes back at its last level (as the

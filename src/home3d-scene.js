@@ -36,6 +36,7 @@ import {
 } from './furniture.js';
 import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
+import { applyTvScreenLook } from './furniture/tv-screen.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse } from './room-pick.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
@@ -4352,6 +4353,17 @@ export const Home3DScene = (() => {
     // dispose's geometry; this only needs to also clear its timers, since a
     // mid-build dispose never reaches attachFurniture in the first place).
     const liveClockStops = new Map();
+    // TV screens (src/furniture/tv-screen.js): itemId -> the screen mesh of
+    // each built `tv`, and itemId -> whether its set is on as last told by
+    // setTvScreen (HA or the ?debug=1 seam). The wanted state is kept apart
+    // from the meshes so a reading that lands before the furniture attaches
+    // is applied when it does. Unknown -> dark, which is how a screen builds.
+    const tvScreens = new Map();
+    const tvScreenOn = new Map();
+    function applyTvScreen(itemId) {
+      const mesh = tvScreens.get(itemId);
+      return mesh ? applyTvScreenLook(mesh.material, !!tvScreenOn.get(itemId)) : false;
+    }
     function stopLiveClocks() {
       liveClockStops.forEach(stop => stop());
       liveClockStops.clear();
@@ -4384,6 +4396,15 @@ export const Home3DScene = (() => {
         });
       });
       if (Object.keys(furnitureLightParts).length) syncLights();
+      // TV screens: index each built TV's screen, then put it in the look
+      // its set was last reported in (dark if none has been).
+      tvScreens.clear();
+      Object.keys(result.dynamicByItemId || {}).forEach(itemId => {
+        result.dynamicByItemId[itemId].group.traverse(o => {
+          if (o.isMesh && o.userData && o.userData.tvScreen) tvScreens.set(itemId, o);
+        });
+        applyTvScreen(itemId);
+      });
       // Start a live clock for every placed wall-clock. onTick asks for a
       // single repaint (requestRender, not wake()) -- a one-shot redraw per
       // second-boundary tick, never a sustained render loop; see the
@@ -5369,6 +5390,29 @@ export const Home3DScene = (() => {
         e.glows.forEach(g => { g.color.copy(col); g.intensity = CORNICE_GLOW_INTENSITY * k * (g.userData.gain || 1); });
         requestRender();
       },
+      /**
+       * Light or darken a TV's screen (a `tv` furniture item, by its id):
+       * on -> the home-screen picture, off -> black glass. Only two uniforms
+       * change (tv-screen.js applyTvScreenLook): no light, no shader, and one
+       * repaint only when something actually changed. Remembered, so a call
+       * before the furniture has attached takes effect when it does.
+       */
+      setTvScreen(itemId, on) {
+        tvScreenOn.set(itemId, !!on);
+        if (applyTvScreen(itemId)) requestRender();
+      },
+      // Every built TV screen and its live look, for tests and the debug seam:
+      // where it is (world centre, metres) and which way it faces (the
+      // horizontal unit normal of its front), so a check can aim setOrbit.
+      getTvScreens() {
+        return [...tvScreens].map(([itemId, mesh]) => {
+          const c = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
+          const n = new THREE.Vector3(0, 0, 1).transformDirection(mesh.matrixWorld);
+          return { itemId, on: !!mesh.material.userData.tvOn,
+            emissive: '#' + mesh.material.emissive.getHexString(), emissiveIntensity: mesh.material.emissiveIntensity,
+            hasPicture: !!mesh.material.emissiveMap, centre: c.toArray(), facing: [n.x, n.z] };
+        });
+      },
       // The cornice downlights actually built for a curtain, in world space,
       // with their live colour/intensity -- for checking the tier counts and
       // that the HA binding reaches every light, not just the first.
@@ -5795,6 +5839,7 @@ export const Home3DScene = (() => {
         // has entries once a clock was actually attached and ticking).
         stopLiveClocks();
         if (furnitureResult) { disposeFurniture(furnitureResult); furnitureResult = null; }
+        tvScreens.clear();
         shadowDepthProbeMats.forEach(m => m.dispose());
         shadowDepthProbeMats.length = 0;
         // The first-frame gate's fallback timer and context-restored listener:
