@@ -343,6 +343,18 @@ export function rowLabelInRoom(label, roomName) {
   return rest.charAt(0).toUpperCase() + rest.slice(1);
 }
 
+/**
+ * A cover row's state: { na, noReading?, pct }. Live: unavailable unless the
+ * motor is confirmed available (curtainUnavailable). A configured HA that is
+ * offline and has never reported this cover (availability null): no reading
+ * -- "Unknown", no slider -- rather than the model's default position shown
+ * as if it were the curtain's. The demo (no HA) previews on the model.
+ */
+export function coverRowState(conn, available, haConfigured, pct) {
+  if (haConfigured && !isLive(conn) && available == null) return { na: true, noReading: true, pct: 0 };
+  return { na: curtainUnavailable(conn, available), pct: Math.round(pct || 0) };
+}
+
 /** The curtains card title: "<Room> curtains", else the tapped curtain's own name. */
 export function curtainCardTitle(roomName, curtainName) {
   return roomName ? roomThingTitle(roomName, 'curtains') : sentenceCase(curtainName || 'Curtains');
@@ -718,6 +730,7 @@ ${sel} .tp-pop { ${COARSE} }
 ${sel} .tp-pop[data-kind=vacuum], ${sel} .tp-pop[data-kind=curtain] { --w: 236px; }
 ${sel} .tp-pop[data-kind=plant] { --w: 220px; }
 ${sel} .tp-pop[data-kind=item] { --w: 252px; }
+${sel} .tp-pop.tp-camcard { --w: 360px; }
 ${sel} .tp-status::after { inset: -14px; }
 ${sel} .tp-btns { gap: 6px; }
 ${sel} .tp-ib::after { inset: -${GC.ibHitY}px -3px; }
@@ -929,6 +942,12 @@ export const STYLE = `
 .tp-cam { position: relative; margin-top: 6px; border-radius: 7px; overflow: hidden; aspect-ratio: 4 / 3; background: rgba(0,0,0,0.35); }
 .tp-cam img { display: block; width: 100%; height: 100%; object-fit: cover; transition: opacity .2s; }
 .tp-cam img.stale { opacity: 0.45; filter: grayscale(0.6); }
+/* Before the first frame (and while none has loaded), the box says so. */
+.tp-cam:not(.has-frame)::before { content: attr(data-msg); position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 12px; color: var(--ink-2); }
+/* A card with a camera grows so the picture is worth looking at: up to 360px,
+   never wider than the screen (a phone gets the full width). */
+.tp-pop.tp-camcard { --w: 360px; max-width: calc(100vw - 16px); }
 .tp-ib.tp-live[aria-pressed=true] { background: var(--bad); border-color: transparent; color: #fff; }
 /* Curtains card: the room's cornice light(s) then its covers, one row each. */
 .tp-pop[data-kind=curtain] { --w: 236px; }
@@ -989,6 +1008,8 @@ ${coarseRules('.tp-force-coarse')}
 :root[data-theme="light"] .tp-ico.dim { fill: rgba(0,0,0,0.3); }
 :root[data-theme="light"] .tp-ib, :root[data-theme="light"] .tp-vb { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.14); color: #1a1d29; }
 :root[data-theme="light"] .tp-vb.primary:not(:disabled) { background: var(--accent); color: #fff; }
+/* After the light .tp-ib rule, which would otherwise hide the pressed state. */
+:root[data-theme="light"] .tp-ib.tp-live[aria-pressed=true] { background: var(--bad); border-color: transparent; color: #fff; }
 :root[data-theme="light"] .tp-vroom { border-color: rgba(0,0,0,0.16); }
 @media (hover: hover) {
   :root[data-theme="light"] .tp-ib:hover:not(:disabled), :root[data-theme="light"] .tp-vb:hover:not(:disabled) { background: rgba(0,0,0,0.09); }
@@ -1007,14 +1028,12 @@ ${coarseRules('.tp-force-coarse')}
 :root[data-theme="light"] .tp-offline { color: #b91c1c; }
 :root[data-theme="light"] .tp-vstat.err, :root[data-theme="light"] .tp-batt.low { color: #b91c1c; }
 :root[data-theme="light"] .tp-pop.chip .st.closed { color: #15803d; }
-:root[data-theme="light"] .tp-pmoist svg { fill: #1d4ed8; }
 :root[data-theme="light"] .tp-pmoist.muted svg { fill: #6b6f7b; }
 :root[data-theme="light"] .tp-pst.ok { color: #166534; background: rgba(34,197,94,0.14); border-color: rgba(21,128,61,0.45); }
 :root[data-theme="light"] .tp-pst.dry, :root[data-theme="light"] .tp-pst.due { color: #92400e; background: rgba(245,158,11,0.16); border-color: rgba(180,83,9,0.45); }
 :root[data-theme="light"] .tp-pst.wet { color: #1e40af; background: rgba(59,130,246,0.14); border-color: rgba(29,78,216,0.45); }
 :root[data-theme="light"] .tp-ico.m-on { fill: var(--accent); }
 :root[data-theme="light"] .tp-select { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.16); }
-:root[data-theme="light"] .tp-ireading .hum svg { fill: #1d4ed8; }
 :root[data-theme="light"] .tp-ivol svg { fill: rgba(0,0,0,0.5); }
 :root[data-theme="light"] .tp-cam { background: rgba(0,0,0,0.08); }
 `;
@@ -1079,7 +1098,7 @@ export const popoverHtml = {
     (m.covers || []).forEach(cv => {
       const c = ' data-c="' + esc(cv.id) + '"';
       const dis = cv.na || off ? ' disabled' : '';
-      const sub = cv.na ? '<small>Motor unavailable</small>' : '<small data-v>Open ' + cv.pct + '%</small>';
+      const sub = cv.na ? '<small>' + (cv.noReading ? 'Unknown' : 'Motor unavailable') + '</small>' : '<small data-v>Open ' + cv.pct + '%</small>';
       rows.push('<div class="tp-irow" data-row="cover"' + c + '><div class="tp-row"><span class="tp-ilab">' +
         ico(cv.pct > 0 ? I.curtains : I.curtainsClosed, cv.na ? 'dim' : '') + '<span><b>' + esc(cv.label) + '</b>' + sub + '</span></span>' +
         '<span class="tp-btns">' +
@@ -1226,7 +1245,7 @@ export const popoverHtml = {
       const liveBtn = r.canLive ? '<button class="tp-ib tp-live" data-a="clive" data-i="' + i + '" aria-pressed="false" data-tip="Live" aria-label="Live: ' +
         esc(r.label) + '"' + (off ? ' disabled' : '') + '>' + svg(I.play) + '</button>' : '';
       rows.push('<div class="tp-irow" data-row="camera"><div class="tp-row">' + lab(ico(I.camera, r.na ? 'dim' : ''), r.label, r.stateText) + liveBtn +
-        '</div><div class="tp-cam" data-cam="' + i + '"></div></div>');
+        '</div><div class="tp-cam" data-cam="' + i + '" data-msg="Loading…"></div></div>');
     });
     const first = I[m.icon] || ((m.media || []).length ? I.tv : (m.lights || []).length ? I.bulb : I.thermometer);
     return shell(ico(first), m.name, m.status, rows.join('') + offlineLine(m));
@@ -1595,8 +1614,8 @@ export function attachTapPopovers(o) {
         const rn = g.room ? roomName(g.room) : '';
         const covers = g.covers.map(cv => {
           const avail = S.curtainAvailable ? S.curtainAvailable(cv.id) : null;
-          return { id: cv.id, label: rowLabelInRoom(sentenceCase(cv.name), rn), na: curtainUnavailable(c, avail),
-            pct: Math.round((S.curtainPct ? S.curtainPct(cv.id) : home.getCurtainOpen(cv.id)) || 0) };
+          return Object.assign({ id: cv.id, label: rowLabelInRoom(sentenceCase(cv.name), rn) },
+            coverRowState(c, avail, !!ha(), (S.curtainPct ? S.curtainPct(cv.id) : home.getCurtainOpen(cv.id)) || 0));
         });
         // Row labels do not repeat the room the title names. A light shared by
         // several of the room's curtains is the room's "Curtain light".
@@ -1982,6 +2001,14 @@ export function attachTapPopovers(o) {
     g.fillText((label || 'Demo camera') + '  ' + when.toLocaleTimeString(), 8, CAM_H - 8);
     return cv.toDataURL('image/jpeg', 0.7);
   }
+  // The picture box: a frame is shown, else a message -- "Loading…" until
+  // the first frame, "No picture" once a load has failed with none shown.
+  function frameState(img, hasFrame, failed) {
+    const box = img.parentNode;
+    if (!box || !box.classList) return;
+    box.classList.toggle('has-frame', hasFrame);
+    box.dataset.msg = failed ? 'No picture' : 'Loading…';
+  }
   function makeCamera(row) {
     const img = document.createElement('img');
     img.alt = row.label || 'Camera';
@@ -1998,8 +2025,16 @@ export function attachTapPopovers(o) {
         im.onload = ok; im.onerror = fail; im.src = src;
         return () => { im.onload = im.onerror = null; im.src = ''; };   // abort: ends the request
       },
-      show(src) { img.src = src || ''; img.style.visibility = src ? '' : 'hidden'; },
-      stale(s) { img.classList.toggle('stale', !!s); },
+      show(src) {
+        img.src = src || ''; img.style.visibility = src ? '' : 'hidden';
+        frameState(img, !!src, img.classList.contains('stale'));
+      },
+      stale(s) { img.classList.toggle('stale', !!s); frameState(img, img.style.visibility !== 'hidden', !!s); },
+      // The Live toggle follows the feed at once (a failed stream, a disconnect).
+      onLive(on) {
+        const b = pop && pop.el.querySelector('[data-a=clive][data-i="' + row.index + '"]');
+        if (b) b.setAttribute('aria-pressed', String(on));
+      },
       schedule: (fn, ms) => setTimeout(fn, ms),
       cancel: h => clearTimeout(h),
       now: () => Date.now(),
@@ -2019,8 +2054,9 @@ export function attachTapPopovers(o) {
       const box = p.el.querySelector('[data-cam="' + i + '"]');
       if (!box) return;
       let cam = p.cams.get(i);
-      if (!cam) { cam = makeCamera(row); p.cams.set(i, cam); cam.feed.start(); }
-      box.appendChild(cam.img);
+      if (!cam) { cam = makeCamera(Object.assign({ index: i }, row)); p.cams.set(i, cam); box.appendChild(cam.img); cam.feed.start(); }
+      else box.appendChild(cam.img);
+      frameState(cam.img, cam.img.style.visibility !== 'hidden', cam.img.classList.contains('stale'));
       // No Live toggle rendered (HA not connected, or no token): Live ends,
       // and is not resumed on its own when the toggle comes back.
       const b = p.el.querySelector('[data-a=clive][data-i="' + i + '"]');
@@ -2123,6 +2159,7 @@ export function attachTapPopovers(o) {
     const refocus = pop.el.contains(ae) ? (ae === pop.el ? '' : (ae.dataset && ae.dataset.a) || '') : null;
     const refocusI = refocus && ae.dataset && ae.dataset.i != null ? ae.dataset.i : null;
     pop.el.innerHTML = v.html(m) + '<span class="tp-arrow"></span>';
+    pop.el.classList.toggle('tp-camcard', !!(m.cameras && m.cameras.length));
     pop.el.setAttribute('aria-label', m.name);
     pop.el.querySelectorAll('.tp-range').forEach(r => r.style.setProperty('--p', fillPct(r)));
     v.bind(pop.target, pop.el, pop.ctl);

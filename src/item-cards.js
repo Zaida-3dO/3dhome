@@ -349,7 +349,8 @@ export function cameraRowModel(raw) {
   const st = raw ? raw.state : undefined;
   if (isUnavailable(st)) return { na: true, stateText: !raw ? 'No picture' : st === 'unavailable' ? 'Offline' : 'Unavailable', canLive: false };
   const a = raw.attributes || {};
-  return { na: false, stateText: humanise(st), canLive: typeof a.access_token === 'string' && a.access_token !== '' };
+  // 'idle' is a camera's normal state: nothing worth saying under its name.
+  return { na: false, stateText: st === 'idle' ? '' : humanise(st), canLive: typeof a.access_token === 'string' && a.access_token !== '' };
 }
 
 const joinUrl = (base, p) => (/^https?:\/\//i.test(p) ? p : String(base || '').replace(/\/+$/, '') + (p.charAt(0) === '/' ? p : '/' + p));
@@ -384,6 +385,8 @@ export function cameraStreamUrl(baseUrl, entity, raw) {
  *                                             abort() drops it (src '' and no callbacks)
  *   d.show(src)                               put `src` on the visible <img> ('' clears it)
  *   d.stale(bool)                             dim the last frame (a load failed)
+ *   d.onLive(bool)                            (optional) Live went on / off -- the
+ *                                             toggle's pressed state follows at once
  *   d.schedule(fn, ms) -> handle, d.cancel(handle), d.now()
  *   d.refreshMs
  *
@@ -400,6 +403,8 @@ export function cameraStreamUrl(baseUrl, entity, raw) {
 export function createCameraFeed(d) {
   let running = false, live = false, isHidden = false, timer = null, pending = 0, failures = 0, seq = 0, lastGood = '';
   let streaming = false, abortProbe = null;
+  // Every change of `live` goes through here, so the toggle can follow it.
+  const setLiveFlag = v => { const was = live; live = !!v; if (was !== live && d.onLive) d.onLive(live); };
   const cancel = () => { if (timer != null) { d.cancel(timer); timer = null; } };
   // Drop an in-flight load: its callbacks are ignored and its request ended.
   const drop = () => { pending = 0; if (abortProbe) { const a = abortProbe; abortProbe = null; a(); } };
@@ -434,29 +439,29 @@ export function createCameraFeed(d) {
   }
   function startLive() {
     const src = d.streamUrl();
-    if (!src) { live = false; return false; }
+    if (!src) { setLiveFlag(false); return false; }
     d.show(src); streaming = true; d.stale(false);
     return true;
   }
   return {
     start() { if (running) return; running = true; failures = 0; if (!isHidden) tick(); },
-    stop() { running = false; live = false; drop(); cancel(); show(''); },
+    stop() { running = false; setLiveFlag(false); drop(); cancel(); show(''); },
     hidden(h) {
       isHidden = !!h;
       if (!running) return;
       // Hidden while Live: the stream ends (the last frame, or nothing, is put
       // back) but Live stays on, and resumes when the tab is visible again.
       if (isHidden) { cancel(); drop(); if (streaming) show(lastGood || ''); }
-      else if (live) { if (!startLive()) { live = false; tick(); } }
+      else if (live) { if (!startLive()) { setLiveFlag(false); tick(); } }
       else tick();
     },
     setLive(on) {
       if (!running) return false;
       cancel(); drop();
-      live = !!on;
+      setLiveFlag(on);
       if (live && isHidden) return true;   // it starts when the tab is visible
       if (live && startLive()) return true;
-      live = false;
+      setLiveFlag(false);
       show(lastGood || '');   // ALWAYS ends the stream; the last frame (if any) stays
       tick();
       return false;
@@ -471,7 +476,7 @@ export function createCameraFeed(d) {
      * The visible <img> errored. Only a running stream counts (clearing the
      * image fires 'error' too): back to snapshots, backing off.
      */
-    streamFailed() { if (!live || !streaming) return; live = false; failures++; show(lastGood || ''); d.stale(true); later(backoff()); },
+    streamFailed() { if (!live || !streaming) return; setLiveFlag(false); failures++; show(lastGood || ''); d.stale(true); later(backoff()); },
     state: () => ({ running, live, streaming, hidden: isHidden, failures, pending: !!pending, scheduled: timer != null }),
   };
 }
