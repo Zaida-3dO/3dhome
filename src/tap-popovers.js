@@ -67,7 +67,7 @@ import { normaliseItemBindings, furnitureTapTarget, tappableFurnitureIds, mediaR
   lightRowToggleCommand, lightColorCommand, applyCommand, mockItemState, clockText, cardEntities, cardTitle, cardIcon, rowLabelUnderTitle, bindingTitle,
   clockTitle, radiatorTitle, roomThingTitle, switchRowModel, switchCommand, cameraRowModel, cameraSnapshotUrl, cameraStreamUrl,
   createCameraFeed } from './item-cards.js';
-import { sendScript, createActionButton, actionButtonText } from './script-call.js';
+import { sendScript, createActionButton, actionButtonText, createKeyIntent, isActivationKey } from './script-call.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -886,9 +886,11 @@ export const STYLE = `
 .tp-vb svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
 .tp-vb::after { content: ''; position: absolute; inset: -${GF.ibHitY}px -2px; }
 .tp-vb:disabled { opacity: 0.35; cursor: not-allowed; }
-.tp-vb:active:not(:disabled) { background: rgba(99,102,241,0.35); }
+.tp-vb:active:not(:disabled):not(.sent):not(.failed) { background: rgba(99,102,241,0.35); }
 .tp-vb.primary:not(:disabled) { background: var(--accent); border-color: transparent; }
-@media (hover: hover) { .tp-vb:hover:not(:disabled) { background: rgba(255,255,255,0.14); } .tp-vb.primary:hover:not(:disabled) { background: #7c7ff2; } }
+/* Hover and press never repaint an action button's Sent / Not sent state:
+   the pointer is usually still over the button that was just clicked. */
+@media (hover: hover) { .tp-vb:hover:not(:disabled):not(.sent):not(.failed) { background: rgba(255,255,255,0.14); } .tp-vb.primary:hover:not(:disabled) { background: #7c7ff2; } }
 .tp-vb:focus-visible, .tp-vroom:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
 /* Item card action buttons (a card's actions row): the same labelled
    button, full width, one per action; a sent one turns green for a moment. */
@@ -1023,7 +1025,7 @@ ${coarseRules('.tp-force-coarse')}
 :root[data-theme="light"] .tp-ib.tp-live[aria-pressed=true] { background: var(--bad); border-color: transparent; color: #fff; }
 :root[data-theme="light"] .tp-vroom { border-color: rgba(0,0,0,0.16); }
 @media (hover: hover) {
-  :root[data-theme="light"] .tp-ib:hover:not(:disabled), :root[data-theme="light"] .tp-vb:hover:not(:disabled) { background: rgba(0,0,0,0.09); }
+  :root[data-theme="light"] .tp-ib:hover:not(:disabled), :root[data-theme="light"] .tp-vb:hover:not(:disabled):not(.sent):not(.failed) { background: rgba(0,0,0,0.09); }
   :root[data-theme="light"] .tp-vroom:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
   :root[data-theme="light"] .tp-ib[data-tip]:hover::before { background: #fff; border-color: rgba(0,0,0,0.14); color: #1a1d29; }
 }
@@ -1516,6 +1518,11 @@ export function attachTapPopovers(o) {
   // sidebar's room script uses the same one -- gated on HA being connected;
   // with no HA configured (the demo) a tap only previews ("Sent (sample)").
   const actionButtons = new Map();
+  // A key release ANYWHERE frees every action button's held-key guard: the
+  // focused button is redrawn on each state change, so its own element may
+  // not be the one the keyup lands on.
+  const onActionKeyUp = e => { if (isActivationKey(e.key)) actionButtons.forEach(b => b.keyUp()); };
+  window.addEventListener('keyup', onActionKeyUp, true);
   const actionWritable = () => itemMockMode() || (!writeBlocked() && canSend());
   function actionButtonFor(t, i) {
     const key = t.itemId + ':' + t.card.index + ':' + i;
@@ -1984,11 +1991,21 @@ export function attachTapPopovers(o) {
           b.setAttribute('aria-pressed', String(on));
         }));
         // An action: one tap runs its script (the guarded sender); a tap
-        // while "Sent" shows is ignored. Only ever from a click.
-        at('act', (b, i) => b.addEventListener('click', () => {
-          if (b.disabled) return;
-          actionButtonFor(t, i).press();
-        }));
+        // while "Sent" shows is ignored. Only ever from a click. A click an
+        // Enter / Space keydown drove is a KEYBOARD press: once it has sent,
+        // a held key's auto-repeat cannot send again until the key is
+        // released (the window keyup below; this element may be redrawn
+        // before the release comes).
+        at('act', (b, i) => {
+          const intent = createKeyIntent();
+          b.addEventListener('keydown', e => intent.keyDown(e.key));
+          b.addEventListener('blur', () => intent.blur());
+          b.addEventListener('click', e => {
+            const keyboard = intent.click(e.detail);
+            if (b.disabled) return;
+            actionButtonFor(t, i).press({ keyboard });
+          });
+        });
         at('spower', (b, i) => b.addEventListener('click', () => {
           const r = model().switches[i]; if (!r || r.na) return;
           itemSend(switchCommand(card.switches[i].entity, !r.on), 'switch', 0); onChange(); ctl.refresh(true);
@@ -2469,6 +2486,7 @@ export function attachTapPopovers(o) {
       close(); unsub();
       if (sidebarObs) sidebarObs.disconnect();
       window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keyup', onActionKeyUp, true);
       window.removeEventListener('pointerup', onPointerEnd, true);
       window.removeEventListener('pointercancel', onPointerEnd, true);
       window.removeEventListener('click', onClick, true);

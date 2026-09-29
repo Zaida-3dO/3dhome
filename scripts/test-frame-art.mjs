@@ -71,6 +71,10 @@ const quiet = fn => { const w = console.warn, l = console.log; console.warn = ()
   check('send: no client -> nothing', SC.sendScript(null, b, () => true) === false);
   check('send: a non-script binding -> nothing', SC.sendScript(client, { entity: 'switch.demo_x' }, () => true) === false && calls.length === 1);
   check('send: a client that drops it -> false', SC.sendScript({ callService: () => false }, b, () => true) === false);
+  // Only an explicit `true` counts as sent: a client answering undefined,
+  // 1 or an object did not confirm the call went out.
+  check('send: only callService\'s === true is "sent"', [undefined, null, 1, 'ok', {}].every(v =>
+    SC.sendScript({ callService: () => v }, b, () => true) === false));
 
   // The button, with a hand-cranked timer.
   let timers = [];
@@ -93,6 +97,44 @@ const quiet = fn => { const w = console.warn, l = console.log; console.warn = ()
   writable = false;
   check('button: not writable -> nothing sent, state unchanged', btn.press() === false && sends === 3 && btn.state === 'idle');
   check('button: onChange saw each state', states.join() === 'sent,idle,failed,sent,idle', states);
+  // HELD ENTER: the key auto-repeats a click every ~30 ms on the focused
+  // button (the card keeps focus on it across redraws). Over 10 s that must
+  // be ONE send; releasing and pressing again is a second.
+  {
+    let now = 0, due = [], n = 0;
+    const setT = (fn, ms) => { const t = { at: now + ms, fn }; due.push(t); return t; };
+    const clearT = t => { due = due.filter(x => x !== t); };
+    const advance = to => {
+      for (;;) { due.sort((a, c) => a.at - c.at); const t = due[0]; if (!t || t.at > to) break; due.shift(); now = t.at; t.fn(); }
+      now = to;
+    };
+    const held = SC.createActionButton({ send: () => { n++; return true; }, writable: () => true, setTimer: setT, clearTimer: clearT, resultMs: 2500 });
+    const intent = SC.createKeyIntent();
+    const keyRepeatClick = () => { intent.keyDown('Enter'); held.press({ keyboard: intent.click(0) }); };
+    for (let t = 0; t <= 10000; t += 30) { advance(t); keyRepeatClick(); }
+    check('held Enter for 10 s: exactly one send', n === 1, n);
+    check('held Enter: the button went back to idle meanwhile (only the key guard stopped it)', held.state === 'idle', held.state);
+    held.keyUp();
+    keyRepeatClick();
+    check('release, then Enter again: a second send', n === 2, n);
+    advance(now + 3000);
+    check('a pointer tap is never blocked by the key guard', held.press() === true && n === 3, n);
+    held.keyUp(); advance(now + 3000);
+    // A keyboard press refused because HA is offline does not arm the guard.
+    let w = false;
+    const off = SC.createActionButton({ send: () => { n++; return true; }, writable: () => w, setTimer: setT, clearTimer: clearT });
+    off.press({ keyboard: true });
+    w = true;
+    check('an offline keyboard press leaves the next one free to send', off.press({ keyboard: true }) === true && n === 4, n);
+    // A failed keyboard send also waits for the release (no resend loop).
+    let m = 0;
+    const bad = SC.createActionButton({ send: () => { m++; return false; }, writable: () => true, setTimer: setT, clearTimer: clearT });
+    bad.press({ keyboard: true }); bad.press({ keyboard: true });
+    check('a failed keyboard send is not retried by the held key', m === 1, m);
+    bad.keyUp();
+    check('...but is after a release', bad.press({ keyboard: true }) === false && m === 2, m);
+  }
+  check('keys: Enter and Space activate, others do not', SC.isActivationKey('Enter') && SC.isActivationKey(' ') && !SC.isActivationKey('a'));
   check('button text', SC.actionButtonText('Art mode', 'idle') === 'Art mode' && SC.actionButtonText('Art mode', 'sent') === 'Sent' &&
     SC.actionButtonText('Art mode', 'sent', true) === 'Sent (sample)' && /^Not sent/.test(SC.actionButtonText('Art mode', 'failed')));
 }
@@ -297,14 +339,33 @@ const ART = { entity: 'remote.demo_stick', attribute: 'current_activity', value:
   check('markup: the label is escaped', T.popoverHtml.item({ name: 'X', status: 'ok', haOff: false, media: [], lights: [], readings: [],
     actions: [Object.assign(act('idle', false), { label: '<b>', text: '<b>' })] }, dot).includes('&lt;b&gt;'));
 
+  // CSS: no hover / press rule may repaint a Sent or Not sent button. With
+  // the pointer still on the clicked button, a :hover background used to
+  // outrank .sent (white "Sent" on near-white in the light theme). Every
+  // rule that styles .tp-vb under :hover or :active must exclude both.
+  const rules = [...T.STYLE.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ sel: m[1].replace(/@media[^{]*\{/g, '').trim(), body: m[2] }));
+  const interactive = rules.flatMap(r => r.sel.split(',').map(x => x.trim()).filter(x => /\.tp-vb\b/.test(x) && /:(hover|active)/.test(x) &&
+    !/\.primary/.test(x) && /background/.test(r.body)));
+  check('css: there are .tp-vb hover/press rules to check (dark, light, press)', interactive.length >= 3, interactive);
+  check('css: none of them repaints a Sent / Not sent button', interactive.every(x => x.includes(':not(.sent)') && x.includes(':not(.failed)')),
+    interactive);
+  check('css: Sent is green with white text in both themes', /\.tp-vb\.sent \{ background: #15803d;[^}]*color: #fff;/.test(T.STYLE) &&
+    /:root\[data-theme="light"\] \.tp-vb\.sent \{ background: #15803d;[^}]*color: #fff;/.test(T.STYLE));
   const tp = read('src/tap-popovers.js').replace(/\s+/g, '');
-  check('wiring: a tap presses the row\'s button (click only)', tp.includes("at('act',(b,i)=>b.addEventListener('click',()=>{if(b.disabled)return;actionButtonFor(t,i).press();}));"));
+  check('wiring: a tap presses the row\'s button (click only), saying whether a key drove it',
+    tp.includes("at('act',(b,i)=>{constintent=createKeyIntent();b.addEventListener('keydown',e=>intent.keyDown(e.key));" +
+      "b.addEventListener('blur',()=>intent.blur());b.addEventListener('click',e=>{constkeyboard=intent.click(e.detail);" +
+      "if(b.disabled)return;actionButtonFor(t,i).press({keyboard});});});"));
+  check('wiring: a key release ANYWHERE frees the held-key guard (the button is redrawn under the key)',
+    tp.includes('constonActionKeyUp=e=>{if(isActivationKey(e.key))actionButtons.forEach(b=>b.keyUp());};' +
+      "window.addEventListener('keyup',onActionKeyUp,true);") &&
+    tp.includes("window.removeEventListener('keyup',onActionKeyUp,true);"));
   check('wiring: the button sends through sendScript, gated on HA connected; the demo only previews',
     tp.includes('send:()=>(itemMockMode()?true:sendScript(ha(),row,()=>!writeBlocked()&&canSend())),'));
   check('wiring: the button is writable only when HA is connected (or the demo)',
     tp.includes('constactionWritable=()=>itemMockMode()||(!writeBlocked()&&canSend());'));
   check('wiring: the model reads the state, never presses', /constactions=\(card\.actions\|\|\[\]\)\.map\(\(row,i\)=>\{constst=actionButtonFor\(t,i\)\.state;/.test(tp) &&
-    (tp.match(/\.press\(\)/g) || []).length === 1);
+    (tp.match(/actionButtonFor\(t,i\)\.press\(/g) || []).length === 1);
   check('wiring: the TV row gets its art entity\'s raw state', tp.includes("constar=row.art?itemRaw(row.art.entity,'art',row,base+i):null;") &&
     tp.includes('mediaRowModel(r,row.art,ar)'));
   const idx = read('index.html').replace(/\s+/g, '');

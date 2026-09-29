@@ -556,7 +556,7 @@ for (const [delay, every] of [[0, 30], [0, 100], [500, 30], [600, 100], [450, 30
     /ha\.onStatusChange\(status => \{ if \(status !== 'connected'\) disarmRoomScripts\(null\); \}\);/.test(html));
   check('index: rendering another view disarms rooms not on screen', /disarmRoomScripts\(selectedRoom\);/.test(html));
   // The guarded sender itself (script-call.js sendScript) is tested by
-  // running it in scripts/test-script-call.mjs; here, that the room script
+  // running it in scripts/test-frame-art.mjs; here, that the room script
   // goes through it, gated on HA being ok.
   check('index: send goes through the shared sendScript, gated on HA being ok',
     /send: \(\) => sendScript\(ha, roomScriptBindings\(\)\.get\(rid\), \(\) => roomScriptHaState\(\) === 'ok'\),/.test(html));
