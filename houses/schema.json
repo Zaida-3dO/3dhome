@@ -64,6 +64,11 @@
           "required": [
             "cameras"
           ]
+        },
+        {
+          "required": [
+            "actions"
+          ]
         }
       ],
       "properties": {
@@ -129,6 +134,31 @@
                   "speaker"
                 ],
                 "description": "Optional: picks the row's icon (and, on the demo house, what the sample device can do)."
+              },
+              "art": {
+                "type": "object",
+                "required": [
+                  "entity",
+                  "value"
+                ],
+                "additionalProperties": false,
+                "description": "Optional, `role: \"tv\"` rows only: when the TV is in ART MODE. The condition HOLDS when `entity` is 'on' and its `attribute` equals `value` (say a streaming stick's remote whose current_activity is a photo-frame app), or -- with no `attribute` -- when `entity`'s state equals `value`. While the TV is on and it holds, the row reads 'Art' and the TV's 3D screen shows an art picture instead of the home screen. Ignored on a row of any other role. Needs rooms schemaVersion 1.10.",
+                "properties": {
+                  "entity": {
+                    "$ref": "#/$defs/entityId",
+                    "description": "The entity the condition reads (any domain)."
+                  },
+                  "attribute": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional: the attribute compared with `value` (the entity must also be 'on'). Without it, the entity's state is compared."
+                  },
+                  "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "What the attribute (or the state) must equal, exactly."
+                  }
+                }
               }
             }
           }
@@ -237,6 +267,45 @@
                 "maximum": 60000,
                 "default": 2000,
                 "description": "How often the snapshot refreshes while the card is open, in ms."
+              }
+            }
+          }
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Action buttons: one labelled button per row that RUNS A SCRIPT -- one tap sends `script.turn_on` targeting `entity` with `variables` (the same guarded call as the sidebar's room script), then the button says Sent / Not sent for a moment. Single tap, no confirm: bind only what is safe to run by mistake. Disabled while Home Assistant is not connected; nothing is ever sent on render or on a resync. Needs rooms schemaVersion 1.10.",
+          "items": {
+            "type": "object",
+            "required": [
+              "entity"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "entity": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/entityId"
+                  },
+                  {
+                    "pattern": "^script\\.[a-z0-9_]+$"
+                  }
+                ],
+                "description": "The `script.*` entity to run."
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The button's text. Without it the script's object id is shown, humanised."
+              },
+              "variables": {
+                "type": "object",
+                "description": "Optional variables passed to the script (`script.turn_on`'s `variables`). The same script may be bound on several items with different variables."
+              },
+              "icon": {
+                "type": "string",
+                "pattern": "^[a-zA-Z]+$",
+                "description": "Optional: the name of a built-in card icon (e.g. 'art', 'play', 'tv'); an unknown name falls back to 'play'."
               }
             }
           }

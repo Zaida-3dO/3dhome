@@ -1004,7 +1004,8 @@
     import { HouseLoader }    from './src/house-loader.js?v=__VERSION__';
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
-    import { tvEntityBindings, tvScreenOn } from './src/furniture/tv-screen.js?v=__VERSION__';
+    import { tvBindings, tvScreenOn, tvScreenMode } from './src/furniture/tv-screen.js?v=__VERSION__';
+    import { sendScript }     from './src/script-call.js?v=__VERSION__';
     import { parseSunTime }   from './src/sun-position.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
              haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml,
@@ -1687,12 +1688,14 @@
         getCurtainOpen: curtainId => home.getCurtainOpen(curtainId),
         getCornice: curtainId => home.getCorniceLight(curtainId),
         // A TV's screen (a `tv` furniture id), as its set's power would drive
-        // it: true/false, or a media_player state through the same mapping
-        // the live path uses. No command is sent:
+        // it: true/false, 'art' (art mode), or a media_player state through
+        // the same mapping the live path uses. No command is sent:
         //   __home3dSensors.tv('bedroom_tv', true)
+        //   __home3dSensors.tv('bedroom_tv', 'art')       // the art picture
         //   __home3dSensors.tv('bedroom_tv', 'standby')   // dark
         //   __home3dSensors.tvScreens()                   // every screen's look
-        tv: (itemId, on) => home.setTvScreen(itemId, typeof on === 'string' ? tvScreenOn(on) : !!on),
+        tv: (itemId, on) => home.setTvScreen(itemId,
+          on === 'art' ? 'art' : typeof on === 'string' ? tvScreenOn(on) : !!on),
         tvScreens: () => home.getTvScreens(),
         // Sidebar slider availability -- this is PANEL state (curtainAvailableState),
         // not scene state, since "can this slider send a command" depends on
@@ -2386,12 +2389,14 @@
         });
         ha.onCurtainAvailabilityChange((curtainId, available) => applyCurtainAvailable(curtainId, available));
 
-        // TV set power -> its screen (lit home screen / black glass). The
-        // item's `role: "tv"` media row in sensors.items; fired only when
-        // that entity's state string changes.
-        const tvBindings = tvEntityBindings(haConfig.sensors && haConfig.sensors.items);
-        ha.onItemEntityChange((entityId, raw) => tvBindings.forEach((tvEntity, itemId) => {
-          if (tvEntity === entityId) home.setTvScreen(itemId, tvScreenOn(raw));
+        // TV set power (and its optional art condition) -> its screen: lit
+        // home screen, art picture, or black glass. The item's `role: "tv"`
+        // media row in sensors.items; fired when the TV's or the art
+        // entity's state -- or the art condition's attribute -- changes.
+        const tvScreenBindings = tvBindings(haConfig.sensors && haConfig.sensors.items);
+        ha.onItemEntityChange(entityId => tvScreenBindings.forEach((b, itemId) => {
+          if (b.entity !== entityId && !(b.art && b.art.entity === entityId)) return;
+          home.setTvScreen(itemId, tvScreenMode(ha.getRawState(b.entity), b.art, b.art && ha.getRawState(b.art.entity)));
         }));
 
         ha.connect();
@@ -3004,11 +3009,9 @@
         if (c) return c;
         c = createTwoStepConfirm({
           writable: () => roomScriptHaState() === 'ok',
-          send: () => {
-            const cmd = roomScriptCommand(roomScriptBindings().get(rid));
-            if (!cmd || roomScriptHaState() !== 'ok') return false;
-            return ha.callService(cmd.domain, cmd.service, cmd.data, cmd.target) === true;
-          },
+          // The shared guarded sender (src/script-call.js), as a furniture
+          // card's action buttons use.
+          send: () => sendScript(ha, roomScriptBindings().get(rid), () => roomScriptHaState() === 'ok'),
           onChange: () => paintRoomScriptRow(rid)
         });
         roomScriptConfirms.set(rid, c);

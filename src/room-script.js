@@ -30,6 +30,7 @@
  */
 
 import { esc } from './room-panel.js';
+import { SCRIPT_ID, scriptCommand } from './script-call.js';
 
 export const DEFAULT_ROOM_SCRIPT_LABEL = 'Kill room';
 export const ARM_TIMEOUT_MS = 4000;
@@ -40,7 +41,6 @@ export const BURST_WINDOW_MS = 1500;  // 3+ near-regular clicks inside this = a 
 export const BURST_GAP_MS = 1000;     // after a burst, ignore clicks until a pause this long
 export const QUIET_MS = 500;          // a synthetic confirm waits this long for no further click
 
-const SCRIPT_ID = /^script\.[a-z0-9_]+$/;
 
 /**
  * rooms.json `sensors.roomScripts` -> Map roomId -> { entity, variables, label }.
@@ -62,15 +62,9 @@ export function normaliseRoomScripts(raw) {
   return out;
 }
 
-/** A binding -> the ONE service call it makes. */
+/** A binding -> the ONE service call it makes (script-call.js's, shared). */
 export function roomScriptCommand(binding) {
-  if (!binding || typeof binding.entity !== 'string' || !SCRIPT_ID.test(binding.entity)) return null;
-  return {
-    domain: 'script',
-    service: 'turn_on',
-    data: { variables: { ...(binding.variables || {}) } },
-    target: { entity_id: binding.entity }
-  };
+  return scriptCommand(binding);
 }
 
 /**

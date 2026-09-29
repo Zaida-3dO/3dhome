@@ -6,6 +6,8 @@
  * the Node tests, the live scene and the spec pages. Four pieces:
  *
  *   tvScreenOn(raw)           a media_player state -> is the panel lit?
+ *   tvScreenMode(...)         the TV's state + its optional ART condition
+ *                             -> 'off' | 'on' | 'art'
  *   tvEntityBindings(items)   rooms.json sensors.items -> itemId -> the entity
  *                             of the item's `role: "tv"` media row
  *   makeTvScreenMaterial()    the screen's ONE material, built in the off look
@@ -46,6 +48,17 @@
  * The sheen is spliced into the fragment shader (onBeforeCompile) and driven
  * by one uniform; every TV shares the one program (customProgramCacheKey).
  *
+ * ART MODE. A TV's media row may carry an `art` condition (rooms.json
+ * schemaVersion 1.10): `{ entity, attribute?, value }`. It HOLDS when the
+ * entity is 'on' and its `attribute` equals `value` -- say a streaming
+ * stick's remote whose current_activity is a photo-frame app -- or, with no
+ * attribute, when the entity's state equals `value`. While the TV is lit
+ * AND the condition holds, the screen shows the ART look instead of the home
+ * screen: a second invented picture (a painting in a mat), drawn once and
+ * shared like the first, swapped in as the emissive map -- same material,
+ * same program -- at a lower, matte intensity. A TV that is off stays black
+ * glass whatever the condition says.
+ *
  * THE PICTURE is invented: a generic smart-TV home screen (a hero banner and
  * rows of rounded app tiles in varied colours), drawn procedurally once per
  * page into a 16:9 canvas and shared by every TV. It carries NO real brand
@@ -60,6 +73,12 @@ export const TV_ON_STATES = Object.freeze(['on', 'idle', 'playing', 'paused', 'b
 
 /** The emission multiplier of a lit screen (the picture's own colours x this). */
 export const ON_INTENSITY = 1.15;
+/** Art mode: dimmer than the home screen -- a matte picture, not a glowing UI. */
+export const ART_INTENSITY = 0.62;
+/** Art mode's surface: a matte (anti-glare) panel, not glossy glass. */
+export const ART_ROUGHNESS = 0.85;
+/** The three looks a screen can be in. */
+export const TV_MODES = Object.freeze(['off', 'on', 'art']);
 /** Screen glass: smooth enough to catch the room's highlights when dark. */
 export const GLASS_ROUGHNESS = 0.3;
 /** The off glass is the item's screenColor scaled by this -- near black. */
@@ -100,13 +119,52 @@ export function tvScreenOn(raw) {
 }
 
 /**
- * rooms.json `sensors.items` -> Map furnitureId -> the entity id of that
- * item's first `role: "tv"` media row (in authored card and row order).
- * Items with no such row are absent: their screen stays dark. Reads the raw
- * binding (the shape src/item-cards.js documents) rather than importing its
- * normaliser, so this module stays a leaf the builders can load.
+ * A media row's `art` condition -> { entity, attribute, value }, or null
+ * when it is missing or malformed (then the TV simply has no art mode).
  */
-export function tvEntityBindings(items) {
+export function normaliseArtCondition(art) {
+  if (!art || typeof art !== 'object' || Array.isArray(art)) return null;
+  if (typeof art.entity !== 'string' || !/^[a-z_]+\.[a-z0-9_]+$/.test(art.entity)) return null;
+  if (typeof art.value !== 'string' || !art.value) return null;
+  if (art.attribute !== undefined && (typeof art.attribute !== 'string' || !art.attribute)) return null;
+  return { entity: art.entity, attribute: art.attribute || null, value: art.value };
+}
+
+/**
+ * Does an art condition hold for its entity's raw state? With an
+ * attribute: the entity is 'on' and that attribute equals `value`. Without:
+ * the entity's state equals `value`. No reading -> no.
+ */
+export function artHolds(art, raw) {
+  if (!art || !raw || typeof raw !== 'object') return false;
+  if (art.attribute) {
+    const a = raw.attributes || {};
+    return raw.state === 'on' && a[art.attribute] === art.value;
+  }
+  return raw.state === art.value;
+}
+
+/** A value from the scene's API or the debug seam -> 'off' | 'on' | 'art'. */
+export function tvMode(v) {
+  if (v === 'art') return 'art';
+  return !v || v === 'off' ? 'off' : 'on';
+}
+
+/**
+ * The screen's mode from HA: dark unless the TV is lit (tvScreenOn); lit and
+ * the art condition holding -> 'art'; otherwise 'on'.
+ */
+export function tvScreenMode(tvRaw, art, artRaw) {
+  if (!tvScreenOn(tvRaw)) return 'off';
+  return art && artHolds(art, artRaw) ? 'art' : 'on';
+}
+
+/**
+ * rooms.json `sensors.items` -> Map furnitureId -> { entity, art } for that
+ * item's first `role: "tv"` media row (first card, first row, as
+ * tvEntityBindings); `art` is its normalised condition or null.
+ */
+export function tvBindings(items) {
   const out = new Map();
   if (!items || typeof items !== 'object') return out;
   Object.keys(items).forEach(itemId => {
@@ -116,9 +174,23 @@ export function tvEntityBindings(items) {
       const media = card && Array.isArray(card.media) ? card.media : [];
       const row = media.find(r => r && r.role === 'tv' && typeof r.entity === 'string' &&
         r.entity.indexOf('media_player.') === 0);
-      if (row) { out.set(itemId, row.entity); return; }
+      if (row) { out.set(itemId, { entity: row.entity, art: normaliseArtCondition(row.art) }); return; }
     }
   });
+  return out;
+}
+
+/**
+ * rooms.json `sensors.items` -> Map furnitureId -> the entity id of that
+ * item's first `role: "tv"` media row (in authored card and row order).
+ * Items with no such row are absent: their screen stays dark. Reads the raw
+ * binding (the shape src/item-cards.js documents) rather than importing its
+ * normaliser, so this module stays a leaf the builders can load.
+ */
+export function tvEntityBindings(items) {
+  const out = new Map();
+  if (!items || typeof items !== 'object') return out;
+  tvBindings(items).forEach((b, itemId) => out.set(itemId, b.entity));
   return out;
 }
 
@@ -131,32 +203,45 @@ function scaledHex(color, k, fallback) {
 }
 
 /**
- * The look for a state, as plain numbers -- what applyTvScreenLook writes.
- * @returns {{ emissive: number, emissiveIntensity: number }}
+ * The look for a mode ('off' | 'on' | 'art', or a boolean), as plain values
+ * -- what applyTvScreenLook writes. `picture` names the emissive map:
+ * 'home' (the home screen) or 'art' (the painting).
+ * @returns {{ emissive, emissiveIntensity, sheen, roughness, picture }}
  */
-export function tvScreenLook(on) {
-  return on
-    ? { emissive: 0xffffff, emissiveIntensity: ON_INTENSITY, sheen: 0 }
-    : { emissive: 0x000000, emissiveIntensity: 0, sheen: OFF_SHEEN };
+export function tvScreenLook(mode) {
+  const m = tvMode(mode);
+  if (m === 'art') return { emissive: 0xffffff, emissiveIntensity: ART_INTENSITY, sheen: 0, roughness: ART_ROUGHNESS, picture: 'art' };
+  if (m === 'on') return { emissive: 0xffffff, emissiveIntensity: ON_INTENSITY, sheen: 0, roughness: GLASS_ROUGHNESS, picture: 'home' };
+  return { emissive: 0x000000, emissiveIntensity: 0, sheen: OFF_SHEEN, roughness: GLASS_ROUGHNESS, picture: 'home' };
 }
 
 /**
- * Put a screen material in the look for `on`. Touches only the emissive
- * colour and intensity (uniforms), so no program changes.
+ * Put a screen material in the look for `mode` ('off' | 'on' | 'art', or a
+ * boolean). Touches only uniforms -- the emissive colour and intensity, the
+ * sheen, the roughness -- and the emissive map's TEXTURE, swapped between
+ * the two shared pictures (the map is always present, so the program never
+ * changes; both pictures are the same kind of texture).
  * @returns {boolean} true when anything changed (the caller repaints then)
  */
-export function applyTvScreenLook(mat, on) {
+export function applyTvScreenLook(mat, mode) {
   if (!mat) return false;
-  const look = tvScreenLook(!!on);
-  const was = mat.userData && mat.userData.tvOn;
-  const sheen = mat.userData && mat.userData.tvSheen ? mat.userData.tvSheen.value : null;
-  const same = mat.emissive && mat.emissive.getHex() === look.emissive &&
-    mat.emissiveIntensity === look.emissiveIntensity && (!sheen || sheen.r === look.sheen);
+  const m = tvMode(mode);
+  const look = tvScreenLook(m);
+  const ud = mat.userData || {};
+  const pics = ud.tvPictures || null;
+  const map = pics ? pics[look.picture] : mat.emissiveMap;
+  const sheen = ud.tvSheen ? ud.tvSheen.value : null;
+  const same = ud.tvMode === m && mat.emissive && mat.emissive.getHex() === look.emissive &&
+    mat.emissiveIntensity === look.emissiveIntensity && mat.roughness === look.roughness &&
+    mat.emissiveMap === map && (!sheen || (sheen.r === look.sheen && sheen.g === look.sheen && sheen.b === look.sheen));
   mat.emissive.setHex(look.emissive);
   mat.emissiveIntensity = look.emissiveIntensity;
+  mat.roughness = look.roughness;
+  if (map) mat.emissiveMap = map;
   if (sheen) sheen.setScalar(look.sheen);
-  mat.userData.tvOn = !!on;
-  return !(same && was === !!on);
+  mat.userData.tvMode = m;
+  mat.userData.tvOn = m !== 'off';
+  return !same;
 }
 
 /**
@@ -176,6 +261,10 @@ export function makeTvScreenMaterial(THREE, screenColor) {
   mat.userData.finish = 'emissive';
   mat.userData.tvScreen = true;
   mat.userData.tvOn = false;
+  mat.userData.tvMode = 'off';
+  // The two shared pictures the emissive map swaps between (never disposed
+  // per TV: they are page-wide; see the texture caches below).
+  mat.userData.tvPictures = { home: tvHomeTexture(THREE), art: tvArtTexture(THREE) };
   // The off-glass sheen: one uniform per TV (its own look), one program for
   // every TV. Built off, so it starts at OFF_SHEEN.
   mat.userData.tvSheen = { value: new THREE.Color().setScalar(OFF_SHEEN) };
@@ -219,10 +308,10 @@ export function injectTvSheen(fragmentShader) {
  * shows it ON, so the lit look is the one that gets signed off.
  * @returns {number} how many screens it touched
  */
-export function setTvScreensIn(root, on) {
+export function setTvScreensIn(root, mode) {
   let n = 0;
   if (root && root.traverse) root.traverse(o => {
-    if (o.isMesh && o.userData && o.userData.tvScreen) { applyTvScreenLook(o.material, on); n++; }
+    if (o.isMesh && o.userData && o.userData.tvScreen) { applyTvScreenLook(o.material, mode); n++; }
   });
   return n;
 }
@@ -233,7 +322,8 @@ export function setTvScreensIn(root, on) {
  * before the furniture attaches is applied when it does. `repaint` is
  * called only when a look actually changed (the scene renders on demand).
  *
- *   set(itemId, on)          remember; apply (and repaint) if built
+ *   set(itemId, mode)        remember ('off' | 'on' | 'art', or a
+ *                            boolean); apply (and repaint) if built
  *   attach(dynamicByItemId)  index a furniture build's screens and put each
  *                            in its wanted look; true if any look changed
  *                            (the caller repaints after attaching anyway)
@@ -245,11 +335,11 @@ export function createTvScreens(repaint) {
   const want = new Map();
   const apply = id => {
     const mesh = meshes.get(id);
-    return mesh ? applyTvScreenLook(mesh.material, !!want.get(id)) : false;
+    return mesh ? applyTvScreenLook(mesh.material, want.get(id) || 'off') : false;
   };
   return {
-    set(itemId, on) {
-      want.set(itemId, !!on);
+    set(itemId, mode) {
+      want.set(itemId, tvMode(mode));
       if (apply(itemId) && repaint) repaint();
     },
     attach(dynamicByItemId) {
@@ -268,33 +358,47 @@ export function createTvScreens(repaint) {
   };
 }
 
-// One picture per THREE namespace (the live page has one; a test may load
-// another). A disposed texture is re-uploaded by three when drawn again, so
-// a house rebuilt after disposeFurniture() reuses it safely.
-const homeTextures = new Map();
+// One picture of each kind per THREE namespace (the live page has one; a
+// test may load another). A disposed texture is re-uploaded by three when
+// drawn again, so a house rebuilt after disposeFurniture() reuses it safely.
+// Both pictures are built the SAME way (same class, size, colour space and
+// filtering), which is what lets a screen swap between them without a new
+// shader program.
+const pictureCache = new Map();
 
-/** The shared home-screen texture (a canvas in a browser, 1x1 in Node). */
-export function tvHomeTexture(THREE) {
-  if (homeTextures.has(THREE)) return homeTextures.get(THREE);
+function makePicture(THREE, kind, draw, fallbackRgb) {
+  let byKind = pictureCache.get(THREE);
+  if (!byKind) { byKind = new Map(); pictureCache.set(THREE, byKind); }
+  if (byKind.has(kind)) return byKind.get(kind);
   let tex = null;
   const canvas = makeCanvas(HOME_W, HOME_H);
   if (canvas) {
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      drawTvHome(ctx, HOME_W, HOME_H);
+      draw(ctx, HOME_W, HOME_H);
       tex = new THREE.CanvasTexture(canvas);
       tex.anisotropy = 4;
     }
   }
   if (!tex) {
-    tex = new THREE.DataTexture(new Uint8Array([40, 60, 90, 255]), 1, 1);
+    tex = new THREE.DataTexture(new Uint8Array(fallbackRgb.concat(255)), 1, 1);
     tex.needsUpdate = true;
   }
   if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
-  tex.name = 'tv-home-screen';
-  tex.userData = Object.assign({}, tex.userData, { tvHome: true });
-  homeTextures.set(THREE, tex);
+  tex.name = 'tv-' + kind;
+  tex.userData = Object.assign({}, tex.userData, kind === 'home-screen' ? { tvHome: true } : { tvArt: true });
+  byKind.set(kind, tex);
   return tex;
+}
+
+/** The shared home-screen texture (a canvas in a browser, 1x1 in Node). */
+export function tvHomeTexture(THREE) {
+  return makePicture(THREE, 'home-screen', drawTvHome, [40, 60, 90]);
+}
+
+/** The shared art-mode texture: a painting in a mat (a canvas in a browser, 1x1 in Node). */
+export function tvArtTexture(THREE) {
+  return makePicture(THREE, 'art', drawTvArt, [200, 170, 130]);
 }
 
 function makeCanvas(w, h) {
@@ -456,4 +560,77 @@ function drawGlyph(ctx, kind, cx, cy, r, color) {
   } else {
     [-0.6, 0, 0.6].forEach(dx => { ctx.beginPath(); ctx.arc(cx + dx * r, cy, r * 0.18, 0, Math.PI * 2); ctx.fill(); });
   }
+}
+
+/**
+ * Draw the invented art-mode picture into a 2D context of w x h: a warm,
+ * soft landscape painting (evening sky, a low sun, layered hills, a lake,
+ * a few trees) set in a wide off-white mat with a thin inner bevel, the way
+ * a frame TV shows art. Deterministic (a seeded generator for the brush
+ * texture), no words, no real image.
+ */
+export function drawTvArt(ctx, w, h) {
+  let seed = 7;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+  // The mat: warm off-white, very slightly darker at the edges.
+  const matG = ctx.createRadialGradient(w / 2, h / 2, h * 0.2, w / 2, h / 2, w * 0.7);
+  matG.addColorStop(0, '#efe9dd'); matG.addColorStop(1, '#ddd5c6');
+  ctx.fillStyle = matG;
+  ctx.fillRect(0, 0, w, h);
+  // The picture's window in the mat (a museum-style wide mat, heavier below).
+  const mx = w * 0.14, myTop = h * 0.14, myBot = h * 0.17;
+  const px = mx, py = myTop, pw = w - mx * 2, ph = h - myTop - myBot;
+  // Bevel: a thin light line inside a hairline shadow.
+  ctx.fillStyle = '#b9ae9c'; ctx.fillRect(px - 5, py - 5, pw + 10, ph + 10);
+  ctx.fillStyle = '#f7f3ea'; ctx.fillRect(px - 3, py - 3, pw + 6, ph + 6);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(px, py, pw, ph); ctx.clip();
+  // Sky: warm evening, peach to a soft dusky blue at the top.
+  const sky = ctx.createLinearGradient(0, py, 0, py + ph * 0.62);
+  sky.addColorStop(0, '#8fa3b8'); sky.addColorStop(0.45, '#e7b98d'); sky.addColorStop(1, '#f2cf9a');
+  ctx.fillStyle = sky; ctx.fillRect(px, py, pw, ph);
+  // A low sun with a soft halo.
+  const sx = px + pw * 0.66, sy = py + ph * 0.5;
+  const halo = ctx.createRadialGradient(sx, sy, 2, sx, sy, ph * 0.45);
+  halo.addColorStop(0, 'rgba(255,236,196,0.95)'); halo.addColorStop(0.18, 'rgba(255,221,170,0.55)'); halo.addColorStop(1, 'rgba(255,210,160,0)');
+  ctx.fillStyle = halo; ctx.fillRect(px, py, pw, ph);
+  // Soft cloud streaks.
+  for (let i = 0; i < 9; i++) {
+    const cy = py + ph * (0.1 + rnd() * 0.3), cx = px + rnd() * pw, cw = pw * (0.12 + rnd() * 0.22);
+    ctx.fillStyle = 'rgba(255,240,225,' + (0.18 + rnd() * 0.18).toFixed(2) + ')';
+    ctx.beginPath(); ctx.ellipse(cx, cy, cw / 2, ph * 0.018, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  // Layered hills, far (hazy) to near (deep).
+  const hill = (base, amp, freq, phase, col) => {
+    ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(px, py + ph);
+    for (let i = 0; i <= 40; i++) {
+      const x = px + pw * i / 40;
+      const y = py + ph * base - Math.sin(i / 40 * Math.PI * freq + phase) * amp - Math.sin(i / 40 * Math.PI * freq * 2.3 + phase * 1.7) * amp * 0.35;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(px + pw, py + ph); ctx.closePath(); ctx.fill();
+  };
+  hill(0.6, ph * 0.05, 2.2, 0.4, '#b8a4a8');
+  hill(0.66, ph * 0.06, 1.6, 1.9, '#8f7f86');
+  // The lake, catching the sky.
+  const lake = ctx.createLinearGradient(0, py + ph * 0.7, 0, py + ph);
+  lake.addColorStop(0, '#e9c79b'); lake.addColorStop(1, '#a8a3a4');
+  ctx.fillStyle = lake; ctx.fillRect(px, py + ph * 0.7, pw, ph * 0.3);
+  ctx.fillStyle = 'rgba(255,238,205,0.55)';
+  for (let i = 0; i < 7; i++) ctx.fillRect(sx - pw * (0.02 + i * 0.012), py + ph * (0.73 + i * 0.035), pw * (0.04 + i * 0.024), 2);
+  // Near shore and a few dark trees.
+  hill(0.84, ph * 0.03, 1.2, 3.1, '#5b5a4c');
+  ctx.fillStyle = '#3f4238';
+  [0.1, 0.16, 0.2, 0.83, 0.9].forEach((f, i) => {
+    const tx = px + pw * f, base = py + ph * 0.86, th = ph * (0.16 + (i % 3) * 0.04);
+    ctx.beginPath(); ctx.moveTo(tx, base - th); ctx.lineTo(tx - th * 0.22, base); ctx.lineTo(tx + th * 0.22, base); ctx.closePath(); ctx.fill();
+  });
+  // Brush texture: short translucent strokes across the whole painting.
+  for (let i = 0; i < 900; i++) {
+    const x = px + rnd() * pw, y = py + rnd() * ph, l = 4 + rnd() * 10;
+    ctx.strokeStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(60,40,30,0.06)';
+    ctx.lineWidth = 1 + rnd() * 1.5;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + l, y + (rnd() - 0.5) * 3); ctx.stroke();
+  }
+  ctx.restore();
 }

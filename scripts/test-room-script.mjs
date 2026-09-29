@@ -555,8 +555,11 @@ for (const [delay, every] of [[0, 30], [0, 100], [500, 30], [600, 100], [450, 30
   check('index: losing HA disarms every room script',
     /ha\.onStatusChange\(status => \{ if \(status !== 'connected'\) disarmRoomScripts\(null\); \}\);/.test(html));
   check('index: rendering another view disarms rooms not on screen', /disarmRoomScripts\(selectedRoom\);/.test(html));
-  check('index: send goes through ha.callService and is gated on HA being ok',
-    /if \(!cmd \|\| roomScriptHaState\(\) !== 'ok'\) return false;\s*return ha\.callService\(cmd\.domain, cmd\.service, cmd\.data, cmd\.target\) === true;/.test(html));
+  // The guarded sender itself (script-call.js sendScript) is tested by
+  // running it in scripts/test-script-call.mjs; here, that the room script
+  // goes through it, gated on HA being ok.
+  check('index: send goes through the shared sendScript, gated on HA being ok',
+    /send: \(\) => sendScript\(ha, roomScriptBindings\(\)\.get\(rid\), \(\) => roomScriptHaState\(\) === 'ok'\),/.test(html));
 }
 
 console.log(`${failures ? 'FAILED' : 'ok'} -- ${passes} passed, ${failures} failed`);

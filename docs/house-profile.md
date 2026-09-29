@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.9"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card and `1.9` its `cameras` rows. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.10"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card, `1.9` its `cameras` rows and `1.10` its `actions` rows and a TV row's `art` condition. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -1404,6 +1404,23 @@ first row (a receiver card gets a speaker, not a TV). The rows:
   with a generic home screen while the set is `on`, `idle`, `playing`,
   `paused` or `buffering`, and black glass when it is `off`, `standby`,
   unavailable or has not reported (a TV with no such row stays dark).
+
+  **Art mode.** A `role: "tv"` row may say when the TV is showing art -- a
+  photo-frame app on its streaming stick, say -- with an `art` condition. It
+  holds when `entity` is `on` and its `attribute` equals `value`, or, with no
+  `attribute`, when the entity's state equals `value`. While the TV is on and
+  it holds, the row reads **Art** (with a picture-frame icon) and the 3D
+  screen shows a generic painting in a mat instead of the home screen; a TV
+  that is off stays black whatever the condition says. The condition's
+  entity is read like any other bound entity; an `art` on a row of another
+  role is ignored (and warned). Needs `schemaVersion` `"1.10"`:
+
+  ```json
+  "lounge_tv": { "title": "Lounge TV", "media": [
+    { "entity": "media_player.example_tv", "label": "TV", "role": "tv",
+      "art": { "entity": "remote.example_stick", "attribute": "current_activity", "value": "example.photo.frame" } }
+  ] }
+  ```
 - **`lights`** -- a `light.*` row: on/off and brightness, plus a colour square
   when the light's `supported_color_modes` include a colour mode. Switching a
   light on sends no brightness, so it comes back at its last level (as the
@@ -1435,6 +1452,23 @@ first row (a receiver card gets a speaker, not a TV). The rows:
   ```json
   "crate": { "title": "Crate", "cameras": [
     { "entity": "camera.example_crate", "label": "Crate cam", "refreshMs": 2000 }
+  ] }
+  ```
+- **`actions`** -- a button that runs a `script.*`: one tap sends
+  `script.turn_on` targeting the script with the row's `variables` -- the
+  same guarded call as the sidebar's room script -- and the button says
+  **Sent** (or **Not sent -- try again**) for a moment. It is a single tap
+  with no confirm, so bind only what is safe to run by mistake (launching an
+  app, say, not switching a room off). `label` is the button's text; `icon`
+  names a built-in card icon (`art`, `play`, `tv`, ...). Disabled while Home
+  Assistant is not connected; nothing is ever sent on render or on a
+  reconnect. The demo house previews it ("Sent (sample)") and sends nothing.
+  Needs `schemaVersion` `"1.10"`:
+
+  ```json
+  "lounge_tv": { "title": "Lounge TV", "actions": [
+    { "entity": "script.example_tv_art", "label": "Art mode", "icon": "art",
+      "variables": { "tv": "media_player.example_tv" } }
   ] }
   ```
 - **`readings`** -- a read-only `sensor.*` row: the value with its

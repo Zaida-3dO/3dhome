@@ -67,6 +67,7 @@ import { normaliseItemBindings, furnitureTapTarget, tappableFurnitureIds, mediaR
   lightRowToggleCommand, lightColorCommand, applyCommand, mockItemState, clockText, cardEntities, cardTitle, cardIcon, rowLabelUnderTitle, bindingTitle,
   clockTitle, radiatorTitle, roomThingTitle, switchRowModel, switchCommand, cameraRowModel, cameraSnapshotUrl, cameraStreamUrl,
   createCameraFeed } from './item-cards.js';
+import { sendScript, createActionButton, actionButtonText } from './script-call.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -176,7 +177,7 @@ export function furnitureTarget(it, point, object, ctx) {
  * item's short label, else its id; the LEAD row (first media, else light,
  * else switch, else reading) is relabelled in place when its label only
  * repeats the title.
- * @param rows  { media, lights, switches, readings } -- row models carrying `label` (and `role`)
+ * @param rows  { media, lights, switches, readings, cameras, actions } -- row models carrying `label` (and `role`)
  */
 export function itemCardHead(card, rows, furnitureLabel, itemId) {
   const name = cardTitle(card, furnitureLabel, itemId);
@@ -889,6 +890,13 @@ export const STYLE = `
 .tp-vb.primary:not(:disabled) { background: var(--accent); border-color: transparent; }
 @media (hover: hover) { .tp-vb:hover:not(:disabled) { background: rgba(255,255,255,0.14); } .tp-vb.primary:hover:not(:disabled) { background: #7c7ff2; } }
 .tp-vb:focus-visible, .tp-vroom:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
+/* Item card action buttons (a card's actions row): the same labelled
+   button, full width, one per action; a sent one turns green for a moment. */
+.tp-abtns { display: grid; grid-template-columns: 1fr; gap: 5px; }
+.tp-abtns .tp-vb { width: 100%; }
+.tp-vb.sent { background: var(--ok); border-color: transparent; color: #fff; }
+.tp-vb.failed { border-color: var(--bad); }
+.tp-vb[aria-disabled=true] { cursor: default; }
 .tp-vrooms-h { margin-top: 9px; font-size: 11px; color: var(--ink-2); }
 .tp-vrooms { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .tp-vroom { border: 1px solid rgba(255,255,255,0.14); background: transparent; color: var(--ink); border-radius: 999px; padding: 4px 9px;
@@ -1193,7 +1201,8 @@ export const popoverHtml = {
       (off ? ' disabled' : '') + '>' + (cur != null && list.indexOf(cur) === -1 ? '<option value="" selected disabled>' + esc(cur) + '</option>' : '') +
       list.map(v => '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select></label>';
     (m.media || []).forEach((r, i) => {
-      const icon = ico(r.role === 'receiver' || r.role === 'speaker' ? I.speaker : r.role === 'cast' ? I.cast : I.tv,
+      // A TV in art mode (its row's art condition): the picture-frame icon.
+      const icon = ico(r.art ? I.art : r.role === 'receiver' || r.role === 'speaker' ? I.speaker : r.role === 'cast' ? I.cast : I.tv,
         r.na ? 'dim' : r.on ? 'm-on' : '');
       const sub = r.title ? r.stateText + ' · ' + r.title : r.stateText;
       let body = '<div class="tp-row">' + lab(icon, r.label, sub, r.on && !r.na) +
@@ -1248,6 +1257,19 @@ export const popoverHtml = {
       rows.push('<div class="tp-irow" data-row="camera"><div class="tp-row">' + lab(ico(I.camera, r.na ? 'dim' : ''), r.label, r.stateText) + liveBtn +
         '</div><div class="tp-cam" data-cam="' + i + '" data-msg="Loading…"></div></div>');
     });
+    // Action rows: one labelled button each; the button's own text says
+    // Sent / Not sent for a moment after a tap (script-call.js).
+    if ((m.actions || []).length) {
+      const btns = m.actions.map((r, i) => {
+        const busy = r.state === 'sent';
+        return '<button class="tp-vb' + (r.state !== 'idle' ? ' ' + esc(r.state) : '') + '" data-a="act" data-i="' + i + '" data-state="' + esc(r.state) + '"' +
+          (busy ? ' aria-disabled="true"' : '') + ' aria-label="' + esc(r.text) + '"' + (r.disabled ? ' disabled' : '') + '>' +
+          svg(I[r.icon] || I.play) + esc(r.text) + '</button>';
+      }).join('');
+      const said = m.actions.map(r => r.state === 'sent' ? r.label + ': sent.' : r.state === 'failed' ? r.label + ': not sent.' : '').filter(Boolean).join(' ');
+      rows.push('<div class="tp-irow" data-row="action"><div class="tp-abtns">' + btns + '</div>' +
+        '<span class="sr-only" role="status" aria-live="polite">' + esc(said) + '</span></div>');
+    }
     const first = I[m.icon] || ((m.media || []).length ? I.tv : (m.lights || []).length ? I.bulb : I.thermometer);
     return shell(ico(first), m.name, m.status, rows.join('') + offlineLine(m));
   },
@@ -1484,6 +1506,27 @@ export function attachTapPopovers(o) {
     // A sample light switched on with no level restores its last one (else full), as HA would.
     getRaw: eid => itemRaw(eid), setMock: (eid, r) => itemMock.set(eid, restoreSample(eid, r)),
     setOptimistic: (eid, r) => itemOptimistic.set(eid, { raw: r, until: Date.now() + OPTIMISTIC_MS }) });
+
+  // Item card action buttons (src/script-call.js): one state machine per
+  // card row, kept across rebuilds and card closes (a "Sent" outlives the
+  // card that showed it). The send is THE shared guarded sender -- the
+  // sidebar's room script uses the same one -- gated on HA being connected;
+  // with no HA configured (the demo) a tap only previews ("Sent (sample)").
+  const actionButtons = new Map();
+  const actionWritable = () => itemMockMode() || (!writeBlocked() && canSend());
+  function actionButtonFor(t, i) {
+    const key = t.itemId + ':' + t.card.index + ':' + i;
+    let b = actionButtons.get(key);
+    if (b) return b;
+    const row = t.card.actions[i];
+    b = createActionButton({
+      writable: actionWritable,
+      send: () => (itemMockMode() ? true : sendScript(ha(), row, () => !writeBlocked() && canSend())),
+      onChange: () => { if (pop) render(true); }
+    });
+    actionButtons.set(key, b);
+    return b;
+  }
 
   // The curtains card (curtainRoomGroup): the tapped curtain's room.
   const corniceBindings = (o.sensors && o.sensors.corniceLights) || {};
@@ -1831,7 +1874,9 @@ export function attachTapPopovers(o) {
         const base = card.index * 3;
         const media = card.media.map((row, i) => {
           const r = itemRaw(row.entity, 'media', row, base + i);
-          return Object.assign({ entity: row.entity, role: row.role, label: rowLabel(row, r) }, mediaRowModel(r));
+          // A TV row's art condition reads its own entity (a remote's activity).
+          const ar = row.art ? itemRaw(row.art.entity, 'art', row, base + i) : null;
+          return Object.assign({ entity: row.entity, role: row.role, label: rowLabel(row, r) }, mediaRowModel(r, row.art, ar));
         });
         const lights = card.lights.map((row, i) => {
           const r = itemRaw(row.entity, 'light', row, base + i);
@@ -1867,10 +1912,18 @@ export function attachTapPopovers(o) {
         });
         const anyNa = media.some(r => r.na) || lights.some(r => r.na) || switches.some(r => r.na) || readings.some(r => r.na) ||
           cameras.some(r => r.na);
+        // Action buttons: their state (idle / sent / failed) and whether a
+        // tap could send now -- disabled while Home Assistant is offline.
+        const actions = (card.actions || []).map((row, i) => {
+          const st = actionButtonFor(t, i).state;
+          const label = rowLabel(row, null);
+          return { entity: row.entity, label, icon: row.icon, state: st, text: actionButtonText(label, st, itemMockMode()),
+            disabled: !actionWritable() };
+        });
         // The first row never just repeats the title ("TV" over "TV").
         const head = itemCardHead(card, { media, lights, switches, readings, cameras }, furnitureLabels.get(t.itemId), t.itemId);
         return { status: itemMockMode() ? 'offlineItem' : statusKey('item', c, anyNa && isLive(c), false), haOff: haOfflineConn(c),
-          name: head.name, icon: head.icon, media, lights, switches, readings, cameras };
+          name: head.name, icon: head.icon, media, lights, switches, readings, cameras, actions };
       },
       html(m) { return popoverHtml.item(m, dot); },
       bind(t, el, ctl) {
@@ -1926,6 +1979,12 @@ export function attachTapPopovers(o) {
           if (!cam || b.disabled) return;
           const on = cam.feed.setLive(!cam.feed.state().live);
           b.setAttribute('aria-pressed', String(on));
+        }));
+        // An action: one tap runs its script (the guarded sender); a tap
+        // while "Sent" shows is ignored. Only ever from a click.
+        at('act', (b, i) => b.addEventListener('click', () => {
+          if (b.disabled) return;
+          actionButtonFor(t, i).press();
         }));
         at('spower', (b, i) => b.addEventListener('click', () => {
           const r = model().switches[i]; if (!r || r.na) return;

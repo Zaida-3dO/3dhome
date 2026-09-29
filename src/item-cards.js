@@ -26,11 +26,13 @@
  *   <card> = {
  *     title:    'Media',                                 // optional
  *     region:   { from: 0, to: 50 },                     // optional, cm
- *     media:    [{ entity: 'media_player.x', label?, role? }],
+ *     media:    [{ entity: 'media_player.x', label?, role?,
+ *                 art?: { entity, attribute?, value } }],     // role 'tv' only
  *     lights:   [{ entity: 'light.x', label? }],
  *     switches: [{ entity: 'switch.x' | 'input_boolean.x', label?, power?: 'sensor.y' }],
  *     cameras:  [{ entity: 'camera.x', label?, refreshMs? }],
- *     readings: [{ entity: 'sensor.x', label?, humidity?: 'sensor.y' }]
+ *     readings: [{ entity: 'sensor.x', label?, humidity?: 'sensor.y' }],
+ *     actions:  [{ entity: 'script.x', label?, variables?: {...}, icon? }]
  *   }
  *
  * A card needs at least one row. An entity of the wrong domain drops that
@@ -40,6 +42,19 @@
  * one of the wrong domain is dropped, the row kept. A camera row shows the
  * camera's snapshot, refreshed every `refreshMs` (default 2000, clamped to
  * 500-60000) while the card is open.
+ *
+ * ACTIONS (schemaVersion 1.10) are buttons that run a script: one tap sends
+ * `script.turn_on` with the row's `variables` through the shared guarded
+ * sender (src/script-call.js, the sidebar's room-script path), then shows
+ * Sent / Not sent for a moment. Disabled while Home Assistant is offline;
+ * nothing is sent on render or resync. A row whose entity is not a
+ * `script.*` id, or whose `variables` is not a plain object, is dropped.
+ *
+ * ART (schemaVersion 1.10): a `role: "tv"` media row may carry an `art`
+ * condition (src/furniture/tv-screen.js artHolds). While the TV is on and it
+ * holds, the row reads "Art" and the 3D screen shows the art picture. The
+ * condition's entity (and attribute) is recorded by the HA client like any
+ * other bound entity. On a row of any other role it is ignored.
  *
  * REGION CONVENTION -- centimetres along the item's WIDTH, measured from the
  * item's LEFT edge as seen from its FRONT (standing in front of it, facing
@@ -56,6 +71,9 @@
  * nothing -- the tap is a plain furniture tap and the room click beneath
  * handles it.
  */
+
+import { normaliseArtCondition, artHolds } from './furniture/tv-screen.js';
+import { SCRIPT_ID, isPlainObject } from './script-call.js';
 
 export const CLOCK_TYPE = 'wall-clock';
 export const RADIATOR_TYPE = 'radiator';
@@ -87,13 +105,30 @@ export function normaliseCard(raw, index) {
     if (from == null || to == null || from < 0 || !(from < to)) return null;
     region = { from, to };
   }
-  const media = normaliseRows(raw.media, 'media_player', r => ({ role: str(r.role) }));
+  const media = normaliseRows(raw.media, 'media_player', r => {
+    const role = str(r.role);
+    return { role, art: role === 'tv' ? normaliseArtCondition(r.art) : null };
+  });
   const lights = normaliseRows(raw.lights, 'light');
   const switches = normaliseRows(raw.switches, SWITCH_DOMAINS, r => ({ power: isEntity(r.power, 'sensor') ? r.power : null }));
   const readings = normaliseRows(raw.readings, 'sensor', r => ({ humidity: isEntity(r.humidity, 'sensor') ? r.humidity : null }));
   const cameras = normaliseRows(raw.cameras, 'camera', r => ({ refreshMs: cameraRefreshMs(r.refreshMs) }));
-  if (!media.length && !lights.length && !switches.length && !readings.length && !cameras.length) return null;
-  return { index: index || 0, title: str(raw.title), region, media, lights, switches, readings, cameras };
+  const actions = normaliseActions(raw.actions);
+  if (!media.length && !lights.length && !switches.length && !readings.length && !cameras.length && !actions.length) return null;
+  return { index: index || 0, title: str(raw.title), region, media, lights, switches, readings, cameras, actions };
+}
+
+/**
+ * A card's `actions` -> [{ entity, label, variables, icon }]. A row whose
+ * entity is not a `script.*` id, or whose `variables` is present but not a
+ * plain object, is dropped (the engine never runs what it cannot vouch for).
+ */
+export function normaliseActions(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter(r => r && typeof r.entity === 'string' && SCRIPT_ID.test(r.entity) &&
+    (r.variables === undefined || isPlainObject(r.variables)))
+    .map(r => ({ entity: r.entity, label: str(r.label), variables: r.variables ? { ...r.variables } : {},
+      icon: typeof r.icon === 'string' && /^[a-zA-Z]+$/.test(r.icon) ? r.icon : null }));
 }
 
 /**
@@ -117,7 +152,7 @@ export function normaliseItemBindings(items) {
 export function cardEntities(card) {
   const s = new Set();
   if (!card) return [];
-  card.media.forEach(r => s.add(r.entity));
+  card.media.forEach(r => { s.add(r.entity); if (r.art) s.add(r.art.entity); });
   card.lights.forEach(r => s.add(r.entity));
   (card.switches || []).forEach(r => { s.add(r.entity); if (r.power) s.add(r.power); });
   (card.cameras || []).forEach(r => s.add(r.entity));
@@ -130,6 +165,23 @@ export function itemBindingEntities(map) {
   const s = new Set();
   (map || new Map()).forEach(cards => cards.forEach(c => cardEntities(c).forEach(e => s.add(e))));
   return s;
+}
+
+/**
+ * entity -> [attribute] that a binding DECIDES on, beyond the state: a TV's
+ * art condition reads its entity's `attribute` (a remote's current
+ * activity, say). The HA client reports a change there as it does a state
+ * change (onItemEntityChange).
+ */
+export function itemWatchedAttributes(map) {
+  const out = new Map();
+  (map || new Map()).forEach(cards => cards.forEach(c => (c.media || []).forEach(r => {
+    if (!r.art || !r.art.attribute) return;
+    const list = out.get(r.art.entity) || [];
+    if (list.indexOf(r.art.attribute) === -1) list.push(r.art.attribute);
+    out.set(r.art.entity, list);
+  })));
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,9 +298,21 @@ export function rowLabel(row, raw) {
  * @returns { na, on, state, stateText, title, volume (0-100 | null when the
  *   device takes no volume or has not reported one), volumeUnknown (true when
  *   it takes a volume but has not reported a level), muted, sources [],
- *   source, soundModes [], soundMode, canPower }
+ *   source, soundModes [], soundMode, canPower, art }
+ * `art` / `artRaw` (optional): the row's art condition and its entity's raw
+ * state -- while the TV is on and the condition holds, `art` is true and the
+ * state reads "Art".
  */
-export function mediaRowModel(raw) {
+export function mediaRowModel(raw, art, artRaw) {
+  const m = mediaRowModelBase(raw);
+  // Art mode (a tv row's condition, tv-screen.js artHolds): the TV is on and
+  // showing art -- read as "Art", not "On".
+  if (art && m.on && !m.na && artHolds(art, artRaw)) Object.assign(m, { art: true, stateText: 'Art', title: null });
+  else m.art = false;
+  return m;
+}
+
+function mediaRowModelBase(raw) {
   const st = raw ? raw.state : undefined;
   const a = (raw && raw.attributes) || {};
   if (isUnavailable(st)) {
@@ -587,12 +651,13 @@ export function cardIcon(card) {
   }
   if (card.lights && card.lights.length) return 'bulb';
   if (card.switches && card.switches.length) return 'plug';
-  return card.cameras && card.cameras.length ? 'camera' : 'thermometer';
+  if (card.cameras && card.cameras.length) return 'camera';
+  return card.actions && card.actions.length && !(card.readings && card.readings.length) ? 'play' : 'thermometer';
 }
 
 /** What a row IS, for when its own label would only repeat the card title. */
 export const ROLE_NAMES = Object.freeze({ tv: 'Television', cast: 'Cast', receiver: 'Receiver', speaker: 'Speaker' });
-const KIND_NAMES = { media: 'Player', light: 'Light', switch: 'Switch', reading: 'Reading', camera: 'Camera' };
+const KIND_NAMES = { media: 'Player', light: 'Light', switch: 'Switch', reading: 'Reading', camera: 'Camera', action: 'Action' };
 
 /**
  * The first row's label, unless it only repeats the card's title (a "TV"
@@ -731,6 +796,8 @@ export function mockItemState(kind, row, index) {
   if (kind === 'switch') return { state: i % 2 === 0 ? 'on' : 'off', attributes: {} };
   // The demo camera has no picture URL: tap-popovers.js draws its frames.
   if (kind === 'camera') return { state: 'idle', attributes: {} };
+  // An art condition's entity (a streaming stick's remote): off, no activity.
+  if (kind === 'art') return { state: 'off', attributes: {} };
   if (kind === 'power') return { state: (38.4 + (i * 17.3) % 60).toFixed(1), attributes: { unit_of_measurement: 'W', device_class: 'power' } };
   if (kind === 'humidity') return { state: String(40 + (i * 3) % 15), attributes: { unit_of_measurement: '%' } };
   return { state: (31 + (i * 2.7) % 12).toFixed(1), attributes: { unit_of_measurement: '°C', device_class: 'temperature' } };

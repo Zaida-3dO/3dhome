@@ -170,6 +170,45 @@ _, warns = run(rooms_doc({"tv": CAM}, version="1.8"))
 check("validator: cameras below 1.9 are warned", any("1.9" in w and "cameras" in w for w in warns), warns)
 _, warns = run(rooms_doc(GOOD, version="1.5"))
 check("validator: below 1.6 is warned", any("1.6" in w for w in warns), warns)
+# ---- actions rows + a TV row's art condition (schemaVersion 1.10) ----------------
+ART_TV = {"title": "Frame TV",
+          "media": [{"entity": 'media_player.demo_frame_tv', "label": "TV", "role": "tv",
+                     "art": {"entity": 'remote.demo_frame_stick', "attribute": "current_activity", "value": "example.photo.frame"}}],
+          "actions": [{"entity": 'script.demo_tv_art', "label": "Art mode", "icon": "art", "variables": {"tv": 'media_player.demo_frame_tv'}}]}
+check("schema: an art condition and an actions row validate", schema_errors(rooms_doc({"tv": ART_TV}, version="1.10")) == [],
+      schema_errors(rooms_doc({"tv": ART_TV}, version="1.10")))
+ACTIONS_ONLY = {"title": "Scenes", "actions": [{"entity": 'script.demo_scene'}]}
+check("schema: an actions-only card validates (actions count as a row)",
+      schema_errors(rooms_doc({"tv": ACTIONS_ONLY}, version="1.10")) == [], schema_errors(rooms_doc({"tv": ACTIONS_ONLY}, version="1.10")))
+check("schema: an art condition with no attribute (state compare) validates",
+      schema_errors(rooms_doc({"tv": {"media": [{"entity": 'media_player.demo_x', "role": "tv",
+                                                  "art": {"entity": 'select.demo_mode', "value": "art"}}]}}, version="1.10")) == [])
+for label, b in [
+    ("a non-script action", {"actions": [{"entity": 'light.demo_x'}]}),
+    ("an action whose variables is a list", {"actions": [{"entity": 'script.demo_x', "variables": [1]}]}),
+    ("an unknown key on an action", {"actions": [{"entity": 'script.demo_x', "confirm": True}]}),
+    ("an empty actions list", {"actions": []}),
+    ("an action icon that is not a plain name", {"actions": [{"entity": 'script.demo_x', "icon": "<svg>"}]}),
+    ("an art condition with no value", {"media": [{"entity": 'media_player.demo_x', "role": "tv", "art": {"entity": 'remote.demo_x'}}]}),
+    ("an art condition with an unknown key", {"media": [{"entity": 'media_player.demo_x', "role": "tv",
+                                                         "art": {"entity": 'remote.demo_x', "value": "a", "equals": "b"}}]}),
+]:
+    # Mutation: loosen the matching schema block -> accepted -> fails.
+    check(f"schema: rejects {label}", schema_errors(rooms_doc({"tv": b}, version="1.10")) != [])
+_, warns = run(rooms_doc({"tv": ART_TV}, version="1.10"))
+check("validator: art + actions at 1.10 are clean", warns == [], warns)
+_, warns = run(rooms_doc({"tv": ART_TV}, version="1.9"))
+# Mutation: drop the 1.10 check -> no warning -> fails.
+check("validator: actions and art below 1.10 are warned",
+      any("1.10" in w and "actions" in w and "art" in w for w in warns), warns)
+_, warns = run(rooms_doc({"tv": ACTIONS_ONLY}, version="1.9"))
+check("validator: actions alone below 1.10 are warned", any("1.10" in w and "actions" in w for w in warns), warns)
+_, warns = run(rooms_doc({"clock": {"title": "Kitchen clock"}, "tv": ACTIONS_ONLY}, version="1.10"))
+check("validator: an actions card is not mistaken for a title-only one", not any("title-only" in w for w in warns), warns)
+_, warns = run(rooms_doc({"tv": {"media": [{"entity": 'media_player.demo_x', "role": "cast",
+                                            "art": {"entity": 'remote.demo_x', "value": "a"}}]}}, version="1.10"))
+# Mutation: drop the role check -> no warning -> fails.
+check("validator: art on a non-tv row is warned", any("role" in w and "art" in w for w in warns), warns)
 
 print(f"{'FAILED' if failures else 'ok'} -- {passes} passed, {failures} failed")
 sys.exit(1 if failures else 0)

@@ -666,6 +666,8 @@ jobs:
         run: node scripts/test-small-items.mjs
       - name: TV screens -- state mapping, dynamic screen part, uniform-only switch, HA wiring
         run: node scripts/test-tv-screen.mjs
+      - name: Frame TVs -- card action buttons (shared script sender), art condition, art screen look
+        run: node scripts/test-frame-art.mjs
       - name: Bathroom fittings -- presets, triangle caps, loft winding, notch, envelopes
         run: node scripts/test-furniture-bathroom.mjs
       - name: Furniture renderer (placement, merge buckets, shadow proxies, fade, attach)

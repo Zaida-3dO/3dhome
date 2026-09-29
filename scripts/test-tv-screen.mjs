@@ -302,10 +302,15 @@ check('the picture is 16:9', Math.abs(TV.HOME_W / TV.HOME_H - 16 / 9) < 0.01);
   check('scene: dispose forgets the screens', /disposeFurniture\(furnitureResult\);furnitureResult=null;\}tvScreens\.clear\(\);/.test(scene));
   const src = squash(read('index.html'));
   check('index: imports the mapping and the binding',
-    src.includes("import{tvEntityBindings,tvScreenOn}from'./src/furniture/tv-screen.js?v=__VERSION__';"));
-  check('index: HA item changes drive setTvScreen through tvScreenOn',
-    src.includes('ha.onItemEntityChange((entityId,raw)=>tvBindings.forEach((tvEntity,itemId)=>{if(tvEntity===entityId)home.setTvScreen(itemId,tvScreenOn(raw));'));
-  check('index: the ?debug=1 seam can flip a TV', src.includes('tv:(itemId,on)=>home.setTvScreen(itemId,'));
+    src.includes("import{tvBindings,tvScreenOn,tvScreenMode}from'./src/furniture/tv-screen.js?v=__VERSION__';"));
+  // The TV's own entity OR its art condition's entity changing re-derives
+  // the screen's mode from BOTH raw states (tvScreenMode; tested in
+  // scripts/test-frame-art.mjs).
+  check('index: HA item changes drive setTvScreen through tvScreenMode',
+    src.includes('ha.onItemEntityChange(entityId=>tvScreenBindings.forEach((b,itemId)=>{if(b.entity!==entityId&&!(b.art&&b.art.entity===entityId))return;' +
+      'home.setTvScreen(itemId,tvScreenMode(ha.getRawState(b.entity),b.art,b.art&&ha.getRawState(b.art.entity)));'));
+  check('index: the ?debug=1 seam can flip a TV, art included',
+    src.includes("tv:(itemId,on)=>home.setTvScreen(itemId,on==='art'?'art':typeofon==='string'?tvScreenOn(on):!!on),"));
 }
 
 // ---- 7. the off-glass sheen ------------------------------------------------------

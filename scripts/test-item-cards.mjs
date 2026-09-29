@@ -496,7 +496,7 @@ const CONSOLE = [
   check('wiring: the climate card title is climateCardName', /name: climateCardName\(t, roomName\) \};/.test(tpSrc));
   check('wiring: the clock card title is clockCardName', /name: clockCardName\(t, roomName\) \}, clockText\(new Date\(\)\)/.test(tpSrc));
   check('wiring: the item card head is itemCardHead', /const head = itemCardHead\(card, \{ media, lights, switches, readings, cameras \}, furnitureLabels\.get\(t\.itemId\), t\.itemId\);/.test(tpSrc) &&
-    /name: head\.name, icon: head\.icon, media, lights, switches, readings, cameras \};/.test(tpSrc));
+    /name: head\.name, icon: head\.icon, media, lights, switches, readings, cameras, actions \};/.test(tpSrc));
 
   // The item sender's gates.
   const cmd = IC.mediaPowerCommand('media_player.demo_tv', true);
@@ -604,7 +604,7 @@ const CONSOLE = [
   check('switch markup: an unavailable switch is disabled', /data-a="spower"[^>]*\sdisabled/.test(sw(un)));
   check('wiring: the switch sends switchCommand through itemSend', /itemSend\(switchCommand\(card\.switches\[i\]\.entity, !r\.on\), 'switch', 0\)/.test(tpSrc));
   check('wiring: the item model builds switch rows from switchRowModel', /switchRowModel\(r, pr\)/.test(tpSrc) &&
-    /name: head\.name, icon: head\.icon, media, lights, switches, readings, cameras \};/.test(tpSrc));
+    /name: head\.name, icon: head\.icon, media, lights, switches, readings, cameras, actions \};/.test(tpSrc));
 
   // The client records a switch and its power sensor; a toggle reaches HA.
   const { HAClient } = await imp('src/ha-client.js');
