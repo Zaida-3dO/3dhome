@@ -122,6 +122,7 @@ function harness(opts = {}) {
       timers.filter(h => h.live && h.at <= t).forEach(h => { h.live = false; h.fn(); });
     },
     setWritable(v) { writable = v; },
+    liveTimers() { return timers.filter(t => t.live).length; },
   };
 }
 {
@@ -347,6 +348,22 @@ function button() {
   o.h.setWritable(true);
   o.h.advance(5000);
   check('quiet wait: HA back later does not resurrect the send', o.h.sends.length === 0, o.h.sends);
+
+  // dispose() mid-wait: the pending send's timer must not fire, and no stale
+  // `pending` may survive to swallow the next press.
+  const d = pendingConfirm();
+  const changesBefore = d.h.states.length;
+  d.h.advance(200);
+  check('quiet wait: (control) the pending confirm holds a live timer', d.h.liveTimers() === 1, d.h.liveTimers());
+  d.h.c.dispose();
+  check('quiet wait: dispose() cancels the pending timer (none left scheduled)', d.h.liveTimers() === 0, d.h.liveTimers());
+  check('quiet wait: dispose() mid-wait reads idle', d.h.c.state === 'idle', d.h.c.state);
+  check('quiet wait: dispose() is silent (no onChange)', d.h.states.length === changesBefore, d.h.states);
+  d.h.advance(5000);
+  check('quiet wait: dispose() mid-wait never sends', d.h.sends.length === 0, d.h.sends);
+  d.ev.click(0); d.h.advance(600); d.ev.click(0); d.h.advance(500);
+  check('quiet wait: after dispose() a fresh deliberate pair sends exactly once (no stale pending/lock)',
+    d.h.sends.length === 1, { sends: d.h.sends, state: d.h.c.state });
 }
 
 // Repeat guard: a HELD assistive-tech switch that auto-repeats its click with
