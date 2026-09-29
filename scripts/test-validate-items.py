@@ -12,7 +12,8 @@ WHAT THIS GUARDS
   2. scripts/validate-house.py: a binding to a furniture item that does not
      exist is an ERROR, as is a region with from >= to; a region past the
      item's width and two overlapping regions are warned; a profile below
-     schemaVersion 1.6 is warned; a clean binding trips none.
+     schemaVersion 1.6 is warned; a title-only radiator in a room with no
+     sensors.climate binding is warned; a clean binding trips none.
 """
 
 import copy
@@ -57,9 +58,12 @@ TV = {"media": [{"entity": 'media_player.demo_tv', "role": "tv"}]}
 BEDSIDE = {"title": "Bedside", "lights": [{"entity": 'light.demo_bedside', "label": "All"}]}
 
 
-def rooms_doc(items, version="1.6"):
+def rooms_doc(items, version="1.6", climate=None):
+    sensors = {"items": items}
+    if climate is not None:
+        sensors["climate"] = climate
     return {"kind": "rooms", "schemaVersion": version, "house": "t", "rooms": {},
-            "sensors": {"items": items}}
+            "sensors": sensors}
 
 
 def schema_errors(doc):
@@ -68,7 +72,8 @@ def schema_errors(doc):
     return r.errors
 
 
-GEO = {"furniture": [{"id": "clock", "room": "room", "type": "wall-clock", "at": [1, 1]},{"id": "console", "room": "room", "type": "cabinet", "at": [1, 1], "params": {"width": 180}},
+GEO = {"furniture": [{"id": "clock", "room": "room", "type": "wall-clock", "at": [1, 1]},
+                     {"id": "rad", "room": "room", "type": "radiator", "at": [1, 1]},{"id": "console", "room": "room", "type": "cabinet", "at": [1, 1], "params": {"width": 180}},
                      {"id": "tv", "room": "room", "type": "tv", "at": [1, 1]},
                      {"id": "bedside", "room": "room", "type": "cabinet", "at": [1, 1]}],
        "doors": [], "curtains": []}
@@ -118,6 +123,15 @@ check("validator: a title-only card on a clock is clean", not any("title-only" i
 _, warns = run(rooms_doc({"tv": {"title": "Living room TV"}}))
 # Mutation: drop the ftype check -> no warning -> fails.
 check("validator: a title-only card on anything else is warned", any("title-only" in w for w in warns), warns)
+_, warns = run(rooms_doc({"rad": {"title": "Radiator by the window"}}))
+# Mutation: drop the new elif branch -> no warning -> fails.
+check("validator: a title-only radiator in a room with no climate binding is warned",
+      any("no sensors.climate binding" in w and "rad" in w for w in warns), warns)
+_, warns = run(rooms_doc({"rad": {"title": "Radiator by the window"}}, climate={"room": 'climate.demo_room'}))
+# Mutation: warn whatever the climate binding says -> fails.
+check("validator: a title-only radiator in a climate-bound room is clean", warns == [], warns)
+_, warns = run(rooms_doc({"rad": {"title": "Radiator by the window"}}, climate={"other": 'climate.demo_other'}))
+check("validator: another room's climate binding does not count", any("no sensors.climate binding" in w for w in warns), warns)
 _, warns = run(rooms_doc(GOOD, version="1.5"))
 check("validator: below 1.6 is warned", any("1.6" in w for w in warns), warns)
 

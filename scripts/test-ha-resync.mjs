@@ -436,10 +436,15 @@ await quiet(async () => {
     /const press = cmd => \{\s*if \(writeBlocked\(\)\) return;/,                                          // curtain open/close
     /const apply = \(v, how\) => \{\s*if \(writeBlocked\(\)\) return;/,                                   // climate slider + steps
     /cp\.addEventListener\('input', \(\) => \{\s*if \(writeBlocked\(\)\) return;/,                      // accent colour square
-    /function itemSend\(command, key, delay\) \{\s*if \(writeBlocked\(\)\) return;/,                  // every furniture item-card control
   ];
   guards.forEach((re, i) => check('popover write handler ' + (i + 1) + '/' + guards.length + ' returns first while HA offline (no preview)', re.test(src)));
-  check('popover guard count: exactly the 7 write paths', (src.match(/if \(writeBlocked\(\)\) return;/g) || []).length === 7);
+  check('popover guard count: exactly the 6 write paths', (src.match(/if \(writeBlocked\(\)\) return;/g) || []).length === 6);
+  // Every furniture item-card control sends through createItemSender, whose
+  // gates are unit-tested in scripts/test-item-cards.mjs (section 9); pinned
+  // here: it returns first while blocked, and the runtime hands it the same
+  // writeBlocked / canSend as every other card.
+  check('item sender returns first while HA offline (no preview)', /return function itemSend\(command, key, delay\) \{\s*if \(d\.writeBlocked\(\)\) return;/.test(src));
+  check('item sender is built from the popover writeBlocked / canSend', /const itemSend = createItemSender\(\{ writeBlocked, canSend, mockMode: itemMockMode, ha,/.test(src));
   check('popover climate samples only with no HA configured', /if \(c == null && !reading\) \{/.test(src) && !/offlineConn/.test(src));
   check('popover status table has no polling entry', !/\n  polling: \[/.test(src) && /\n  haOffline: \['bad', 'HA offline'/.test(src));
   const html = read('index.html');

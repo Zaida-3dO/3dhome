@@ -21,6 +21,9 @@
  *   7. index.html sends rgb_color for a non-ambient accent channel only when
  *      the colour was picked (withColor), and follows HA's colour for every
  *      colour channel.
+ *   8. lightServiceCall: a power switch turns a light on with NO brightness
+ *      (HA restores its last level) -- sidebar and popover switches alike;
+ *      the brightness sliders still send their level.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -133,8 +136,9 @@ check('supportsColor: unknown (no raw state / no modes reported) -> yes, the squ
 // 7. index.html wiring (source level)
 {
   const html = read('index.html');
-  check('sendToHA: rgb_color for ambient always, other colour channels only when picked',
-    /if \(state\.color !== undefined && \(group === 'ambient' \|\| \(withColor && isColorChannel\(group\)\)\)\)/.test(html));
+  // sendToHA builds its call with lightServiceCall (section 8 tests it).
+  check('sendToHA: the call is lightServiceCall(group, state, { withColor, power })',
+    /const call = lightServiceCall\(group, state, \{ withColor, power \}\);\s*ha\.callServiceDebounced\('light', call\.service, call\.data, target, key, debounceMs \|\| 0\);/.test(html));
   check('HA colour followed for every accent channel (#65: any non-main)',
     /if \(state\.color !== undefined && group !== 'main'\) ls\[group\]\.color = state\.color;/.test(html));
   check('sidebar square gated on the ambient entity supporting colour',
@@ -142,6 +146,36 @@ check('supportsColor: unknown (no raw state / no modes reported) -> yes, the squ
     && /return supportsColor\(raw && raw\.attributes\);/.test(html));
   const tp = read('src/tap-popovers.js');
   check('popover square gated on supported_color_modes', /colorable: isColorChannel\(t\.channel\) && supportsColor\(r && r\.attributes\),/.test(tp));
+}
+
+// 8. lightServiceCall: the sidebar / popover light call. A POWER switch
+//    turns on with no brightness (HA restores the last level); the slider sends one.
+{
+  const L = await imp('src/light-color.js');
+  const html = read('index.html');
+  const tp = read('src/tap-popovers.js');
+  const main = { on: true, bri: 40, temp: 3000 };
+  const pw = L.lightServiceCall('main', main, { power: true });
+  // Mutation: drop `!o.power &&` -> brightness 102 -> fails.
+  check('power switch on: turn_on with NO brightness key', pw.service === 'turn_on' && !('brightness' in pw.data), pw);
+  const sl = L.lightServiceCall('main', main, {});
+  check('slider: brightness from bri (the old rounding)', sl.service === 'turn_on' && sl.data.brightness === 102 && sl.data.color_temp_kelvin === 3000, sl);
+  check('off: turn_off, no data', eq(L.lightServiceCall('main', { on: false, bri: 40 }, { power: true }), { service: 'turn_off', data: {} }));
+  check('colour temp only on main', !('color_temp_kelvin' in L.lightServiceCall('cove', { on: true, temp: 3000 }, {}).data));
+  check('rgb_color for ambient always, other colour channels only when picked',
+    eq(L.lightServiceCall('ambient', { on: true, color: '#ff8000' }, { power: true }).data.rgb_color, [255, 128, 0]) &&
+    !('rgb_color' in L.lightServiceCall('cove', { on: true, color: '#ff8000' }, {}).data) &&
+    eq(L.lightServiceCall('cove', { on: true, color: '#ff8000' }, { withColor: true }).data.rgb_color, [255, 128, 0]) &&
+    !('rgb_color' in L.lightServiceCall('galaxy', { on: true, color: '#ff8000' }, { withColor: true }).data));
+  check('a colour that is not a colour is not sent', !('rgb_color' in L.lightServiceCall('ambient', { on: true, color: 'junk' }, {}).data));
+  // Wiring: every power switch passes power = true; the sliders do not.
+  // Mutation: drop `, false, true` from any toggle -> fails.
+  ['main', 'ambient', 'galaxy'].forEach(ch => check('sidebar ' + ch + ' switch sends as a power switch',
+    html.indexOf("sendToHA(rid, '" + ch + "', s." + ch + ", 0, false, true); refreshRoomRow('" + ch + "');") !== -1));
+  check('sidebar sliders are not power switches', (html.match(/sendToHA\(rid, '\w+', s\.\w+, 200(, true)?\);/g) || []).length === 5);
+  check('popover sendLight forwards power', /sendLight: \(roomId, channel, state, debounceMs, withColor, power\) => sendToHA\(roomId, channel, state, debounceMs, withColor, power\),/.test(html));
+  check('popover light switch sends as a power switch', /o\.sendLight\(t\.roomId, t\.channel, st, 0, false, true\);/.test(tp));
+  check('popover light slider is not a power switch', /o\.sendLight\(t\.roomId, t\.channel, st, 200\);/.test(tp));
 }
 
 console.log('\n' + passes + ' passed, ' + failures + ' failed');

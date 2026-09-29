@@ -1055,8 +1055,10 @@ def check_item_binding(rooms_doc, geo, sensors, version, report):
     never be reached -- an error; so is a region whose `from` is not below its
     `to` (the engine drops that card). A region reaching past the item's
     authored `params.width` is warned (that part can never be tapped), as are
-    two regions of one item that overlap (the first listed wins there). The
-    schema already enforces the shape and the domains.
+    two regions of one item that overlap (the first listed wins there), and a
+    title-only card on a radiator whose room has no `sensors.climate` binding
+    (nothing opens for it). The schema already enforces the shape and the
+    domains.
     """
     items = sensors.get("items") or {}
     if not items:
@@ -1078,6 +1080,14 @@ def check_item_binding(rooms_doc, geo, sensors, version, report):
         if rowless and (isinstance(binding, list) or ftype not in ("wall-clock", "radiator")):
             report.warn(where, "a title-only card names a clock or a radiator; on any other item (or in a list) it has "
                                "nothing to show and the item stays a plain furniture tap")
+        elif rowless and ftype == "radiator":
+            # A radiator opens its ROOM's climate card; with no climate binding
+            # for that room nothing opens, so the title is never shown.
+            room = (furniture.get(iid) or {}).get("room")
+            eid = (sensors.get("climate") or {}).get(room) if isinstance(room, str) else None
+            if not (isinstance(eid, str) and eid):
+                report.warn(where, f"a title-only card names radiator '{iid}', but its room '{room}' has no "
+                                   "sensors.climate binding -- nothing opens for this radiator, so the title is never shown")
         width = ((furniture.get(iid) or {}).get("params") or {}).get("width")
         spans = []
         for i, card in enumerate(cards):
