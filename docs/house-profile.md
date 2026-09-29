@@ -1455,7 +1455,14 @@ that room's `variables`. It is meant for a script that switches the room off
 Nothing is sent on render, on a reconnect or on a resync — only from that
 second tap. The button is disabled while Home Assistant is not connected
 (losing the connection also disarms it), and in a house with no Home Assistant
-(the demo), where there is nothing to run it on. Leaving the room disarms it.
+(the demo), where there is nothing to run it on. Leaving the room or closing
+the sidebar disarms it.
+
+From the keyboard, Enter or Space arms it and a second, separate press
+confirms. The button keeps focus between the two, and a status region
+announces "Armed" and then "Sent" to a screen reader. Holding Enter down never
+confirms: after a keyboard arm, the key has to be released before a keyboard
+press can count.
 
 `script.turn_on` rather than the script's own service (`script.<name>`):
 `turn_on` is Home Assistant's way to start a script **by entity id** with

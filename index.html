@@ -358,14 +358,26 @@
       border: 1px solid rgba(248,113,113,0.6); background: rgba(239,68,68,0.10); color: #fca5a5;
       transition: background 0.15s, border-color 0.15s, color 0.15s;
     }
-    .room-script-btn:hover:not(:disabled) { background: rgba(239,68,68,0.20); }
     .room-script-btn:focus-visible { outline: 2px solid #fca5a5; outline-offset: 2px; }
     .room-script-btn.armed { background: #dc2626; border-color: #dc2626; color: #fff; }
-    .room-script-btn.armed:hover:not(:disabled) { background: #b91c1c; }
     .room-script-btn.sent { background: rgba(34,197,94,0.14); border-color: rgba(34,197,94,0.5); color: #bbf7d0; }
     .room-script-btn.failed { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.5); color: #fde68a; }
     .room-script-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    /* Hover only where hover is real (a touch screen's :hover sticks after
+       the tap), and only on the idle and armed states: right after the
+       confirming tap the pointer is still over the button, and Sent /
+       Not sent must show their own colours, not a hover tint. */
+    @media (hover: hover) {
+      .room-script-btn.idle:hover:not(:disabled) { background: rgba(239,68,68,0.20); }
+      .room-script-btn.armed:hover:not(:disabled) { background: #b91c1c; }
+      :root[data-theme="light"] .room-script-btn.idle:hover:not(:disabled) { background: rgba(220,38,38,0.12); }
+      :root[data-theme="light"] .room-script-btn.armed:hover:not(:disabled) { background: #b91c1c; }
+    }
     .room-script-note { margin-top: 6px; font-size: 11px; opacity: 0.6; text-align: center; }
+    .room-script-note[hidden] { display: none; }
+    /* Visually hidden, still read: the row's role="status" announcement. */
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+      clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 
     /* Ambience: ONE colour square (the light's current colour) inline with
        the brightness slider and its value:  [■] ───●─── 17%.  A native
@@ -565,10 +577,8 @@
     :root[data-theme="light"] .vac-status.err { color: #b91c1c; }
     :root[data-theme="light"] .room-script-row { border-top-color: rgba(0,0,0,0.08); }
     :root[data-theme="light"] .room-script-btn { background: rgba(220,38,38,0.06); border-color: rgba(185,28,28,0.55); color: #b91c1c; }
-    :root[data-theme="light"] .room-script-btn:hover:not(:disabled) { background: rgba(220,38,38,0.12); }
     :root[data-theme="light"] .room-script-btn:focus-visible { outline-color: #b91c1c; }
     :root[data-theme="light"] .room-script-btn.armed { background: #dc2626; border-color: #dc2626; color: #fff; }
-    :root[data-theme="light"] .room-script-btn.armed:hover:not(:disabled) { background: #b91c1c; }
     :root[data-theme="light"] .room-script-btn.sent { background: rgba(34,197,94,0.14); border-color: rgba(21,128,61,0.45); color: #166534; }
     :root[data-theme="light"] .room-script-btn.failed { background: rgba(245,158,11,0.16); border-color: rgba(180,83,9,0.45); color: #92400e; }
     :root[data-theme="light"] .room-script-note { opacity: 0.72; }
@@ -1017,7 +1027,8 @@
     import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCommand, vacuumStatusText,
              MOCK_VACUUM_READINGS, mockVacuumAfter } from './src/vacuum-control.js?v=__VERSION__';
     import { normalisePlantBindings, plantStatusText, agoText, mockPlantReading } from './src/plant-status.js?v=__VERSION__';
-    import { normaliseRoomScripts, roomScriptCommand, createTwoStepConfirm, roomScriptRowHtml }
+    import { normaliseRoomScripts, roomScriptCommand, createTwoStepConfirm, roomScriptRowHtml,
+             roomScriptView, applyRoomScriptView }
                               from './src/room-script.js?v=__VERSION__';
 
     // Theme (Settings > Theme). The inline <head> script already painted the
@@ -2160,6 +2171,10 @@
       // Panel logic
       function openPanel() { panel.classList.add('open'); topRightBtns.style.display = 'none'; }
       function closePanel() {
+        // Every hide path (X, a background tap, a scroll, an orbit, an
+        // object tap) comes through here: an armed Kill room must not still
+        // be armed when the panel is reopened inside its 4 s window.
+        disarmRoomScripts(null);
         if (isWideScreen()) { selectedRoom = null; renderPanel(); return; }
         panel.classList.remove('open'); topRightBtns.style.display = ''; selectedRoom = null;
       }
@@ -2977,10 +2992,24 @@
             if (!cmd || roomScriptHaState() !== 'ok') return false;
             return ha.callService(cmd.domain, cmd.service, cmd.data, cmd.target) === true;
           },
-          onChange: () => { if (selectedRoom === rid) refreshRoomRow('room-script'); }
+          onChange: () => paintRoomScriptRow(rid)
         });
         roomScriptConfirms.set(rid, c);
         return c;
+      }
+      // A state change updates the painted row IN PLACE (applyRoomScriptView):
+      // the button keeps its keyboard focus, and the row's persistent
+      // role="status" region announces the new state. Only a row missing its
+      // parts is repainted.
+      function paintRoomScriptRow(rid) {
+        if (selectedRoom !== rid || !panelReady) return;
+        const row = panelBody.querySelector('[data-row="room-script"]');
+        if (!row) return;
+        const b = roomScriptBindings().get(rid);
+        const c = roomScriptConfirms.get(rid);
+        if (!b || !applyRoomScriptView(row, roomScriptView(b, c ? c.state : 'idle', roomScriptHaState()))) {
+          refreshRoomRow('room-script');
+        }
       }
       function disarmRoomScripts(exceptRid) {
         if (!roomScriptConfirms) return;
@@ -3119,14 +3148,21 @@
             el.addEventListener('pointercancel', endDrag);
             el.addEventListener('blur', endDrag);
           }
-          // Curtain Open / Close buttons: one press, one command, to every
-          // bound motor. The 3D curtain then follows HA's own reports.
           // Room script: the first tap arms, the second sends (press() in
           // src/room-script.js), and press() itself refuses unless HA is
-          // connected -- behind onWrite and the disabled button.
-          if (action === 'room-script') onWrite(el, 'click', () => {
-            if (!el.disabled) roomScriptConfirm(rid).press();
-          });
+          // connected -- behind onWrite and the disabled button. A click
+          // with detail 0 came from a key: a keyboard arm then needs the key
+          // RELEASED (keyup) before a keyboard confirm counts, so a held
+          // Enter's auto-repeat can never confirm. keyup only clears that
+          // flag -- it sends nothing, so it is not an onWrite handler.
+          if (action === 'room-script') {
+            onWrite(el, 'click', e => {
+              if (!el.disabled) roomScriptConfirm(rid).press({ keyboard: e.detail === 0 });
+            });
+            el.addEventListener('keyup', () => roomScriptConfirm(rid).keyUp());
+          }
+          // Curtain Open / Close buttons: one press, one command, to every
+          // bound motor. The 3D curtain then follows HA's own reports.
           if (action === 'curtain-cmd') {
             const curtainId = el.dataset.curtain;
             onWrite(el, 'click', () => {

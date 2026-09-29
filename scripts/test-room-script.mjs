@@ -17,17 +17,24 @@
  *      timeoutMs and a press after that only re-arms; a second press inside
  *      minArmMs (a double-tap) is ignored; the result state (sent / failed)
  *      returns to idle after resultMs; writable() false disarms and sends
- *      nothing; reset() disarms; a throwing send reads as failed.
+ *      nothing; reset() disarms; a throwing send reads as failed. KEYBOARD:
+ *      a keyboard arm needs a key release before a keyboard confirm counts,
+ *      so a held Enter's auto-repeat never confirms; a deliberate second
+ *      press (Enter or Space) does; pointer taps are unaffected.
  *   4. End to end over the fake HA WebSocket, through the REAL
  *      HAClient.callService: two presses put exactly one call_service
  *      script/turn_on with the right target and variables on the socket; one
  *      press puts none; a disconnected client sends none (and the confirm
  *      reports failed).
  *   5. Row markup: the label, the armed text, disabled unless HA is 'ok',
- *      and escaping of a profile-supplied label.
+ *      escaping of a profile-supplied label, and a persistent role="status"
+ *      region outside the button; roomScriptView / applyRoomScriptView update
+ *      the SAME button in place (so it keeps focus) and fill the region.
  *   6. index.html wiring (source-level): the row is only added for a bound
- *      room; the click handler is the only caller of press(); the render path
- *      only reads .state; losing HA disarms.
+ *      room; the click handler is the only caller of press() and flags a
+ *      keyboard click; keyup releases the guard; the render path only reads
+ *      .state; losing HA, rendering another view and CLOSING THE PANEL all
+ *      disarm; hover styles never outrank Sent / Not sent.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -170,6 +177,51 @@ function harness(opts = {}) {
   h2.c.press(); h2.advance(500); h2.c.press();
   check('confirm: a throwing send reads failed', h2.c.state === 'failed');
 }
+// Keyboard: a HELD Enter auto-repeats a click every ~30 ms after the repeat
+// delay. Model it: keydown -> click (arms), then repeats long past minArmMs
+// with no keyup. None may confirm.
+{
+  const h = harness();
+  h.c.press({ keyboard: true });
+  check('keyboard: Enter arms', h.c.state === 'armed' && h.sends.length === 0);
+  for (let i = 0; i < 100; i++) { h.advance(30); h.c.press({ keyboard: true }); }
+  check('keyboard: a held Enter (100 repeats over 3 s, no keyup) never confirms', h.sends.length === 0 && h.c.state === 'armed', h.sends);
+  h.c.keyUp();
+  h.advance(100);
+  h.c.press({ keyboard: true });
+  check('keyboard: release then a deliberate second press confirms', h.sends.length === 1 && h.c.state === 'sent', h.sends);
+}
+{
+  // Space clicks on release: keyup, then click. Arm = [keyup, click];
+  // confirm = the next [keyup, click]. The first keyup lands before the arm,
+  // so it cannot count; the second one does.
+  const h = harness();
+  h.c.keyUp(); h.c.press({ keyboard: true });
+  h.advance(600);
+  h.c.keyUp(); h.c.press({ keyboard: true });
+  check('keyboard: Space press, Space press confirms', h.sends.length === 1, h.sends);
+}
+{
+  const h = harness();
+  h.c.keyUp();                   // a stray keyup BEFORE arming
+  h.c.press({ keyboard: true }); // Enter arms
+  h.advance(600);
+  h.c.press({ keyboard: true }); // repeat of the same held key
+  check('keyboard: a keyup before the arm does not license a repeat', h.sends.length === 0, h.sends);
+}
+{
+  const h = harness();
+  h.c.press({ keyboard: true });
+  h.advance(4000);
+  check('keyboard: arm still times out', h.c.state === 'idle');
+  h.c.press({ keyboard: true });
+  h.advance(600);
+  h.c.press({ keyboard: true });
+  check('keyboard: a re-arm after the timeout also needs a release', h.sends.length === 0, h.sends);
+  const p = harness();
+  p.c.press(); p.advance(600); p.c.press();
+  check('pointer: two taps still confirm with no keyup at all', p.sends.length === 1, p.sends);
+}
 
 // ---- 4. End to end over the fake HA WebSocket --------------------------------
 {
@@ -235,6 +287,27 @@ function harness(opts = {}) {
   check('row: no HA disabled', /disabled>/.test(RS.roomScriptRowHtml(b, 'idle', 'none')));
   const evil = RS.roomScriptRowHtml({ ...b, label: '<img src=x>' }, 'idle', 'ok');
   check('row: label escaped', !/<img/.test(evil) && /&lt;img/.test(evil), evil);
+  check('row: a persistent role=status region, OUTSIDE the button',
+    /<\/button>[\s\S]*role="status" aria-live="polite" data-room-script-live/.test(idle) && !/<button[^>]*aria-live/.test(idle), idle);
+
+  // roomScriptView + applyRoomScriptView: the in-place update keeps the SAME
+  // button element (so its focus) and puts the announcement in the region.
+  const v = RS.roomScriptView(b, 'armed', 'ok');
+  check('view: armed', v.state === 'armed' && v.text === 'Tap again to kill room' && v.disabled === false &&
+    /Armed/.test(v.live) && /Switches off/.test(v.note), v);
+  check('view: sent announces Sent', RS.roomScriptView(b, 'sent', 'ok').live === 'Sent.');
+  check('view: failed announces', /Not sent/.test(RS.roomScriptView(b, 'failed', 'ok').live));
+  check('view: offline is idle + disabled, nothing announced', (() => { const o = RS.roomScriptView(b, 'armed', 'offline'); return o.state === 'idle' && o.disabled && o.live === ''; })());
+  const el = (attrs = {}) => ({ attrs, className: '', textContent: '', disabled: false, hidden: false,
+    setAttribute(k, val) { this.attrs[k] = val; } });
+  const btn = el(), note = el(), live = el();
+  const row = { querySelector: sel => sel === '[data-action="room-script"]' ? btn : sel === '.room-script-note' ? note : sel === '[data-room-script-live]' ? live : null };
+  check('apply: updates a complete row', RS.applyRoomScriptView(row, v) === true);
+  check('apply: same button, new class/state/text', btn.className === 'room-script-btn armed' && btn.attrs['data-state'] === 'armed' && btn.textContent === 'Tap again to kill room', btn);
+  check('apply: live region carries the announcement', /Armed/.test(live.textContent), live);
+  RS.applyRoomScriptView(row, RS.roomScriptView(b, 'idle', 'ok'));
+  check('apply: idle hides the note and clears the region', note.hidden === true && live.textContent === '', { note, live });
+  check('apply: a row missing its parts reports false', RS.applyRoomScriptView({ querySelector: () => null }, v) === false);
 }
 
 // ---- 6. index.html wiring --------------------------------------------------
@@ -242,9 +315,24 @@ function harness(opts = {}) {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   check('index: row key only for a bound room',
     /if \(roomScriptBindings\(\)\.has\(rid\)\) keys\.push\('room-script'\);/.test(html));
-  const presses = html.match(/\.press\(\)/g) || [];
-  const inClick = /if \(action === 'room-script'\) onWrite\(el, 'click', \(\) => \{\s*if \(!el\.disabled\) roomScriptConfirm\(rid\)\.press\(\);\s*\}\);/.test(html);
-  check('index: press() called only from the click handler', presses.length === 1 && inClick, presses.length);
+  const presses = html.match(/roomScriptConfirm\(rid\)\.press\(/g) || [];
+  const inClick = /onWrite\(el, 'click', e => \{\s*if \(!el\.disabled\) roomScriptConfirm\(rid\)\.press\(\{ keyboard: e\.detail === 0 \}\);\s*\}\);/.test(html);
+  check('index: press() called only from the click handler, flagged keyboard for a detail-0 click', presses.length === 1 && inClick, presses.length);
+  check('index: keyup on the button releases the keyboard guard',
+    /el\.addEventListener\('keyup', \(\) => roomScriptConfirm\(rid\)\.keyUp\(\)\);/.test(html));
+  const closeFn = (html.match(/function closePanel\(\) \{[\s\S]*?\n      \}/) || [''])[0];
+  check('index: closing the panel disarms every room script (both branches)',
+    /^function closePanel\(\) \{[\s\S]*?disarmRoomScripts\(null\);\s*if \(isWideScreen\(\)\)/.test(closeFn), closeFn);
+  check('index: a state change updates the row in place (focus kept), repainting only as a fallback',
+    /onChange: \(\) => paintRoomScriptRow\(rid\)/.test(html) &&
+    /if \(!b \|\| !applyRoomScriptView\(row, roomScriptView\(b, c \? c\.state : 'idle', roomScriptHaState\(\)\)\)\) \{\s*refreshRoomRow\('room-script'\);/.test(html));
+  // Visual review d79a126d: right after the confirming tap the pointer is
+  // still over the button, so a hover rule must not outrank Sent / Not sent.
+  const hoverRules = html.match(/[^\n{}]*\.room-script-btn[^\n{]*:hover[^\n{]*\{/g) || [];
+  check('css: every room-script hover rule is scoped to idle or armed',
+    hoverRules.length === 4 && hoverRules.every(r => /\.room-script-btn\.(idle|armed):hover/.test(r)), hoverRules);
+  check('css: hover rules only where hover is real (not sticky touch hover)',
+    /@media \(hover: hover\) \{\s*\.room-script-btn\.idle:hover/.test(html));
   check('index: render reads state only', /roomScriptRowHtml\(b, c \? c\.state : 'idle', roomScriptHaState\(\)\)/.test(html));
   check('index: losing HA disarms every room script',
     /ha\.onStatusChange\(status => \{ if \(status !== 'connected'\) disarmRoomScripts\(null\); \}\);/.test(html));

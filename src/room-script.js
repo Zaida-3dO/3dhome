@@ -74,6 +74,17 @@ export function roomScriptCommand(binding) {
  * went out (HAClient.callService's own return value). `writable()` false
  * (HA offline) makes a press disarm and send nothing -- a second gate behind
  * the disabled DOM. Timers and the clock are injectable for the tests.
+ *
+ * KEYBOARD. The button keeps its focus across states (index.html updates it
+ * in place), so a HELD Enter would otherwise confirm: its auto-repeat fires a
+ * click every ~30 ms once the repeat delay (250-500 ms, often past
+ * minArmMs) has passed. So a press made from the keyboard (`{ keyboard:
+ * true }` -- a click with detail 0) that ARMS also demands a key release:
+ * until keyUp() is called, no keyboard press can confirm. A deliberate second
+ * press (release, press again) confirms as usual. Space fires its click on
+ * release, after its keyup, so the next Space's keyup arrives before the
+ * click that confirms -- the same rule covers it. Pointer presses are
+ * unaffected.
  */
 export function createTwoStepConfirm({
   send, writable, onChange,
@@ -83,33 +94,42 @@ export function createTwoStepConfirm({
   let state = 'idle';
   let armedAt = 0;
   let timer = null;
+  let awaitKeyUp = false;
   const canWrite = () => typeof writable !== 'function' || writable() === true;
 
   function go(next, afterMs) {
     if (timer !== null) { clearTimer(timer); timer = null; }
     const changed = next !== state;
     state = next;
+    if (next !== 'armed') awaitKeyUp = false;
     if (afterMs > 0) timer = setTimer(() => { timer = null; go('idle', 0); }, afterMs);
     if (changed && typeof onChange === 'function') onChange(state);
   }
 
   return {
     get state() { return state; },
-    /** A click. Returns true only on the press that sent the call. */
-    press() {
+    /** A click. `opts.keyboard`: it came from a key (Enter / Space).
+     *  Returns true only on the press that sent the call. */
+    press(opts) {
+      const keyboard = !!(opts && opts.keyboard);
       if (!canWrite()) { go('idle', 0); return false; }
       if (state !== 'armed') {
         armedAt = now();
         go('armed', timeoutMs);
+        awaitKeyUp = keyboard;
         return false;
       }
       if (now() - armedAt < minArmMs) return false; // one gesture, not a confirm
+      if (keyboard && awaitKeyUp) return false;     // the arming key is still held
       let ok = false;
       try { ok = send() === true; } catch (e) { ok = false; }
       go(ok ? 'sent' : 'failed', resultMs);
       return ok;
     },
-    /** Back to idle, no send (HA went offline, the room was left). */
+    /** A key was released on the button: the next keyboard press is fresh. */
+    keyUp() { awaitKeyUp = false; },
+    /** Back to idle, no send (HA went offline, the room was left, the panel
+     *  closed). */
     reset() { go('idle', 0); },
     dispose() { if (timer !== null) { clearTimer(timer); timer = null; } }
   };
@@ -124,18 +144,61 @@ export function roomScriptButtonText(label, state) {
 }
 
 /**
- * The row. `haState`: 'none' (no Home Assistant configured -- nothing to run
- * it on), 'offline', or 'ok'. Disabled unless 'ok'.
+ * Everything the row shows, for the markup below AND for index.html's
+ * in-place update (which keeps the button element, and so its keyboard
+ * focus, across states). `haState`: 'none' (no Home Assistant configured --
+ * nothing to run it on), 'offline', or 'ok'. Disabled unless 'ok'.
+ *
+ *   state     the state painted ('idle' whenever HA is not ok)
+ *   text      the button's text
+ *   disabled  the button's disabled flag
+ *   note      the small line under it ('' for none)
+ *   live      what the persistent role="status" region announces
  */
-export function roomScriptRowHtml(binding, state, haState) {
-  const st = haState === 'ok' ? (state || 'idle') : 'idle';
-  const dis = haState === 'ok' ? '' : ' disabled';
+export function roomScriptView(binding, state, haState) {
+  const ok = haState === 'ok';
+  const st = ok ? (state || 'idle') : 'idle';
   const note = haState === 'none' ? 'Needs Home Assistant'
     : haState === 'offline' ? 'Unavailable while Home Assistant is offline'
     : st === 'armed' ? 'Switches off this room’s lights and devices' : '';
+  const text = roomScriptButtonText(binding.label, st);
+  const live = st === 'armed' ? 'Armed. Press again to confirm: ' + text.replace(/^Tap again to /, '') + '.'
+    : st === 'sent' ? 'Sent.'
+    : st === 'failed' ? 'Not sent. Try again.'
+    : '';
+  return { state: st, text, disabled: !ok, note, live };
+}
+
+/**
+ * The row. The announcement lives in its own role="status" element, which
+ * stays in the DOM while the button changes state (a live region must exist
+ * before its content changes to be announced).
+ */
+export function roomScriptRowHtml(binding, state, haState) {
+  const v = roomScriptView(binding, state, haState);
   return `<div class="control-group room-script-row" data-row="room-script">
-    <button class="room-script-btn ${esc(st)}" data-action="room-script" data-state="${esc(st)}"
-      aria-live="polite"${dis}>${esc(roomScriptButtonText(binding.label, st))}</button>
-    ${note ? `<div class="room-script-note">${esc(note)}</div>` : ''}
+    <button class="room-script-btn ${esc(v.state)}" data-action="room-script" data-state="${esc(v.state)}"${v.disabled ? ' disabled' : ''}>${esc(v.text)}</button>
+    <div class="room-script-note"${v.note ? '' : ' hidden'}>${esc(v.note)}</div>
+    <div class="sr-only" role="status" aria-live="polite" data-room-script-live></div>
   </div>`;
+}
+
+/**
+ * Update a painted row in place to `view` (roomScriptView). Returns false
+ * when `row` does not have the expected parts, so the caller can repaint it
+ * instead. DOM-light: only textContent / className / attributes.
+ */
+export function applyRoomScriptView(row, view) {
+  const btn = row && row.querySelector('[data-action="room-script"]');
+  const note = row && row.querySelector('.room-script-note');
+  const live = row && row.querySelector('[data-room-script-live]');
+  if (!btn || !note || !live) return false;
+  btn.className = 'room-script-btn ' + view.state;
+  btn.setAttribute('data-state', view.state);
+  btn.textContent = view.text;
+  btn.disabled = view.disabled;
+  note.textContent = view.note;
+  note.hidden = !view.note;
+  live.textContent = view.live;
+  return true;
 }

@@ -75,6 +75,13 @@ jobs:
           fi
       - name: Run the PII guard
         run: bash scripts/check-no-pii.sh
+      - name: The guard catches a real-looking entity id in every bindable domain
+        run: |
+          # Runs the real guard on a scratch copy of the tracked files with one
+          # planted id per domain (script, vacuum, media_player, ...), and
+          # checks houses/demo/rooms.json still requires a demo_ prefix.
+          set -euo pipefail
+          node scripts/test-check-no-pii.mjs
 
   version-stamping:
     name: Version stamping guard
