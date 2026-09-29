@@ -31,7 +31,8 @@
  *      arm, and stays refused until a 1 s pause; a deliberate pair 0.4-4 s
  *      apart (even with an accidental double in between) still confirms,
  *      after 0.5 s of quiet for a synthetic click; pointer and Enter confirms
- *      stay immediate.
+ *      stay immediate. QUIET WAIT: reset() (panel close / room change) or HA
+ *      going offline during the 0.5 s wait never sends.
  *   4. End to end over the fake HA WebSocket, through the REAL
  *      HAClient.callService: two presses put exactly one call_service
  *      script/turn_on with the right target and variables on the socket; one
@@ -313,6 +314,41 @@ function button() {
   b.ev.click(1); b.h.advance(200); b.ev.click(1);
   check('pointer: a double-tap does not', b.h.sends.length === 0);
 }
+// The 0.5 s quiet wait of a synthetic confirm: something that disarms the
+// button while the send is still pending must stop it. reset() is what the
+// page calls on panel close, on leaving the room and on HA going offline;
+// fire() re-checks writable() for the case where HA drops and nothing has
+// called reset() yet.
+{
+  const pendingConfirm = () => {
+    const b = button();
+    b.ev.click(0); b.h.advance(600); b.ev.click(0);   // arm, then a synthetic confirm
+    return b;
+  };
+  const ctl = pendingConfirm();
+  check('quiet wait: (control) a pending synthetic confirm is waiting, nothing sent yet',
+    ctl.h.sends.length === 0 && ctl.h.c.state === 'armed', ctl.h.sends);
+  ctl.h.advance(500);
+  check('quiet wait: (control) left alone it sends once', ctl.h.sends.length === 1, ctl.h.sends);
+
+  const r = pendingConfirm();
+  r.h.advance(200);
+  r.h.c.reset();                                        // panel closed / room changed
+  check('quiet wait: reset() mid-wait goes idle', r.h.c.state === 'idle', r.h.c.state);
+  r.h.advance(5000);
+  check('quiet wait: reset() mid-wait never sends', r.h.sends.length === 0, r.h.sends);
+
+  const o = pendingConfirm();
+  o.h.advance(200);
+  o.h.setWritable(false);                               // HA dropped; no reset() yet
+  o.h.advance(5000);
+  check('quiet wait: HA offline when the wait ends never sends', o.h.sends.length === 0, o.h.sends);
+  check('quiet wait: ...and the button goes idle', o.h.c.state === 'idle', o.h.c.state);
+  o.h.setWritable(true);
+  o.h.advance(5000);
+  check('quiet wait: HA back later does not resurrect the send', o.h.sends.length === 0, o.h.sends);
+}
+
 // Repeat guard: a HELD assistive-tech switch that auto-repeats its click with
 // no key events. Each model: (initial delay before repeats, repeat interval).
 for (const [delay, every] of [[0, 30], [0, 100], [500, 30], [600, 100], [450, 300]]) {
