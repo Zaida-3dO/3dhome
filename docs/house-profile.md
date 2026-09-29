@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.9"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key `1.8` the `switches` rows of an item card and `1.9` its `cameras` rows. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.9"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card and `1.9` its `cameras` rows. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
