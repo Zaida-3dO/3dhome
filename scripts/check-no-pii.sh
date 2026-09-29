@@ -162,7 +162,20 @@ fi
 # people to weaken it, which is worse than the narrow rule.
 # ---------------------------------------------------------------------------
 # climate: added with the sidebar temperature row (rooms.json sensors.climate).
-ENTITY_RE='"(light|switch|sensor|binary_sensor|cover|climate)\.[a-z0-9_]+"'
+#
+# ENTITY_DOMAINS: every domain rooms.json can bind today -- light (rooms),
+# binary_sensor (presence, doors), cover (curtains), climate, vacuum
+# (sensors.vacuums), sensor (plants, readings), media_player (sensors.items),
+# script (sensors.roomScripts) -- plus the Home Assistant domains a future
+# binding is likeliest to reach for, so a new binding is guarded the day it
+# lands rather than after someone notices. scripts/test-check-no-pii.sh
+# plants one real-looking id per domain and asserts each is caught.
+# Deliberately NOT here: domains whose name is also a common JS/JSON word
+# ("event.x", "update.x", "number.x", "select.x", "button.x", "text.x",
+# "time.x", "date.x", "image.x", "person.x"), which would fire on ordinary
+# code and prose; see the note on narrowness above.
+ENTITY_DOMAINS='light|switch|sensor|binary_sensor|cover|climate|script|vacuum|media_player|scene|automation|input_boolean|input_number|input_select|input_text|input_button|input_datetime|camera|fan|lock|alarm_control_panel|device_tracker|water_heater|humidifier|remote|siren|valve|lawn_mower|counter|timer'
+ENTITY_RE="\"(${ENTITY_DOMAINS})\\.[a-z0-9_]+\""
 
 # is_fictional_id <object_id> - true if an id is obviously invented.
 #

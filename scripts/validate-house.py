@@ -1046,6 +1046,33 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
     check_vacuum_binding(rooms_doc, geo, sensors, geo_room_ids, (major, minor), report)
     check_plant_binding(rooms_doc, geo, sensors, (major, minor), report)
     check_item_binding(rooms_doc, geo, sensors, (major, minor), report)
+    check_room_script_binding(rooms_doc, sensors, geo_room_ids, (major, minor), report)
+
+
+def check_room_script_binding(rooms_doc, sensors, geo_room_ids, version, report):
+    """`sensors.roomScripts`: room id -> the ONE script the room's sidebar
+    offers as its (two-step) "Kill room" button (src/room-script.js). A
+    binding to a room that does not exist can never be shown -- an error, like
+    presence and climate. The schema already enforces the shape and the
+    `script.` domain. Several rooms sharing one script, even with identical
+    variables, is deliberate (two rooms the script treats as one area) and is
+    not reported.
+    """
+    scripts = sensors.get("roomScripts") or {}
+    if not scripts:
+        return
+    if version < (1, 7):
+        report.warn(
+            "rooms.json/schemaVersion",
+            "`sensors.roomScripts` needs schemaVersion 1.7 or newer, but this profile "
+            f"declares '{rooms_doc.get('schemaVersion')}' -- bump it; nothing else enforces this coupling",
+        )
+    for rid in scripts:
+        if rid not in geo_room_ids:
+            report.error(
+                f"rooms.json/sensors/roomScripts/{rid}",
+                f"room script bound to room '{rid}', which has no matching room in geometry.json",
+            )
 
 
 def check_item_binding(rooms_doc, geo, sensors, version, report):

@@ -1,6 +1,6 @@
 {
   "kind": "rooms",
-  "schemaVersion": "1.6",
+  "schemaVersion": "1.7",
   "house": "demo",
   "homeAssistant": {
     "enabled": false,
@@ -176,6 +176,15 @@
           }
         ]
       }
+    },
+    "roomScripts": {
+      "lounge": { "entity": "script.demo_room_off", "variables": { "area": "demo_lounge_kitchen" } },
+      "kitchen": { "entity": "script.demo_room_off", "variables": { "area": "demo_lounge_kitchen" } },
+      "hall": { "entity": "script.demo_room_off", "variables": { "area": "demo_hall_store" } },
+      "store": { "entity": "script.demo_room_off", "variables": { "area": "demo_hall_store" } },
+      "study": { "entity": "script.demo_room_off", "variables": { "area": "demo_study" } },
+      "bathroom": { "entity": "script.demo_room_off", "variables": { "area": "demo_bathroom" } },
+      "bedroom": { "entity": "script.demo_room_off", "variables": { "area": "demo_bedroom" }, "label": "Switch room off" }
     }
   }
 }

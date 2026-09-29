@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.6"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key and `1.6` its `items` key. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.7"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key and `1.7` its `roomScripts` key. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -1037,6 +1037,7 @@ renders exactly as it did before — both features simply stay dark.
 | `climate` | **room id** | ONE `climate.*` entity (a string, not a list) for the room panel's temperature row |
 | `vacuums` | **furniture item id**, from the geometry's `furniture[].id` | A robot vacuum: click the item for its control card; the sidebar's Controls view shows the same block |
 | `plants` | **furniture item id** | A plant: tap the item for its read-only moisture card; the sidebar's Controls view lists every plant |
+| `roomScripts` | **room id** | ONE `script.*` the room panel offers as a two-step "Kill room" button |
 
 Several entities on one target are OR-ed: any one of them reading `on` means
 occupied, or open. `unavailable` and `unknown` count as `off`, so a sensor that
@@ -1073,6 +1074,8 @@ lacks is simply not shown:
   `min_temp`, `max_temp` and `target_temp_step` (step defaults to `0.5`). A
   thermostat that is `off`, or reports no target, shows "off" with the slider
   disabled.
+- **Kill room** — last, under a divider: the room's `roomScripts` button (see
+  below).
 
 Every control that sends a command is disabled while its entity is unavailable.
 
@@ -1426,6 +1429,56 @@ controls move. `items` needs `schemaVersion` `"1.6"`; the validator errors on
 an item id the geometry does not have and on a region whose `from` is not below
 its `to`, and warns on a region past the item's `params.width` and on two
 overlapping regions.
+
+#### Room scripts ("Kill room")
+
+```json
+"sensors": {
+  "roomScripts": {
+    "lounge":  { "entity": "script.example_room_off", "variables": { "area": "lounge_and_kitchen" } },
+    "kitchen": { "entity": "script.example_room_off", "variables": { "area": "lounge_and_kitchen" } },
+    "study":   { "entity": "script.example_room_off", "variables": { "area": "study" },
+                 "label": "Switch room off" }
+  }
+}
+```
+
+Keyed by **room id**. Each bound room's panel ends with one red, full-width
+button — **Kill room** unless `label` says otherwise — that runs `entity` with
+that room's `variables`. It is meant for a script that switches the room off
+(lights, curtains, TVs), so a mis-tap must not fire it:
+
+1. The first tap **arms** it: the button turns solid red and reads "Tap again
+   to kill room". Left alone for about 4 seconds, it goes back to idle. A
+   second tap within 0.4 s of the first is ignored, so a double-tap is not a
+   confirm.
+2. The second tap sends **one** `script.turn_on`, targeting `entity`, with
+   `variables` as its `variables`, and the button reads **Sent** (or **Not
+   sent — try again** when the call could not go out) for a moment.
+
+Nothing is sent on render, on a reconnect or on a resync — only from that
+second tap. The button is disabled while Home Assistant is not connected
+(losing the connection also disarms it), and in a house with no Home Assistant
+(the demo), where there is nothing to run it on. Leaving the room or closing
+the sidebar disarms it.
+
+From the keyboard, Enter or Space arms it and a second, separate press
+confirms. The button keeps focus between the two, and a status region
+announces "Armed" and then "Sent" to a screen reader. Holding Enter down never
+confirms: after a keyboard arm, the key has to be released before a keyboard
+press can count.
+
+`script.turn_on` rather than the script's own service (`script.<name>`):
+`turn_on` is Home Assistant's way to start a script **by entity id** with
+`variables`, and it returns as soon as the script has started instead of
+waiting for it to finish. **Sent** therefore means Home Assistant accepted the
+call, not that every device has already switched off.
+
+One script can serve every room: bind it to each room with the value that
+room's variables need. Several rooms may pass **identical** variables — two
+rooms the script treats as one area — and the validator does not report that.
+`roomScripts` needs `schemaVersion` `"1.7"`; the validator errors on a room id
+the geometry does not have, and the schema requires a `script.*` entity.
 
 Leave `url` and `fallbackUrl` out of a committed profile. A hostname in a
 tracked file discloses infrastructure; supply them through runtime config
