@@ -567,10 +567,22 @@ export const HAClient = (() => {
       return true;
     }
 
+    // cb(entityId, raw) for a sensors.items entity whose STATE STRING changed
+    // (first report included) -- a TV's screen follows its set's power. An
+    // attribute-only republish (volume, media position) does not fire, so a
+    // consumer may repaint on every call.
+    const itemEntityCallbacks = [];
     function noteRaw(st) {
       if (!st || !st.entity_id) return;
       if (!entityIndex.has(st.entity_id) && !climateIndex.has(st.entity_id) && !itemEntityIds.has(st.entity_id)) return;
-      rawStates.set(st.entity_id, { state: st.state, attributes: st.attributes || {} });
+      const prev = rawStates.get(st.entity_id);
+      const raw = { state: st.state, attributes: st.attributes || {} };
+      rawStates.set(st.entity_id, raw);
+      if (itemEntityIds.has(st.entity_id) && (!prev || prev.state !== raw.state)) {
+        itemEntityCallbacks.forEach(cb => {
+          try { cb(st.entity_id, raw); } catch (e) { console.warn('HAClient itemEntityCb:', e); }
+        });
+      }
     }
 
     /**
@@ -1075,6 +1087,8 @@ export const HAClient = (() => {
       // Raw { state, attributes } last seen for a bound light / climate
       // entity, or null before it has reported. See rawStates above.
       getRawState(entityId) { return rawStates.get(entityId) || null; },
+      // cb(entityId, raw) -- see itemEntityCallbacks above.
+      onItemEntityChange(cb) { itemEntityCallbacks.push(cb); },
       onStatusChange(cb) { statusCallbacks.push(cb); },
       // Test/diagnostic seam: drive a sensor without a live HA socket. Returns
       // true if the resolved boolean changed (and callbacks fired).

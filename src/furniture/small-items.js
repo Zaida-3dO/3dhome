@@ -27,6 +27,7 @@
  * furniture[].params, never here.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { makeTvScreenMaterial } from './tv-screen.js';
 
 const CM = 0.01;
 
@@ -65,6 +66,11 @@ const OVERLAY_GAP = 0.002;
 //   'picture-frame' a wooden picture-frame bezel (Frame-TV look), wall-hung,
 //                  ("art mode" imagery is not built yet -- see `photo-frame`
 //                  for the injectable-texture pattern a later PR can reuse).
+// THE SCREEN follows the TV (src/furniture/tv-screen.js): it is a DYNAMIC part
+// (userData.dynamic, never merged) named 'tvScreen', built dark -- black
+// glass -- and lit with an invented home-screen picture when the scene's
+// setTvScreen() says the set is on. `screenColor` is the glass's tint (drawn
+// darkened to near-black), no longer a constant glow.
 // Generic defaults only -- real model dimensions (when a research note
 // supplies them) belong in a private house's furniture[].params, never here.
 // ============================================================================
@@ -116,9 +122,17 @@ function buildTv(THREE, params, opts) {
   }
   const h = Math.max(m(p.height) - panelBottom, 0.01);
 
-  const screenMat = makeFinish(THREE, 'emissive', p.screenColor);
+  const screenMat = makeTvScreenMaterial(THREE, p.screenColor);
   const screenDepth = Math.min(Math.max(d * 0.3, 0.005), d * 0.5);
   const cy = panelBottom + h / 2;
+  // The screen is its own live mesh, so the scene can light it per item.
+  const tagScreen = mesh => {
+    mesh.name = 'tvScreen';
+    mesh.userData.keep = true;
+    mesh.userData.dynamic = true;
+    mesh.userData.tvScreen = true;
+    return mesh;
+  };
 
   if (!pictureFrame || o.detail === 'low') {
     // 'thin' (and the low-detail picture frame, whose body simply takes the
@@ -131,9 +145,7 @@ function buildTv(THREE, params, opts) {
       : makeFinish(THREE, p.finish, p.color);
     g.add(box(THREE, w, d - OVERLAY_GAP, h, bodyMat, 0, cy, (d - OVERLAY_GAP) / 2));
     const bezel = pictureFrame ? Math.min(m(p.frameWidth), w / 4, h / 4) : Math.min(0.012, w * 0.012);
-    const screen = box(THREE, w - bezel * 2, screenDepth, h - bezel * 2, screenMat, 0, cy, d - screenDepth / 2);
-    screen.userData.keep = true;
-    g.add(screen);
+    g.add(tagScreen(box(THREE, w - bezel * 2, screenDepth, h - bezel * 2, screenMat, 0, cy, d - screenDepth / 2)));
     return g;
   }
 
@@ -154,9 +166,7 @@ function buildTv(THREE, params, opts) {
   const bodyFront = d - OVERLAY_GAP - screenDepth;
   g.add(box(THREE, w - (fw - tuck) * 2, bodyFront - OVERLAY_GAP, h - (fw - tuck) * 2, bodyMat,
     0, cy, OVERLAY_GAP + (bodyFront - OVERLAY_GAP) / 2));
-  const screen = box(THREE, w - fw * 2, screenDepth, h - fw * 2, screenMat, 0, cy, bodyFront + screenDepth / 2);
-  screen.userData.keep = true;
-  g.add(screen);
+  g.add(tagScreen(box(THREE, w - fw * 2, screenDepth, h - fw * 2, screenMat, 0, cy, bodyFront + screenDepth / 2)));
   return g;
 }
 

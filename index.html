@@ -965,6 +965,7 @@
     import { HouseLoader }    from './src/house-loader.js?v=__VERSION__';
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
+    import { tvEntityBindings, tvScreenOn } from './src/furniture/tv-screen.js?v=__VERSION__';
     import { parseSunTime }   from './src/sun-position.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
              haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml,
@@ -1643,6 +1644,14 @@
           home.setCorniceLight(curtainId, { on: !!on, bri: bri != null ? bri : 100, color: color || null }),
         getCurtainOpen: curtainId => home.getCurtainOpen(curtainId),
         getCornice: curtainId => home.getCorniceLight(curtainId),
+        // A TV's screen (a `tv` furniture id), as its set's power would drive
+        // it: true/false, or a media_player state through the same mapping
+        // the live path uses. No command is sent:
+        //   __home3dSensors.tv('bedroom_tv', true)
+        //   __home3dSensors.tv('bedroom_tv', 'standby')   // dark
+        //   __home3dSensors.tvScreens()                   // every screen's look
+        tv: (itemId, on) => home.setTvScreen(itemId, typeof on === 'string' ? tvScreenOn(on) : !!on),
+        tvScreens: () => home.getTvScreens(),
         // Sidebar slider availability -- this is PANEL state (curtainAvailableState),
         // not scene state, since "can this slider send a command" depends on
         // whether ha exists and has a reading, not on the 3D curtain itself.
@@ -2327,6 +2336,14 @@
           home.setCorniceLight(curtainId, st);
         });
         ha.onCurtainAvailabilityChange((curtainId, available) => applyCurtainAvailable(curtainId, available));
+
+        // TV set power -> its screen (lit home screen / black glass). The
+        // item's `role: "tv"` media row in sensors.items; fired only when
+        // that entity's state string changes.
+        const tvBindings = tvEntityBindings(haConfig.sensors && haConfig.sensors.items);
+        ha.onItemEntityChange((entityId, raw) => tvBindings.forEach((tvEntity, itemId) => {
+          if (tvEntity === entityId) home.setTvScreen(itemId, tvScreenOn(raw));
+        }));
 
         ha.connect();
       }
