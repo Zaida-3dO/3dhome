@@ -5379,11 +5379,13 @@ export const Home3DScene = (() => {
         requestRender();
       },
       /**
-       * Light or darken a TV's screen (a `tv` furniture item, by its id):
-       * on -> the home-screen picture, off -> black glass. Only two uniforms
-       * change (tv-screen.js applyTvScreenLook): no light, no shader, and one
-       * repaint only when something actually changed. Remembered, so a call
-       * before the furniture has attached takes effect when it does.
+       * Set a TV's screen (a `tv` furniture item, by its id): 'on' (or
+       * true) -> the home-screen picture, 'art' -> the art-mode picture,
+       * 'off' (or false) -> black glass. Only uniforms and the emissive
+       * map's texture change (tv-screen.js applyTvScreenLook): no light, no
+       * shader, and one repaint only when something actually changed.
+       * Remembered, so a call before the furniture has attached takes
+       * effect when it does.
        */
       setTvScreen(itemId, on) { tvScreens.set(itemId, on); },
       // Every built TV screen and its live look, for tests and the debug seam:
@@ -5393,7 +5395,7 @@ export const Home3DScene = (() => {
         return tvScreens.entries().map(([itemId, mesh]) => {
           const c = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
           const n = new THREE.Vector3(0, 0, 1).transformDirection(mesh.matrixWorld);
-          return { itemId, on: !!mesh.material.userData.tvOn,
+          return { itemId, on: !!mesh.material.userData.tvOn, mode: mesh.material.userData.tvMode,
             emissive: '#' + mesh.material.emissive.getHexString(), emissiveIntensity: mesh.material.emissiveIntensity,
             hasPicture: !!mesh.material.emissiveMap, centre: c.toArray(), facing: [n.x, n.z] };
         });

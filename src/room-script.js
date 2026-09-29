@@ -30,6 +30,11 @@
  */
 
 import { esc } from './room-panel.js';
+import { SCRIPT_ID, scriptCommand, createKeyIntent } from './script-call.js';
+
+// The key-intent tracker moved to script-call.js (a card's action buttons
+// share it); re-exported so this module's callers keep one import.
+export { createKeyIntent };
 
 export const DEFAULT_ROOM_SCRIPT_LABEL = 'Kill room';
 export const ARM_TIMEOUT_MS = 4000;
@@ -40,7 +45,6 @@ export const BURST_WINDOW_MS = 1500;  // 3+ near-regular clicks inside this = a 
 export const BURST_GAP_MS = 1000;     // after a burst, ignore clicks until a pause this long
 export const QUIET_MS = 500;          // a synthetic confirm waits this long for no further click
 
-const SCRIPT_ID = /^script\.[a-z0-9_]+$/;
 
 /**
  * rooms.json `sensors.roomScripts` -> Map roomId -> { entity, variables, label }.
@@ -62,15 +66,9 @@ export function normaliseRoomScripts(raw) {
   return out;
 }
 
-/** A binding -> the ONE service call it makes. */
+/** A binding -> the ONE service call it makes (script-call.js's, shared). */
 export function roomScriptCommand(binding) {
-  if (!binding || typeof binding.entity !== 'string' || !SCRIPT_ID.test(binding.entity)) return null;
-  return {
-    domain: 'script',
-    service: 'turn_on',
-    data: { variables: { ...(binding.variables || {}) } },
-    target: { entity_id: binding.entity }
-  };
+  return scriptCommand(binding);
 }
 
 /**
@@ -225,43 +223,6 @@ export function createTwoStepConfirm({
 }
 
 /** The keys that activate a button. */
-const ACTIVATION_KEYS = new Set(['Enter', ' ', 'Spacebar']);
-
-/**
- * Which clicks on the button a real key press drove. `detail === 0` alone is
- * not enough: a screen reader in browse mode, a switch device and a scripted
- * el.click() all click with detail 0 and never send a key event, so treating
- * them as keyboard would arm the button and then refuse every confirm (the
- * release guard waits for a keyup that never comes).
- *
- *   keyDown(key)  an Enter / Space keydown ON the button (a held Enter's
- *                 auto-repeat keydowns included) -> the next click is keyed
- *   click(detail) -> true when that click is keyboard-driven; consumes it
- *   keyUp(key)    -> true for an Enter / Space release (the caller then
- *                 releases the confirm's guard); also ends the key's claim
- *   blur()        focus left: a keydown whose click never came is dropped
- *
- * Space activates on release, so its click follows its keyup and reads as a
- * plain press -- safe, because a held Space never auto-repeats a click.
- */
-export function createKeyIntent() {
-  let keyed = false;
-  return {
-    keyDown(key) { if (ACTIVATION_KEYS.has(key)) keyed = true; },
-    click(detail) {
-      const kb = keyed && detail === 0;
-      keyed = false;
-      return kb;
-    },
-    keyUp(key) {
-      if (!ACTIVATION_KEYS.has(key)) return false;
-      keyed = false;
-      return true;
-    },
-    blur() { keyed = false; }
-  };
-}
-
 /** What the button says in each state. */
 export function roomScriptButtonText(label, state) {
   if (state === 'armed') return 'Tap again to ' + label.charAt(0).toLowerCase() + label.slice(1);

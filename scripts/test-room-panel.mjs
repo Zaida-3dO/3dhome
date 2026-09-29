@@ -451,12 +451,16 @@ const onReading = (over = {}) => HAClient.parseClimate({
     /climateSender\.markDirty\(roomId\)/.test(html) && (html.match(/curtainSender\.markDirty\(curtainId\)/g) || []).length === 2);
   check('index: curtain row paints the reported position, not the animated one',
     /const pct = curtainShownPct\(cu\.id\);/.test(html));
-  // Five: the two senders, sendToHA's one light call (lightServiceCall picks
-  // turn_on / turn_off), vacuumSend (the robot vacuum block), which is itself
-  // gated on haOffline + 'connected', and the room script's confirm (gated
-  // likewise; scripts/test-room-script.mjs).
-  check('index: no callService outside the senders, sendToHA, vacuumSend and the room script',
-    (html.match(/ha\.callService(Debounced)?\(/g) || []).length === 5);
+  // Four: the two senders, sendToHA's one light call (lightServiceCall picks
+  // turn_on / turn_off) and vacuumSend (the robot vacuum block), which is
+  // itself gated on haOffline + 'connected'. The room script's confirm sends
+  // through the shared sendScript (src/script-call.js), gated likewise --
+  // one call site, checked here; its guard is tested in
+  // scripts/test-frame-art.mjs and scripts/test-room-script.mjs.
+  check('index: no callService outside the senders, sendToHA and vacuumSend',
+    (html.match(/ha\.callService(Debounced)?\(/g) || []).length === 4);
+  check('index: the only other send is the room script, through sendScript',
+    (html.match(/sendScript\(/g) || []).length === 1);
   const vacSend = (html.match(/function vacuumSend\([\s\S]*?\n      \}/) || [''])[0];
   check('index: vacuumSend refuses offline and sends only when connected',
     /if \(!b \|\| haOffline\(ha\)\) return;/.test(vacSend) && /ha\.status === 'connected'/.test(vacSend) &&

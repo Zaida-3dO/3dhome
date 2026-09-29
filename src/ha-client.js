@@ -16,7 +16,7 @@
 import { colorFromAttributes, DEFAULT_ACCENT_COLOR } from './light-color.js';
 import { normaliseVacuumBindings, parseVacuum, vacuumCommand, vacuumSegmentCommand } from './vacuum-control.js';
 import { normalisePlantBindings, plantEntities, parsePlant } from './plant-status.js';
-import { normaliseItemBindings, itemBindingEntities } from './item-cards.js';
+import { normaliseItemBindings, itemBindingEntities, itemWatchedAttributes } from './item-cards.js';
 
 /**
  * Slider value -> a `cover.set_cover_position` call, fanned out to every
@@ -553,7 +553,11 @@ export const HAClient = (() => {
     // is all the fold they need. The card repaints on its own 1 s tick.
     // Curtain covers and cornice lights (fittingIndex) too: the curtains
     // card's cornice-light row needs the light's own 'unavailable'.
-    const itemEntityIds = itemBindingEntities(normaliseItemBindings(sensors && sensors.items));
+    const itemBindingsNorm = normaliseItemBindings(sensors && sensors.items);
+    const itemEntityIds = itemBindingEntities(itemBindingsNorm);
+    // entity -> the attributes a binding decides on (a TV's art condition
+    // reads e.g. a remote's current_activity): a change there fires too.
+    const itemWatched = itemWatchedAttributes(itemBindingsNorm);
     // sun.sun -> cb({ azimuth, elevation }), degrees. Every HA install has
     // the entity; the scene points its sun from it. Fired only when either
     // value actually changed.
@@ -570,9 +574,10 @@ export const HAClient = (() => {
     }
 
     // cb(entityId, raw) for a sensors.items entity whose STATE STRING changed
-    // (first report included) -- a TV's screen follows its set's power. An
-    // attribute-only republish (volume, media position) does not fire, so a
-    // consumer may repaint on every call.
+    // (first report included) -- a TV's screen follows its set's power -- or
+    // one of its WATCHED attributes changed (itemWatched: an art condition's
+    // attribute). Any other attribute-only republish (volume, media
+    // position) does not fire, so a consumer may repaint on every call.
     const itemEntityCallbacks = [];
     function noteRaw(st) {
       if (!st || !st.entity_id) return;
@@ -581,7 +586,9 @@ export const HAClient = (() => {
       const prev = rawStates.get(st.entity_id);
       const raw = { state: st.state, attributes: st.attributes || {} };
       rawStates.set(st.entity_id, raw);
-      if (itemEntityIds.has(st.entity_id) && (!prev || prev.state !== raw.state)) {
+      const watched = itemWatched.get(st.entity_id);
+      const attrChanged = !!prev && !!watched && watched.some(a => prev.attributes[a] !== raw.attributes[a]);
+      if (itemEntityIds.has(st.entity_id) && (!prev || prev.state !== raw.state || attrChanged)) {
         itemEntityCallbacks.forEach(cb => {
           try { cb(st.entity_id, raw); } catch (e) { console.warn('HAClient itemEntityCb:', e); }
         });

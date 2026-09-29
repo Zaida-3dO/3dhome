@@ -680,7 +680,7 @@
       "label": "TV console", "notes": "Bound in rooms.json sensors.items with two REGION cards along its width, measured from its left edge as seen from the front (the order fronts[].cells are listed in): the left door (0-50) shows sample temperatures, the open shelf and drawer (50-130) a sample AV receiver. Nothing covers the right door, so a tap there is a plain furniture tap." },
     { "id": "bedroom_tv", "room": "bedroom", "type": "tv", "wall": 14, "centre": 560, "offset": 0, "elevation": 85,
       "params": {"width": 123, "height": 71},
-      "label": "TV", "notes": "Bound in rooms.json sensors.items: a TV and its cast device, each with a power switch." },
+      "label": "TV", "notes": "Bound in rooms.json sensors.items: a TV and its cast device, each with a power switch; the TV row has an art condition (the cast device's activity) and the card an Art mode action button." },
     { "id": "bedroom_bedside", "room": "bedroom", "type": "cabinet", "wall": 11, "centre": 505, "offset": 0,
       "params": {"width": 45, "height": 55, "depth": 40, "fronts": [{"height": 27, "cells": [{"kind": "drawer"}]}, {"height": 28, "cells": [{"kind": "drawer"}]}], "plinth": {"type": "plinth", "height": 0}, "color": "#e8e2d6"},
       "label": "Bedside table", "notes": "Bound in rooms.json sensors.items: three light rows (sample lights here)." },

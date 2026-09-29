@@ -1,6 +1,6 @@
 {
   "kind": "rooms",
-  "schemaVersion": "1.9",
+  "schemaVersion": "1.10",
   "house": "demo",
   "homeAssistant": {
     "enabled": false,
@@ -98,12 +98,28 @@
           {
             "entity": "media_player.demo_bedroom_tv",
             "label": "TV",
-            "role": "tv"
+            "role": "tv",
+            "art": {
+              "entity": "remote.demo_bedroom_tv_cast",
+              "attribute": "current_activity",
+              "value": "example.photo.frame"
+            }
           },
           {
             "entity": "media_player.demo_bedroom_tv_cast",
             "label": "TV cast",
             "role": "cast"
+          }
+        ],
+        "actions": [
+          {
+            "entity": "script.demo_tv_art",
+            "label": "Art mode",
+            "icon": "art",
+            "variables": {
+              "tv": "media_player.demo_bedroom_tv",
+              "player": "remote.demo_bedroom_tv_cast"
+            }
           }
         ]
       },
