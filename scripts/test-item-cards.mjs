@@ -696,7 +696,8 @@ const CONSOLE = [
   const ctl = html => (html.match(/<(button class="tp-(sw|ib)|input)[^>]*>/g) || []);
   check('curtains markup: every control disabled while HA is offline', ctl(hOff).length === 7 && ctl(hOff).every(c => /\sdisabled\b/.test(c)), ctl(hOff));
   check('wiring: the curtain view is built from curtainRoomGroup', /const curtainGroup = t => curtainRoomGroup\(t\.id, o\.house && o\.house\.curtains, bindings\.curtains, corniceBindings\);/.test(tpSrc) &&
-    /name: curtainCardTitle\(g\.room \? roomName\(g\.room\) : '', curtainNames\.get\(t\.id\) \|\| t\.id\), lights, covers \};/.test(tpSrc));
+    /const rn = g\.room \? roomName\(g\.room\) : '';/.test(tpSrc) &&
+    /name: curtainCardTitle\(rn, curtainNames\.get\(t\.id\) \|\| t\.id\), lights, covers \};/.test(tpSrc));
   // Mutation: the switch passes `false` (not a power switch) -> fails.
   check('wiring: the cornice switch is a power switch, the slider is not', /sendCornice\(l\.id, l\.entities, \{ on: !st\.on \}, true, 0\);/.test(tpSrc) &&
     /sendCornice\(l\.id, l\.entities, \{ on: true, bri: \+r\.value \}, false, 200\);/.test(tpSrc));
@@ -981,8 +982,23 @@ const CONSOLE = [
   const two = T.curtainRoomGroup('w_blind', curtains, covers, { w_blind: ['light.demo_a'], w_curtain: ['light.demo_a', 'light.demo_b'] });
   check('curtains card: a cornice with a light of its own keeps its row', two.lights.length === 2);
   check('wiring: a shared light is the room\'s curtain light; its preview reaches every curtain it lights',
-    /label: l\.shared && g\.room \? roomThingTitle\(roomName\(g\.room\), 'curtain light'\)/.test(tpSrc) &&
+    /label: l\.shared && g\.room \? 'Curtain light' : rowLabelInRoom\(sentenceCase\(l\.name \+ ' light'\), rn\)/.test(tpSrc) &&
     /same\.forEach\(k => home\.setCorniceLight\(k,/.test(tpSrc));
+
+  // Visual-review follow-ups (8b510fcd).
+  // Mutation: return the label unchanged -> 'Living room blinds' -> fails.
+  check('row labels under a room title drop the room', T.rowLabelInRoom('Living room blinds', 'Living room') === 'Blinds' &&
+    T.rowLabelInRoom('Living Room curtain light', 'Living room') === 'Curtain light');
+  // Mutation: match only the whole room name -> 'Office curtain' kept -> fails.
+  check('row labels: the end of the room name counts too ("Office curtain" in the Home office)', T.rowLabelInRoom('Office curtain', 'Home office') === 'Curtain');
+  check('row labels: a label that IS the room, or does not start with it, is kept', T.rowLabelInRoom('Living room', 'Living room') === 'Living room' &&
+    T.rowLabelInRoom('Bay blind', 'Living room') === 'Bay blind' && T.rowLabelInRoom('Officer', 'Home office') === 'Officer');
+  check('wiring: cover labels drop the room', /label: rowLabelInRoom\(sentenceCase\(cv\.name\), rn\),/.test(tpSrc));
+  // Mutation: drop the coarse kind widths -> the curtain card shrinks to 216px on touch -> fails.
+  check('touch sizing keeps each kind\'s own width', /\.tp-force-coarse \.tp-pop\[data-kind=vacuum\], \.tp-force-coarse \.tp-pop\[data-kind=curtain\] \{ --w: 236px; \}/.test(T.STYLE) &&
+    /\.tp-force-coarse \.tp-pop\[data-kind=item\] \{ --w: 252px; \}/.test(T.STYLE));
+  // Mutation: back to #60a5fa -> fails.
+  check('the droplets use the --wet token', /\.tp-ireading \.hum svg \{[^}]*fill: var\(--wet\);/.test(T.STYLE) && /\.tp-pmoist svg \{[^}]*fill: var\(--wet\);/.test(T.STYLE));
 
   const REST = { on: true, bri: 100, color: null, rest: true };
   const off = T.corniceRowState({ opt: null, now: 0, last: null, live: false, raw: null, scene: REST, haConfigured: true });

@@ -326,6 +326,27 @@ export function corniceRowState(x) {
   return { row: { na: false, on: !!s.on, bri: seen != null ? seen : lastOr100, briUnknown: false }, seen };
 }
 
+/**
+ * A row label under a card titled with the room ("Living room curtains"):
+ * the room is not said twice. A label that starts with the room's name -- or
+ * with the END of it ("Office curtain" in the "Home office") -- loses that
+ * part ("Living room blinds" -> "Blinds", "Office curtain" -> "Curtain"). A
+ * label that is only the room, or does not start with it, is kept.
+ */
+export function rowLabelInRoom(label, roomName) {
+  const l = String(label || '').trim(), r = String(roomName || '').trim();
+  if (!l || !r) return l;
+  const lw = l.split(/\s+/), rw = r.toLowerCase().split(/\s+/);
+  for (let n = rw.length; n > 0; n--) {
+    const tail = rw.slice(rw.length - n);
+    if (lw.length > n && tail.every((w, k) => lw[k].toLowerCase() === w)) {
+      const rest = lw.slice(n).join(' ');
+      return rest.charAt(0).toUpperCase() + rest.slice(1);
+    }
+  }
+  return l;
+}
+
 /** The curtains card title: "<Room> curtains", else the tapped curtain's own name. */
 export function curtainCardTitle(roomName, curtainName) {
   return roomName ? roomThingTitle(roomName, 'curtains') : sentenceCase(curtainName || 'Curtains');
@@ -698,6 +719,9 @@ const MARQ_PAD = 6;   // px the marquee's fade reaches past the title box
 const COARSE = '--w:216px;--ib-w:38px;--ib-h:' + GC.ibH + 'px;--sw-w:40px;--sw-h:' + GC.swH + 'px;--thumb:26px;--track-h:8px;';
 const coarseRules = sel => `
 ${sel} .tp-pop { ${COARSE} }
+${sel} .tp-pop[data-kind=vacuum], ${sel} .tp-pop[data-kind=curtain] { --w: 236px; }
+${sel} .tp-pop[data-kind=plant] { --w: 220px; }
+${sel} .tp-pop[data-kind=item] { --w: 252px; }
 ${sel} .tp-status::after { inset: -14px; }
 ${sel} .tp-btns { gap: 6px; }
 ${sel} .tp-ib::after { inset: -${GC.ibHitY}px -3px; }
@@ -869,7 +893,7 @@ export const STYLE = `
 .tp-ico.p-dry, .tp-ico.p-due { fill: var(--door-open); }
 .tp-ico.p-wet { fill: var(--wet); }
 .tp-pmoist { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; min-width: 0; }
-.tp-pmoist svg { width: 16px; height: 16px; flex: none; fill: #60a5fa; }
+.tp-pmoist svg { width: 16px; height: 16px; flex: none; fill: var(--wet); }
 .tp-pmoist b { font-size: 20px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
 .tp-pmoist.muted b { font-size: 15px; color: var(--ink-2); }
 .tp-pmoist.muted svg { fill: rgba(255,255,255,0.35); }
@@ -917,7 +941,7 @@ export const STYLE = `
 .tp-ireading b { font-size: 14px; font-weight: 600; color: var(--ink); }
 .tp-ireading.muted b { font-size: 12px; color: var(--ink-2); font-weight: 500; }
 .tp-ireading .hum { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; color: var(--ink-2); }
-.tp-ireading .hum svg { width: 11px; height: 11px; fill: #60a5fa; }
+.tp-ireading .hum svg { width: 11px; height: 11px; fill: var(--wet); }
 .tp-ivol { display: flex; align-items: center; gap: 6px; margin: 6px 0 -2px; }
 .tp-ivol svg { width: 14px; height: 14px; flex: none; fill: var(--ink-2); }
 .tp-ivol .tp-range { flex: 1 1 auto; width: auto; min-width: 0; margin: 0; }
@@ -958,7 +982,7 @@ ${coarseRules('.tp-force-coarse')}
    follows the card through --pop-bg / --pop-border. */
 :root[data-theme="light"] .tp-pop { color-scheme: only light;
   /* State colours darkened to at least 3:1 on the near-white card. */
-  --ink:#1a1d29; --ink-2:rgba(26,29,41,0.64); --amber:#b37f00; --heat:#e8590c; --door-open:#c77700; --ok:#16a34a; --wet:#3b82f6;
+  --ink:#1a1d29; --ink-2:rgba(26,29,41,0.64); --amber:#b37f00; --heat:#e8590c; --door-open:#c77700; --ok:#15803d; --wet:#3b82f6;
   --pop-bg: rgba(250,251,253,0.96); --pop-border: rgba(0,0,0,0.12); --range-track: rgba(0,0,0,0.18);
   box-shadow: 0 6px 20px rgba(0,0,0,0.22); }
 /* :where() keeps this at .tp-ico's own weight (0,1,0): it re-colours the
@@ -1572,17 +1596,19 @@ export function attachTapPopovers(o) {
       model(t) {
         const c = conn();
         const g = curtainGroup(t);
+        const rn = g.room ? roomName(g.room) : '';
         const covers = g.covers.map(cv => {
           const avail = S.curtainAvailable ? S.curtainAvailable(cv.id) : null;
-          return { id: cv.id, label: sentenceCase(cv.name), na: curtainUnavailable(c, avail),
+          return { id: cv.id, label: rowLabelInRoom(sentenceCase(cv.name), rn), na: curtainUnavailable(c, avail),
             pct: Math.round((S.curtainPct ? S.curtainPct(cv.id) : home.getCurtainOpen(cv.id)) || 0) };
         });
-        // A light shared by several of the room's curtains is the room's curtain light.
+        // Row labels do not repeat the room the title names. A light shared by
+        // several of the room's curtains is the room's "Curtain light".
         const lights = g.lights.map(l => Object.assign({ id: l.id,
-          label: l.shared && g.room ? roomThingTitle(roomName(g.room), 'curtain light') : sentenceCase(l.name + ' light') }, corniceRow(l, c)));
+          label: l.shared && g.room ? 'Curtain light' : rowLabelInRoom(sentenceCase(l.name + ' light'), rn) }, corniceRow(l, c)));
         const coverNa = covers.some(r => r.na), lightNa = lights.some(r => r.na);
         return { status: coverNa ? statusKey('curtain', c, true) : statusKey('light', c, lightNa), haOff: haOfflineConn(c),
-          name: curtainCardTitle(g.room ? roomName(g.room) : '', curtainNames.get(t.id) || t.id), lights, covers };
+          name: curtainCardTitle(rn, curtainNames.get(t.id) || t.id), lights, covers };
       },
       html(m) { return popoverHtml.curtain(m, dot); },
       bind(t, el, ctl) {
