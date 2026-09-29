@@ -1995,10 +1995,15 @@ export function attachTapPopovers(o) {
         // Enter / Space keydown drove is a KEYBOARD press: once it has sent,
         // a held key's auto-repeat cannot send again until the key is
         // released (the window keyup below; this element may be redrawn
-        // before the release comes).
+        // before the release comes). The button's own keyup reaches its key
+        // tracker too, as the Kill room wires it: Space clicks on RELEASE, so
+        // without that its click would read as a keyboard press after the
+        // window keyup had already freed the guard -- re-arming it with no
+        // release left to come, and swallowing the next Enter.
         at('act', (b, i) => {
           const intent = createKeyIntent();
           b.addEventListener('keydown', e => intent.keyDown(e.key));
+          b.addEventListener('keyup', e => intent.keyUp(e.key));
           b.addEventListener('blur', () => intent.blur());
           b.addEventListener('click', e => {
             const keyboard = intent.click(e.detail);

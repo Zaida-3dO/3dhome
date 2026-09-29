@@ -222,7 +222,6 @@ export function createTwoStepConfirm({
   };
 }
 
-/** The keys that activate a button. */
 /** What the button says in each state. */
 export function roomScriptButtonText(label, state) {
   if (state === 'armed') return 'Tap again to ' + label.charAt(0).toLowerCase() + label.slice(1);

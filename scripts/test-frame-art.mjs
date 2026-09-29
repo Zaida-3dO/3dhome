@@ -117,15 +117,20 @@ const quiet = fn => { const w = console.warn, l = console.log; console.warn = ()
     held.keyUp();
     keyRepeatClick();
     check('release, then Enter again: a second send', n === 2, n);
+    held.keyUp();                                            // that Enter is released too
     advance(now + 3000);
     check('a pointer tap is never blocked by the key guard', held.press() === true && n === 3, n);
+    advance(now + 3000);
+    // ...and does not ARM it: a keyboard press straight after a pointer tap
+    // (no key release in between -- there was no key) still sends.
+    check('a pointer tap does not arm the key guard', held.press({ keyboard: true }) === true && n === 4, n);
     held.keyUp(); advance(now + 3000);
     // A keyboard press refused because HA is offline does not arm the guard.
     let w = false;
     const off = SC.createActionButton({ send: () => { n++; return true; }, writable: () => w, setTimer: setT, clearTimer: clearT });
     off.press({ keyboard: true });
     w = true;
-    check('an offline keyboard press leaves the next one free to send', off.press({ keyboard: true }) === true && n === 4, n);
+    check('an offline keyboard press leaves the next one free to send', off.press({ keyboard: true }) === true && n === 5, n);
     // A failed keyboard send also waits for the release (no resend loop).
     let m = 0;
     const bad = SC.createActionButton({ send: () => { m++; return false; }, writable: () => true, setTimer: setT, clearTimer: clearT });
@@ -133,6 +138,43 @@ const quiet = fn => { const w = console.warn, l = console.log; console.warn = ()
     check('a failed keyboard send is not retried by the held key', m === 1, m);
     bad.keyUp();
     check('...but is after a release', bad.press({ keyboard: true }) === false && m === 2, m);
+  }
+  // SPACE THEN ENTER, driven the way the card's button wires the tracker
+  // (keydown / keyup on the button -> createKeyIntent, a keyup ANYWHERE ->
+  // the button's keyUp, click -> press({ keyboard: intent.click(detail) })).
+  // Space clicks on RELEASE: its click follows its keyup.
+  {
+    let now = 0, due = [], n = 0;
+    const setT = (fn, ms) => { const t = { at: now + ms, fn }; due.push(t); return t; };
+    const clearT = t => { due = due.filter(x => x !== t); };
+    const advance = to => {
+      for (;;) { due.sort((a, c) => a.at - c.at); const t = due[0]; if (!t || t.at > to) break; due.shift(); now = t.at; t.fn(); }
+      now = to;
+    };
+    const btn = SC.createActionButton({ send: () => { n++; return true; }, writable: () => true, setTimer: setT, clearTimer: clearT, resultMs: 2500 });
+    const intent = SC.createKeyIntent();
+    // The card's wiring, as functions of the events.
+    const keydown = k => intent.keyDown(k);
+    const keyup = k => { intent.keyUp(k); if (SC.isActivationKey(k)) btn.keyUp(); };  // button keyup + window keyup
+    const click = () => btn.press({ keyboard: intent.click(0) });
+    keydown(' '); keyup(' '); click();                        // Space: release, then its click
+    check('Space sends', n === 1, n);
+    advance(3000);
+    keydown('Enter'); click(); keyup('Enter');                // Enter: click on keydown
+    check('Space, then Enter: Enter sends too (not swallowed)', n === 2, n);
+    advance(6000);
+    for (let t = 6000; t <= 16000; t += 30) { advance(t); keydown('Enter'); click(); }
+    keyup('Enter');
+    check('...and a held Enter after that still sends once', n === 3, n);
+    // The bug, pinned: without the button's own keyup reaching the tracker
+    // (only the window's), the same Space-then-Enter swallows the Enter.
+    let m = 0;
+    const b2 = SC.createActionButton({ send: () => { m++; return true; }, writable: () => true, setTimer: setT, clearTimer: clearT, resultMs: 2500 });
+    const i2 = SC.createKeyIntent();
+    i2.keyDown(' '); b2.keyUp(); b2.press({ keyboard: i2.click(0) });
+    advance(now + 3000);
+    i2.keyDown('Enter'); b2.press({ keyboard: i2.click(0) });
+    check('(without the button keyup, the Enter is swallowed -- why the wiring matters)', m === 1, m);
   }
   check('keys: Enter and Space activate, others do not', SC.isActivationKey('Enter') && SC.isActivationKey(' ') && !SC.isActivationKey('a'));
   check('button text', SC.actionButtonText('Art mode', 'idle') === 'Art mode' && SC.actionButtonText('Art mode', 'sent') === 'Sent' &&
@@ -354,7 +396,8 @@ const ART = { entity: 'remote.demo_stick', attribute: 'current_activity', value:
   const tp = read('src/tap-popovers.js').replace(/\s+/g, '');
   check('wiring: a tap presses the row\'s button (click only), saying whether a key drove it',
     tp.includes("at('act',(b,i)=>{constintent=createKeyIntent();b.addEventListener('keydown',e=>intent.keyDown(e.key));" +
-      "b.addEventListener('blur',()=>intent.blur());b.addEventListener('click',e=>{constkeyboard=intent.click(e.detail);" +
+      "b.addEventListener('keyup',e=>intent.keyUp(e.key));b.addEventListener('blur',()=>intent.blur());" +
+      "b.addEventListener('click',e=>{constkeyboard=intent.click(e.detail);" +
       "if(b.disabled)return;actionButtonFor(t,i).press({keyboard});});});"));
   check('wiring: a key release ANYWHERE frees the held-key guard (the button is redrawn under the key)',
     tp.includes('constonActionKeyUp=e=>{if(isActivationKey(e.key))actionButtons.forEach(b=>b.keyUp());};' +
