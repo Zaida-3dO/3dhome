@@ -62,6 +62,10 @@
      module -- the same contract the live scene and the Node tests use. -->
 <script type="module">
   import * as SmallItems from '../src/furniture/small-items.js';
+  // A TV's screen builds dark (its set is off until Home Assistant says
+  // otherwise); this page lights it for sign-off (see buildItem).
+  import * as TvScreen from '../src/furniture/tv-screen.js';
+  window.TvScreen = TvScreen;
   // The photo-frame image preview's span maths (page-only, DOM-free).
   import * as PhotoSpan from '../src/photo-span.js';
   window.PhotoSpan = PhotoSpan;
@@ -235,6 +239,9 @@ function buildItem(t, group, THREE, ctx) {
   // `t.params` (the params table, Copy JSON) never sees it.
   if (t.photo) params = Object.assign({}, params, { image: 'page-preview', textureLoader: () => t.photo.tex });
   const built = impl.build(THREE, params, { detail: t.detail || 'full' });
+  // TV, screen preview (page-only): ON by default -- the lit home screen is
+  // the look signed off here; "Screen: off" shows the black glass.
+  if (t.tv && window.TvScreen) window.TvScreen.setTvScreensIn(built, t.tv.on);
   group.add(built);
   disposePhotoSlices();
   if (t.photo) spanPhoto(THREE, built, t.photo);
@@ -335,6 +342,8 @@ function SmallItemObject({ type }) {
   // Tube floor lamp light preview (page-only): on/off and brightness; the
   // colour is the lamp's own `color` param.
   const [lamp, setLamp] = React.useState({ on: true, brightness: 1 });
+  // TV screen preview (page-only): the set on or off. On by default.
+  const [tv, setTv] = React.useState({ on: true });
   // Photo frame image preview (page-only): { tex, aspect, name, url }.
   const [photo, setPhoto] = React.useState(null);
   const [photoError, setPhotoError] = React.useState('');
@@ -379,6 +388,7 @@ function SmallItemObject({ type }) {
   const baseParams = paramsFor(type, activePreset);
   const params = Object.assign({}, baseParams, overrides);
   const t = { type, params, detail, lamp: type === 'tube-floor-lamp' ? lamp : null,
+    tv: type === 'tv' ? tv : null,
     photo: type === 'photo-frame' ? photo : null };
 
   const selectPreset = (pn) => {
@@ -451,6 +461,16 @@ function SmallItemObject({ type }) {
                 part of Copy JSON. A real placement takes its picture from the house's own files.
               </div>
               {photoError && <div className="legend" style={{ color: '#a33', opacity: 1 }}>{photoError}</div>}
+            </div>
+          )}
+          {type === 'tv' && (
+            <div className="row" id="tvPreview">
+              <button className={'btn' + (tv.on ? ' active' : '')} onClick={() => setTv({ on: !tv.on })}>
+                {tv.on ? 'Screen: on' : 'Screen: off'}
+              </button>
+              <span className="legend" style={{ marginTop: 0 }}>
+                Preview only: in the house the screen follows the TV's own Home Assistant entity.
+              </span>
             </div>
           )}
           {type === 'tube-floor-lamp' && (

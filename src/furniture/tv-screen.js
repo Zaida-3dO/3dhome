@@ -28,14 +28,23 @@
  * THE TWO LOOKS are the SAME material with different uniforms, never a
  * different material or program: the screen's emissive map (the home-screen
  * picture) is attached at build time and stays attached, and "off" simply
- * multiplies it by a black emissive colour. So a switch changes two
+ * multiplies it by a black emissive colour. So a switch changes three
  * uniforms, adds no light, compiles no shader and allocates nothing.
  *
  *   off  glass colour (the item's `screenColor`, darkened to near-black)
- *        lit by the room, roughness GLASS_ROUGHNESS: a faint sheen and the
- *        room's highlights, so it still reads as a screen -- but no glow.
+ *        lit by the room, roughness GLASS_ROUGHNESS, plus the GLASS SHEEN:
+ *        a very faint, fixed "reflection" -- a soft diagonal band, a little
+ *        more towards the top, and a thin brighter rim at the edges. The
+ *        live house has no environment map, so a dark smooth panel in a dim
+ *        room otherwise renders pure 0 and vanishes into a dark wall behind
+ *        it (a black slat wall, say); the sheen keeps its outline and surface
+ *        readable while it stays unmistakably black and unlit. OFF_SHEEN is
+ *        a few sRGB levels at most, and neutral grey, never blue.
  *   on   the same glass, plus the home-screen picture as emission at
- *        ON_INTENSITY.
+ *        ON_INTENSITY, and no sheen.
+ *
+ * The sheen is spliced into the fragment shader (onBeforeCompile) and driven
+ * by one uniform; every TV shares the one program (customProgramCacheKey).
  *
  * THE PICTURE is invented: a generic smart-TV home screen (a hero banner and
  * rows of rounded app tiles in varied colours), drawn procedurally once per
@@ -55,6 +64,11 @@ export const ON_INTENSITY = 1.15;
 export const GLASS_ROUGHNESS = 0.3;
 /** The off glass is the item's screenColor scaled by this -- near black. */
 export const GLASS_DARKEN = 0.3;
+/**
+ * The off glass's fixed sheen, linear RGB per channel, before the shader's
+ * weights (at most ~1.9x this, on the rim). Neutral grey: never tints blue.
+ */
+export const OFF_SHEEN = 0.006;
 
 /** The picture's size: 16:9, enough for a big TV seen across a room. */
 export const HOME_W = 768;
@@ -106,8 +120,8 @@ function scaledHex(color, k, fallback) {
  */
 export function tvScreenLook(on) {
   return on
-    ? { emissive: 0xffffff, emissiveIntensity: ON_INTENSITY }
-    : { emissive: 0x000000, emissiveIntensity: 0 };
+    ? { emissive: 0xffffff, emissiveIntensity: ON_INTENSITY, sheen: 0 }
+    : { emissive: 0x000000, emissiveIntensity: 0, sheen: OFF_SHEEN };
 }
 
 /**
@@ -119,9 +133,12 @@ export function applyTvScreenLook(mat, on) {
   if (!mat) return false;
   const look = tvScreenLook(!!on);
   const was = mat.userData && mat.userData.tvOn;
-  const same = mat.emissive && mat.emissive.getHex() === look.emissive && mat.emissiveIntensity === look.emissiveIntensity;
+  const sheen = mat.userData && mat.userData.tvSheen ? mat.userData.tvSheen.value : null;
+  const same = mat.emissive && mat.emissive.getHex() === look.emissive &&
+    mat.emissiveIntensity === look.emissiveIntensity && (!sheen || sheen.r === look.sheen);
   mat.emissive.setHex(look.emissive);
   mat.emissiveIntensity = look.emissiveIntensity;
+  if (sheen) sheen.setScalar(look.sheen);
   mat.userData.tvOn = !!on;
   return !(same && was === !!on);
 }
@@ -143,7 +160,95 @@ export function makeTvScreenMaterial(THREE, screenColor) {
   mat.userData.finish = 'emissive';
   mat.userData.tvScreen = true;
   mat.userData.tvOn = false;
+  // The off-glass sheen: one uniform per TV (its own look), one program for
+  // every TV. Built off, so it starts at OFF_SHEEN.
+  mat.userData.tvSheen = { value: new THREE.Color().setScalar(OFF_SHEEN) };
+  mat.onBeforeCompile = shader => {
+    shader.uniforms.tvSheen = mat.userData.tvSheen;
+    shader.fragmentShader = injectTvSheen(shader.fragmentShader);
+  };
+  mat.customProgramCacheKey = () => 'tv-screen-glass-1';
   return mat;
+}
+
+/**
+ * The sheen, spliced in right after the emissive map is applied, in that
+ * map's own uv (0..1 across the panel's front). Weights: a floor, a slow
+ * rise towards the top, a soft diagonal band (a window's reflection), and a
+ * thin rim at the panel's edge -- what outlines it against a dark wall.
+ */
+export const TV_SHEEN_GLSL = [
+  '{',
+  '  vec2 tvq = vEmissiveMapUv;',
+  '  float tvBand = exp( -pow( ( tvq.x * 0.7 - tvq.y + 0.25 ) / 0.22, 2.0 ) );',
+  '  float tvEdge = min( min( tvq.x, 1.0 - tvq.x ), min( tvq.y, 1.0 - tvq.y ) );',
+  '  float tvRim = 1.0 - smoothstep( 0.0, 0.018, tvEdge );',
+  '  totalEmissiveRadiance += tvSheen * ( 0.25 + 0.2 * tvq.y + 0.45 * tvBand + 1.0 * tvRim );',
+  '}'
+].join('\n');
+
+/** Splice the sheen into a MeshStandardMaterial fragment shader. */
+export function injectTvSheen(fragmentShader) {
+  const anchor = '#include <emissivemap_fragment>';
+  if (typeof fragmentShader !== 'string' || fragmentShader.indexOf(anchor) === -1) return fragmentShader;
+  return fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform vec3 tvSheen;')
+    .replace(anchor, anchor + '\n' + TV_SHEEN_GLSL);
+}
+
+/**
+ * Light or darken every TV screen inside `root` (a built TV, or a group of
+ * them) -- for a page that shows a TV with no Home Assistant: the spec page
+ * shows it ON, so the lit look is the one that gets signed off.
+ * @returns {number} how many screens it touched
+ */
+export function setTvScreensIn(root, on) {
+  let n = 0;
+  if (root && root.traverse) root.traverse(o => {
+    if (o.isMesh && o.userData && o.userData.tvScreen) { applyTvScreenLook(o.material, on); n++; }
+  });
+  return n;
+}
+
+/**
+ * The scene's TV screens: which are built, and which should be lit. The
+ * wanted state is kept apart from the meshes, so a reading that lands
+ * before the furniture attaches is applied when it does. `repaint` is
+ * called only when a look actually changed (the scene renders on demand).
+ *
+ *   set(itemId, on)          remember; apply (and repaint) if built
+ *   attach(dynamicByItemId)  index a furniture build's screens and put each
+ *                            in its wanted look; true if any look changed
+ *                            (the caller repaints after attaching anyway)
+ *   clear()                  forget the meshes (furniture disposed)
+ *   entries()                [[itemId, mesh], ...]
+ */
+export function createTvScreens(repaint) {
+  const meshes = new Map();
+  const want = new Map();
+  const apply = id => {
+    const mesh = meshes.get(id);
+    return mesh ? applyTvScreenLook(mesh.material, !!want.get(id)) : false;
+  };
+  return {
+    set(itemId, on) {
+      want.set(itemId, !!on);
+      if (apply(itemId) && repaint) repaint();
+    },
+    attach(dynamicByItemId) {
+      meshes.clear();
+      let changed = false;
+      Object.keys(dynamicByItemId || {}).forEach(itemId => {
+        const dyn = dynamicByItemId[itemId];
+        if (!dyn || !dyn.group) return;
+        dyn.group.traverse(o => { if (o.isMesh && o.userData && o.userData.tvScreen) meshes.set(itemId, o); });
+        if (apply(itemId)) changed = true;
+      });
+      return changed;
+    },
+    clear() { meshes.clear(); },
+    entries() { return [...meshes]; }
+  };
 }
 
 // One picture per THREE namespace (the live page has one; a test may load
