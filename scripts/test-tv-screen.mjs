@@ -313,15 +313,33 @@ check('the picture is 16:9', Math.abs(TV.HOME_W / TV.HOME_H - 16 / 9) < 0.01);
   const g1 = SI.TYPES.tv.build(THREE, {}, { detail: 'full' }), g2 = SI.TYPES.tv.build(THREE, {}, { detail: 'low' });
   const m1 = screensOf(g1)[0].material, m2 = screensOf(g2)[0].material;
   const sh = m1.userData.tvSheen && m1.userData.tvSheen.value;
-  check('sheen: built off with OFF_SHEEN', !!sh && sh.r === TV.OFF_SHEEN && sh.g === TV.OFF_SHEEN && sh.b === TV.OFF_SHEEN);
-  check('sheen: faint -- at most a few sRGB levels even on the rim', TV.OFF_SHEEN > 0 && TV.OFF_SHEEN * 1.9 <= 0.012, TV.OFF_SHEEN);
+  // Every channel equal to `v` -- neutral grey, never a tint.
+  const grey = (c, v) => !!c && c.r === v && c.g === v && c.b === v;
+  check('sheen: built off with OFF_SHEEN, neutral', grey(sh, TV.OFF_SHEEN), sh);
+  // FAINT, from the shader itself: the weights the GLSL actually carries,
+  // parsed out of it, times OFF_SHEEN, must stay under SHEEN_PEAK_MAX.
+  const m = /totalEmissiveRadiance \+= tvSheen \* \( ([\d.]+) \+ ([\d.]+) \* tvq\.y \+ ([\d.]+) \* tvBand \+ ([\d.]+) \* tvRim \);/.exec(TV.TV_SHEEN_GLSL);
+  const w = TV.SHEEN_WEIGHTS;
+  check('sheen: the GLSL carries exactly SHEEN_WEIGHTS', !!m && +m[1] === w.base && +m[2] === w.top && +m[3] === w.band && +m[4] === w.rim,
+    m && m.slice(1));
+  const peak = m ? TV.OFF_SHEEN * (+m[1] + +m[2] + +m[3] + +m[4]) : Infinity;
+  check('sheen: faint -- its brightest point (OFF_SHEEN x the shader\'s weights) stays under SHEEN_PEAK_MAX',
+    TV.OFF_SHEEN > 0 && peak <= TV.SHEEN_PEAK_MAX && Math.abs(TV.sheenPeak() - peak) < 1e-12, { peak, max: TV.SHEEN_PEAK_MAX });
+  check('sheen: the cap itself is a few sRGB levels, not a glow', TV.SHEEN_PEAK_MAX <= 0.012);
   check('sheen: each TV its own uniform', m1.userData.tvSheen !== m2.userData.tvSheen);
   check('sheen: one program for every TV', m1.customProgramCacheKey() === m2.customProgramCacheKey());
   TV.applyTvScreenLook(m1, true);
-  check('sheen: none while ON', sh.r === 0 && sh.g === 0 && sh.b === 0);
-  check('sheen: the other TV keeps its own', m2.userData.tvSheen.value.r === TV.OFF_SHEEN);
+  check('sheen: none while ON', grey(sh, 0), sh);
+  check('sheen: the other TV keeps its own', grey(m2.userData.tvSheen.value, TV.OFF_SHEEN));
   TV.applyTvScreenLook(m1, false);
-  check('sheen: back when OFF', sh.r === TV.OFF_SHEEN);
+  check('sheen: back when OFF, neutral', grey(sh, TV.OFF_SHEEN), sh);
+  // Several flips, every channel checked after each one.
+  let flipsNeutral = true;
+  [true, false, true, true, false, false].forEach(on => {
+    TV.applyTvScreenLook(m1, on);
+    if (!grey(sh, on ? 0 : TV.OFF_SHEEN)) flipsNeutral = false;
+  });
+  check('sheen: neutral grey after every flip', flipsNeutral, sh);
   // Through onBeforeCompile, on the REAL three.js standard shader.
   const shader = { uniforms: {}, vertexShader: THREE.ShaderLib.standard.vertexShader,
     fragmentShader: THREE.ShaderLib.standard.fragmentShader };
