@@ -3173,13 +3173,17 @@
           // a keyboard confirm counts, so a held Enter's auto-repeat can
           // never confirm. Any other click -- pointer, a screen reader's or
           // switch device's synthetic activation, el.click() -- is a plain
-          // press and confirms on a second one. keydown / keyup / blur only
-          // track intent and send nothing, so they are not onWrite handlers.
+          // press and confirms on a second one -- behind the repeat guard
+          // (a held, auto-repeating switch cancels the arm), and a synthetic
+          // (detail 0) confirm waits a moment for quiet before it sends.
+          // keydown / keyup / blur only track intent and send nothing, so
+          // they are not onWrite handlers.
           if (action === 'room-script') {
             const intent = createKeyIntent();
             onWrite(el, 'click', e => {
               const keyboard = intent.click(e.detail);
-              if (!el.disabled) roomScriptConfirm(rid).press({ keyboard });
+              const synthetic = !keyboard && e.detail === 0;
+              if (!el.disabled) roomScriptConfirm(rid).press({ keyboard, synthetic });
             });
             el.addEventListener('keydown', e => intent.keyDown(e.key));
             el.addEventListener('keyup', e => { if (intent.keyUp(e.key)) roomScriptConfirm(rid).keyUp(); });

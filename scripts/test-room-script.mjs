@@ -26,6 +26,12 @@
  *      and a held Enter never confirms; an assistive-tech or scripted click
  *      (detail 0, no key events) arms and confirms like a tap; pointer taps
  *      as before. Only Enter / Space keyups release; blur drops a stale key.
+ *      REPEAT GUARD: a held assistive-tech switch that auto-repeats its click
+ *      (several initial-delay / interval models) never sends, cancels the
+ *      arm, and stays refused until a 1 s pause; a deliberate pair 0.4-4 s
+ *      apart (even with an accidental double in between) still confirms,
+ *      after 0.5 s of quiet for a synthetic click; pointer and Enter confirms
+ *      stay immediate.
  *   4. End to end over the fake HA WebSocket, through the REAL
  *      HAClient.callService: two presses put exactly one call_service
  *      script/turn_on with the right target and variables on the socket; one
@@ -238,7 +244,7 @@ function button() {
   const ev = {
     keydown: key => intent.keyDown(key),
     keyup: key => { if (intent.keyUp(key)) h.c.keyUp(); },
-    click: detail => h.c.press({ keyboard: intent.click(detail) }),
+    click: detail => { const keyboard = intent.click(detail); return h.c.press({ keyboard, synthetic: !keyboard && detail === 0 }); },
     blur: () => intent.blur(),
   };
   return { h, ev };
@@ -272,6 +278,9 @@ function button() {
   check('key: Space arms', h.c.state === 'armed' && h.sends.length === 0);
   h.advance(600);
   ev.keydown(' '); ev.keyup(' '); ev.click(0);
+  // Space's click follows its keyup, so it reads as a plain detail-0 press
+  // and its confirm waits out the quiet window like any synthetic one.
+  h.advance(500);
   check('key: a second Space confirms', h.sends.length === 1, h.sends);
 }
 {
@@ -282,13 +291,17 @@ function button() {
   h.advance(100); ev.click(0);
   check('synthetic: a second one inside 400 ms does not confirm', h.sends.length === 0);
   h.advance(400); ev.click(0);
-  check('synthetic: a second one past 400 ms confirms (no keyup ever needed)', h.sends.length === 1, h.sends);
+  check('synthetic: the confirm waits for quiet (nothing sent yet)', h.sends.length === 0 && h.c.state === 'armed', h.sends);
+  h.advance(499);
+  check('synthetic: still nothing just inside the quiet window', h.sends.length === 0);
+  h.advance(1);
+  check('synthetic: a second one past 400 ms confirms after 500 ms of quiet (no keyup ever needed)', h.sends.length === 1 && h.c.state === 'sent', h.sends);
 }
 {
   // A keydown whose click never came (focus moved on), then a synthetic click.
   const { h, ev } = button();
   ev.keydown('Enter'); ev.blur();
-  ev.click(0); h.advance(600); ev.click(0);
+  ev.click(0); h.advance(600); ev.click(0); h.advance(500);
   check('synthetic: a stale keydown dropped on blur does not strand the confirm', h.sends.length === 1, h.sends);
 }
 {
@@ -300,9 +313,70 @@ function button() {
   b.ev.click(1); b.h.advance(200); b.ev.click(1);
   check('pointer: a double-tap does not', b.h.sends.length === 0);
 }
+// Repeat guard: a HELD assistive-tech switch that auto-repeats its click with
+// no key events. Each model: (initial delay before repeats, repeat interval).
+for (const [delay, every] of [[0, 30], [0, 100], [500, 30], [600, 100], [450, 300]]) {
+  const { h, ev } = button();
+  const label = `burst (first repeat after ${delay} ms, then every ${every} ms)`;
+  ev.click(0);
+  h.advance(delay || every); ev.click(0);
+  for (let i = 0; i < 60; i++) { h.advance(every); ev.click(0); }   // held for a while
+  check('repeat: ' + label + ' sends nothing', h.sends.length === 0, h.sends);
+  check('repeat: ' + label + ' cancels the arm', h.c.state === 'idle', h.c.state);
+  h.advance(5000);
+  check('repeat: ' + label + ' never sends after release either', h.sends.length === 0, h.sends);
+  // After the release, a deliberate pair works again.
+  ev.click(0); h.advance(800); ev.click(0); h.advance(500);
+  check('repeat: after a ' + label + ' and a pause, a deliberate pair confirms', h.sends.length === 1, h.sends);
+}
+{
+  // Locked: clicks keep being refused until a full 1 s pause.
+  const { h, ev } = button();
+  ev.click(0); h.advance(30); ev.click(0); h.advance(30); ev.click(0);
+  check('repeat: three regular clicks are a burst -> idle', h.c.state === 'idle');
+  h.advance(900); ev.click(0);
+  check('repeat: a click 0.9 s later is still refused (no arm)', h.c.state === 'idle');
+  h.advance(900); ev.click(0);
+  check('repeat: ...and it restarts the pause', h.c.state === 'idle');
+  h.advance(1000); ev.click(0);
+  check('repeat: after a 1 s pause a click arms again', h.c.state === 'armed');
+}
+{
+  // Deliberate presses that are NOT bursts.
+  const { h, ev } = button();
+  ev.click(0); h.advance(1500); ev.click(0); h.advance(500);
+  check('deliberate: two presses 1.5 s apart confirm', h.sends.length === 1, h.sends);
+  const a = button();
+  a.ev.click(0); a.h.advance(200); a.ev.click(0); a.h.advance(800); a.ev.click(0); a.h.advance(500);
+  check('deliberate: arm, an accidental double (200 ms), then a press 0.8 s later confirms (irregular, not a burst)', a.h.sends.length === 1, a.h.sends);
+  const w = button();
+  w.ev.click(0); w.h.advance(800); w.ev.click(0); w.h.advance(800); w.ev.click(0);
+  check('deliberate: evenly spaced presses spread past the 1.5 s window are not a burst (the third re-arms)',
+    w.h.sends.length === 1 && w.h.c.state === 'armed', { sends: w.h.sends, state: w.h.c.state });
+  const b = button();
+  b.ev.click(0); b.h.advance(3900); b.ev.click(0); b.h.advance(500);
+  check('deliberate: a second press at 3.9 s still confirms', b.h.sends.length === 1, b.h.sends);
+  const c = button();
+  c.ev.click(0); c.h.advance(700); c.ev.click(0); c.h.advance(200); c.ev.click(0); c.h.advance(2000);
+  check('deliberate: a click inside the quiet window cancels the confirm (fail safe)', c.h.sends.length === 0 && c.h.c.state === 'idle', { sends: c.h.sends, state: c.h.c.state });
+}
+{
+  // Pointer taps: unchanged -- immediate confirm, double-tap refused.
+  const { h, ev } = button();
+  ev.click(1); h.advance(450); ev.click(1);
+  check('pointer: two taps 450 ms apart confirm immediately (no quiet wait)', h.sends.length === 1 && h.c.state === 'sent', h.sends);
+  const p = button();
+  p.ev.click(1); p.h.advance(30); p.ev.click(1); p.h.advance(30); p.ev.click(1);
+  p.h.advance(500); p.ev.click(1);
+  check('pointer: a rapid burst of taps is refused like any other', p.h.sends.length === 0, p.h.sends);
+  const k = button();
+  k.ev.keydown('Enter'); k.ev.click(0); k.ev.keyup('Enter'); k.h.advance(600);
+  k.ev.keydown('Enter'); k.ev.click(0); k.ev.keyup('Enter');
+  check('key: a deliberate Enter pair still confirms immediately', k.h.sends.length === 1, k.h.sends);
+}
 {
   const ki = RS.createKeyIntent();
-  check('intent: a pointer click after a keydown is not keyboard', (ki.keyDown('Enter'), ki.click(1)) === false);
+  check('intent: a pointer click after a keydown is not keyboard',(ki.keyDown('Enter'), ki.click(1)) === false);
   check('intent: a click consumes the key', (ki.keyDown('Enter'), ki.click(0), ki.click(0)) === false);
   check('intent: other keys do not key a click', (ki.keyDown('a'), ki.click(0)) === false);
   check('intent: blur drops a keydown whose click never came', (ki.keyDown('Enter'), ki.blur(), ki.click(0)) === false);
@@ -402,7 +476,7 @@ function button() {
   check('index: row key only for a bound room',
     /if \(roomScriptBindings\(\)\.has\(rid\)\) keys\.push\('room-script'\);/.test(html));
   const presses = html.match(/roomScriptConfirm\(rid\)\.press\(/g) || [];
-  const inClick = /const intent = createKeyIntent\(\);\s*onWrite\(el, 'click', e => \{\s*const keyboard = intent\.click\(e\.detail\);\s*if \(!el\.disabled\) roomScriptConfirm\(rid\)\.press\(\{ keyboard \}\);\s*\}\);/.test(html);
+  const inClick = /const intent = createKeyIntent\(\);\s*onWrite\(el, 'click', e => \{\s*const keyboard = intent\.click\(e\.detail\);\s*const synthetic = !keyboard && e\.detail === 0;\s*if \(!el\.disabled\) roomScriptConfirm\(rid\)\.press\(\{ keyboard, synthetic \}\);\s*\}\);/.test(html);
   check('index: press() called only from the click handler, keyboard decided by the key-intent tracker', presses.length === 1 && inClick, presses.length);
   check('index: keydown on the button feeds the tracker',
     /el\.addEventListener\('keydown', e => intent\.keyDown\(e\.key\)\);/.test(html));
