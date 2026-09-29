@@ -54,6 +54,11 @@
           "required": [
             "readings"
           ]
+        },
+        {
+          "required": [
+            "switches"
+          ]
         }
       ],
       "properties": {
@@ -149,6 +154,47 @@
                 "type": "string",
                 "minLength": 1,
                 "description": "Optional row label. Without it the entity's own friendly_name is shown."
+              }
+            }
+          }
+        },
+        "switches": {
+          "type": "array",
+          "minItems": 1,
+          "description": "On/off rows for a socket or a device: the state (On / Off / Offline) and a power switch (switch.turn_on / turn_off, or input_boolean.turn_on / turn_off), with the paired power sensor's live draw on the row when `power` is bound. An offline power sensor shows nothing, never 0 W. Needs rooms schemaVersion 1.8.",
+          "items": {
+            "type": "object",
+            "required": [
+              "entity"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "entity": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/entityId"
+                  },
+                  {
+                    "pattern": "^(switch|input_boolean)\\."
+                  }
+                ],
+                "description": "The `switch.*` (or `input_boolean.*`) entity."
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional row label. Without it the entity's own friendly_name is shown."
+              },
+              "power": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/entityId"
+                  },
+                  {
+                    "pattern": "^sensor\\."
+                  }
+                ],
+                "description": "Optional power-draw `sensor.*` (W) shown on the row."
               }
             }
           }

@@ -167,6 +167,9 @@ check('supportsColor: unknown (no raw state / no modes reported) -> yes, the squ
     !('rgb_color' in L.lightServiceCall('cove', { on: true, color: '#ff8000' }, {}).data) &&
     eq(L.lightServiceCall('cove', { on: true, color: '#ff8000' }, { withColor: true }).data.rgb_color, [255, 128, 0]) &&
     !('rgb_color' in L.lightServiceCall('galaxy', { on: true, color: '#ff8000' }, { withColor: true }).data));
+  // A colour pick on an OFF light (power + withColor): the colour, no brightness.
+  const pk = L.lightServiceCall('cove', { on: true, bri: 100, color: '#ff8000' }, { withColor: true, power: true });
+  check('colour pick turning a light on: rgb_color, no brightness', !('brightness' in pk.data) && eq(pk.data.rgb_color, [255, 128, 0]), pk);
   check('a colour that is not a colour is not sent', !('rgb_color' in L.lightServiceCall('ambient', { on: true, color: 'junk' }, {}).data));
   // Wiring: every power switch passes power = true; the sliders do not.
   // Mutation: drop `, false, true` from any toggle -> fails.
