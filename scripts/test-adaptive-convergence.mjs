@@ -78,8 +78,8 @@ function mem(init) {
  * One load. dev: { mobile, maxRatio, frameMs(levelName, dpr), coldMs(levelName, loadIndex) }.
  * Returns { level, levelName, from, dpr, decisions, record }.
  */
-function simulateLoad(storage, dev, shadows, loadIndex) {
-  const wall0 = WALL0 + loadIndex * HOUR;
+function simulateLoad(storage, dev, shadows, loadIndex, spacingMs) {
+  const wall0 = WALL0 + loadIndex * (spacingMs || HOUR);
   const maxLevel = 4;
   const ctx = { maxLevel, mobile: dev.mobile, shadows };
   const key = A.storageKey(GPU, FRAG_U, shadows);
@@ -147,9 +147,9 @@ function simulateLoad(storage, dev, shadows, loadIndex) {
     record: A.loadState(storage, key, maxLevel) };
 }
 
-function simulate(storage, dev, shadows, loads, firstIndex) {
+function simulate(storage, dev, shadows, loads, firstIndex, spacingMs) {
   const out = [];
-  for (let i = 0; i < loads; i++) out.push(simulateLoad(storage, dev, shadows, (firstIndex || 0) + i));
+  for (let i = 0; i < loads; i++) out.push(simulateLoad(storage, dev, shadows, (firstIndex || 0) + i, spacingMs));
   return out;
 }
 const path2str = p => p.map((l, i) => `L${i + 1} ${l.levelName}@${l.dpr}`).join(' -> ');
@@ -208,6 +208,56 @@ const tablet = variant => ({ mobile: true, maxRatio: 2, frameMs: profileMs(TABLE
   const p = simulate(s, tablet('optimistic'), 'low', 6);
   console.log('tablet, popup, optimistic (1.25 holds): ' + path2str(p));
   check('optimistic popup: settles at ultra-lite, sharper (1.25), and stays', p.slice(2).every(l => l.levelName === 'ultra-lite' && l.dpr === 1.25), path2str(p));
+}
+
+// ---- 1b. the same tablet, reloaded rarely (round 2) ---------------------------
+// A wall tablet may go a week or a month between loads. Neither a strike nor
+// the refusal may depend on that: ultra is refused within two failing loads
+// whatever the spacing, and the tablet settles at ultra-lite @ DPR 1 and
+// stays there for the whole block: BLOCK_LOADS loads as well as 7 days, so
+// how often the page reloads does not decide how often ultra is retried.
+// After that ultra is re-checked once (a driver update may have made it
+// affordable) and, still too slow, refused again within two loads.
+const DAY = 24 * HOUR;
+for (const days of [8, 30]) {
+  for (const shadows of ['auto', 'low']) {
+    const p = simulate(staleTabletStorage(), tablet('pessimistic'), shadows, 16, 0, days * DAY);
+    const names = p.map(l => l.levelName);
+    const tag = `${days}-day gaps, ${shadows === 'low' ? 'popup' : 'page'}`;
+    console.log(`tablet, ${tag}: ` + path2str(p));
+    const ultra = names.map((n, i) => (n === 'ultra' ? i : -1)).filter(i => i >= 0);
+    check(`${tag}: never builds low`, p.every(l => l.level >= 1), names);
+    if (shadows === 'auto') {
+      check(`${tag}: ultra's first two loads are back to back (strike, then refusal)`,
+        ultra.length >= 2 && ultra[1] === ultra[0] + 1, names);
+      check(`${tag}: after the refusal, ultra is not built again for BLOCK_LOADS loads`,
+        ultra.slice(2).every(i => i > ultra[1] + A.BLOCK_LOADS), names);
+      check(`${tag}: ultra is built at most 3 times in 16 loads`, ultra.length <= 3, names);
+      const refuse = p[ultra[1]].decisions.find(d => d.proposeLevel != null);
+      check(`${tag}: the second ultra load refuses it (ultra-lite next, ultra blocked)`,
+        refuse && refuse.proposeLevel === 3 && refuse.block && refuse.block.level === 4, p[ultra[1]].decisions);
+    } else {
+      check(`${tag}: ultra never built (it is ultra-lite here)`, ultra.length === 0, names);
+    }
+    const settledFrom = shadows === 'auto' ? 5 : 2;
+    const until = shadows === 'auto' ? settledFrom + A.BLOCK_LOADS : p.length;
+    check(`${tag}: settles at ultra-lite @ DPR 1 by load ${settledFrom + 1} and stays through load ${until}`,
+      p.slice(settledFrom, until).every(l => l.levelName === 'ultra-lite' && l.dpr === 1), path2str(p));
+  }
+}
+{ // Non-vacuity: the round-1 bug. With a strike that expired on the block
+  // clock, 8-day loads left the page at ultra on every load after the climb.
+  // Emulated here by clearing the strike between loads.
+  const s = staleTabletStorage();
+  const key = A.storageKey(GPU, FRAG_U, 'auto');
+  const p = [];
+  for (let i = 0; i < 10; i++) {
+    const rec = A.loadState(s, key, 4);
+    if (rec && rec.strike) A.saveState(s, key, Object.assign({}, rec, { strike: null }));
+    p.push(simulateLoad(s, tablet('pessimistic'), 'auto', i, 8 * DAY));
+  }
+  check('control: a strike lost between loads never refuses ultra (round-1 review repro)',
+    p.slice(3).every(l => l.levelName === 'ultra'), path2str(p));
 }
 
 // ---- 2. a fresh mobile GPU where only mid-lite holds, and only at DPR 1 ----------

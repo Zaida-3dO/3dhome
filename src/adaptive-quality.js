@@ -61,6 +61,16 @@ export const DPR_STEP = 0.25;
 export const MOBILE_START_RATIO = 1.5;
 /** A level stepped down from, and a DPR notch that failed, stay out of reach this long. */
 export const BLOCK_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * On a mobile GPU a block ALSO outlasts this many loads (task e7e10870,
+ * round 2): it expires only when BLOCK_MS has passed AND this many loads have
+ * run under it. A wall tablet may reload once a week or less; on the wall
+ * clock alone every refused level would be retried on the very next load --
+ * two loads at ~10 fps (strike, refusal) out of every three. Counted in
+ * loads, the retry rate no longer depends on how often the page reloads.
+ * A desktop's blocks are wall-clock only, as before.
+ */
+export const BLOCK_LOADS = 10;
 /** Quiet time after any step before samples count again (buffer realloc, first frames). */
 export const SETTLE_MS = 300;
 /** A gap longer than this is a stall or a background tab, not a frame. */
@@ -267,7 +277,7 @@ export function thresholds(cadenceMs, vsyncMs) {
  *        load: this session never climbs past it
  * @param {number} [o.defaultLevel] the device's default level (coldFrame only
  *        steps down from ABOVE it, so a desktop's own build is never touched)
- * @param {?{level:number, until:number}} [o.strike]  a floor failure recorded
+ * @param {?{level:number, at:?number}} [o.strike]  a floor failure recorded
  *        at `level` on an earlier load (mobile only): a second one proposes down
  * @param {boolean} [o.locked]  a manual level: never propose a level (up or
  *        down) and never strike; only the pixel ratio moves
@@ -286,7 +296,7 @@ export function createController(o) {
     pendingAt: 0,             // the ceiling an up-proposal was earned at
     blocked: o.blocked || null,
     // Only a strike at THIS load's level counts; any other is dropped.
-    strike: o.strike && o.strike.level === o.level ? { level: o.strike.level, until: o.strike.until } : null,
+    strike: o.strike && o.strike.level === o.level ? { level: o.strike.level, at: o.strike.at } : null,
     struckThisLoad: false,
     upStreak: 0,
     downStreak: 0,
@@ -299,7 +309,8 @@ export function createController(o) {
   let winStart = 0;
 
   function isBlocked(level, now) {
-    return !!(st.blocked && now < st.blocked.until && level >= st.blocked.level);
+    const b = st.blocked;
+    return !!(b && level >= b.level && (now < b.until || b.loadsLeft > 0));
   }
 
   function reset(now, quietMs) {
@@ -350,7 +361,8 @@ export function createController(o) {
     if (n == null) return;
     st.pending = n;
     d.proposeLevel = n;
-    st.blocked = { level: n + 1, until: now + BLOCK_MS };
+    st.blocked = detailFirst ? { level: n + 1, until: now + BLOCK_MS, loadsLeft: BLOCK_LOADS }
+      : { level: n + 1, until: now + BLOCK_MS };
     d.block = st.blocked;
     st.strike = null;
   }
@@ -363,13 +375,18 @@ export function createController(o) {
   // persisted -- and the level is proposed down when it fails at the floor
   // again on a LATER load. Sustained headroom at the level clears the strike
   // (stepUp). A level-up proposed this load is withdrawn either way.
+  //
+  // A strike has NO clock (round 2): it lasts until headroom clears it or a
+  // second failure confirms it, however far apart the loads are. It used to
+  // expire with BLOCK_MS, and a tablet reloaded less than weekly then never
+  // refused a level at all.
   function floorFailure(d, now) {
     if (st.pending != null && st.pending < st.level) return;
     if (st.pending != null && st.pending > st.level) { st.pending = null; d.revoke = true; }
-    if (st.strike && !st.struckThisLoad && now < st.strike.until) { proposeDown(d, now); return; }
+    if (st.strike && !st.struckThisLoad) { proposeDown(d, now); return; }
     if (st.struckThisLoad) return;
     st.struckThisLoad = true;
-    st.strike = { level: st.level, until: now + BLOCK_MS };
+    st.strike = { level: st.level, at: now };
     d.strike = st.strike;
   }
 
@@ -696,13 +713,16 @@ export function loadState(storage, key, maxLevel) {
   const out = { level: null, blocked: null, dprCap: null, strike: null, settled: null };
   if (Number.isInteger(v.level)) out.level = Math.max(0, Math.min(maxLevel, v.level));
   const b = v.blocked;
-  if (b && Number.isInteger(b.level) && Number.isFinite(b.until)) out.blocked = { level: b.level, until: b.until };
+  if (b && Number.isInteger(b.level) && Number.isFinite(b.until)) {
+    out.blocked = { level: b.level, until: b.until };
+    if (Number.isInteger(b.loadsLeft) && b.loadsLeft > 0) out.blocked.loadsLeft = b.loadsLeft;
+  }
   const c = v.dprCap;
   if (c && Number.isInteger(c.level) && c.ratio > 0 && Number.isFinite(c.until)) {
     out.dprCap = { level: c.level, ratio: c.ratio, until: c.until };
   }
   const k = v.strike;
-  if (k && Number.isInteger(k.level) && Number.isFinite(k.until)) out.strike = { level: k.level, until: k.until };
+  if (k && Number.isInteger(k.level)) out.strike = { level: k.level, at: Number.isFinite(k.at) ? k.at : null };
   if (v.settled && typeof v.settled === 'object') out.settled = v.settled;
   return out;
 }
@@ -767,8 +787,9 @@ export function savePin(storage, key, level) {
  * @param {number} o.wall      Date.now()
  * @returns {{level:number, from:string, locked:boolean, blocked:?Object,
  *            dprCap:?Object, strike:?Object}}
- *   from: 'manual' | 'stored' | 'default'. dprCap and strike only when they
- *   were learnt at this level and have not expired.
+ *   from: 'manual' | 'stored' | 'default'. dprCap only when it was learnt at
+ *   this level and has not expired; strike when it was recorded at this level
+ *   (a strike has no expiry). A mobile block's loadsLeft counts this load.
  */
 export function resolveStart(o) {
   const s = o.stored || null;
@@ -776,11 +797,15 @@ export function resolveStart(o) {
   const level = manual ? o.pin : (s && s.level != null ? s.level : o.defaultLevel);
   const from = manual ? 'manual' : (s && s.level != null ? 'stored' : 'default');
   const live = r => (r && r.level === level && o.wall < r.until ? r : null);
+  // A mobile block's load count: this load is one more under it (it is
+  // written back, decremented, with the rest of the record).
+  let blocked = s ? s.blocked : null;
+  if (blocked && blocked.loadsLeft > 0 && !manual) blocked = Object.assign({}, blocked, { loadsLeft: blocked.loadsLeft - 1 });
   return {
-    level, from, locked: manual,
-    blocked: s ? s.blocked : null,
+    level, from, locked: manual, blocked,
     dprCap: s ? live(s.dprCap) : null,
-    strike: manual || !s ? null : live(s.strike)
+    // No clock on a strike: only its level decides whether it applies.
+    strike: manual || !s || !s.strike || s.strike.level !== level ? null : s.strike
   };
 }
 
@@ -802,11 +827,32 @@ export function recordFor(ctl, startLevel, dprCap, extra) {
 /** Plain-words names for Settings > Quality, by level. */
 export const LEVEL_LABELS = Object.freeze([
   'Low',
-  'Medium – fewer small items',
+  'Medium (lite)',
   'Medium',
   'High',
   'Max'
 ]);
+
+/** What each level means, for the option's tooltip (the label stays short). */
+export const LEVEL_HINTS = Object.freeze([
+  'Simple furniture, no shadows',
+  'Medium, without the small items',
+  'Medium, every item',
+  'Full detail, no room shadows',
+  'Full detail with room shadows'
+]);
+
+/**
+ * The cheapest level that builds exactly what `level` builds under ctx --
+ * what to CALL a running level. In the HA popup (shadows=low) ultra builds
+ * what ultra-lite builds, so a device running ultra there is running High,
+ * not a Max the Settings list shows as unavailable.
+ */
+export function equivalentLevel(level, ctx) {
+  const here = configKey(levelConfig(level, ctx));
+  for (let l = 0; l < level; l++) if (configKey(levelConfig(l, ctx)) === here) return l;
+  return level;
+}
 
 /**
  * The manual choices for Settings > Quality: every level, with whether this
@@ -818,7 +864,7 @@ export const LEVEL_LABELS = Object.freeze([
  */
 export function levelOptions(ctx) {
   return LEVELS.map((L, level) => {
-    const o = { level, name: L.name, label: LEVEL_LABELS[level], available: true, reason: null };
+    const o = { level, name: L.name, label: LEVEL_LABELS[level], hint: LEVEL_HINTS[level], available: true, reason: null };
     if (level > ctx.maxLevel) {
       o.available = false;
       o.reason = 'this GPU cannot compile it';

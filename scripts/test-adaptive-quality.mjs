@@ -392,7 +392,7 @@ const W = A.WINDOW;
   check('key names the GPU, the uniform budget and the shadows mode', key === 'home3d.quality.v2|ANGLE (ARM, Immortalis-G925 MC12, OpenGL ES 3.2)|1024|low', key);
   check('embed (low) and standalone (auto) learn separately', A.storageKey('g', 1024, 'auto') !== A.storageKey('g', 1024, 'low'));
   check('masked/empty name -> unknown', A.storageKey('', 512) === 'home3d.quality.v2|unknown|512|auto');
-  const full = { level: 3, blocked: { level: 4, until: 99 }, dprCap: { level: 3, ratio: 1.75, until: 99 }, strike: { level: 3, until: 99 }, settled: null };
+  const full = { level: 3, blocked: { level: 4, until: 99 }, dprCap: { level: 3, ratio: 1.75, until: 99 }, strike: { level: 3, at: 42 }, settled: null };
   check('save then load round-trips', A.saveState(s, key, full) === true &&
     JSON.stringify(A.loadState(s, key, 4)) === JSON.stringify(full), A.loadState(s, key, 4));
   check('stored level is clamped to what compiles', A.loadState(s, key, 2).level === 2);
@@ -703,7 +703,7 @@ const W = A.WINDOW;
     (A.savePin(s, pk, 2), A.saveState(s, v2Key, { level: 3 }), A.clearState(s, v2Key), A.loadPin(s, pk, 4) === 2));
 
   // resolveStart: the scene's start, exactly.
-  const stored = { level: 3, blocked: { level: 4, until: 5000 }, dprCap: { level: 3, ratio: 1, until: 5000 }, strike: { level: 3, until: 5000 }, settled: null };
+  const stored = { level: 3, blocked: { level: 4, until: 5000 }, dprCap: { level: 3, ratio: 1, until: 5000 }, strike: { level: 3, at: 10 }, settled: null };
   const a = A.resolveStart({ stored, pin: null, defaultLevel: 1, wall: 1000 });
   check('resolveStart: the stored level, its cap, block and strike', a.level === 3 && a.from === 'stored' && !a.locked &&
     a.dprCap === stored.dprCap && a.blocked === stored.blocked && a.strike === stored.strike, a);
@@ -713,7 +713,14 @@ const W = A.WINDOW;
   const b2 = A.resolveStart({ stored, pin: 3, defaultLevel: 1, wall: 1000 });
   check('resolveStart: a manual level keeps the ratio cap learnt at that level', b2.dprCap === stored.dprCap && b2.strike === null, b2);
   const c = A.resolveStart({ stored, pin: null, defaultLevel: 1, wall: 6000 });
-  check('resolveStart: an expired cap and strike are dropped', c.dprCap === null && c.strike === null && c.level === 3, c);
+  check('resolveStart: an expired cap is dropped', c.dprCap === null && c.level === 3, c);
+  const c30 = A.resolveStart({ stored, pin: null, defaultLevel: 1, wall: 30 * 24 * 3600e3 });
+  check('resolveStart: a strike has no clock -- still there 30 days later (round 2)', c30.strike === stored.strike, c30);
+  const mb = A.resolveStart({ stored: Object.assign({}, stored, { blocked: { level: 4, until: 5000, loadsLeft: 3 } }), pin: null, defaultLevel: 1, wall: 1000 });
+  check('resolveStart: a mobile block counts this load (loadsLeft 3 -> 2), without touching the stored object',
+    mb.blocked.loadsLeft === 2 && mb.blocked.until === 5000 && mb.blocked !== stored.blocked, mb.blocked);
+  const mp = A.resolveStart({ stored: Object.assign({}, stored, { blocked: { level: 4, until: 5000, loadsLeft: 3 } }), pin: 3, defaultLevel: 1, wall: 1000 });
+  check('resolveStart: a manual load does not count against a block', mp.blocked.loadsLeft === 3, mp.blocked);
   const e = A.resolveStart({ stored: Object.assign({}, stored, { level: 2 }), pin: null, defaultLevel: 1, wall: 1000 });
   check('resolveStart: a cap or strike learnt at another level is dropped', e.level === 2 && e.dprCap === null && e.strike === null, e);
   check('resolveStart: nothing stored -> the default', A.resolveStart({ stored: null, pin: null, defaultLevel: 4, wall: 0 }).level === 4);
@@ -745,10 +752,24 @@ const W = A.WINDOW;
     sk.strike === null && skr.out[0] && skr.out[0].strikeCleared === true, skr.out);
   const other = tabletController({ level: 2, strike: { level: 3, until: 1e15 } });
   check('strike: one recorded at another level is ignored', other.strike === null);
-  const exp = tabletController({ level: 3, strike: { level: 3, until: 5 } });
-  const er = run(exp, frames(60, 3000));
-  check('strike: an expired one does not confirm -- a fresh strike, no proposal',
-    er.out.some(d => d.strike) && er.out.every(d => d.proposeLevel == null), er.out);
+  // Round 2: a strike has no clock. Recorded long ago (a tablet reloaded
+  // monthly) it still confirms the next failure at the floor.
+  const exp = tabletController({ level: 3, strike: { level: 3, at: 5 } });
+  const er = run(exp, frames(60, 3000), 60 * 24 * 3600e3);
+  check('strike: an old one (60 days) still confirms -- proposed down and blocked',
+    er.out.some(d => d.proposeLevel === 2 && d.block && d.block.level === 3) && er.out.every(d => !d.strike), er.out);
+  // Round 2: on a mobile GPU a block also outlasts BLOCK_LOADS loads.
+  const blk = er.out.find(d => d.block).block;
+  check('block (mobile): carries BLOCK_LOADS loads as well as BLOCK_MS', blk.loadsLeft === A.BLOCK_LOADS && A.BLOCK_LOADS >= 2, blk);
+  const late = tabletController({ level: 2, dprCap: 1, blocked: { level: 3, until: 5, loadsLeft: 1 } });
+  run(late, frames(8, 3 * W), 1e9);
+  check('block (mobile): past BLOCK_MS but with loads left, still blocks', late.pending === null, late.pending);
+  const done = tabletController({ level: 2, dprCap: 1, blocked: { level: 3, until: 5 } });
+  run(done, frames(8, 3 * W), 1e9);
+  check('block (mobile): past BLOCK_MS and no loads left, expires', done.pending === 3, done.pending);
+  const deskBlk = A.createController({ floor: 1, startRatio: 1, maxRatio: 1, level: 4, ctx: { maxLevel: 4, mobile: false, shadows: 'auto' } });
+  const dbr = run(deskBlk, frames(50, 200)).out.find(d => d.block);
+  check('block (desktop): wall-clock only, as before -- no load count', dbr && dbr.block.loadsLeft === undefined, dbr);
   const twice = tabletController({ level: 3 });
   const tr = run(twice, frames(60, 6000));
   check('strike: failing at the floor all session long is ONE strike, never a proposal in the same load',
@@ -770,7 +791,7 @@ const W = A.WINDOW;
 
   // levelOptions: what Settings offers.
   const full = A.levelOptions({ maxLevel: 4, mobile: true, shadows: 'auto' });
-  check('options: five levels in ladder order with plain labels', full.map(o => o.label).join('|') === 'Low|Medium – fewer small items|Medium|High|Max' &&
+  check('options: five levels in ladder order with plain labels', full.map(o => o.label).join('|') === 'Low|Medium (lite)|Medium|High|Max' && full.every(o => typeof o.hint === 'string' && o.hint.length > 0) &&
     full.map(o => o.name).join() === 'low,mid-lite,mid,ultra-lite,ultra', full);
   check('options: all available on an ultra-compiling GPU on the page', full.every(o => o.available && o.reason === null), full);
   const mid = A.levelOptions({ maxLevel: 2, mobile: true, shadows: 'auto' });
@@ -779,6 +800,22 @@ const W = A.WINDOW;
   const popup = A.levelOptions({ maxLevel: 4, mobile: true, shadows: 'low' });
   check('options: in the popup (shadows=low) Max builds what High builds -> disabled, says so',
     popup[4].available === false && popup[4].reason === 'same as High here' && popup[3].available === true, popup);
+  // Round 2: a running level is NAMED as the cheapest level that builds the same thing.
+  check('equivalentLevel: ultra in the popup is High (ultra-lite)', A.equivalentLevel(4, { maxLevel: 4, mobile: false, shadows: 'low' }) === 3);
+  check('equivalentLevel: ultra on the page is itself', A.equivalentLevel(4, { maxLevel: 4, mobile: false, shadows: 'auto' }) === 4);
+  check('equivalentLevel: every other level is itself on the page',
+    [0, 1, 2, 3].every(l => A.equivalentLevel(l, { maxLevel: 4, mobile: true, shadows: 'auto' }) === l));
+  {
+    const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+    const page = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    check('scene: the readout label is the equivalent level\'s',
+      src.indexOf('levelLabel: LEVEL_LABELS[equivalentLevel(startLevelIdx, levelCtx)],') !== -1 &&
+      src.indexOf('levelLabelName: LEVELS[equivalentLevel(startLevelIdx, levelCtx)].name,') !== -1);
+    const BS = String.fromCharCode(92);
+    check('page: the readout keeps each item whole (no-break spaces, word joiner after - and the en dash)',
+      page.indexOf("b.replace(/ /g, '" + BS + "u00a0').replace(/([-" + BS + "u2013])/g, '$1" + BS + "u2060')") !== -1);
+    check('page: each option carries its hint as a tooltip', page.indexOf(`' title="' + o.hint + '">' + o.label`) !== -1);
+  }
 }
 
 console.log((failures ? 'FAILED' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

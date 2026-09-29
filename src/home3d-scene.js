@@ -13,7 +13,7 @@ import { detectMobileGpu, resolveTier } from './quality-tier.js';
 import {
   LEVELS, maxLevelFor, levelForTier, defaultLevel, levelConfig, createController,
   storageKey, loadState, saveState, clearState, estimateVsync, capCadence, rafThrottle,
-  pinKey, loadPin, savePin, resolveStart, recordFor, levelOptions, LEVEL_LABELS,
+  pinKey, loadPin, savePin, resolveStart, recordFor, levelOptions, LEVEL_LABELS, equivalentLevel,
   MOBILE_START_RATIO, MIN_FPS_CAP, BLOCK_MS, COLD_FRAME_MS, createProbeScheduler
 } from './adaptive-quality.js';
 import { collapseEmitters } from './light-merge.js';
@@ -4097,7 +4097,7 @@ export const Home3DScene = (() => {
     }
     function qualityStatus() {
       const pending = adaptive && !qualityForgotten ? adaptive.pending : null;
-      const blocked = adaptive && adaptive.blocked && Date.now() < adaptive.blocked.until ? adaptive.blocked : null;
+      const blocked = adaptive && adaptive.blocked && (Date.now() < adaptive.blocked.until || adaptive.blocked.loadsLeft > 0) ? adaptive.blocked : null;
       const pinNext = pinAllowed ? loadPin(qStorage, qPinKey, maxLevel) : null;
       return {
         adaptive: !!adaptive,
@@ -4113,7 +4113,10 @@ export const Home3DScene = (() => {
         canPin: pinAllowed,
         pin: levelFrom === 'manual' ? startLevelIdx : null,
         pinNext,
-        levelLabel: LEVEL_LABELS[startLevelIdx],
+        // Named as the cheapest level that builds the same thing (task
+        // e7e10870 r2): ultra in the popup is High, as Settings lists it.
+        levelLabel: LEVEL_LABELS[equivalentLevel(startLevelIdx, levelCtx)],
+        levelLabelName: LEVELS[equivalentLevel(startLevelIdx, levelCtx)].name,
         levels: pinAllowed ? levelOptions(levelCtx) : [],
         level: startLevelIdx, levelName: startLevel.name, levelFrom, maxLevel, tier,
         dpr: ceilingRatio, dprStart: adaptive ? dprStart : null, dprMax: basePixelRatio,
@@ -4125,7 +4128,7 @@ export const Home3DScene = (() => {
         nextLevel: pending, nextLevelName: levelName(pending),
         nextLevelLabel: pending == null ? null : LEVEL_LABELS[pending],
         // Levels at or above this are not proposed until `until`.
-        blockedFrom: blocked ? { level: blocked.level, levelName: levelName(blocked.level), until: blocked.until } : null
+        blockedFrom: blocked ? { level: blocked.level, levelName: levelName(blocked.level), until: blocked.until, loadsLeft: blocked.loadsLeft || 0 } : null
       };
     }
     function notifyQuality() {
@@ -4162,8 +4165,8 @@ export const Home3DScene = (() => {
       if (d.to != null) bits.push(`DPR ${d.to}`);
       if (d.revoke) bits.push('next-load step up withdrawn');
       if (d.proposeLevel != null) bits.push(`next load: ${levelName(d.proposeLevel)}`);
-      if (d.block) bits.push(`${levelName(d.block.level)} and above blocked for 7 days`);
-      if (d.strike) bits.push(`strike at ${levelName(d.strike.level)} (a second load failing at DPR ${adaptive.floor} steps it down)`);
+      if (d.block) bits.push(`${levelName(d.block.level)} and above blocked for 7 days${d.block.loadsLeft ? ' and ' + d.block.loadsLeft + ' loads' : ''}`);
+      if (d.strike) bits.push(`strike at ${levelName(d.strike.level)} (the next load that fails at DPR ${adaptive.floor} steps it down)`);
       if (d.strikeCleared) bits.push('earlier strike cleared');
       console.info(`[Home3DScene] Adaptive quality: ${why} at DPR ${d.from} (level ${startLevel.name}) -> ${bits.join('; ')}.`);
       if (d.proposeLevel != null || d.revoke || d.block || d.cap != null || d.strike || d.strikeCleared) persistQuality();

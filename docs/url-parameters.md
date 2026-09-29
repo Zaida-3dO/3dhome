@@ -335,7 +335,9 @@ frame times. The GPU class only decides where a device starts.
     all the way to 1.0 before any level is stepped down. A level is stepped
     down only when it still fails **at 1.0**, and only when that happens on
     **two separate loads**. The first failure is recorded as a *strike*, and
-    sustained headroom at that level on a later load clears it. At 1.0 with
+    sustained headroom at that level on a later load clears it. A strike has
+    no expiry, so a tablet that reloads once a month still refuses a
+    too-heavy level on its second failing load. At 1.0 with
     headroom, it proposes the next level up for the next load, as before.
     Measured on a wall tablet (Mali-G925, 60 Hz): `mid-lite` and
     `ultra-lite` both hold 60 fps at 1.0 and fail at 1.5, so it settles on
@@ -344,7 +346,10 @@ frame times. The GPU class only decides where a device starts.
     falls below its start ratio.
 - **No flip-flop.** A pixel-ratio notch that failed is not tried again for
   this level for 7 days. A level stepped down from is blocked, along with
-  everything above it, for 7 days. A first frame that blocks for over a
+  everything above it, for 7 days. On a mobile GPU the block also lasts at
+  least 10 loads (`BLOCK_LOADS`). A device that reloads rarely therefore
+  re-checks a refused level once every 10 loads, not on every load after a
+  week. A first frame that blocks for over a
   second at a level above the device's default counts as a failure on its
   own. That covers a cold room-shadow pass. On a desktop, and at a level
   with room-shadow lights, it steps the level down at once: that pass is
@@ -353,8 +358,11 @@ frame times. The GPU class only decides where a device starts.
   load. The wall tablet's first frames measured 17–42 ms at every level, so
   it never trips there.
 - **Settings > Quality.** **Auto (recommended)**, the default, runs the
-  ladder above. You can also pin a level: Low, Medium – fewer small items
-  (`mid-lite`), Medium, High (`ultra-lite`) or Max (`ultra`). A pin applies
+  ladder above. You can also pin a level: Low, Medium (lite)
+  (`mid-lite`, without the small items), Medium, High (`ultra-lite`) or Max
+  (`ultra`). Each option's tooltip says what it builds. The readout names a
+  running level by the cheapest level that builds the same thing, so
+  `ultra` in the popup reads High. A pin applies
   to this device in this context only, so the page and the popup keep
   separate pins (`home3d.quality.pin.v1|…`). It persists across loads. While
   pinned, the ladder does not move the level, and the pixel ratio still

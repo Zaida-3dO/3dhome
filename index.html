@@ -2534,7 +2534,7 @@
         // Auto vs Manual first: the row must say who chose what is running.
         const mode = s.mode === 'manual' ? 'Manual' : s.mode === 'auto' ? 'Auto' : 'Fixed';
         const changed = s.canPin && (s.pinNext == null ? null : s.pinNext) !== (s.pin == null ? null : s.pin);
-        const bits = [mode, (s.levelLabel || s.levelName) + ' (' + s.levelName + ')', 'sharpness ' + s.dpr];
+        const bits = [mode, (s.levelLabel || s.levelName) + ' (' + (s.levelLabelName || s.levelName) + ')', 'sharpness ' + s.dpr];
         if (!s.adaptive) bits.push(s.mode === 'manual' ? 'sharpness fixed (' + s.reason + ')' : 'fixed (' + s.reason + ')');
         else {
           if (s.p95 != null) bits.push('p95 ' + s.p95 + ' ms');
@@ -2542,8 +2542,10 @@
           if (s.mode === 'auto' && !changed) bits.push('next load: ' + (s.nextLevelLabel || 'same'));
         }
         if (changed) bits.push('next load: ' + (s.pinNext == null ? 'Auto' : 'Manual ' + s.levels[s.pinNext].label));
-        // Wrap between items, never inside one ("p95 16.7 / ms").
-        return bits.map(b => b.replace(/ /g, ' ')).join(' · ');
+        // Wrap between items, never inside one ("p95 16.7 / ms"): no-break
+        // spaces, and a word joiner after every hyphen or dash, which a
+        // browser otherwise breaks after ("ultra-" / "lite").
+        return bits.map(b => b.replace(/ /g, '\u00a0').replace(/([-\u2013])/g, '$1\u2060')).join(' \u00b7 ');
       }
 
       function renderPanel() {
@@ -2645,7 +2647,7 @@
                 ? '<select class="quality-select" id="panel-quality-select" aria-label="Quality">' +
                   '<option value="auto"' + (qs.pinNext == null ? ' selected' : '') + '>Auto (recommended)</option>' +
                   qs.levels.map(o => '<option value="' + o.level + '"' + (qs.pinNext === o.level ? ' selected' : '') +
-                    (o.available ? '' : ' disabled') + '>' + o.label + (o.available ? '' : ' (' + o.reason + ')') + '</option>').join('') +
+                    (o.available ? '' : ' disabled') + ' title="' + o.hint + '">' + o.label + (o.available ? '' : ' (' + o.reason + ')') + '</option>').join('') +
                   '</select>'
                 : '') +
               '</div>' +
