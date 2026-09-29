@@ -1114,7 +1114,9 @@ const CONSOLE = [
   // Mutation: drop the light pressed rule (or put it before the .tp-ib rule) -> fails.
   check('light theme: the pressed Live button is coloured (its rule comes after the light .tp-ib rule)', iLightIb > -1 && iLightPressed > iLightIb);
   // One droplet blue in both themes.
-  check('droplets: no hard-coded blue left; both use --wet', !/:root\[data-theme="light"\] \.tp-(pmoist|ireading \.hum) svg \{ fill: #/.test(css) &&
+  // Mutation: split the light rule back into two different blues -> fails.
+  check('droplets: one blue -- --wet in dark, one shared light rule for moisture and humidity',
+    /:root\[data-theme="light"\] \.tp-pmoist svg, :root\[data-theme="light"\] \.tp-ireading \.hum svg \{ fill: #[0-9a-f]{6}; \}/.test(css) &&
     /\.tp-pmoist svg \{[^}]*fill: var\(--wet\)/.test(css) && /\.tp-ireading \.hum svg \{[^}]*fill: var\(--wet\)/.test(css));
   // A bigger camera card.
   // Mutation: drop the camera-card width -> fails.
