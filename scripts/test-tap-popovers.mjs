@@ -22,6 +22,8 @@
  *      pauses; reduced motion wraps instead.
  *   9. The accent light's colour square: inline with the slider, current
  *      colour, disabled offline; the main light has none.
+ *  10. Light theme: every state icon (.light-on, .heat, .d-open, .p-ok, ...)
+ *      outranks the light theme's plain-icon fill, so it keeps its colour.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -309,6 +311,43 @@ console.log('popover markup: title + accent colour square');
   ok(/if \(p\.hover \|\| p\.hold \|\| p\.ctl\.dragging\) p\.marq\.pause\(\); else p\.marq\.play\(\);/.test(src),
     'marquee pauses while hovered or while a slider is held/dragged');
   ok(/\$\{sel\} \.tp-color \{ --sq: 20px; --pad: 12px; \}/.test(src), 'coarse pointer: colour square hit area 20 + 2x12 = 44px');
+}
+
+console.log('light theme: state icons keep their colour');
+{
+  // CSS specificity [ids, classes/attributes/pseudo-classes, elements]; a
+  // :where(...) counts for nothing, which is the point of the fix.
+  const spec = sel => {
+    let t = sel.replace(/:where\((?:[^()]|\([^()]*\))*\)/g, ' ');
+    const a = (t.match(/#[\w-]+/g) || []).length;
+    const b = (t.match(/\.[\w-]+|\[[^\]]*\]|(^|[^:]):(?!:)[\w-]+/g) || []).length;
+    const c = (t.replace(/\[[^\]]*\]/g, '').match(/(^|[\s>+~])[a-z][\w-]*|::[\w-]+/gi) || []).length;
+    return [a, b, c];
+  };
+  const cmp = (x, y) => (x[0] - y[0]) || (x[1] - y[1]) || (x[2] - y[2]);
+  const css = T.STYLE.replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let mm;
+  while ((mm = re.exec(css))) mm[1].split(',').forEach(sel => rules.push({ sel: sel.trim(), body: mm[2], at: mm.index }));
+  const fills = rules.filter(r => /(^|;|\s)fill:/.test(r.body));
+  const lightPlain = fills.filter(r => /data-theme="light"/.test(r.sel) && /\.tp-ico$/.test(r.sel));
+  const basePlain = fills.find(r => r.sel === '.tp-ico');
+  ok(lightPlain.length === 1 && basePlain, 'one light-theme rule re-colours the plain icon');
+  const lp = lightPlain[0];
+  // Mutation: back to `:root[data-theme="light"] .tp-ico` -> (0,3,0) outranks every state -> fails.
+  ['light-on', 'heat', 'd-open', 'd-closed', 'p-ok', 'p-dry', 'p-due', 'p-wet', 'm-on'].forEach(k => {
+    const st = fills.filter(r => r.sel === '.tp-ico.' + k);
+    ok(st.length === 1 && cmp(spec(st[0].sel), spec(lp.sel)) > 0,
+      'light theme: .tp-ico.' + k + ' ' + JSON.stringify(st[0] && spec(st[0].sel)) + ' outranks the plain-icon rule ' + JSON.stringify(spec(lp.sel)));
+  });
+  ok(cmp(spec(lp.sel), spec(basePlain.sel)) >= 0 && lp.at > basePlain.at, 'light theme: the plain icon still turns dark (same weight, later)');
+  const dimLight = fills.find(r => /data-theme="light"/.test(r.sel) && /\.tp-ico\.dim$/.test(r.sel));
+  ok(dimLight && cmp(spec(dimLight.sel), spec('.tp-ico.dim')) > 0, 'light theme: the dimmed icon keeps its own light-theme fill');
+  ok(fills.find(r => r.sel === '.tp-ico.light-on' && /var\(--amber\)/.test(r.body)) &&
+    /:root\[data-theme="light"\] \.tp-pop \{[^}]*--amber:#d99a00/.test(T.STYLE), 'the state fills read the theme tokens (light theme redefines them)');
+  ok(spec('.a.b')[1] === 2 && spec(':root[data-theme="light"] .x')[1] === 3 && spec(':where(:root[data-theme="light"]) .x')[1] === 1,
+    'the specificity helper itself counts classes, attributes and pseudo-classes, and :where as nothing');
 }
 
 if (failed) { console.log('\n' + failed + ' FAILED'); process.exit(1); }

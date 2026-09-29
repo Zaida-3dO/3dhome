@@ -62,7 +62,7 @@ import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCom
 import { normalisePlantBindings, plantStatusText, agoText, batteryText, mockPlantReading } from './plant-status.js';
 import { normaliseItemBindings, furnitureTapTarget, tappableFurnitureIds, mediaRowModel, lightRowModel, readingRowModel,
   rowLabel, mediaPowerCommand, mediaVolumeCommand, mediaSourceCommand, mediaSoundModeCommand, lightRowCommand,
-  applyCommand, mockItemState, clockText, cardEntities, cardTitle, cardIcon, rowLabelUnderTitle, bindingTitle,
+  lightRowToggleCommand, applyCommand, mockItemState, clockText, cardEntities, cardTitle, cardIcon, rowLabelUnderTitle, bindingTitle,
   clockTitle, radiatorTitle } from './item-cards.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
@@ -134,6 +134,104 @@ export function deviceTarget(id, vacuums, plants, object) {
   if (b) return { kind: 'vacuum', id, entities: [b.entity], binding: b, object };
   const p = plants && plants.get(id);
   return p ? { kind: 'plant', id, entities: [p.moisture || p.watering], binding: p, object } : null;
+}
+
+/**
+ * A furniture hit -> its tap target (what the runtime's deviceAt returns for
+ * the item under the first solid hit), or null.
+ *
+ * PRECEDENCE: a vacuum or plant binding (deviceTarget) wins over an item
+ * binding, a clock or a radiator on the same id (furnitureTapTarget). A
+ * clock or a radiator may carry a title-only binding in `sensors.items`
+ * (`{ "title": ... }`): it becomes the target's `label`. A clock also carries
+ * its room (for "<Room> clock").
+ *
+ * @param it      home.furnitureItemAt's item: { id, type, room, ... }
+ * @param point   the hit point (world metres)
+ * @param object  the hit mesh
+ * @param ctx     { vacuums, plants (normalised Maps), items (Map from
+ *                normaliseItemBindings), climate (sensors.climate), rawItems
+ *                (sensors.items as authored) }
+ */
+export function furnitureTarget(it, point, object, ctx) {
+  if (!it) return null;
+  const c = ctx || {};
+  const t = deviceTarget(it.id, c.vacuums, c.plants, object) ||
+    furnitureTapTarget(it, point, { items: c.items, climate: c.climate });
+  if (t && !t.object) t.object = object;
+  if (t && (t.kind === 'clock' || t.kind === 'climate')) {
+    const title = bindingTitle(c.rawItems, it.id);
+    if (title) t.label = title;
+    if (t.kind === 'clock') t.room = it.room;
+  }
+  return t;
+}
+
+/**
+ * The title and header icon of a furniture item card, from its row models
+ * (the item view's model). The title is the binding's title, else the
+ * item's short label, else its id; the LEAD row (first media, else light,
+ * else reading) is relabelled in place when its label only repeats the title.
+ * @param rows  { media, lights, readings } -- row models carrying `label` (and `role`)
+ */
+export function itemCardHead(card, rows, furnitureLabel, itemId) {
+  const name = cardTitle(card, furnitureLabel, itemId);
+  const r = rows || {};
+  const lead = (r.media || [])[0] ? [r.media[0], 'media'] : (r.lights || [])[0] ? [r.lights[0], 'light']
+    : (r.readings || [])[0] ? [r.readings[0], 'reading'] : null;
+  if (lead) lead[0].label = rowLabelUnderTitle(lead[0].label, name, lead[0].role, lead[1]);
+  return { name, icon: cardIcon(card) };
+}
+
+/** A clock card's title: the title-only binding exactly as written, else "<Room> clock". */
+export function clockCardName(t, roomName) {
+  return clockTitle(t && t.label, t && t.room ? roomName(t.room) : '');
+}
+
+/** A radiator's climate card title (t.id is the room): the title-only binding as written, else "<Room> radiator". */
+export function climateCardName(t, roomName) {
+  return radiatorTitle(t && t.label, roomName(t && t.id));
+}
+
+/**
+ * The item cards' send path, given its guards (injected, so the gates are
+ * unit-testable). Nothing while `writeBlocked()`; with no HA configured
+ * (`mockMode()`) the sample moves and nothing is sent; otherwise only when
+ * `canSend()` -- a real, fully connected client -- through its
+ * callServiceDebounced, followed by an optimistic repaint. `delay` > 0
+ * debounces under `key` (a slider's input); a 0-delay send under the same key
+ * cancels a pending one (its release), as the sidebar's senders do.
+ *
+ * @param d  { writeBlocked, canSend, mockMode, ha, getRaw(eid), setMock(eid, raw),
+ *           setOptimistic(eid, raw) }
+ * @returns (command, key, delay) => void
+ */
+export function createItemSender(d) {
+  return function itemSend(command, key, delay) {
+    if (d.writeBlocked()) return;
+    const eid = command.target.entity_id;
+    const cur = d.getRaw(eid);
+    if (d.mockMode()) { d.setMock(eid, applyCommand(cur, command)); return; }
+    if (!d.canSend()) return;
+    d.ha().callServiceDebounced(command.domain, command.service, command.data, command.target, 'item:' + key + ':' + eid, delay || 0);
+    d.setOptimistic(eid, applyCommand(cur, command));
+  };
+}
+
+/**
+ * What a card's periodic repaint does: 'rebuild' its markup, 'patch' it in
+ * place (a view with a `patch`, e.g. the clock's ticking time), or 'none'.
+ * A view may give a `sig(model)` that leaves out what `patch` updates, so a
+ * change there alone never rebuilds the card (a rebuild restarts the title
+ * marquee and moves focus). Nothing repaints under a drag unless forced.
+ * @returns { action, sig } -- sig is what the card was last built from
+ */
+export function repaintAction(view, model, prevSig, extra, force, dragging) {
+  const sig = JSON.stringify(view.sig ? view.sig(model) : model) + extra;
+  if (force) return { action: 'rebuild', sig };
+  if (dragging) return { action: 'none', sig: prevSig };
+  if (sig !== prevSig) return { action: 'rebuild', sig };
+  return { action: view.patch ? 'patch' : 'none', sig };
 }
 
 /**
@@ -667,6 +765,13 @@ export const STYLE = `
 .tp-ivol { display: flex; align-items: center; gap: 6px; margin: 6px 0 -2px; }
 .tp-ivol svg { width: 14px; height: 14px; flex: none; fill: var(--ink-2); }
 .tp-ivol .tp-range { flex: 1 1 auto; width: auto; min-width: 0; margin: 0; }
+/* Volume not reported: an empty track, no thumb, "?" beside it -- unknown,
+   never a level. Moving it sets a level (and it becomes an ordinary slider). */
+.tp-range.unknown::-webkit-slider-runnable-track { background: var(--range-track); }
+.tp-range.unknown::-moz-range-progress { background: transparent; }
+.tp-range.unknown::-webkit-slider-thumb { opacity: 0; }
+.tp-range.unknown::-moz-range-thumb { opacity: 0; }
+.tp-ivol-q { flex: none; font-size: 11px; color: var(--ink-2); }
 .tp-isel { display: flex; gap: 5px; margin-top: 7px; }
 .tp-selw { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .tp-selw > span { font-size: 11px; color: var(--ink-2); line-height: 1.2; }
@@ -699,7 +804,10 @@ ${coarseRules('.tp-force-coarse')}
   --ink:#1a1d29; --ink-2:rgba(26,29,41,0.64); --amber:#d99a00; --heat:#e8590c; --door-open:#c77700; --ok:#16a34a;
   --pop-bg: rgba(250,251,253,0.96); --pop-border: rgba(0,0,0,0.12); --range-track: rgba(0,0,0,0.18);
   box-shadow: 0 6px 20px rgba(0,0,0,0.22); }
-:root[data-theme="light"] .tp-ico { fill: rgba(0,0,0,0.62); }
+/* :where() keeps this at .tp-ico's own weight (0,1,0): it re-colours the
+   plain icon, but every state class (.light-on, .heat, .d-open, .p-ok, ...)
+   still outranks it and shows its colour, from the light-theme tokens above. */
+:where(:root[data-theme="light"]) .tp-ico { fill: rgba(0,0,0,0.62); }
 :root[data-theme="light"] .tp-ico.light-on, :root[data-theme="light"] .tp-ico.heat { filter: none; }
 :root[data-theme="light"] .tp-ico.dim { fill: rgba(0,0,0,0.3); }
 :root[data-theme="light"] .tp-ib, :root[data-theme="light"] .tp-vb { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.14); color: #1a1d29; }
@@ -865,6 +973,11 @@ export const popoverHtml = {
       if (r.volume != null) {
         body += '<div class="tp-ivol">' + svg(I.volume) + '<input class="tp-range" data-a="mvol" data-i="' + i +
           '" type="range" min="0" max="100" value="' + r.volume + '" aria-label="Volume: ' + esc(r.label) + '"' + (off ? ' disabled' : '') + '></div>';
+      } else if (r.volumeUnknown) {
+        // Takes a volume but has not reported one: UNKNOWN, never 0.
+        body += '<div class="tp-ivol" data-vol-unknown>' + svg(I.volume) + '<input class="tp-range unknown" data-a="mvol" data-i="' + i +
+          '" type="range" min="0" max="100" value="50" aria-valuetext="Unknown" aria-label="Volume (not reported): ' + esc(r.label) + '"' +
+          (off ? ' disabled' : '') + '><span class="tp-ivol-q" title="Volume not reported">?</span></div>';
       }
       const sels = (r.sources.length ? select('msrc', i, r.sources, r.source, 'Source: ' + r.label, 'Source') : '') +
         (r.soundModes.length ? select('mmode', i, r.soundModes, r.soundMode, 'Sound mode: ' + r.label, 'Sound mode') : '');
@@ -897,8 +1010,8 @@ export const popoverHtml = {
   /** Clock (read-only, no Home Assistant). m: { name, time, seconds, date }. */
   clock(m) {
     return '<div class="tp-head">' + ico(I.clock) + nameHtml(m.name) + '</div>' +
-      '<div class="tp-clock" data-v><b>' + esc(m.time) + '</b><small>:' + esc(m.seconds) + '</small></div>' +
-      '<div class="tp-clock-date">' + esc(m.date) + '</div>';
+      '<div class="tp-clock" data-v><b data-time>' + esc(m.time) + '</b><small data-sec>:' + esc(m.seconds) + '</small></div>' +
+      '<div class="tp-clock-date" data-date>' + esc(m.date) + '</div>';
   },
   climate(m, dot) {
     const shell = shellWith(dot);
@@ -917,6 +1030,19 @@ export const popoverHtml = {
       '</div>' +
       (live ? '<input class="tp-range temp" data-a="set" type="range" min="' + m.min + '" max="' + m.max + '" step="' + m.step +
         '" value="' + m.target + '" aria-label="Target temperature"' + dis + '>' : '') + offlineLine(m));
+  },
+};
+
+/**
+ * The clock card ticks every second. Only its TIME is patched in place; the
+ * card is rebuilt only when its title changes -- a rebuild would restart the
+ * title's marquee, reset its aria-label and move focus, every second.
+ */
+export const clockTick = {
+  sig: m => ({ name: m.name }),
+  patch(el, m) {
+    const set = (sel, text) => { const e = el.querySelector(sel); if (e && e.textContent !== text) e.textContent = text; };
+    set('[data-time]', m.time); set('[data-sec]', ':' + m.seconds); set('[data-date]', m.date);
   },
 };
 
@@ -964,19 +1090,10 @@ export function attachTapPopovers(o) {
   // where the tap landed (see the header). A vacuum / plant binding wins over
   // an item binding on the same id; a bound item's tap that lands on a part
   // of it no card covers is not a target.
+  const deviceCtx = { vacuums, plants, items: itemBindings, climate: climateBinding, rawItems };
   const deviceAt = !deviceIds.size || typeof home.furnitureItemAt !== 'function' ? null : h => {
     const it = h && h.point ? home.furnitureItemAt(h.point, deviceIds) : null;
-    if (!it) return null;
-    const t = deviceTarget(it.id, vacuums, plants, h.object) ||
-      furnitureTapTarget(it, h.point, { items: itemBindings, climate: climateBinding });
-    if (t && !t.object) t.object = h.object;
-    // A clock or a radiator may carry a title-only binding ({ "title": ... }).
-    if (t && (t.kind === 'clock' || t.kind === 'climate')) {
-      const title = bindingTitle(rawItems, it.id);
-      if (title) t.label = title;
-      if (t.kind === 'clock') t.room = it.room;
-    }
-    return t;
+    return it ? furnitureTarget(it, h.point, h.object, deviceCtx) : null;
   };
   const curtainNames = new Map(((o.house && o.house.curtains) || []).map(c => [c.id, c.name || c.id]));
   const doorNames = new Map(((o.house && o.house.doors) || []).map(d => [d.id, d.name || d.id]));
@@ -1111,21 +1228,11 @@ export function attachTapPopovers(o) {
     if (!itemMock.has(eid)) itemMock.set(eid, mockItemState(kind, row, i));
     return itemMock.get(eid);
   }
-  /**
-   * Send one item-row command through the HA client -- or, with no HA
-   * configured, move the sample. Nothing while writeBlocked(). `delay` > 0
-   * debounces under `key` (a slider's input); a 0-delay send under the same
-   * key cancels a pending one (its release), as the sidebar's senders do.
-   */
-  function itemSend(command, key, delay) {
-    if (writeBlocked()) return;
-    const eid = command.target.entity_id;
-    const cur = itemRaw(eid);
-    if (itemMockMode()) { itemMock.set(eid, applyCommand(cur, command)); return; }
-    if (!canSend()) return;
-    ha().callServiceDebounced(command.domain, command.service, command.data, command.target, 'item:' + key + ':' + eid, delay || 0);
-    itemOptimistic.set(eid, { raw: applyCommand(cur, command), until: Date.now() + OPTIMISTIC_MS });
-  }
+  // Send one item-row command (createItemSender: the writeBlocked / mock /
+  // canSend gates, then an optimistic repaint).
+  const itemSend = createItemSender({ writeBlocked, canSend, mockMode: itemMockMode, ha,
+    getRaw: eid => itemRaw(eid), setMock: (eid, r) => itemMock.set(eid, r),
+    setOptimistic: (eid, r) => itemOptimistic.set(eid, { raw: r, until: Date.now() + OPTIMISTIC_MS }) });
 
   const VIEWS = {
     light: {
@@ -1150,7 +1257,8 @@ export function attachTapPopovers(o) {
           if (writeBlocked()) return;
           const st = s(); if (!st) return;
           st.on = !st.on; if (st.on && !st.bri) st.bri = 100;
-          home.updateLights(); o.sendLight(t.roomId, t.channel, st, 0); onChange(); ctl.refresh(true);
+          // power: turn_on with no brightness -- HA restores the last level.
+          home.updateLights(); o.sendLight(t.roomId, t.channel, st, 0, false, true); onChange(); ctl.refresh(true);
         });
         const r = el.querySelector('[data-a=bri]');
         if (r) {
@@ -1270,7 +1378,7 @@ export function attachTapPopovers(o) {
         return { status: statusKey('climate', c, readingNa && isLive(c), mock), na, mock, off, haOff: haOfflineConn(c),
           current: reading ? reading.current : null, target: reading ? reading.target : null,
           min: reading ? reading.min : 7, max: reading ? reading.max : 30, step: reading ? reading.step : 0.5,
-          activity: climateActivity(action, off), name: radiatorTitle(t.label, roomName(t.id)) };
+          activity: climateActivity(action, off), name: climateCardName(t, roomName) };
       },
       html(m) { return popoverHtml.climate(m, dot); },
       bind(t, el, ctl) {
@@ -1398,12 +1506,10 @@ export function attachTapPopovers(o) {
           return Object.assign({ entity: row.entity, label: rowLabel(row, r) }, readingRowModel(r, hr));
         });
         const anyNa = media.some(r => r.na) || lights.some(r => r.na) || readings.some(r => r.na);
-        const name = cardTitle(card, furnitureLabels.get(t.itemId), t.itemId);
         // The first row never just repeats the title ("TV" over "TV").
-        const lead = media[0] ? [media[0], 'media'] : lights[0] ? [lights[0], 'light'] : readings[0] ? [readings[0], 'reading'] : null;
-        if (lead) lead[0].label = rowLabelUnderTitle(lead[0].label, name, lead[0].role, lead[1]);
+        const head = itemCardHead(card, { media, lights, readings }, furnitureLabels.get(t.itemId), t.itemId);
         return { status: itemMockMode() ? 'offlineItem' : statusKey('item', c, anyNa && isLive(c), false), haOff: haOfflineConn(c),
-          name, icon: cardIcon(card), media, lights, readings };
+          name: head.name, icon: head.icon, media, lights, readings };
       },
       html(m) { return popoverHtml.item(m, dot); },
       bind(t, el, ctl) {
@@ -1425,6 +1531,7 @@ export function attachTapPopovers(o) {
         at('mvol', (r, i) => {
           r.addEventListener('input', () => {
             ctl.dragging = true; r.style.setProperty('--p', fillPct(r));
+            if (r.classList.contains('unknown')) { r.classList.remove('unknown'); r.removeAttribute('aria-valuetext'); }
             itemSend(mediaVolumeCommand(card.media[i].entity, +r.value), 'vol', 200);
           });
           r.addEventListener('change', () => itemSend(mediaVolumeCommand(card.media[i].entity, +r.value), 'vol', 0));
@@ -1440,7 +1547,8 @@ export function attachTapPopovers(o) {
         });
         at('lpower', (b, i) => b.addEventListener('click', () => {
           const r = model().lights[i]; if (!r || r.na) return;
-          itemSend(lightRowCommand(card.lights[i].entity, { on: !r.on, bri: r.bri }), 'light', 0); onChange(); ctl.refresh(true);
+          // No brightness on a switch-on: HA restores the light's last level.
+          itemSend(lightRowToggleCommand(card.lights[i].entity, r), 'light', 0); onChange(); ctl.refresh(true);
         }));
         at('lbri', (r, i) => {
           r.addEventListener('input', () => {
@@ -1466,10 +1574,13 @@ export function attachTapPopovers(o) {
     clock: {
       model(t) {
         // Never the raw furniture label (an authoring note in a real house).
-        return Object.assign({ name: clockTitle(t.label, t.room ? roomName(t.room) : '') }, clockText(new Date()));
+        return Object.assign({ name: clockCardName(t, roomName) }, clockText(new Date()));
       },
       html(m) { return popoverHtml.clock(m); },
       bind() {},   // read-only
+      // The time is patched in place each tick; only a new title rebuilds.
+      sig: clockTick.sig,
+      patch: clockTick.patch,
     },
 
     door: {
@@ -1566,9 +1677,10 @@ export function attachTapPopovers(o) {
     if (!pop) return;
     const v = VIEWS[pop.target.kind];
     const m = v.model(pop.target);
-    const sig = JSON.stringify(m) + tipOpen;
-    if (!force && (sig === pop.sig || pop.ctl.dragging)) return;
-    pop.sig = sig;
+    const next = repaintAction(v, m, pop.sig, tipOpen, force, pop.ctl.dragging);
+    if (next.action === 'patch') v.patch(pop.el, m);
+    if (next.action !== 'rebuild') return;
+    pop.sig = next.sig;
     // A rebuild replaces every control: keep keyboard focus on the same one.
     const ae = document.activeElement;
     const refocus = pop.el.contains(ae) ? (ae === pop.el ? '' : (ae.dataset && ae.dataset.a) || '') : null;

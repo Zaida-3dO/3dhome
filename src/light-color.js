@@ -102,3 +102,35 @@ export function swatchColor(color) {
   const rgb = hexToRgb(color);
   return rgb ? rgbToHex(rgb) : DEFAULT_ACCENT_COLOR;
 }
+
+/**
+ * The Home Assistant light call for one sidebar / popover light channel:
+ * `{ service: 'turn_off' | 'turn_on', data }` (index.html's sendToHA sends
+ * it to the channel's entities).
+ *
+ *   brightness  from `state.bri` -- EXCEPT on a power switch (`power`): a
+ *               light switched on comes back at its LAST level, which Home
+ *               Assistant restores when turn_on carries no brightness. Only
+ *               the brightness slider sets a level.
+ *   colour temp `state.temp`, main channel only.
+ *   colour      'ambient' carries its colour on every turn_on; any other
+ *               colour channel only when the colour was picked (`withColor`),
+ *               so a plain toggle never repaints a light with a default
+ *               nobody chose.
+ *
+ * @param state  { on, bri (0-100), temp (K), color ('#rrggbb') }
+ * @param opts   { withColor, power }
+ */
+export function lightServiceCall(group, state, opts) {
+  const o = opts || {};
+  const s = state || {};
+  if (!s.on) return { service: 'turn_off', data: {} };
+  const data = {};
+  if (!o.power && s.bri !== undefined) data.brightness = Math.round(s.bri * 2.55);
+  if (s.temp !== undefined && group === 'main') data.color_temp_kelvin = s.temp;
+  if (s.color !== undefined && (group === 'ambient' || (o.withColor && isColorChannel(group)))) {
+    const rgb = hexToRgb(s.color);
+    if (rgb) data.rgb_color = rgb;
+  }
+  return { service: 'turn_on', data };
+}

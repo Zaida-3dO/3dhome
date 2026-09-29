@@ -231,15 +231,16 @@ export function rowLabel(row, raw) {
 /**
  * A media_player row.
  * @returns { na, on, state, stateText, title, volume (0-100 | null when the
- *   device takes no volume), muted, sources [], source, soundModes [],
- *   soundMode, canPower }
+ *   device takes no volume or has not reported one), volumeUnknown (true when
+ *   it takes a volume but has not reported a level), muted, sources [],
+ *   source, soundModes [], soundMode, canPower }
  */
 export function mediaRowModel(raw) {
   const st = raw ? raw.state : undefined;
   const a = (raw && raw.attributes) || {};
   if (isUnavailable(st)) {
     return { na: true, on: false, state: st || null, stateText: st === 'unavailable' ? 'Offline' : 'Unavailable',
-      title: null, volume: null, muted: false, sources: [], source: null, soundModes: [], soundMode: null, canPower: false };
+      title: null, volume: null, volumeUnknown: false, muted: false, sources: [], source: null, soundModes: [], soundMode: null, canPower: false };
   }
   const on = !OFF_STATES.has(st);
   const feat = typeof a.supported_features === 'number' ? a.supported_features : null;
@@ -247,6 +248,8 @@ export function mediaRowModel(raw) {
   const title = (st === 'playing' || st === 'paused') && typeof a.media_title === 'string' && a.media_title ? a.media_title : null;
   const vol = num(a.volume_level);
   const volOk = on && (vol != null || (feat != null && (feat & MEDIA_FEATURE.VOLUME_SET) !== 0));
+  // A device that takes a volume but has not reported one: the level is
+  // UNKNOWN, not 0 -- the card shows an indeterminate slider, never a 0.
   const list = v => (Array.isArray(v) ? v.filter(x => typeof x === 'string' && x) : []);
   const sources = on && has(MEDIA_FEATURE.SELECT_SOURCE) ? list(a.source_list) : [];
   const soundModes = on && has(MEDIA_FEATURE.SELECT_SOUND_MODE) ? list(a.sound_mode_list) : [];
@@ -254,7 +257,8 @@ export function mediaRowModel(raw) {
     buffering: 'Buffering' }[st] || humanise(st);
   return {
     na: false, on, state: st, stateText, title,
-    volume: volOk ? Math.round((vol != null ? vol : 0) * 100) : null,
+    volume: volOk && vol != null ? Math.round(vol * 100) : null,
+    volumeUnknown: volOk && vol == null,
     muted: a.is_volume_muted === true,
     sources, source: typeof a.source === 'string' ? a.source : null,
     soundModes, soundMode: typeof a.sound_mode === 'string' ? a.sound_mode : null,
@@ -428,6 +432,16 @@ export function lightRowCommand(entity, state, withColor) {
     data.rgb_color = [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
   }
   return cmd('light', 'turn_on', data, entity);
+}
+
+/**
+ * A light row's power switch: turn_off, or turn_on with NO brightness, so
+ * Home Assistant brings the light back at its last level. Switching on never
+ * forces a level; only the brightness slider sends one.
+ * @param row  the row's lightRowModel ({ on })
+ */
+export function lightRowToggleCommand(entity, row) {
+  return lightRowCommand(entity, { on: !(row && row.on) });
 }
 
 /**

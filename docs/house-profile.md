@@ -1383,11 +1383,14 @@ first row (a receiver card gets a speaker, not a TV). The rows:
 - **`media`** -- a `media_player.*` row: its state (Off / On / Idle / Playing
   with the title / **Offline**), a **power switch** (`media_player.turn_on` /
   `turn_off`, disabled when the device reports it cannot), a **volume** slider
-  while it is on and takes volume (`volume_set`), and **source** and **sound
+  while it is on and takes volume (`volume_set`; a device that has not reported
+  a level shows an empty slider marked **?** -- unknown, never 0), and **source** and **sound
   mode** pickers when it lists them (`select_source`, `select_sound_mode` -- an
   AV receiver). `role` (`tv` / `cast` / `receiver` / `speaker`) picks the icon.
 - **`lights`** -- a `light.*` row: on/off and brightness, plus a colour square
-  when the light's `supported_color_modes` include a colour mode.
+  when the light's `supported_color_modes` include a colour mode. Switching a
+  light on sends no brightness, so it comes back at its last level (as the
+  room's own light switches do); only the slider sets a level.
 - **`readings`** -- a read-only `sensor.*` row: the value with its
   `unit_of_measurement`, and an optional `humidity` partner beside it. An
   unavailable sensor reads **Offline**, never 0.
@@ -1408,7 +1411,8 @@ label), and any `radiator` item opens the climate card of the room it stands in
 (`climate` above; nothing if that room has none). To name either, give it a
 **title-only** entry: `"office_clock": { "title": "Gold clock" }` (the
 validator warns about a title-only entry on any other item, where it has nothing
-to show). Temperatures read with one decimal (`31.0°C`), as the climate card
+to show, and on a radiator whose room has no `climate` binding, where nothing
+opens). Temperatures read with one decimal (`31.0°C`), as the climate card
 does. A light channel drawn on an item (a bedside table's LED strip) is still
 its own light tap and wins over the item's card.
 

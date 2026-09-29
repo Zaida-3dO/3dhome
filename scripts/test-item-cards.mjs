@@ -23,6 +23,14 @@
  *      recorded, an unbound one is not, and a light row's command goes out
  *      as the right call_service.
  *   8. The demo house binds every card kind, to furniture that exists.
+ *   9. The card's wiring, as pure functions tap-popovers.js runs: which
+ *      target a furniture hit becomes (a vacuum / plant beats an item
+ *      binding; title-only clock / radiator titles; the clock's room), the
+ *      item card's title and lead-row relabel, the clock / climate titles,
+ *      the item sender's writeBlocked / mock / canSend gates, and the clock
+ *      patching its time in place instead of rebuilding every second.
+ *  10. A light row's power switch turns on with NO brightness (HA restores
+ *      the last level); only the slider sends one.
  *
  * Each check names the one-line mutation it catches.
  */
@@ -205,6 +213,11 @@ const CONSOLE = [
   check('media: playing shows its title', playing.on && playing.stateText === 'Playing' && playing.title === 'News');
   check('media: idle shows no title', IC.mediaRowModel({ state: 'idle', attributes: { media_title: 'Old' } }).title === null);
   check('media: no volume support, no level -> no slider', IC.mediaRowModel({ state: 'on', attributes: { supported_features: F.TURN_OFF } }).volume === null);
+  // Mutation: back to Math.round((vol != null ? vol : 0) * 100) -> volume 0 -> fails.
+  const noLevel = IC.mediaRowModel({ state: 'on', attributes: { supported_features: F.VOLUME_SET | F.TURN_ON | F.TURN_OFF } });
+  check('media: takes a volume but reported none -> UNKNOWN, never 0', noLevel.volume === null && noLevel.volumeUnknown === true, noLevel);
+  check('media: a reported level is known', recv.attributes && m.volumeUnknown === false && m.volume === 42);
+  check('media: an off device has no unknown volume either', off.volumeUnknown === false);
   check('media: sources not offered without SELECT_SOURCE', IC.mediaRowModel({ state: 'on', attributes: { supported_features: F.TURN_OFF, source_list: ['A'] } }).sources.length === 0);
   const un = IC.mediaRowModel({ state: 'unavailable', attributes: {} });
   check('media: unavailable -> Offline, no controls', un.na && un.stateText === 'Offline' && !un.canPower && un.volume === null);
@@ -336,11 +349,23 @@ const CONSOLE = [
   const tv = T.popoverHtml.item({ name: 'TV', status: 'ok', haOff: false, lights: [], readings: [],
     media: [Object.assign({ label: 'Television', role: 'tv' }, IC.mediaRowModel({ state: 'off', attributes: { supported_features: F.TURN_ON | F.TURN_OFF } }))] }, dot);
   check('card: an off TV -- a power switch, no volume', /data-a="mpower"[^>]*aria-checked="false"/.test(tv) && !/data-a="mvol"/.test(tv) && !/\sdisabled/.test(tv), tv);
+  const tvRow = extra => Object.assign({ label: 'Television', role: 'tv' },
+    IC.mediaRowModel({ state: 'on', attributes: Object.assign({ supported_features: F.VOLUME_SET | F.TURN_ON | F.TURN_OFF }, extra) }));
+  const unk = T.popoverHtml.item({ name: 'TV', status: 'ok', haOff: false, lights: [], readings: [], media: [tvRow({})] }, dot);
+  const volInput = h => (h.match(/<input[^>]*data-a="mvol"[^>]*>/) || [''])[0];
+  // Mutation: drop the volumeUnknown branch -> no slider at all -> fails; render it as value="0" -> fails.
+  check('card: an unreported volume is an indeterminate slider, not 0', /data-vol-unknown/.test(unk) && /class="tp-range unknown"/.test(volInput(unk)) &&
+    /aria-valuetext="Unknown"/.test(volInput(unk)) && !/value="0"/.test(volInput(unk)), volInput(unk));
+  const known = T.popoverHtml.item({ name: 'TV', status: 'ok', haOff: false, lights: [], readings: [], media: [tvRow({ volume_level: 0.25 })] }, dot);
+  check('card: a reported volume is an ordinary slider at its level', /value="25"/.test(volInput(known)) && !/unknown/.test(volInput(known)) &&
+    !/data-vol-unknown/.test(known), volInput(known));
+  const unkOff = T.popoverHtml.item({ name: 'TV', status: 'ok', haOff: true, lights: [], readings: [], media: [tvRow({})] }, dot);
+  check('card: the unknown-volume slider is disabled while HA is offline', /\sdisabled\b/.test(volInput(unkOff)), volInput(unkOff));
   const esc = T.popoverHtml.item({ name: '<b>x</b>', status: 'ok', haOff: false, media: [], lights: [],
     readings: [Object.assign({ label: '<img>' }, IC.readingRowModel({ state: '20', attributes: {} }))] }, dot);
   check('card: names are escaped', esc.indexOf('<img>') === -1 && esc.indexOf('<b>x</b>') === -1);
   const clock = T.popoverHtml.clock({ name: 'Kitchen clock', time: '07:04', seconds: '09', date: 'Monday 5 January 2026' });
-  check('clock card: time, seconds and date, no controls', /<b>07:04<\/b><small>:09<\/small>/.test(clock) && /Monday 5 January 2026/.test(clock) &&
+  check('clock card: time, seconds and date, no controls', /<b data-time>07:04<\/b><small data-sec>:09<\/small>/.test(clock) && /Monday 5 January 2026/.test(clock) &&
     !/<(button|input|select)\b/.test(clock), clock);
 }
 
@@ -405,6 +430,122 @@ const CONSOLE = [
   check('demo: a wall clock and a radiator in a climate-bound room', (geo.furniture || []).some(f => f.type === 'wall-clock') &&
     (geo.furniture || []).some(f => f.type === 'radiator' && typeof climate[f.room] === 'string'));
   check('demo: rooms.json declares 1.6 for sensors.items', rooms.schemaVersion === '1.6');
+}
+
+// ---- 9. the card wiring (pure parts of src/tap-popovers.js) --------------------------
+{
+  const T = await imp('src/tap-popovers.js');
+  const tpSrc = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
+  const VP = await imp('src/vacuum-control.js'), PP = await imp('src/plant-status.js');
+  const vacuums = VP.normaliseVacuumBindings({ robo: { entity: 'vacuum.demo_robo' } });
+  const plants = PP.normalisePlantBindings({ fern: { moisture: 'sensor.demo_fern_moisture' } });
+  // The same ids also carry an item binding: the vacuum / plant must win.
+  const TVB = { media: [{ entity: 'media_player.demo_tv', role: 'tv' }] }, LAMP = { title: 'Lamp', lights: [{ entity: 'light.demo_lamp' }] };
+  const rawItems = { robo: TVB, fern: LAMP, tv: TVB, kclock: { title: 'Kitchen Wall Clock' }, rad: { title: 'Radiator by the Window' } };
+  const items = IC.normaliseItemBindings(rawItems);
+  const ctx = { vacuums, plants, items, climate: { den: 'climate.demo_den' }, rawItems };
+  const obj = { name: 'mesh' };
+  const at = it => T.furnitureTarget(it, { x: 0, y: 0, z: 0 }, obj, ctx);
+  // Mutation: ask furnitureTapTarget before deviceTarget -> 'item' -> fails.
+  check('target: a vacuum binding beats an item binding on the same id', (at({ id: 'robo', type: 'cabinet' }) || {}).kind === 'vacuum');
+  check('target: a plant binding beats an item binding on the same id', (at({ id: 'fern', type: 'cabinet' }) || {}).kind === 'plant');
+  check('target: an item binding alone is an item card', (at({ id: 'tv', type: 'tv' }) || {}).kind === 'item');
+  check('target: the hit mesh rides along', at({ id: 'tv', type: 'tv' }).object === obj && at({ id: 'robo' }).object === obj);
+  const clk = at({ id: 'kclock', type: 'wall-clock', room: 'kitchen' });
+  // Mutation: drop `t.room = it.room` -> no room -> fails; drop the bindingTitle lookup -> no label -> fails.
+  check('target: a clock carries its room', clk && clk.kind === 'clock' && clk.room === 'kitchen', clk);
+  check('target: a title-only clock binding becomes its label', clk && clk.label === 'Kitchen Wall Clock', clk);
+  const rad = at({ id: 'rad', type: 'radiator', room: 'den' });
+  check('target: a title-only radiator binding becomes its label', rad && rad.kind === 'climate' && rad.id === 'den' && rad.label === 'Radiator by the Window', rad);
+  check('target: no title -> no label', at({ id: 'other_clock', type: 'wall-clock', room: 'hall' }).label === undefined);
+  check('target: nothing bound, nothing typed -> null', at({ id: 'chair', type: 'chair' }) === null && T.furnitureTarget(null, null, obj, ctx) === null);
+
+  const roomName = id => ({ kitchen: 'Kitchen', den: 'Home Den' }[id] || id);
+  // Mutation: clockCardName ignores t.label -> 'Kitchen clock' -> fails.
+  check('clock title: the bound title exactly as written', T.clockCardName(clk, roomName) === 'Kitchen Wall Clock');
+  check('clock title: no binding -> "<Room> clock" from the target room', T.clockCardName({ room: 'kitchen' }, roomName) === 'Kitchen clock' &&
+    T.clockCardName({}, roomName) === 'Clock');
+  // Mutation (the review's): radiatorTitle(null, ...) -> 'Home den radiator' -> fails.
+  check('climate title: the bound title exactly as written', T.climateCardName(rad, roomName) === 'Radiator by the Window');
+  check('climate title: no binding -> "<Room> radiator" from the room id', T.climateCardName({ id: 'den' }, roomName) === 'Home den radiator');
+
+  const tvCard = items.get('tv')[0];
+  const rows = { media: [{ label: 'TV', role: 'tv' }], lights: [], readings: [] };
+  const head = T.itemCardHead(tvCard, rows, 'TV (matte) - DRAFT', 'tv');
+  // Mutation: drop the relabel line -> 'TV' under 'TV' -> fails.
+  check('item head: the short label is the title, the lead row is relabelled', head.name === 'TV' && rows.media[0].label === 'Television' && head.icon === 'tv', [head, rows]);
+  const lrows = { media: [], lights: [{ label: 'Bedside' }, { label: 'Bedside' }], readings: [] };
+  T.itemCardHead({ title: 'Bedside', media: [], lights: [{}], readings: [] }, lrows, null, 'b');
+  check('item head: only the LEAD row is relabelled', lrows.lights[0].label === 'Light' && lrows.lights[1].label === 'Bedside', lrows);
+  check('item head: a binding title wins over the label', T.itemCardHead({ title: 'Den TV', media: [], lights: [], readings: [] }, {}, 'TV', 'tv').name === 'Den TV');
+
+  // Wiring: the runtime calls these, and nothing else, for the same answers.
+  check('wiring: deviceAt is furnitureTarget', /return it \? furnitureTarget\(it, h\.point, h\.object, deviceCtx\) : null;/.test(tpSrc));
+  check('wiring: the climate card title is climateCardName', /name: climateCardName\(t, roomName\) \};/.test(tpSrc));
+  check('wiring: the clock card title is clockCardName', /name: clockCardName\(t, roomName\) \}, clockText\(new Date\(\)\)/.test(tpSrc));
+  check('wiring: the item card head is itemCardHead', /const head = itemCardHead\(card, \{ media, lights, readings \}, furnitureLabels\.get\(t\.itemId\), t\.itemId\);/.test(tpSrc) &&
+    /name: head\.name, icon: head\.icon, media, lights, readings \};/.test(tpSrc));
+
+  // The item sender's gates.
+  const cmd = IC.mediaPowerCommand('media_player.demo_tv', true);
+  const mk = over => {
+    const log = { calls: [], mock: [], opt: [] };
+    const d = Object.assign({ writeBlocked: () => false, canSend: () => true, mockMode: () => false,
+      ha: () => ({ callServiceDebounced: (...a) => log.calls.push(a) }), getRaw: () => ({ state: 'off', attributes: {} }),
+      setMock: (e, r) => log.mock.push([e, r]), setOptimistic: (e, r) => log.opt.push([e, r]) }, over);
+    return { send: T.createItemSender(d), log };
+  };
+  let x = mk({});
+  x.send(cmd, 'power', 0);
+  check('item sender: connected -> one call and an optimistic state', x.log.calls.length === 1 && x.log.calls[0][1] === 'turn_on' &&
+    x.log.calls[0][4] === 'item:power:media_player.demo_tv' && x.log.opt.length === 1 && x.log.opt[0][1].state === 'on', x.log);
+  x = mk({ canSend: () => false });
+  x.send(cmd, 'power', 0);
+  // Mutation: delete `if (!d.canSend()) return;` -> a call goes out -> fails.
+  check('item sender: canSend false -> nothing sent, nothing optimistic', x.log.calls.length === 0 && x.log.opt.length === 0 && x.log.mock.length === 0, x.log);
+  x = mk({ writeBlocked: () => true, mockMode: () => true });
+  x.send(cmd, 'power', 0);
+  check('item sender: writeBlocked -> nothing at all, not even the sample', x.log.calls.length === 0 && x.log.mock.length === 0 && x.log.opt.length === 0, x.log);
+  x = mk({ mockMode: () => true, canSend: () => false });
+  x.send(cmd, 'power', 0);
+  check('item sender: no HA configured -> the sample moves, nothing sent', x.log.mock.length === 1 && x.log.mock[0][1].state === 'on' && x.log.calls.length === 0, x.log);
+
+  // The clock ticks without a rebuild.
+  const clockView = { sig: T.clockTick.sig, patch: T.clockTick.patch };
+  const m1 = { name: 'Kitchen clock', time: '07:04', seconds: '09', date: 'Monday' };
+  const m2 = Object.assign({}, m1, { seconds: '10' });
+  const first = T.repaintAction(clockView, m1, null, false, true, false);
+  const tick = T.repaintAction(clockView, m2, first.sig, false, false, false);
+  // Mutation: sig includes the time (or drop sig) -> 'rebuild' every second -> fails.
+  check('clock: a tick patches, never rebuilds', first.action === 'rebuild' && tick.action === 'patch', [first, tick]);
+  check('clock: a new title rebuilds', T.repaintAction(clockView, Object.assign({}, m2, { name: 'Hall clock' }), first.sig, false, false, false).action === 'rebuild');
+  check('repaint: a view with no sig rebuilds on any change, else nothing', T.repaintAction({}, { a: 2 }, JSON.stringify({ a: 1 }) + false, false, false, false).action === 'rebuild' &&
+    T.repaintAction({}, { a: 1 }, JSON.stringify({ a: 1 }) + false, false, false, false).action === 'none');
+  check('repaint: never under a drag unless forced', T.repaintAction({}, { a: 2 }, 'x', false, false, true).action === 'none' &&
+    T.repaintAction({}, { a: 2 }, 'x', false, true, true).action === 'rebuild');
+  const nodes = { '[data-time]': { textContent: '07:04' }, '[data-sec]': { textContent: ':09' }, '[data-date]': { textContent: 'Monday' } };
+  T.clockTick.patch({ querySelector: q => nodes[q] || null }, { time: '07:05', seconds: '00', date: 'Tuesday' });
+  check('clock: the patch rewrites the time, seconds and date text', nodes['[data-time]'].textContent === '07:05' &&
+    nodes['[data-sec]'].textContent === ':00' && nodes['[data-date]'].textContent === 'Tuesday', nodes);
+  check('wiring: render goes through repaintAction and the view\'s patch', /const next = repaintAction\(v, m, pop\.sig, tipOpen, force, pop\.ctl\.dragging\);\s*if \(next\.action === 'patch'\) v\.patch\(pop\.el, m\);\s*if \(next\.action !== 'rebuild'\) return;/.test(tpSrc));
+  check('wiring: the clock view carries clockTick', /sig: clockTick\.sig,\s*patch: clockTick\.patch,/.test(tpSrc));
+}
+
+// ---- 10. a light row's power switch -------------------------------------------
+{
+  const offRow = IC.lightRowModel({ state: 'off', attributes: {} });
+  const on = IC.lightRowToggleCommand('light.demo_bedside', offRow);
+  // Mutation: pass the row's bri through (the old { on, bri: r.bri }) -> brightness 255 -> fails.
+  check('light switch: off -> turn_on with NO brightness (HA restores the last level)', on.service === 'turn_on' && !('brightness' in on.data) &&
+    on.target.entity_id === 'light.demo_bedside', on);
+  check('light switch: on -> turn_off', IC.lightRowToggleCommand('light.demo_bedside', IC.lightRowModel({ state: 'on', attributes: { brightness: 40 } })).service === 'turn_off');
+  check('light slider: still sends its brightness', IC.lightRowCommand('light.demo_bedside', { on: true, bri: 40 }).data.brightness === 102);
+  const tpSrc = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
+  check('wiring: the item card switch sends lightRowToggleCommand', /itemSend\(lightRowToggleCommand\(card\.lights\[i\]\.entity, r\), 'light', 0\)/.test(tpSrc) &&
+    !/lightRowCommand\(card\.lights\[i\]\.entity, \{ on: !r\.on/.test(tpSrc));
+  check('wiring: the item card slider sends its value as brightness', /itemSend\(lightRowCommand\(card\.lights\[i\]\.entity, \{ on: true, bri: \+r\.value \}\), 'light', 200\)/.test(tpSrc));
+  const after = IC.applyCommand({ state: 'off', attributes: { brightness: 90 } }, on);
+  check('light switch: the optimistic state keeps the known level', after.state === 'on' && after.attributes.brightness === 90, after);
 }
 
 console.log(failures ? 'FAILED -- ' + failures + ' failed, ' + passes + ' passed' : 'ok -- ' + passes + ' passed, 0 failed');
