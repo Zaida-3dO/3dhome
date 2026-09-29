@@ -359,6 +359,9 @@ console.log('light theme: state icons keep their colour');
     const c = tok(lightBlock, k);
     ok(c && contrast(c, '#fafbfd') >= 3, 'light theme: --' + k + ' ' + c + ' reaches 3:1 on the card (' + (c ? contrast(c, '#fafbfd').toFixed(2) : '-') + ')');
   });
+  // --ok also colours the 11px "On" text of a switch row: text wants 4.5:1.
+  // Mutation: back to #16a34a (3.18:1) -> fails.
+  ok(contrast(tok(lightBlock, 'ok'), '#fafbfd') >= 4.5, 'light theme: --ok reaches 4.5:1 (it colours small text)');
   ok(tok(darkBlock, 'amber') === '#ffd43b' && tok(darkBlock, 'wet') === '#60a5fa', 'dark theme: the amber and wet colours are unchanged');
   ok(spec('.a.b')[1] === 2 && spec(':root[data-theme="light"] .x')[1] === 3 && spec(':where(:root[data-theme="light"]) .x')[1] === 1,
     'the specificity helper itself counts classes, attributes and pseudo-classes, and :where as nothing');

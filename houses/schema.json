@@ -59,6 +59,11 @@
           "required": [
             "switches"
           ]
+        },
+        {
+          "required": [
+            "cameras"
+          ]
         }
       ],
       "properties": {
@@ -195,6 +200,43 @@
                   }
                 ],
                 "description": "Optional power-draw `sensor.*` (W) shown on the row."
+              }
+            }
+          }
+        },
+        "cameras": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Camera rows: the camera's snapshot (HA's entity_picture, /api/camera_proxy), refreshed every `refreshMs` while the card is open and paused while the tab is hidden, with an optional Live toggle to HA's MJPEG proxy (/api/camera_proxy_stream) while the card is open. A snapshot that cannot be refreshed keeps the last frame, dimmed; failures back off. Needs rooms schemaVersion 1.9.",
+          "items": {
+            "type": "object",
+            "required": [
+              "entity"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "entity": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/entityId"
+                  },
+                  {
+                    "pattern": "^camera\\."
+                  }
+                ],
+                "description": "The `camera.*` entity."
+              },
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Optional row label. Without it the entity's own friendly_name is shown."
+              },
+              "refreshMs": {
+                "type": "integer",
+                "minimum": 500,
+                "maximum": 60000,
+                "default": 2000,
+                "description": "How often the snapshot refreshes while the card is open, in ms."
               }
             }
           }

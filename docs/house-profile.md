@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.8"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key and `1.8` the `switches` rows of an item card. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.9"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card and `1.9` its `cameras` rows. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -1113,7 +1113,9 @@ every curtain in that room first (on/off and brightness -- switching it on
 brings it back at its last level), then every bound cover in the room, each
 with its own position slider and Open / Close buttons, labelled with the
 curtain's `label`. So a room with a curtain and a blind on one window shows
-both, and its cornice light, whichever of them you tap. The card is titled
+both, and its cornice light, whichever of them you tap. One light is one row:
+a cornice light bound under both the curtain and the blind shows once, as the
+room's curtain light. The card is titled
 "<Room> curtains".
 
 `curtains` and `corniceLights` need `schemaVersion` `"1.2"`: an engine older
@@ -1383,7 +1385,7 @@ not have and on `dryBelow` not below `wetAbove`.
 
 Keyed by the **furniture item** that is tapped, found by where the tap lands,
 exactly like a robot vacuum. The value is **one card**, or a **list of cards**
-each scoped to a `region` of the item. A card has a `title` and any of four row
+each scoped to a `region` of the item. A card has a `title` and any of five row
 lists, at least one of them. **Give every card a short `title`** ("Living room
 TV", "Sound system"): without one the card falls back to the item's `label` cut
 at its first ` (` or ` - `, and a real house's labels are usually authoring
@@ -1418,6 +1420,21 @@ first row (a receiver card gets a speaker, not a TV). The rows:
   ```json
   "desk": { "title": "Desk", "switches": [
     { "entity": "switch.example_desk_monitor", "label": "Monitor", "power": "sensor.example_desk_monitor_power" }
+  ] }
+  ```
+- **`cameras`** -- a `camera.*` row: the camera's snapshot, refreshed every
+  `refreshMs` (default `2000`, 500-60000) while the card is open, paused while
+  the tab is hidden and stopped when the card closes. A camera that can stream
+  gets a **Live** toggle (Home Assistant's MJPEG proxy), streaming only while
+  the card is open and Live is on. A snapshot that cannot be refreshed keeps
+  the last frame, dimmed, and retries with a growing back-off; there is never
+  a broken-image icon. The picture comes from the entity's `entity_picture`
+  (a short-lived, rotating token), fetched as a plain image -- no library.
+  Needs `schemaVersion` `"1.9"`:
+
+  ```json
+  "crate": { "title": "Crate", "cameras": [
+    { "entity": "camera.example_crate", "label": "Crate cam", "refreshMs": 2000 }
   ] }
   ```
 - **`readings`** -- a read-only `sensor.*` row: the value with its
