@@ -5401,11 +5401,17 @@ export const Home3DScene = (() => {
         tvScreenOn.set(itemId, !!on);
         if (applyTvScreen(itemId)) requestRender();
       },
-      // Every built TV screen and its live look, for tests and the debug seam.
+      // Every built TV screen and its live look, for tests and the debug seam:
+      // where it is (world centre, metres) and which way it faces (the
+      // horizontal unit normal of its front), so a check can aim setOrbit.
       getTvScreens() {
-        return [...tvScreens].map(([itemId, mesh]) => ({ itemId, on: !!mesh.material.userData.tvOn,
-          emissive: '#' + mesh.material.emissive.getHexString(), emissiveIntensity: mesh.material.emissiveIntensity,
-          hasPicture: !!mesh.material.emissiveMap }));
+        return [...tvScreens].map(([itemId, mesh]) => {
+          const c = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
+          const n = new THREE.Vector3(0, 0, 1).transformDirection(mesh.matrixWorld);
+          return { itemId, on: !!mesh.material.userData.tvOn,
+            emissive: '#' + mesh.material.emissive.getHexString(), emissiveIntensity: mesh.material.emissiveIntensity,
+            hasPicture: !!mesh.material.emissiveMap, centre: c.toArray(), facing: [n.x, n.z] };
+        });
       },
       // The cornice downlights actually built for a curtain, in world space,
       // with their live colour/intensity -- for checking the tier counts and

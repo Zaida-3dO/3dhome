@@ -277,8 +277,8 @@ export function drawTvHome(ctx, w, h) {
   const rowLabel = (y, lw) => { ctx.fillStyle = '#8f98ae'; rr(ctx, S(24), y, lw, S(9), S(4)); ctx.fill(); };
   rowLabel(S(232), S(70));
   const apps = [
-    ['#e5484d', '#b8323a', 'play'], ['#2f81f7', '#1d5fc4', 'wave'], ['#22b573', '#168a55', 'ring'],
-    ['#f5a524', '#d0801a', 'star'], ['#8e5cf6', '#6a3fd0', 'square'], ['#10b6c9', '#0b8a99', 'bars'],
+    ['#ff7a59', '#e0553a', 'star'], ['#2f81f7', '#1d5fc4', 'wave'], ['#22b573', '#168a55', 'ring'],
+    ['#f5a524', '#d0801a', 'bars'], ['#8e5cf6', '#6a3fd0', 'square'], ['#10b6c9', '#0b8a99', 'wave'],
     ['#ec4899', '#c02d78', 'ring'], ['#f0f2f7', '#c9cfdc', 'dots']
   ];
   const tw1 = S(84), th1 = S(56), gap = S(10);
@@ -313,9 +313,9 @@ function drawGlyph(ctx, kind, cx, cy, r, color) {
   ctx.fillStyle = color; ctx.strokeStyle = color;
   ctx.lineWidth = r * 0.3; ctx.lineCap = 'round';
   ctx.beginPath();
-  if (kind === 'play') {
-    ctx.moveTo(cx - r * 0.6, cy - r * 0.8); ctx.lineTo(cx - r * 0.6, cy + r * 0.8); ctx.lineTo(cx + r * 0.8, cy); ctx.closePath(); ctx.fill();
-  } else if (kind === 'wave') {
+  // Deliberately no "play triangle" tile: a red tile with a white play
+  // triangle is a real video brand's mark.
+  if (kind === 'wave') {
     ctx.moveTo(cx - r, cy);
     for (let i = 0; i <= 16; i++) ctx.lineTo(cx - r + 2 * r * i / 16, cy - Math.sin(i / 16 * Math.PI * 2) * r * 0.5);
     ctx.stroke();
