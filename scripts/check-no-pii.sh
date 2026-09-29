@@ -168,7 +168,7 @@ fi
 # (sensors.vacuums), sensor (plants, readings), media_player (sensors.items),
 # script (sensors.roomScripts) -- plus the Home Assistant domains a future
 # binding is likeliest to reach for, so a new binding is guarded the day it
-# lands rather than after someone notices. scripts/test-check-no-pii.sh
+# lands rather than after someone notices. scripts/test-check-no-pii.mjs
 # plants one real-looking id per domain and asserts each is caught.
 # Deliberately NOT here: domains whose name is also a common JS/JSON word
 # ("event.x", "update.x", "number.x", "select.x", "button.x", "text.x",
@@ -191,6 +191,15 @@ ENTITY_RE="\"(${ENTITY_DOMAINS})\\.[a-z0-9_]+\""
 is_fictional_id() {
   case "$1" in
     demo_*|*_demo_*|example_*|my_*|your_*|foo_*|bar_*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# is_file_extension <object_id> - true if the "object id" is a file extension,
+# i.e. the whole match was a filename such as "script.js" (see the id loop).
+is_file_extension() {
+  case "$1" in
+    js|mjs|cjs|jsx|ts|json|css|html|htm|md|py|sh|txt|svg|png|jpg|jpeg|webp|gif|ico|glb|gltf|yml|yaml|xml|map|wasm|woff|woff2) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -221,6 +230,11 @@ ENTITY_BAD=$(printf '%s\n' "$ENTITY_HITS" | while IFS= read -r line; do
   _loc=$(printf '%s' "$line" | cut -d: -f1-2)
   printf '%s' "$line" | grep -o -E "$ENTITY_RE" | tr -d '"' | while IFS= read -r id; do
     _obj=${id#*.}
+    # A quoted FILENAME is not an entity id: "script.js", "camera.json",
+    # "scene.html" match ENTITY_RE because script / camera / scene are
+    # domains. An object id that is exactly a common file extension is a
+    # filename, never a device (no real entity is named `script.js`).
+    is_file_extension "$_obj" && continue
     case "$_file" in
       houses/demo/rooms.json)
         is_fictional_id "$_obj" || \

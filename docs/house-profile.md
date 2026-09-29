@@ -1466,7 +1466,9 @@ From the keyboard, Enter or Space arms it and a second, separate press
 confirms. The button keeps focus between the two, and a status region
 announces "Armed" and then "Sent" to a screen reader. Holding Enter down never
 confirms: after a keyboard arm, the key has to be released before a keyboard
-press can count.
+press can count. A screen reader's or switch device's activation (no key
+events reach the page) works like a tap: the first arms, a second one
+confirms.
 
 `script.turn_on` rather than the script's own service (`script.<name>`):
 `turn_on` is Home Assistant's way to start a script **by entity id** with

@@ -359,7 +359,9 @@ await quiet(async () => {
   const writes = wire.match(/onWrite\(el, '(click|input)'/g) || [];
   check('every light / ambience / curtain / climate / room-script write handler is gated (12)', writes.length === 12, writes.length);
   check('no ungated click/input handler left', !/el\.addEventListener\('(click|input)'/.test(wire));
-  check('lock-release handlers stay ungated', (wire.match(/el\.addEventListener\('(pointerup|pointercancel|blur)'/g) || []).length === 6);
+  // Seven: the six drag-lock releases (curtain + climate x pointerup /
+  // pointercancel / blur) and the room script's key-intent reset on blur.
+  check('lock-release handlers stay ungated', (wire.match(/el\.addEventListener\('(pointerup|pointercancel|blur)'/g) || []).length === 7);
   check('sendToHA refuses while offline', /function sendToHA\([^)]*\) \{\s*if \(!ha \|\| !haConfig \|\| haOffline\(ha\)\) return;/.test(html));
   check('both senders are writable-gated', (html.match(/writable: \(\) => !haOffline\(ha\),/g) || []).length === 2);
   const statusAt = html.indexOf('ha.onStatusChange(status => {');

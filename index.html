@@ -1029,7 +1029,7 @@
              MOCK_VACUUM_READINGS, mockVacuumAfter } from './src/vacuum-control.js?v=__VERSION__';
     import { normalisePlantBindings, plantStatusText, agoText, mockPlantReading } from './src/plant-status.js?v=__VERSION__';
     import { normaliseRoomScripts, roomScriptCommand, createTwoStepConfirm, roomScriptRowHtml,
-             roomScriptView, applyRoomScriptView }
+             roomScriptView, applyRoomScriptView, createKeyIntent }
                               from './src/room-script.js?v=__VERSION__';
 
     // Theme (Settings > Theme). The inline <head> script already painted the
@@ -3167,16 +3167,23 @@
           }
           // Room script: the first tap arms, the second sends (press() in
           // src/room-script.js), and press() itself refuses unless HA is
-          // connected -- behind onWrite and the disabled button. A click
-          // with detail 0 came from a key: a keyboard arm then needs the key
-          // RELEASED (keyup) before a keyboard confirm counts, so a held
-          // Enter's auto-repeat can never confirm. keyup only clears that
-          // flag -- it sends nothing, so it is not an onWrite handler.
+          // connected -- behind onWrite and the disabled button. A click an
+          // Enter / Space keydown on this button drove (createKeyIntent) is a
+          // keyboard press: a keyboard arm then needs the key RELEASED before
+          // a keyboard confirm counts, so a held Enter's auto-repeat can
+          // never confirm. Any other click -- pointer, a screen reader's or
+          // switch device's synthetic activation, el.click() -- is a plain
+          // press and confirms on a second one. keydown / keyup / blur only
+          // track intent and send nothing, so they are not onWrite handlers.
           if (action === 'room-script') {
+            const intent = createKeyIntent();
             onWrite(el, 'click', e => {
-              if (!el.disabled) roomScriptConfirm(rid).press({ keyboard: e.detail === 0 });
+              const keyboard = intent.click(e.detail);
+              if (!el.disabled) roomScriptConfirm(rid).press({ keyboard });
             });
-            el.addEventListener('keyup', () => roomScriptConfirm(rid).keyUp());
+            el.addEventListener('keydown', e => intent.keyDown(e.key));
+            el.addEventListener('keyup', e => { if (intent.keyUp(e.key)) roomScriptConfirm(rid).keyUp(); });
+            el.addEventListener('blur', () => intent.blur());
           }
           // Curtain Open / Close buttons: one press, one command, to every
           // bound motor. The 3D curtain then follows HA's own reports.

@@ -79,12 +79,13 @@ export function roomScriptCommand(binding) {
  * in place), so a HELD Enter would otherwise confirm: its auto-repeat fires a
  * click every ~30 ms once the repeat delay (250-500 ms, often past
  * minArmMs) has passed. So a press made from the keyboard (`{ keyboard:
- * true }` -- a click with detail 0) that ARMS also demands a key release:
- * until keyUp() is called, no keyboard press can confirm. A deliberate second
- * press (release, press again) confirms as usual. Space fires its click on
- * release, after its keyup, so the next Space's keyup arrives before the
- * click that confirms -- the same rule covers it. Pointer presses are
- * unaffected.
+ * true }` -- a click that a real Enter / Space keydown on the button drove,
+ * see createKeyIntent) that ARMS also demands a key release: until keyUp()
+ * is called, no keyboard press can confirm. A deliberate second press
+ * (release, press again) confirms as usual. Every other click -- a pointer
+ * tap, a screen reader's or switch device's synthetic activation, a scripted
+ * el.click() -- is a plain press: it arms, and a second one past minArmMs
+ * confirms. Those never deliver a keyup, so they must not wait for one.
  */
 export function createTwoStepConfirm({
   send, writable, onChange,
@@ -132,6 +133,44 @@ export function createTwoStepConfirm({
      *  closed). */
     reset() { go('idle', 0); },
     dispose() { if (timer !== null) { clearTimer(timer); timer = null; } }
+  };
+}
+
+/** The keys that activate a button. */
+const ACTIVATION_KEYS = new Set(['Enter', ' ', 'Spacebar']);
+
+/**
+ * Which clicks on the button a real key press drove. `detail === 0` alone is
+ * not enough: a screen reader in browse mode, a switch device and a scripted
+ * el.click() all click with detail 0 and never send a key event, so treating
+ * them as keyboard would arm the button and then refuse every confirm (the
+ * release guard waits for a keyup that never comes).
+ *
+ *   keyDown(key)  an Enter / Space keydown ON the button (a held Enter's
+ *                 auto-repeat keydowns included) -> the next click is keyed
+ *   click(detail) -> true when that click is keyboard-driven; consumes it
+ *   keyUp(key)    -> true for an Enter / Space release (the caller then
+ *                 releases the confirm's guard); also ends the key's claim
+ *   blur()        focus left: a keydown whose click never came is dropped
+ *
+ * Space activates on release, so its click follows its keyup and reads as a
+ * plain press -- safe, because a held Space never auto-repeats a click.
+ */
+export function createKeyIntent() {
+  let keyed = false;
+  return {
+    keyDown(key) { if (ACTIVATION_KEYS.has(key)) keyed = true; },
+    click(detail) {
+      const kb = keyed && detail === 0;
+      keyed = false;
+      return kb;
+    },
+    keyUp(key) {
+      if (!ACTIVATION_KEYS.has(key)) return false;
+      keyed = false;
+      return true;
+    },
+    blur() { keyed = false; }
   };
 }
 
