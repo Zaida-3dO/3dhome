@@ -249,6 +249,14 @@ jobs:
           # against the real callServiceDebounced.
           set -euo pipefail
           node scripts/test-room-panel.mjs
+      - name: Room script ("Kill room") button -- two-step confirm, one script.turn_on
+        run: |
+          # Asserts the first tap only arms, a second sends exactly ONE
+          # script.turn_on with the room's variables (over the fake HA
+          # WebSocket, through the real callService), the arm times out, a
+          # double-tap is not a confirm, and offline sends nothing.
+          set -euo pipefail
+          node scripts/test-room-script.mjs
       - name: Home Assistant transport is the WebSocket only (no REST, no CORS)
         run: |
           # Asserts ha-client never calls fetch(): a whole session (connect,
@@ -773,6 +781,8 @@ jobs:
         run: python scripts/test-validate-plant.py
       - name: sensors.items schema and validator checks (row domains, regions, unknown furniture item, version)
         run: python scripts/test-validate-items.py
+      - name: sensors.roomScripts schema and validator checks (script domain, unknown room, shared variables, version)
+        run: python scripts/test-validate-room-script.py
       - name: sh3d-furniture / furniture-apply tests
         run: python scripts/test-sh3d-furniture.py
 

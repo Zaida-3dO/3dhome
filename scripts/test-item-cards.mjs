@@ -429,7 +429,7 @@ const CONSOLE = [
   const climate = (rooms.sensors && rooms.sensors.climate) || {};
   check('demo: a wall clock and a radiator in a climate-bound room', (geo.furniture || []).some(f => f.type === 'wall-clock') &&
     (geo.furniture || []).some(f => f.type === 'radiator' && typeof climate[f.room] === 'string'));
-  check('demo: rooms.json declares 1.6 for sensors.items', rooms.schemaVersion === '1.6');
+  check('demo: rooms.json declares 1.6 or newer for sensors.items', /^1\.([6-9]|\d\d+)$/.test(rooms.schemaVersion), rooms.schemaVersion);
 }
 
 // ---- 9. the card wiring (pure parts of src/tap-popovers.js) --------------------------

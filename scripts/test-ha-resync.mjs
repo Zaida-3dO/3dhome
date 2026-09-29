@@ -357,7 +357,7 @@ await quiet(async () => {
   check('wireRoomControls found', wire.length > 200);
   check('onWrite gates on haOffline', /const onWrite = \(el, type, fn\) => el\.addEventListener\(type, e => \{ if \(!haOffline\(ha\)\) fn\(e\); \}\)/.test(wire));
   const writes = wire.match(/onWrite\(el, '(click|input)'/g) || [];
-  check('every light / ambience / curtain / climate write handler is gated (11)', writes.length === 11, writes.length);
+  check('every light / ambience / curtain / climate / room-script write handler is gated (12)', writes.length === 12, writes.length);
   check('no ungated click/input handler left', !/el\.addEventListener\('(click|input)'/.test(wire));
   check('lock-release handlers stay ungated', (wire.match(/el\.addEventListener\('(pointerup|pointercancel|blur)'/g) || []).length === 6);
   check('sendToHA refuses while offline', /function sendToHA\([^)]*\) \{\s*if \(!ha \|\| !haConfig \|\| haOffline\(ha\)\) return;/.test(html));

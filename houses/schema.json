@@ -4896,6 +4896,38 @@
                   }
                 ]
               }
+            },
+            "roomScripts": {
+              "type": "object",
+              "description": "Room id -> ONE Home Assistant script the room's sidebar view offers as a destructive button at its foot (label 'Kill room' by default), for a script that switches the room off. The button is a two-step confirm: the first tap arms it ('Tap again to ...', back to idle after about 4 s), the second sends `script.turn_on` targeting `entity` with `variables` -- and nothing else is ever sent. Disabled while Home Assistant is not connected; absent for a room with no entry. The same script may be bound to several rooms with different `variables`, and several rooms may pass identical ones (two rooms the script treats as one area). Room ids MUST exist in the paired geometry profile's `rooms`. Needs rooms schemaVersion 1.7.",
+              "propertyNames": {
+                "$ref": "#/$defs/roomId"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "required": ["entity"],
+                "additionalProperties": false,
+                "properties": {
+                  "entity": {
+                    "allOf": [
+                      { "$ref": "#/$defs/entityId" },
+                      { "pattern": "^script\\." }
+                    ],
+                    "description": "The `script.*` entity to run."
+                  },
+                  "variables": {
+                    "type": "object",
+                    "description": "The script's variables for this room, passed as `variables` to script.turn_on, e.g. { \"room\": \"<the value the script expects>\" }. Omitted: the script runs with none."
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40,
+                    "default": "Kill room",
+                    "description": "The button's text. Armed, it reads 'Tap again to <label, first letter lower-cased>'."
+                  }
+                }
+              }
             }
           },
           "additionalProperties": false
