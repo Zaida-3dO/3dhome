@@ -662,7 +662,7 @@ ${sel} .tp-pop.chip { padding: 10px 12px; }`;
 export const STYLE = `
 .tp-pop { --w:200px; --ib-w:30px; --ib-h:${GF.ibH}px; --sw-w:36px; --sw-h:${GF.swH}px; --thumb:20px; --track-h:6px;
   --ink:#fff; --ink-2:rgba(255,255,255,0.62); --accent:#6366f1; --ok:#22c55e; --warn:#eab308; --bad:#ef4444;
-  --amber:#ffd43b; --heat:#ff8a3d; --door-open:#f59e0b;
+  --amber:#ffd43b; --heat:#ff8a3d; --door-open:#f59e0b; --wet:#60a5fa;
   /* The card and its pointer diamond paint from these same two variables. */
   --pop-bg: rgba(10,10,20,0.94); --pop-border: rgba(255,255,255,0.10);
   /* Range parts -- see the .tp-range block below. */
@@ -818,7 +818,7 @@ export const STYLE = `
 .tp-pop[data-kind=plant] { --w: 220px; }
 .tp-ico.p-ok { fill: var(--ok); }
 .tp-ico.p-dry, .tp-ico.p-due { fill: var(--door-open); }
-.tp-ico.p-wet { fill: #60a5fa; }
+.tp-ico.p-wet { fill: var(--wet); }
 .tp-pmoist { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; min-width: 0; }
 .tp-pmoist svg { width: 16px; height: 16px; flex: none; fill: #60a5fa; }
 .tp-pmoist b { font-size: 20px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
@@ -900,7 +900,8 @@ ${coarseRules('.tp-force-coarse')}
    of it; the rest re-colours the literal white-on-dark parts. The diamond
    follows the card through --pop-bg / --pop-border. */
 :root[data-theme="light"] .tp-pop { color-scheme: only light;
-  --ink:#1a1d29; --ink-2:rgba(26,29,41,0.64); --amber:#d99a00; --heat:#e8590c; --door-open:#c77700; --ok:#16a34a;
+  /* State colours darkened to at least 3:1 on the near-white card. */
+  --ink:#1a1d29; --ink-2:rgba(26,29,41,0.64); --amber:#b37f00; --heat:#e8590c; --door-open:#c77700; --ok:#16a34a; --wet:#3b82f6;
   --pop-bg: rgba(250,251,253,0.96); --pop-border: rgba(0,0,0,0.12); --range-track: rgba(0,0,0,0.18);
   box-shadow: 0 6px 20px rgba(0,0,0,0.22); }
 /* :where() keeps this at .tp-ico's own weight (0,1,0): it re-colours the
@@ -1106,7 +1107,7 @@ export const popoverHtml = {
         // Takes a volume but has not reported one: UNKNOWN, never 0.
         body += '<div class="tp-ivol" data-vol-unknown>' + svg(I.volume) + '<input class="tp-range unknown" data-a="mvol" data-i="' + i +
           '" type="range" min="0" max="100" value="50" aria-valuetext="Unknown" aria-label="Volume (not reported): ' + esc(r.label) + '"' +
-          (off ? ' disabled' : '') + '><span class="tp-ivol-q" title="Volume not reported">?</span></div>';
+          (off ? ' disabled' : '') + '><span class="tp-ivol-q" role="img" aria-label="Volume not reported" title="Volume not reported">?</span></div>';
       }
       const sels = (r.sources.length ? select('msrc', i, r.sources, r.source, 'Source: ' + r.label, 'Source') : '') +
         (r.soundModes.length ? select('mmode', i, r.soundModes, r.soundMode, 'Sound mode: ' + r.label, 'Sound mode') : '');

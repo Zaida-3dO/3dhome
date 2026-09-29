@@ -23,7 +23,8 @@
  *   9. The accent light's colour square: inline with the slider, current
  *      colour, disabled offline; the main light has none.
  *  10. Light theme: every state icon (.light-on, .heat, .d-open, .p-ok, ...)
- *      outranks the light theme's plain-icon fill, so it keeps its colour.
+ *      outranks the light theme's plain-icon fill, so it keeps its colour,
+ *      and each state colour reaches 3:1 on the light card.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -336,7 +337,7 @@ console.log('light theme: state icons keep their colour');
   ok(lightPlain.length === 1 && basePlain, 'one light-theme rule re-colours the plain icon');
   const lp = lightPlain[0];
   // Mutation: back to `:root[data-theme="light"] .tp-ico` -> (0,3,0) outranks every state -> fails.
-  ['light-on', 'heat', 'd-open', 'd-closed', 'p-ok', 'p-dry', 'p-due', 'p-wet', 'm-on'].forEach(k => {
+  ['light-on', 'heat', 'd-open', 'd-closed', 'p-ok', 'p-dry', 'p-due', 'p-wet', 'm-on', 'sw-on'].forEach(k => {
     const st = fills.filter(r => r.sel === '.tp-ico.' + k);
     ok(st.length === 1 && cmp(spec(st[0].sel), spec(lp.sel)) > 0,
       'light theme: .tp-ico.' + k + ' ' + JSON.stringify(st[0] && spec(st[0].sel)) + ' outranks the plain-icon rule ' + JSON.stringify(spec(lp.sel)));
@@ -344,8 +345,21 @@ console.log('light theme: state icons keep their colour');
   ok(cmp(spec(lp.sel), spec(basePlain.sel)) >= 0 && lp.at > basePlain.at, 'light theme: the plain icon still turns dark (same weight, later)');
   const dimLight = fills.find(r => /data-theme="light"/.test(r.sel) && /\.tp-ico\.dim$/.test(r.sel));
   ok(dimLight && cmp(spec(dimLight.sel), spec('.tp-ico.dim')) > 0, 'light theme: the dimmed icon keeps its own light-theme fill');
-  ok(fills.find(r => r.sel === '.tp-ico.light-on' && /var\(--amber\)/.test(r.body)) &&
-    /:root\[data-theme="light"\] \.tp-pop \{[^}]*--amber:#d99a00/.test(T.STYLE), 'the state fills read the theme tokens (light theme redefines them)');
+  const lightBlock = (T.STYLE.match(/:root\[data-theme="light"\] \.tp-pop \{([^}]*)\}/) || [])[1] || '';
+  const darkBlock = (T.STYLE.match(/\n\.tp-pop \{([^}]*)\}/) || [])[1] || '';
+  const tok = (block, name) => (block.match(new RegExp('--' + name + ':\\s*(#[0-9a-fA-F]{6})')) || [])[1];
+  ok(fills.find(r => r.sel === '.tp-ico.light-on' && /var\(--amber\)/.test(r.body)) && fills.find(r => r.sel === '.tp-ico.p-wet' && /var\(--wet\)/.test(r.body)) &&
+    tok(lightBlock, 'amber') && tok(lightBlock, 'wet'), 'the state fills read the theme tokens (light theme redefines them)');
+  // WCAG contrast of each light-theme state colour on the light card (#fafbfd).
+  const lum = hex => { const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map(x => (x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4))); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  // Mutation: back to --amber:#d99a00 (2.4:1) or --wet:#60a5fa (2.5:1) -> fails.
+  ['amber', 'wet', 'heat', 'door-open', 'ok'].forEach(k => {
+    const c = tok(lightBlock, k);
+    ok(c && contrast(c, '#fafbfd') >= 3, 'light theme: --' + k + ' ' + c + ' reaches 3:1 on the card (' + (c ? contrast(c, '#fafbfd').toFixed(2) : '-') + ')');
+  });
+  ok(tok(darkBlock, 'amber') === '#ffd43b' && tok(darkBlock, 'wet') === '#60a5fa', 'dark theme: the amber and wet colours are unchanged');
   ok(spec('.a.b')[1] === 2 && spec(':root[data-theme="light"] .x')[1] === 3 && spec(':where(:root[data-theme="light"]) .x')[1] === 1,
     'the specificity helper itself counts classes, attributes and pseudo-classes, and :where as nothing');
 }
