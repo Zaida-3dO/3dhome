@@ -66,9 +66,25 @@ export const GLASS_ROUGHNESS = 0.3;
 export const GLASS_DARKEN = 0.3;
 /**
  * The off glass's fixed sheen, linear RGB per channel, before the shader's
- * weights (at most ~1.9x this, on the rim). Neutral grey: never tints blue.
+ * weights (SHEEN_WEIGHTS). Neutral grey: never tints blue.
  */
 export const OFF_SHEEN = 0.006;
+/**
+ * The shader's weights on the sheen: a floor, a rise towards the top (x uv
+ * y), a soft diagonal band and the edge rim, each term 0..1. TV_SHEEN_GLSL
+ * is written FROM these, so the brightest the sheen can ever be is
+ * OFF_SHEEN x their sum (sheenPeak) -- held under SHEEN_PEAK_MAX.
+ */
+export const SHEEN_WEIGHTS = Object.freeze({ base: 0.25, top: 0.2, band: 0.45, rim: 1.0 });
+/** The most the off glass may add, linear: a few sRGB levels after tone mapping. */
+export const SHEEN_PEAK_MAX = 0.012;
+/** The brightest the off sheen can be anywhere on the panel (all terms at 1). */
+export function sheenPeak() {
+  const w = SHEEN_WEIGHTS;
+  return OFF_SHEEN * (w.base + w.top + w.band + w.rim);
+}
+/** A JS number as a GLSL float literal (1 -> '1.0'). */
+const glslFloat = v => (Number.isInteger(v) ? v.toFixed(1) : String(v));
 
 /** The picture's size: 16:9, enough for a big TV seen across a room. */
 export const HOME_W = 768;
@@ -183,7 +199,8 @@ export const TV_SHEEN_GLSL = [
   '  float tvBand = exp( -pow( ( tvq.x * 0.7 - tvq.y + 0.25 ) / 0.22, 2.0 ) );',
   '  float tvEdge = min( min( tvq.x, 1.0 - tvq.x ), min( tvq.y, 1.0 - tvq.y ) );',
   '  float tvRim = 1.0 - smoothstep( 0.0, 0.018, tvEdge );',
-  '  totalEmissiveRadiance += tvSheen * ( 0.25 + 0.2 * tvq.y + 0.45 * tvBand + 1.0 * tvRim );',
+  '  totalEmissiveRadiance += tvSheen * ( ' + glslFloat(SHEEN_WEIGHTS.base) + ' + ' + glslFloat(SHEEN_WEIGHTS.top) +
+    ' * tvq.y + ' + glslFloat(SHEEN_WEIGHTS.band) + ' * tvBand + ' + glslFloat(SHEEN_WEIGHTS.rim) + ' * tvRim );',
   '}'
 ].join('\n');
 
