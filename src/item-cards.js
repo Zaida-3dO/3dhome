@@ -380,7 +380,8 @@ export function cameraStreamUrl(baseUrl, entity, raw) {
  *
  *   d.snapshotUrl(bust) -> string | null     a fresh snapshot URL
  *   d.streamUrl()       -> string | null     the MJPEG URL (Live)
- *   d.probe(src, ok, fail)                    load `src` OFF-screen (a new Image)
+ *   d.probe(src, ok, fail) -> abort()         load `src` OFF-screen (a new Image);
+ *                                             abort() drops it (src '' and no callbacks)
  *   d.show(src)                               put `src` on the visible <img> ('' clears it)
  *   d.stale(bool)                             dim the last frame (a load failed)
  *   d.schedule(fn, ms) -> handle, d.cancel(handle), d.now()
@@ -391,18 +392,26 @@ export function cameraStreamUrl(baseUrl, entity, raw) {
  * Failures back off (refreshMs x 2^n, at most 60 s) -- never a retry storm.
  * One load at a time; a load that never settles counts as failed after 15 s.
  * stop() cancels everything and clears the image, so no request is made
- * after the card closes; hidden(true) pauses (and ends a Live stream).
+ * after the card closes; hidden(true) pauses (and ends a Live stream, which
+ * comes back when the tab does -- Live stays ON). An abandoned load (timed
+ * out, stopped, hidden, Live) is aborted, so a stalled camera never piles up
+ * connections. Live is honest: when it is off, no stream is on the <img>.
  */
 export function createCameraFeed(d) {
   let running = false, live = false, isHidden = false, timer = null, pending = 0, failures = 0, seq = 0, lastGood = '';
+  let streaming = false, abortProbe = null;
   const cancel = () => { if (timer != null) { d.cancel(timer); timer = null; } };
+  // Drop an in-flight load: its callbacks are ignored and its request ended.
+  const drop = () => { pending = 0; if (abortProbe) { const a = abortProbe; abortProbe = null; a(); } };
+  // Every picture change goes through here: anything but the stream ends it.
+  const show = src => { streaming = false; d.show(src); };
   const later = ms => { cancel(); timer = d.schedule(() => { timer = null; tick(); }, ms); };
   const backoff = () => Math.min(60000, d.refreshMs * Math.pow(2, Math.min(failures, 10)));
   function settle(id, ok, src) {
     if (id !== pending) return;   // stale, stopped, or already timed out
-    pending = 0;
+    pending = 0; abortProbe = null;
     if (!running || isHidden || live) return;
-    if (ok) { failures = 0; lastGood = src; d.show(src); d.stale(false); later(d.refreshMs); }
+    if (ok) { failures = 0; lastGood = src; show(src); d.stale(false); later(d.refreshMs); }
     else { failures++; d.stale(true); later(backoff()); }
   }
   function tick() {
@@ -413,38 +422,57 @@ export function createCameraFeed(d) {
     pending = id;
     // The watchdog: if neither callback fires within 15 s, the load failed.
     cancel();
-    timer = d.schedule(() => { timer = null; if (pending === id) settle(id, false, src); }, 15000);
-    d.probe(src, () => settle(id, true, src), () => settle(id, false, src));
+    timer = d.schedule(() => {
+      timer = null;
+      if (pending !== id) return;
+      const a = abortProbe; abortProbe = null;
+      if (a) a();   // the hung request is ended, not left open
+      settle(id, false, src);
+    }, 15000);
+    const abort = d.probe(src, () => settle(id, true, src), () => settle(id, false, src));
+    if (pending === id) abortProbe = typeof abort === 'function' ? abort : null;
   }
   function startLive() {
     const src = d.streamUrl();
     if (!src) { live = false; return false; }
-    d.show(src); d.stale(false);
+    d.show(src); streaming = true; d.stale(false);
     return true;
   }
   return {
     start() { if (running) return; running = true; failures = 0; if (!isHidden) tick(); },
-    stop() { running = false; live = false; pending = 0; cancel(); d.show(''); },
+    stop() { running = false; live = false; drop(); cancel(); show(''); },
     hidden(h) {
       isHidden = !!h;
       if (!running) return;
-      if (isHidden) { cancel(); pending = 0; if (live) d.show(lastGood); }
-      else if (live) { if (!startLive()) tick(); }
+      // Hidden while Live: the stream ends (the last frame, or nothing, is put
+      // back) but Live stays on, and resumes when the tab is visible again.
+      if (isHidden) { cancel(); drop(); if (streaming) show(lastGood || ''); }
+      else if (live) { if (!startLive()) { live = false; tick(); } }
       else tick();
     },
     setLive(on) {
       if (!running) return false;
-      cancel(); pending = 0;
+      cancel(); drop();
       live = !!on;
-      if (live && !isHidden && startLive()) return true;
+      if (live && isHidden) return true;   // it starts when the tab is visible
+      if (live && startLive()) return true;
       live = false;
-      if (lastGood) d.show(lastGood);   // ends the stream; the last frame stays
+      show(lastGood || '');   // ALWAYS ends the stream; the last frame (if any) stays
       tick();
       return false;
     },
-    /** A Live stream failed (the <img> error event): back to snapshots, backing off. */
-    streamFailed() { if (!live) return; live = false; failures++; if (lastGood) d.show(lastGood); d.stale(true); later(backoff()); },
-    state: () => ({ running, live, hidden: isHidden, failures, pending: !!pending, scheduled: timer != null }),
+    /**
+     * Live is allowed only while the camera can stream (HA connected, a
+     * token): told it no longer can, Live ends -- and is not resumed when it
+     * can again (the user turns it back on).
+     */
+    allowLive(ok) { if (!ok && live) this.setLive(false); },
+    /**
+     * The visible <img> errored. Only a running stream counts (clearing the
+     * image fires 'error' too): back to snapshots, backing off.
+     */
+    streamFailed() { if (!live || !streaming) return; live = false; failures++; show(lastGood || ''); d.stale(true); later(backoff()); },
+    state: () => ({ running, live, streaming, hidden: isHidden, failures, pending: !!pending, scheduled: timer != null }),
   };
 }
 

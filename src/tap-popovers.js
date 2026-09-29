@@ -328,23 +328,19 @@ export function corniceRowState(x) {
 
 /**
  * A row label under a card titled with the room ("Living room curtains"):
- * the room is not said twice. A label that starts with the room's name -- or
- * with the END of it ("Office curtain" in the "Home office") -- loses that
- * part ("Living room blinds" -> "Blinds", "Office curtain" -> "Curtain"). A
- * label that is only the room, or does not start with it, is kept.
+ * the room is not said twice. A label that starts with the room's WHOLE name,
+ * as whole words, loses it ("Living room blinds" -> "Blinds"). Anything else
+ * is kept as written -- a label that is only the room, one that merely shares
+ * a word with it ("Room divider" in the "Living room"), or a shorter name for
+ * the room ("Office curtain" in the "Home office").
  */
 export function rowLabelInRoom(label, roomName) {
   const l = String(label || '').trim(), r = String(roomName || '').trim();
   if (!l || !r) return l;
   const lw = l.split(/\s+/), rw = r.toLowerCase().split(/\s+/);
-  for (let n = rw.length; n > 0; n--) {
-    const tail = rw.slice(rw.length - n);
-    if (lw.length > n && tail.every((w, k) => lw[k].toLowerCase() === w)) {
-      const rest = lw.slice(n).join(' ');
-      return rest.charAt(0).toUpperCase() + rest.slice(1);
-    }
-  }
-  return l;
+  if (lw.length <= rw.length || !rw.every((w, k) => lw[k].toLowerCase() === w)) return l;
+  const rest = lw.slice(rw.length).join(' ');
+  return rest.charAt(0).toUpperCase() + rest.slice(1);
 }
 
 /** The curtains card title: "<Room> curtains", else the tapped curtain's own name. */
@@ -1997,7 +1993,11 @@ export function attachTapPopovers(o) {
       refreshMs: row.refreshMs,
       snapshotUrl: bust => (itemMockMode() ? demoCameraFrame(row.label, new Date(bust)) : ha() ? cameraSnapshotUrl(base(), raw(eid), bust) : null),
       streamUrl: () => (!itemMockMode() && conn() === 'connected' ? cameraStreamUrl(base(), eid, raw(eid)) : null),
-      probe(src, ok, fail) { const im = new Image(); im.onload = ok; im.onerror = fail; im.src = src; },
+      probe(src, ok, fail) {
+        const im = new Image();
+        im.onload = ok; im.onerror = fail; im.src = src;
+        return () => { im.onload = im.onerror = null; im.src = ''; };   // abort: ends the request
+      },
       show(src) { img.src = src || ''; img.style.visibility = src ? '' : 'hidden'; },
       stale(s) { img.classList.toggle('stale', !!s); },
       schedule: (fn, ms) => setTimeout(fn, ms),
@@ -2021,7 +2021,10 @@ export function attachTapPopovers(o) {
       let cam = p.cams.get(i);
       if (!cam) { cam = makeCamera(row); p.cams.set(i, cam); cam.feed.start(); }
       box.appendChild(cam.img);
+      // No Live toggle rendered (HA not connected, or no token): Live ends,
+      // and is not resumed on its own when the toggle comes back.
       const b = p.el.querySelector('[data-a=clive][data-i="' + i + '"]');
+      cam.feed.allowLive(!!b);
       if (b) b.setAttribute('aria-pressed', String(cam.feed.state().live));
     });
   }

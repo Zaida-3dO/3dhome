@@ -920,6 +920,69 @@ const CONSOLE = [
   x.feed.hidden(true); x.feed.start();
   check('feed: opened while hidden -> nothing until visible', x.t.probes.length === 0);
 
+  // Round 2 (ea54a0e0). A probe that can be aborted.
+  const aborts = [];
+  const mkA = over => mk(Object.assign({ probe: (src, ok, fail) => { const p = { src, ok, fail, aborted: false }; aborts.push(p); return () => { p.aborted = true; }; } }, over));
+  // 1. Live off before any frame: the stream must not stay on the <img>.
+  x = mkA({});
+  x.feed.start();
+  x.feed.setLive(true);
+  x.feed.setLive(false);
+  // Mutation: back to `if (lastGood) d.show(lastGood)` -> the stream URL stays shown -> fails.
+  check('live: off before the first frame ends the stream (the image is cleared)', x.t.shown.at(-1) === '' && !x.feed.state().live && !x.feed.state().streaming, x.t.shown);
+  // Hidden while Live with no frame yet: Live stays ON (honest), the stream ends, and it comes back.
+  x = mkA({});
+  x.feed.start(); x.feed.setLive(true);
+  x.feed.hidden(true);
+  x.feed.streamFailed();   // clearing the <img> fires 'error' in a browser
+  // Mutation: streamFailed ignores `streaming` -> Live silently dropped -> fails.
+  check('live: hidden ends the stream but Live stays on (a clearing error is not a stream failure)', x.t.shown.at(-1) === '' && x.feed.state().live, x.feed.state());
+  x.feed.hidden(false);
+  check('live: visible again -> the stream is back', /camera_proxy_stream/.test(x.t.shown.at(-1)) && x.feed.state().streaming);
+  // 2. Live ends when the camera can no longer stream, and is not resumed.
+  x = mkA({});
+  x.feed.start(); x.feed.setLive(true);
+  x.feed.allowLive(false);
+  // Mutation: allowLive does nothing -> still streaming -> fails.
+  check('live: HA disconnect (no Live toggle) ends Live and the stream', !x.feed.state().live && !/stream/.test(x.t.shown.at(-1)));
+  x.feed.allowLive(true);
+  check('live: ... and it is not resumed on reconnect', !x.feed.state().live && !/stream/.test(x.t.shown.at(-1)));
+  check('wiring: every rebuild tells the feed whether a Live toggle is there', /cam\.feed\.allowLive\(!!b\);/.test(tpSrc));
+  // 3. Abandoned loads are aborted.
+  aborts.length = 0;
+  x = mkA({});
+  x.feed.start();
+  x.advance(15000);
+  // Mutation: the watchdog does not abort -> the hung load stays open -> fails.
+  check('probe: a load that times out is aborted', aborts.length === 1 && aborts[0].aborted === true);
+  x.advance(4000);
+  check('probe: ... and the retry is a fresh load', aborts.length === 2 && !aborts[1].aborted);
+  x.feed.stop();
+  // Mutation: stop() leaves the probe running -> fails.
+  check('probe: close aborts the load in flight', aborts[1].aborted === true);
+  aborts.length = 0;
+  x = mkA({});
+  x.feed.start(); x.feed.hidden(true);
+  check('probe: hiding the tab aborts the load in flight', aborts[0].aborted === true);
+  check('wiring: the runtime probe can be aborted (src cleared, callbacks dropped)', /return \(\) => \{ im\.onload = im\.onerror = null; im\.src = ''; \};/.test(tpSrc));
+  // 4. A late load (after its watchdog) is ignored.
+  x = mk({});
+  x.feed.start();
+  const late = x.t.probes[0];
+  x.advance(15000);   // timed out: failed, retry armed at 4 s
+  const armed = x.t.timers.size;
+  late.ok();
+  // Mutation: drop `if (id !== pending) return;` -> the late frame is shown and the timer reset -> fails.
+  check('feed: a load landing after its watchdog is ignored', !x.t.shown.includes(late.src) && x.t.stale.at(-1) === true && x.t.timers.size === armed, x.t.shown);
+  // The back-off stops at 60 s.
+  x = mk({ snapshotUrl: () => null });
+  x.feed.start();
+  for (let i = 0; i < 12; i++) x.advance(60000);
+  const before = x.t.timers.size;
+  const next = [...x.t.timers.values()][0];
+  // Mutation: raise the 60000 cap -> the next retry is further than 60 s away -> fails.
+  check('feed: the back-off is capped at 60 s', before === 1 && next.at - x.t.now <= 60000 && next.at - x.t.now > 30000, next && next.at - x.t.now);
+
   // Markup.
   const dot = () => '';
   const html = haOff => T.popoverHtml.item({ name: 'Crate', status: 'ok', haOff, media: [], lights: [], switches: [], readings: [],
@@ -989,8 +1052,9 @@ const CONSOLE = [
   // Mutation: return the label unchanged -> 'Living room blinds' -> fails.
   check('row labels under a room title drop the room', T.rowLabelInRoom('Living room blinds', 'Living room') === 'Blinds' &&
     T.rowLabelInRoom('Living Room curtain light', 'Living room') === 'Curtain light');
-  // Mutation: match only the whole room name -> 'Office curtain' kept -> fails.
-  check('row labels: the end of the room name counts too ("Office curtain" in the Home office)', T.rowLabelInRoom('Office curtain', 'Home office') === 'Curtain');
+  // Mutation: strip a trailing room word (the old overlap rule) -> 'Divider' / 'Curtain' -> fails.
+  check('row labels: only the WHOLE room name, as whole words, is stripped', T.rowLabelInRoom('Room divider', 'Living room') === 'Room divider' &&
+    T.rowLabelInRoom('Office curtain', 'Home office') === 'Office curtain' && T.rowLabelInRoom('Living roomy blind', 'Living room') === 'Living roomy blind');
   check('row labels: a label that IS the room, or does not start with it, is kept', T.rowLabelInRoom('Living room', 'Living room') === 'Living room' &&
     T.rowLabelInRoom('Bay blind', 'Living room') === 'Bay blind' && T.rowLabelInRoom('Officer', 'Home office') === 'Officer');
   check('wiring: cover labels drop the room', /label: rowLabelInRoom\(sentenceCase\(cv\.name\), rn\),/.test(tpSrc));
