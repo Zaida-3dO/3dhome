@@ -990,6 +990,38 @@ and edit mode is not offered there. The edit UI is loaded only when used, so a
 plain view-mode load pays nothing for it. A draft never holds the Home
 Assistant token: only the two profile documents go in.
 
+If a draft makes the page fail to start, a small **Discard draft** control is
+shown over the error card (it is mounted before the house is built), so a phone
+or the tablet never needs devtools to get back to the served profile.
+
+#### Moving and re-tuning furniture in edit mode
+
+In edit mode, **tap a piece of furniture** to select it (an amber box). Then:
+
+- **Drag it** on the floor to move it. Moves snap to 1 cm and stay inside the
+  item's own room polygon (dragging into a wall slides along it). A
+  wall-anchored item (`wall` + `centre`) slides along its wall, kept to its
+  room's stretch of that wall. Dragging empty space still orbits the camera.
+- **−90° / −15° / +15° / +90°** turn a free-standing item (`rotation`). A
+  wall-anchored item always faces into its room, so it has no rotate buttons.
+- **Arrow keys** nudge 1 cm (Shift: 10 cm), relative to the camera.
+- The item's **settings** come from its type's control descriptors
+  (`docs/furniture-controls.md`): sliders, colours, option lists and toggles,
+  each written to the item's `params` and rebuilt about 100 ms after you stop.
+  A slider whose range a spec page ties to another value (a standing desk's
+  top height between its min and max height) follows it live.
+- **Delete** removes the item, and any `sensors.items` / `plants` / `vacuums`
+  binding to it in `rooms.json`.
+
+Edits render at once but stay in memory until **Save** (in the banner) writes
+them to the draft; **Done** with unsaved changes asks whether to save them.
+**Export** saves first. An export changes only the edited items' lines: every
+untouched item is copied byte for byte.
+
+While editing, the furniture is built one piece per room and the selected item
+on its own, so a change rebuilds only that item. Leaving edit mode puts back
+the merged house-wide build view mode uses.
+
 ### Camera presets — why they are optional
 
 `cameraPresets` is optional and usually you should leave it out. The reasoning:

@@ -712,6 +712,8 @@ jobs:
         run: node scripts/test-profile-draft.mjs
       - name: Layout-preserving JSON -- a no-op export is byte-identical, an edit changes only its own lines
         run: node scripts/test-json-layout.mjs
+      - name: Edit ops -- move/rotate/param/delete change only their item, export keeps untouched items byte-identical, moves stay in the room
+        run: node scripts/test-edit-ops.mjs
       - name: Sliders and popover -- every range part styled, diamond matches the card, color-scheme dark
         run: node scripts/test-range-styles.mjs
       - name: Theme -- Auto/Dark/Light resolution, persistence, system listener, pre-paint script
@@ -803,6 +805,13 @@ jobs:
           tmp="$(mktemp -d)"
           cp -r houses/demo/. "$tmp/"
           node scripts/test-profile-draft.mjs --write "$tmp"
+          python scripts/validate-house.py --strict "$tmp"
+      - name: An edit-mode furniture export (a move, a rotation, a param, a delete) passes validate-house.py --strict
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cp -r houses/demo/. "$tmp/"
+          node scripts/test-edit-ops.mjs --write "$tmp"
           python scripts/validate-house.py --strict "$tmp"
       - name: Furniture schema and validator checks
         run: python scripts/test-validate-furniture.py

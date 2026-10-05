@@ -701,7 +701,7 @@ function lightScene() {
   check('scene registers furniture fades through fadeRegistrations only',
     /fadeRegistrations\(result\)\.forEach/.test(sceneSrc) && !/furnitureResult\.beauty[^\n]*wallMeshes/.test(sceneSrc));
   check('scene registers each fade with its base opacity and depthWrite',
-    /wallMeshes\.push\(\{ mesh, nx: host\.nx, nz: host\.nz, outer: true, base: baseOpacity, baseDepthWrite \}\)/.test(sceneSrc));
+    /const entry = \{ mesh, nx: host\.nx, nz: host\.nz, outer: true, base: baseOpacity, baseDepthWrite, furniture: true \};\s*wallMeshes\.push\(entry\);/.test(sceneSrc));
   check('scene fade loop drives opacity and depthWrite through wallFadeTarget / wallFadeDepthWrite',
     /const targetOpacity = wallFadeTarget\(dot, b\)/.test(sceneSrc) &&
     /mesh\.material\.depthWrite = wallFadeDepthWrite\(mesh\.material\.opacity, b, baseDepthWrite\)/.test(sceneSrc));
