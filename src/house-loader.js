@@ -28,6 +28,7 @@
  */
 
 import { insidePoly } from './footstep-walk.js';
+import { compileFocusView } from './camera-focus.js';
 import { RUG_PATTERN_DEFAULTS, RUG_PATTERNS, RUG_PATTERN_HOUSE_KEYS, RUG_PATTERN_ACROSS } from './rug-pattern.js';
 import { FINISHES, FINISH_TYPES, GRID_ANCHORS, resolveTileLook, outsideVector, faceNormalToward, compassVector } from './wall-finish.js';
 
@@ -1068,6 +1069,17 @@ export const HouseLoader = (() => {
     const tx = x => (x - OX) * S;
     const tz = y => (y - OY) * S;
 
+    // An optional camera-focus `view` (schemaVersion 1.4) on a room, a
+    // furniture item or a curtain: orbit terms with a plan-cm target, compiled
+    // here with the transform applied so the scene runs it as-is. Absent ->
+    // null (the scene derives a view). Malformed -> null with a warning.
+    function focusViewOf(owner, what) {
+      if (!owner || owner.view == null) return null;
+      const v = compileFocusView(owner.view, tx, tz);
+      if (!v) warn(what + ' view needs numeric azimuth, polar and a positive distance -- ignored');
+      return v;
+    }
+
     // ---- Walls ------------------------------------------------------------
     const rawWalls = (geo.walls.segments || []).map(w => ({
       id: w.id,
@@ -1252,7 +1264,10 @@ export const HouseLoader = (() => {
         footstepZone: footstepZone,
         // {points: absolute plan-coordinate waypoints, smooth} or null. Takes
         // precedence over footstepZone in the scene.
-        footstepPath: footstepPath
+        footstepPath: footstepPath,
+        // The room's authored camera-focus view (schemaVersion 1.4), compiled
+        // to world metres, or null to derive one (src/camera-focus.js).
+        view: focusViewOf(r, 'room "' + r.id + '"')
       };
       roomOrder.push(r.id);
     });
@@ -1279,7 +1294,7 @@ export const HouseLoader = (() => {
     const curtains = [];
     (Array.isArray(geo.curtains) ? geo.curtains : []).forEach(c => {
       const compiled = compileCurtain(c, wallsById, rooms, defaults, warn);
-      if (compiled) curtains.push(compiled);
+      if (compiled) { compiled.view = focusViewOf(c, 'curtain "' + c.id + '"'); curtains.push(compiled); }
     });
     stackCurtains(curtains);
     markUnderCornice(curtains);
@@ -1301,6 +1316,7 @@ export const HouseLoader = (() => {
       // (src/furniture/model.js). Builders get it as build()'s opts.assetBase;
       // the type itself guards the path it resolves under it.
       compiled.assetBase = dir;
+      compiled.view = focusViewOf(f, 'furniture "' + compiled.id + '"');
       furniture.push(compiled);
     });
 

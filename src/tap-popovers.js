@@ -68,6 +68,7 @@ import { normaliseItemBindings, furnitureTapTarget, tappableFurnitureIds, mediaR
   clockTitle, radiatorTitle, roomThingTitle, switchRowModel, switchCommand, cameraRowModel, cameraSnapshotUrl, cameraStreamUrl,
   createCameraFeed } from './item-cards.js';
 import { sendScript, createActionButton, actionButtonText, createKeyIntent, isActivationKey } from './script-call.js';
+import { createFocusGate, focusThenOpen } from './camera-focus.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -1339,6 +1340,22 @@ export const clockTick = {
  *                          rect is kept out of placement bounds, and toggling
  *                          its 'open' class closes the card
  * @param o.debug           expose window.__home3dTap (removed again on dispose)
+ * @param o.focus           OPTIONAL (target, point) => Promise -- camera focus
+ *                          (src/camera-focus.js). A tap awaits it (the camera
+ *                          flies to the target) and THEN opens the card,
+ *                          anchored where the tapped point now projects: the
+ *                          card closes when the camera moves, so it cannot open
+ *                          before the flight. A newer tap, a pointer down
+ *                          elsewhere or Escape while it flies means the card
+ *                          never opens (o.onFocusAbandon(target, why) is
+ *                          called, why 'tap' | 'wheel' | 'escape' | 'dispose').
+ *                          Absent, or returning null: the card opens at once,
+ *                          as before.
+ * @param o.onClose         OPTIONAL (target, why) => void -- a card closed.
+ *                          why: 'tap' (a pointer down outside it), 'escape',
+ *                          'wheel', 'camera' (the camera moved), 'resize',
+ *                          'sidebar', 'replace' (another card opened), 'api',
+ *                          'dispose'.
  */
 export function attachTapPopovers(o) {
   const { THREE, home, container, Home3DScene } = o;
@@ -2162,7 +2179,7 @@ export function attachTapPopovers(o) {
   let tipOpen = false, tipTimer = 0;
   /** @param restoreFocus  put keyboard focus back where it was before open
    *  (Escape). A tap-away close leaves focus wherever the tap put it. */
-  function close(restoreFocus) {
+  function close(restoreFocus, why) {
     if (!pop) return;
     const p = pop;
     clearInterval(p.timer); clearTimeout(tipTimer); tipOpen = false;
@@ -2171,6 +2188,9 @@ export function attachTapPopovers(o) {
     const hadFocus = p.el.contains(document.activeElement);
     if (p.el.parentNode) p.el.parentNode.removeChild(p.el);
     pop = null;
+    if (typeof o.onClose === 'function') {
+      try { o.onClose(p.target, why || 'api'); } catch (e) { /* the page's hook must not break closing */ }
+    }
     if (restoreFocus === true && hadFocus) {
       const back = p.returnTo;
       if (back && back !== document.body && back.isConnected && typeof back.focus === 'function') back.focus({ preventScroll: true });
@@ -2286,7 +2306,7 @@ export function attachTapPopovers(o) {
 
   function open(target, x, y) {
     const returnTo = pop ? pop.returnTo : document.activeElement;
-    close();
+    close(false, 'replace');
     const el = document.createElement('div');
     el.className = 'tp-pop' + (VIEWS[target.kind].chip ? ' chip' : '');
     el.dataset.kind = target.kind;
@@ -2341,8 +2361,16 @@ export function attachTapPopovers(o) {
   const pointers = new Set();
   let downX = 0, downY = 0, multi = false;
   const inCanvas = e => container.contains(e.target);
+  // Camera focus: one generation per tap that flies before opening.
+  const focusGate = createFocusGate();
+  let focusInFlight = 0;   // taps whose flight has not resolved yet
+  let abandonWhy = 'tap';  // what last superseded one ('tap' | 'wheel' | 'escape' | 'dispose')
+  const supersede = why => { if (focusInFlight) { abandonWhy = why; focusGate.invalidate(); } };
   const onPointerDown = e => {
-    if (pop && !pop.el.contains(e.target)) close();
+    // A pointer down anywhere outside a card while a tap's flight is still
+    // in the air supersedes that tap: its card must not open afterwards.
+    if (!(pop && pop.el.contains(e.target))) supersede('tap');
+    if (pop && !pop.el.contains(e.target)) close(false, 'tap');
     if (!inCanvas(e)) return;
     pointers.add(e.pointerId);
     if (pointers.size === 1) { downX = e.clientX; downY = e.clientY; multi = false; }
@@ -2367,12 +2395,42 @@ export function attachTapPopovers(o) {
         try { o.onObjectTap(res.target); } catch (err) { /* the page's hook must not cost the tap */ }
         syncSidebarOpen();
       }
+      // Fly first, then open where the tapped point now is on screen. A
+      // door's chip opens at once: framing doors is out of scope. o.focus
+      // returning null (focus switched off) opens at once, exactly as before.
+      const target = res.target, point = res.point;
+      const flight = typeof o.focus === 'function' && target.kind !== 'door' ? o.focus(target, point) : null;
+      if (flight) {
+        focusInFlight++;
+        focusThenOpen(focusGate, () => flight, () => {
+          if (disposed) return;
+          const at = projectPoint(point);
+          open(target, at ? at.x : e.clientX, at ? at.y : e.clientY);
+        }, () => {
+          if (typeof o.onFocusAbandon === 'function') { try { o.onFocusAbandon(target, abandonWhy); } catch (err) { /* ignore */ } }
+        }).finally(() => { focusInFlight--; });
+        return;
+      }
+      focusGate.invalidate();
       open(res.target, e.clientX, e.clientY);
     }
   };
-  const onWheel = e => { if (pop && inCanvas(e)) close(); };
-  const onKey = e => { if (e.key === 'Escape' && pop) close(true); };
-  const onResize = () => close();
+  // The client-pixel position of a world point, or null when it is behind
+  // the camera or off the canvas.
+  function projectPoint(pt) {
+    if (!pt) return null;
+    const r = canvasRect();
+    tmpV.set(pt.x, pt.y, pt.z).project(home.getCamera());
+    if (tmpV.z > 1 || tmpV.z < -1 || Math.abs(tmpV.x) > 1 || Math.abs(tmpV.y) > 1) return null;
+    return { x: r.left + (tmpV.x + 1) / 2 * r.width, y: r.top + (1 - tmpV.y) / 2 * r.height };
+  }
+  const onWheel = e => { if (inCanvas(e)) supersede('wheel'); if (pop && inCanvas(e)) close(false, 'wheel'); };
+  const onKey = e => {
+    if (e.key !== 'Escape') return;
+    supersede('escape');
+    if (pop) close(true, 'escape');
+  };
+  const onResize = () => close(false, 'resize');
 
   window.addEventListener('pointerdown', onPointerDown, true);
   window.addEventListener('pointerup', onPointerEnd, true);
@@ -2387,7 +2445,7 @@ export function attachTapPopovers(o) {
   let sidebarOpen = o.sidebar && o.sidebar.classList ? o.sidebar.classList.contains('open') : false;
   const sidebarObs = o.sidebar && typeof MutationObserver === 'function' ? new MutationObserver(() => {
     const now = o.sidebar.classList.contains('open');
-    if (now !== sidebarOpen) { sidebarOpen = now; close(); }
+    if (now !== sidebarOpen) { sidebarOpen = now; close(false, 'sidebar'); }
   }) : null;
   if (sidebarObs) sidebarObs.observe(o.sidebar, { attributes: true, attributeFilter: ['class'] });
   function syncSidebarOpen() {
@@ -2407,7 +2465,7 @@ export function attachTapPopovers(o) {
   const unsub = home.onRender(() => {
     try { noteLevels(); } catch (e) { /* never break the render loop */ }
     if (!pop) return;
-    if (camMoved(pop.camSnap)) { close(); return; }
+    if (camMoved(pop.camSnap)) { close(false, 'camera'); return; }
     try { render(false); } catch (e) { /* never break the render loop */ }
   });
 
@@ -2472,7 +2530,7 @@ export function attachTapPopovers(o) {
     },
     /** Repaint an open card from the shared state now (never under a drag). */
     refresh: () => render(false),
-    close: () => close(),
+    close: () => close(false, 'api'),
     isOpen: () => !!pop,
     current: () => (pop ? { kind: pop.target.kind, id: pop.target.id, entities: pop.target.entities.slice(), placement: pop.el.dataset.placement,
       status: (pop.el.querySelector('[data-a=status]') || {}).dataset?.st, rect: pop.el.getBoundingClientRect().toJSON() } : null),
@@ -2488,7 +2546,8 @@ export function attachTapPopovers(o) {
     dispose() {
       if (disposed) return;
       disposed = true;
-      close(); unsub();
+      supersede('dispose');
+      close(false, 'dispose'); unsub();
       if (sidebarObs) sidebarObs.disconnect();
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('keyup', onActionKeyUp, true);

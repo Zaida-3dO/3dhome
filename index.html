@@ -1046,6 +1046,8 @@
     import { attachTapPopovers, climateActivity } from './src/tap-popovers.js?v=__VERSION__';
     // The sidebar's open / pinned state machine (collapsible widths only).
     import { sidebarReduce, SIDEBAR_INITIAL } from './src/sidebar-pin.js?v=__VERSION__';
+    // Camera focus: the camera flies to a tapped room or device, and back.
+    import { createFocusController, deviceKey } from './src/camera-focus.js?v=__VERSION__';
     import { createThemeController } from './src/theme.js?v=__VERSION__';
     import { colorFromAttributes, supportsColor, lightServiceCall } from './src/light-color.js?v=__VERSION__';
     import { ICONS, svgIcon }  from './src/ui-icons.js?v=__VERSION__';
@@ -1129,6 +1131,12 @@
       //   INITIAL pose; the user can still orbit/pan freely afterwards.
       //   Ignored in ?preview=true (that mode auto-rotates from its own pose).
       const cameraPreset = params.get('camera');
+
+      // ?focus=0 switches camera focus off for this load (the Settings switch
+      // "Camera follows selection" does it persistently). Off means exactly
+      // the behaviour from before the feature: no flights, no home pose, and a
+      // background tap on a wide screen does not deselect the room.
+      const focusParamOff = params.get('focus') === '0';
 
       // ── Power/quality settings (overridable via URL for A/B testing) ──
       //   ?shadows=auto|low|off   ?fps=<n>
@@ -1596,7 +1604,7 @@
         // already, switches it to that room): see src/sidebar-pin.js.
         onRoomClick: isPreview ? undefined : (roomId => {
           roomTapPending = true;   // this tap is a room, not the empty background
-          selectedRoom = roomId; sidebarEvent('roomTap'); renderPanel();
+          selectedRoom = roomId; sidebarEvent('roomTap'); renderPanel(); focusRoom('explicit');
         })
       });
 
@@ -2210,8 +2218,18 @@
         // object tap) comes through here: an armed Kill room must not still
         // be armed when the panel is reopened inside its 4 s window.
         disarmRoomScripts(null);
-        if (isWideScreen()) { selectedRoom = null; renderPanel(); return; }
+        if (isWideScreen()) { selectedRoom = null; renderPanel(); focusAfterClose(); return; }
         panel.classList.remove('open'); topRightBtns.style.display = ''; selectedRoom = null;
+        focusAfterClose();
+      }
+      // Camera focus after the sidebar closed: an orbit / zoom / scroll
+      // closing it is the user driving the camera (no flight, home
+      // forgotten); an object tap closing it keeps the room in focus under
+      // the device; anything else (X, a background tap) is a click-away.
+      function focusAfterClose() {
+        const cause = sidebarCause;
+        if (cause === 'objectTap') return;
+        focusRoom(cause === 'cameraStart' || cause === 'scroll' ? 'gesture' : 'explicit');
       }
 
       // ---- Pinned sidebar (collapsible widths only) ----
@@ -2231,11 +2249,15 @@
         panelPin.title = label;
         panelPin.innerHTML = svgIcon(on ? ICONS.pin : ICONS.pinOutline);
       }
+      let sidebarCause = null;   // the sidebar event being applied (closePanel reads it)
       function sidebarEvent(ev) {
         const prev = sidebarState;
         sidebarState = sidebarReduce(prev, ev, { collapsible: !isWideScreen() });
-        if (sidebarState.open && !panel.classList.contains('open')) openPanel();
-        else if (!sidebarState.open && prev.open) closePanel();
+        sidebarCause = ev;
+        try {
+          if (sidebarState.open && !panel.classList.contains('open')) openPanel();
+          else if (!sidebarState.open && prev.open) closePanel();
+        } finally { sidebarCause = null; }
         paintPin();
       }
       paintPin();
@@ -2246,7 +2268,7 @@
         if (isWideScreen()) { sidebarEvent('controls'); renderPanel(); }
       });
 
-      lightsBtn.addEventListener('click', () => { selectedRoom = null; panelView = 'controls'; sidebarEvent('controls'); renderPanel(); });
+      lightsBtn.addEventListener('click', () => { selectedRoom = null; panelView = 'controls'; sidebarEvent('controls'); renderPanel(); focusRoom('explicit'); });
       panelClose.addEventListener('click', () => sidebarEvent('close'));
       panelPin.addEventListener('click', () => sidebarEvent('togglePin'));
 
@@ -2277,6 +2299,14 @@
           if (roomTapPending) { roomTapPending = false; return; }
           if (e.detail === 0) return;   // a keyboard-synthesised click, not a tap
           sidebarEvent('background');
+          // Camera focus: a background tap is the click-away. It clears the
+          // room on a wide screen too (where the sidebar never closes) -- but
+          // a tap that only closed a card peels just that card, back to the
+          // room view. A pinned, still-open sidebar keeps its room.
+          if (focusOn() && !cardClosedThisPointer && (isWideScreen() || !panel.classList.contains('open'))) {
+            if (selectedRoom) { selectedRoom = null; renderPanel(); }
+            focusRoom('explicit');
+          }
         });
         window.addEventListener('scroll', () => sidebarEvent('scroll'), { passive: true });
       }
@@ -2287,8 +2317,112 @@
       // the expected single step. In practice only one is active at a time.
       panelBack.addEventListener('click', () => {
         if (panelView === 'settings') { panelView = 'controls'; renderPanel(); return; }
-        selectedRoom = null; renderPanel();
+        selectedRoom = null; renderPanel(); focusRoom('explicit');
       });
+
+      // ---- Camera focus (src/camera-focus.js) ----
+      // Tap a room: the camera flies to that room's showcase view. Tap a
+      // device: it flies in on the device, then the card opens. Click away
+      // with nothing left selected: it flies back to where it was before the
+      // first selection (the home pose). Off in ?preview=true, with ?focus=0,
+      // and with Settings > "Camera follows selection" switched off.
+      //
+      // Every selection change goes through the controller, which BATCHES the
+      // changes one user action makes: while a pointer is down nothing is
+      // decided, and on release the batch is a click-away ('explicit', the
+      // camera flies) unless the pointer dragged ('gesture': it never flies,
+      // the user is driving). Tapping a room with a card open is therefore ONE
+      // room flight, not a return flight and then a room flight.
+      const FOCUS_PREF_KEY = 'home3d.cameraFocus';
+      const focusAllowed = !isPreview && !focusParamOff && typeof home.flyTo === 'function';
+      let focusPref = (() => { try { return window.localStorage.getItem(FOCUS_PREF_KEY) !== 'off'; } catch (e) { return true; } })();
+      function focusOn() { return focusAllowed && focusPref; }
+      function setFocusPref(on) {
+        focusPref = !!on;
+        try { window.localStorage.setItem(FOCUS_PREF_KEY, on ? 'on' : 'off'); } catch (e) { /* storage blocked: this load only */ }
+        if (!on) { home.cancelFlight(); focusCtl.reset(); }
+      }
+      // The part of the canvas the open sidebar covers (the 300px overlay
+      // between the phone and wide layouts), so a room is framed beside it.
+      function panelInset() {
+        const w = container.clientWidth, h = container.clientHeight;
+        const covers = !isWideScreen() && panel.classList.contains('open') && window.innerWidth > 600;
+        return { right: covers ? panel.offsetWidth : 0, width: w, height: h };
+      }
+      function focusViewFor(sel) {
+        if (sel.device) {
+          const d = sel.device, pt = d.focusPoint || null;
+          if (d.kind === 'curtain') return home.curtainView(d.id) || (pt ? home.pointView(pt) : null);
+          if (d.kind === 'light') return pt ? home.pointView(pt) : null;
+          const it = pt && typeof home.furnitureItemAt === 'function' ? home.furnitureItemAt(pt) : null;
+          if (it) return home.itemView(it.id, pt);
+          return pt ? home.pointView(pt) : null;
+        }
+        if (sel.room) return home.roomView(sel.room, { inset: panelInset() });
+        return null;
+      }
+      const focusCtl = createFocusController({
+        getPose: () => home.getPose(),
+        fly: pose => home.flyTo(pose),
+        resolveView: focusViewFor,
+      });
+      // Verification seam (?debug=1): the controller and the switch.
+      if (params.get('debug') === '1') window.__home3dFocus = { ctl: focusCtl, on: focusOn, home, house };
+      function focusRoom(mode) {
+        if (!focusOn()) return;
+        const cur = focusCtl.selection();
+        if ((cur.room || null) === (selectedRoom || null)) return;
+        // A room change while a card is open closes the card (its onClose
+        // lands in the same batch, so this is one flight, not two).
+        if (selectedRoom && tapPopovers && tapPopovers.isOpen()) tapPopovers.close();
+        focusCtl.request({ room: selectedRoom || null }, mode);
+      }
+      function focusDropDevice(target, why) {
+        if (!focusOn() || why === 'dispose') return;
+        const cur = focusCtl.selection().device;
+        if (!cur || deviceKey(cur) !== deviceKey(target)) return;   // a newer device owns the focus
+        const gesture = why === 'wheel' || why === 'camera' || why === 'resize';
+        focusCtl.request({ device: null }, gesture ? 'gesture' : 'explicit');
+      }
+      // The pointer hold. Registered BEFORE attachTapPopovers below, so a
+      // pointer down that closes a card already finds the batch open.
+      let cardClosedThisPointer = false;
+      if (!isPreview) {
+        const downs = new Map();   // pointerId -> { x, y }
+        let holding = false, moved = false;
+        window.addEventListener('pointerdown', e => {
+          if (!focusOn()) return;
+          downs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (downs.size > 1) { moved = true; focusCtl.markGesture(); }
+          if (holding) return;
+          holding = true; moved = false; cardClosedThisPointer = false;
+          focusCtl.hold();
+        }, true);
+        window.addEventListener('pointermove', e => {
+          const d = holding && downs.get(e.pointerId);
+          if (!d || moved) return;
+          if (Math.abs(e.clientX - d.x) > 5 || Math.abs(e.clientY - d.y) > 5) {
+            // Only a drag ON THE CANVAS drives the camera; a slider drag in
+            // the sidebar or a card is not a camera gesture.
+            if (container.contains(e.target)) { moved = true; focusCtl.markGesture(); }
+          }
+        }, true);
+        const endPointer = (e, cancelled) => {
+          if (!downs.has(e.pointerId)) return;
+          downs.delete(e.pointerId);
+          if (cancelled) moved = true;
+          if (downs.size || !holding) return;
+          holding = false;
+          const mode = moved ? 'gesture' : 'explicit';
+          // After this pointer's click has been dispatched.
+          setTimeout(() => focusCtl.release(mode), 0);
+        };
+        window.addEventListener('pointerup', e => endPointer(e, false), true);
+        window.addEventListener('pointercancel', e => endPointer(e, true), true);
+        // A wheel or a pinch is the user driving the camera too.
+        container.addEventListener('wheel', () => focusCtl.markGesture(), { passive: true });
+        container.addEventListener('touchmove', e => { if (e.touches.length >= 2) focusCtl.markGesture(); }, { passive: true });
+      }
       // Settings button (Controls footer) -> switch the sidebar to the Settings
       // view. renderPanel() reads panelView; the panelReady guard is already
       // true by the time any click can happen, so this re-render is safe.
@@ -2440,6 +2574,19 @@
         sendLight: (roomId, channel, state, debounceMs, withColor, power) => sendToHA(roomId, channel, state, debounceMs, withColor, power),
         // Close an UNPINNED sidebar on an object tap; the popover still opens.
         onObjectTap: () => sidebarEvent('objectTap'),
+        // Camera focus: fly to the device, then the card opens. null when
+        // focus is off, so the card opens at once exactly as before.
+        focus: focusAllowed ? ((target, point) => {
+          if (!focusOn()) return null;
+          const dev = Object.assign({}, target, { focusPoint: point && point.clone ? point.clone() : point });
+          focusCtl.request({ device: dev }, 'explicit');
+          return focusCtl.flushNow();
+        }) : undefined,
+        onClose: (target, why) => {
+          if (why === 'tap') cardClosedThisPointer = true;
+          focusDropDevice(target, why);
+        },
+        onFocusAbandon: (target, why) => focusDropDevice(target, why),
         state: {
           doorStatus: id => (doorStatus.has(id) ? doorStatus.get(id) : null),
           curtainAvailable: id => (curtainAvailableState.has(id) ? curtainAvailableState.get(id) : null),
@@ -2606,6 +2753,15 @@
             '<button class="toggle ' + (compassOn ? 'on' : '') + '" id="panel-compass-toggle"><div class="toggle-knob"></div></button>' +
             '</div>';
 
+          // Camera focus (src/camera-focus.js): the camera flies to a tapped
+          // room or device and back. Not offered under ?focus=0.
+          if (focusAllowed) {
+            html += '<div class="panel-toggle-row">' +
+              '<span class="panel-toggle-label">Camera follows selection</span>' +
+              '<button class="toggle ' + (focusPref ? 'on' : '') + '" id="panel-focus-toggle" aria-pressed="' + focusPref + '" aria-label="Camera follows selection"><div class="toggle-knob"></div></button>' +
+              '</div>';
+          }
+
           html += '<div class="panel-toggle-row">' +
             '<span class="panel-toggle-label">Grid <span class="kbd-hint">(G)</span></span>' +
             '<button class="toggle ' + (gridOn ? 'on' : '') + '" id="panel-grid-toggle"><div class="toggle-knob"></div></button>' +
@@ -2731,6 +2887,10 @@
           if (panelCompassToggle) {
             panelCompassToggle.addEventListener('click', () => { setCompass(!compassOn); renderPanel(); });
           }
+          const panelFocusToggle = document.getElementById('panel-focus-toggle');
+          if (panelFocusToggle) {
+            panelFocusToggle.addEventListener('click', () => { setFocusPref(!focusPref); renderPanel(); });
+          }
           const panelGridToggle = document.getElementById('panel-grid-toggle');
           if (panelGridToggle) {
             panelGridToggle.addEventListener('click', () => { grid.toggle(); renderPanel(); });
@@ -2826,7 +2986,7 @@
           panelBody.innerHTML = html;
 
           panelBody.querySelectorAll('.room-list-item').forEach(btn => {
-            btn.addEventListener('click', () => { selectedRoom = btn.dataset.room; renderPanel(); });
+            btn.addEventListener('click', () => { selectedRoom = btn.dataset.room; renderPanel(); focusRoom('explicit'); });
           });
           wireVacuumBlocks(panelBody);
         } else {

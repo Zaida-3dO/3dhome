@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.10"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card, `1.9` its `cameras` rows and `1.10` its `actions` rows and a TV row's `art` condition. `geometry.json` is at `"1.2"`: `1.1` added the optional `windows` and `curtains`, and `1.2` added the optional `furniture`. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.10"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card, `1.9` its `cameras` rows and `1.10` its `actions` rows and a TV row's `art` condition. `geometry.json` is at `"1.4"`: `1.1` added the optional `windows` and `curtains`, `1.2` the optional `furniture`, `1.3` a wall's optional `finishes`, and `1.4` the optional camera-focus `view` on a room, a furniture item or a curtain. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -928,6 +928,44 @@ copy the directory, you have copied the house.
 If you share a profile, fill in `texture.credit`. A shared house profile carrying
 an unlicensed photograph is a licensing problem, and a photo of your own wall is
 also a photo of your own wall.
+
+### Camera focus views
+
+Tapping a room flies the camera to a fixed showcase view of that room; tapping a
+device flies in on the device (see [`?focus`](url-parameters.md#focus)). With
+nothing authored, every view is **derived**, so any house works unchanged:
+
+- **A room** is framed from the house's own home angle (the `iso` preset's
+  azimuth and polar, which `cameraPresets.iso` overrides), aimed at a point
+  inside its polygon (the centroid, or for an L-shaped room whose centroid falls
+  outside it, the middle of its widest part), at the smallest distance that
+  keeps the whole floor polygon on screen.
+- **A furniture item** is framed from its front, at its world box's centre, from
+  2.2 × the box diagonal (at least 1.2 m). A curtain the same, from the room side.
+  A light is framed from the current azimuth at the tapped fixture.
+
+When a derived view is not the one you want, add `view` to the room, the
+furniture item or the curtain (`schemaVersion` `"1.4"`):
+
+```json
+"rooms": [{ "id": "lounge", "label": "Lounge", "polygon": [...],
+            "view": { "target": [520, 310], "targetHeight": 90,
+                      "azimuth": 0.69, "polar": 0.95, "distance": 6.5, "fov": 50 } }]
+```
+
+| Key | Required | Meaning |
+|-----|----------|---------|
+| `azimuth` | yes | Orbit angle, radians, as in `cameraPresets` (0 = camera on the east side). |
+| `polar` | yes | Angle from straight up, radians (π/2 = eye level). |
+| `distance` | yes | Camera distance from the target, **metres**. |
+| `target` | no | Plan point (cm) to look at. Omitted: the derived target. |
+| `targetHeight` | no | Height of `target` above the floor, cm. Default 0. |
+| `fov` | no | Vertical field of view, degrees. Default 50. |
+
+The loader compiles it with the coordinate transform applied, and the runtime
+prefers it over the derived view. It is shape data — a camera pose — so it lives
+in `geometry.json`, which is safe to share. The validator warns when a `view`
+appears in a profile below `"1.4"`; an older engine ignores the key and derives.
 
 ### Camera presets — why they are optional
 

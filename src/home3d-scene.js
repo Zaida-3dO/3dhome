@@ -40,6 +40,7 @@ import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { createTvScreens } from './furniture/tv-screen.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse } from './room-pick.js';
+import { lerpPose, easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation } from './camera-focus.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
   solarPosition, sunDirection, NIGHT,
@@ -4667,12 +4668,132 @@ export const Home3DScene = (() => {
       if (!name) return false;
       const p = CAMERA_PRESETS[String(name).toLowerCase()];
       if (!p) return false;
+      cancelFlight();
       orb.th = p.th;
       orb.ph = p.ph;
       orb.r = p.r;
       orb.tgt.copy(p.tgt || _homeTgt());
       updCam();
       return true;
+    }
+
+    // ---- Camera flights (camera focus, src/camera-focus.js) -------------
+    //
+    // flyTo(pose) eases the orbit camera from where it is to `pose` over ~0.7 s
+    // (ease-in-out, azimuth by the shortest arc, distance in log space). It is
+    // BOUNDED like the door swings: tickCameraFlight() feeds `animating` in the
+    // loop, so the scene renders exactly until the flight lands and then goes
+    // back to zero frames. Any pointer / wheel / touch / camera key, a resize,
+    // or an API jump (setView / setOrbit) cancels it where it is -- no jump.
+    // A newer flyTo supersedes an older one. Each resolves its promise once:
+    // 'landed', 'cancelled' or 'superseded'. Under prefers-reduced-motion the
+    // flight is a jump.
+    let flight = null;   // { from, to, t0, ms, resolve }
+    function getPose() {
+      return { th: orb.th, ph: orb.ph, r: orb.r, tgt: [orb.tgt.x, orb.tgt.y, orb.tgt.z], fov: cam.fov };
+    }
+    function applyPose(p) {
+      orb.th = p.th; orb.ph = p.ph; orb.r = p.r;
+      orb.tgt.set(p.tgt[0], p.tgt[1], p.tgt[2]);
+      const fov = p.fov != null ? p.fov : cam.fov;
+      if (Math.abs(fov - cam.fov) > 1e-9) { cam.fov = fov; cam.updateProjectionMatrix(); }
+      updCam();
+    }
+    function endFlight(status) {
+      if (!flight) return;
+      const f = flight;
+      flight = null;
+      try { f.resolve(status); } catch (e) { /* a resolver never throws */ }
+    }
+    function reducedMotion() {
+      try { return typeof window !== 'undefined' && typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
+    }
+    function flyTo(pose, opts) {
+      endFlight('superseded');
+      const ms = opts && opts.ms != null ? opts.ms : 700;
+      if (!(ms > 0) || reducedMotion()) { applyPose(pose); wake(250); return Promise.resolve('landed'); }
+      return new Promise(resolve => {
+        flight = { from: getPose(), to: clonePose(pose), t0: performance.now(), ms, resolve };
+        wake(ms + 50);
+      });
+    }
+    function cancelFlight() {
+      if (!flight) return false;
+      endFlight('cancelled');
+      wake(250);
+      return true;
+    }
+    function tickCameraFlight(now) {
+      if (!flight) return false;
+      const t = (now - flight.t0) / flight.ms;
+      if (t >= 1) { applyPose(flight.to); endFlight('landed'); return false; }
+      applyPose(lerpPose(flight.from, flight.to, easeInOut(Math.max(0, t))));
+      return true;
+    }
+
+    // ---- Focus views ------------------------------------------------------
+    // The pose the camera flies to for a selection. A profile `view` (geometry
+    // schemaVersion 1.4, compiled by house-loader) wins; otherwise the view is
+    // DERIVED, so any house works with nothing authored. A room's derived view
+    // uses the house's own home angle (the `iso` preset, which a profile may
+    // override) -- a fixed showcase view per room, not the current azimuth.
+    function roomShape(id) {
+      const rm = ROOMS[id];
+      if (!rm) return null;
+      return rm.poly || [[rm.x1, rm.y1], [rm.x2, rm.y1], [rm.x2, rm.y2], [rm.x1, rm.y2]];
+    }
+    function roomView(id, opts) {
+      const poly = roomShape(id);
+      if (!poly) return null;
+      const home = CAMERA_PRESETS.iso;
+      const derived = () => deriveRoomView({
+        poly, toWorld: (x, y) => [tx(x), tz(y)], th: home.th, ph: home.ph, fov: cam.fov,
+        aspect: cam.aspect, inset: opts && opts.inset, maxR: _defaultDistance * 3,
+      });
+      const v = ROOMS[id].view;
+      if (v) {
+        const d = v.tgt ? null : derived();
+        return { th: v.th, ph: v.ph, r: v.r, tgt: v.tgt ? v.tgt.slice() : [d.tgt[0], v.targetHeight || 0, d.tgt[2]], fov: v.fov };
+      }
+      return derived();
+    }
+    function authoredView(v, fallbackTgt) {
+      return { th: v.th, ph: v.ph, r: v.r, tgt: v.tgt ? v.tgt.slice() : fallbackTgt, fov: v.fov };
+    }
+    function itemView(id, point) {
+      const entry = furnitureResult && furnitureResult.byId ? furnitureResult.byId[id] : null;
+      const box = entry && entry.worldBox ? entry.worldBox : null;
+      const placed = (HOUSE.furniture || []).find(f => f.id === id);
+      const rot = entry && entry.placement ? entry.placement.rotationDeg : (placed ? placed.rotationDeg : 0);
+      const pt = point ? [point.x != null ? point.x : point[0], point.y != null ? point.y : point[1], point.z != null ? point.z : point[2]] : null;
+      const f = frontFromRotation(rot);
+      const d = deriveItemView({ box, point: pt || [orb.tgt.x, orb.tgt.y, orb.tgt.z], front: f, th: orb.th, fov: cam.fov });
+      if (placed && placed.view) return authoredView(placed.view, d.tgt);
+      return d;
+    }
+    function curtainView(id) {
+      const c = (HOUSE.curtains || CURTAINS || []).find(k => k.id === id);
+      if (!c) return null;
+      const off = (c.offset || 0) * c.inDir;
+      const lo = Math.max(0, (c.top - c.drop)) / 100, hi = c.top / 100;
+      let box, front;
+      if (c.axis === 'x') {
+        const y = c.at + off;
+        box = { min: [tx(c.c - c.w / 2), lo, tz(y) - 0.05], max: [tx(c.c + c.w / 2), hi, tz(y) + 0.05] };
+        front = [0, c.inDir];
+      } else {
+        const x = c.at + off;
+        box = { min: [tx(x) - 0.05, lo, tz(c.c - c.w / 2)], max: [tx(x) + 0.05, hi, tz(c.c + c.w / 2)] };
+        front = [c.inDir, 0];
+      }
+      const d = deriveItemView({ box, front, th: orb.th, fov: cam.fov });
+      if (c.view) return authoredView(c.view, d.tgt);
+      return d;
+    }
+    function pointView(point) {
+      const pt = [point.x != null ? point.x : point[0], point.y != null ? point.y : point[1], point.z != null ? point.z : point[2]];
+      return deriveItemView({ box: null, point: pt, front: null, th: orb.th, minR: 1.6, fov: cam.fov });
     }
 
     // Pan — translates orb.tgt (the look-at point) along the camera's actual
@@ -4959,6 +5080,9 @@ export const Home3DScene = (() => {
       needsRender = false;
 
 
+      // A camera flight moves the camera BEFORE this frame's wall fade reads
+      // its direction, and reports "still moving" into `animating` below.
+      const flightMoving = tickCameraFlight(frameNow);
       if (autoRotate && !orb.drag && !orb.pan) {
         autoAngle += rotateSpeed * dt;
         orb.th = Math.PI * 0.22 + autoAngle;
@@ -5037,6 +5161,7 @@ export const Home3DScene = (() => {
       if (tickFootstepFades()) animating = true;
       if (tickDoorSwings()) animating = true;
       if (tickCurtainMotions()) animating = true;
+      if (flightMoving) animating = true;
 
       transitionsActive = animating;
       // Time the render itself rather than the gap between frames. The gap is
@@ -5112,6 +5237,7 @@ export const Home3DScene = (() => {
       }
 
       on(container, "pointerdown", e => {
+        cancelFlight();   // the user takes the camera: stop where it is
         container.setPointerCapture(e.pointerId);
         if (e.pointerType === "touch") touchIds.add(e.pointerId);
         // button: 0=left (rotate, existing), 1=middle, 2=right (pan, new) —
@@ -5172,6 +5298,7 @@ export const Home3DScene = (() => {
       });
       on(container, "wheel", e => {
         e.preventDefault();
+        cancelFlight();
         // See zoomBy above. The old additive step with a -30 floor let r
         // cross zero, which flipped the camera to the far side of the target
         // and turned further zoom-in into zoom-out.
@@ -5184,6 +5311,7 @@ export const Home3DScene = (() => {
       // One finger still rotates through the pointer handlers above.
       const pt = t => ({ x: t.clientX, y: t.clientY });
       on(container, "touchstart", e => {
+        cancelFlight();
         if (e.touches.length === 2) twoFinger.start(pt(e.touches[0]), pt(e.touches[1]));
       }, { passive: true });
       on(container, "touchmove", e => {
@@ -5200,11 +5328,19 @@ export const Home3DScene = (() => {
         }
       }, { passive: false });
       const endTouches = e => { if (e.touches.length < 2) twoFinger.end(); };
+      // Keyboard camera input cancels a flight too. The orbit camera has no
+      // keyboard controls of its own today; these are the keys one would use,
+      // so a future binding (or a browser's own arrow-key handling) never
+      // fights a flight in progress.
+      const CAMERA_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', '+', '-', '=']);
+      on(window, "keydown", e => { if (flight && CAMERA_KEYS.has(e.key)) cancelFlight(); });
       on(container, "touchend", endTouches);
       on(container, "touchcancel", endTouches);
     }
 
     on(window, "resize", () => {
+      // The view a flight is heading to was framed for the old size.
+      cancelFlight();
       const w = container.clientWidth, h = container.clientHeight;
       if (w === 0 || h === 0) return;
       cam.aspect = w / h;
@@ -5811,12 +5947,25 @@ export const Home3DScene = (() => {
       // Free camera pose for visual checks: orbit angles plus a world-space
       // look-at point (metres), since the presets can only aim at the floor.
       setOrbit(th, ph, r, target) {
+        cancelFlight();
         orb.th = th; orb.ph = ph; orb.r = r;
         if (target) orb.tgt.set(target[0], target[1], target[2]);
         updCam();
       },
       // Preset names, for callers that want to validate/enumerate.
       viewPresets: Object.keys(CAMERA_PRESETS),
+      // Camera focus (src/camera-focus.js). getPose/flyTo/cancelFlight drive
+      // the flight; isFlying for checks. The *View helpers return the pose a
+      // selection frames: a profile `view` when the house authors one, else
+      // the derived view. All return null for an unknown id.
+      getPose,
+      flyTo(pose, opts) { return flyTo(pose, opts); },
+      cancelFlight() { return cancelFlight(); },
+      isFlying() { return !!flight; },
+      roomView(id, opts) { return roomView(id, opts); },
+      itemView(id, point) { return itemView(id, point); },
+      curtainView(id) { return curtainView(id); },
+      pointView(point) { return pointView(point); },
       // Subscribe an overlay to post-render frames. fn(cam) runs after every
       // rendered frame (see onRenderSubs above). Returns an unsubscribe fn.
       // The scene renders on demand, so also nudge one frame now in case the
@@ -5867,6 +6016,7 @@ export const Home3DScene = (() => {
       dispose() {
         if (_disposed) return;
         _disposed = true;
+        endFlight('cancelled');   // an awaited flight never hangs past teardown
         // Before the traverse below: the furniture owns materials the scene
         // graph cannot reach (a proxy's customDepthMaterial, the depth
         // precompile material). A still-pending attach sees _disposed and

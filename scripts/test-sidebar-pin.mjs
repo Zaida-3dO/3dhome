@@ -112,7 +112,9 @@ check('opts omitted -> collapsible (the safe reading)', is(P.sidebarReduce({ ope
   check('popover: onObjectTap runs BEFORE the card opens',
     onClick.indexOf('o.onObjectTap(res.target)') > -1 && onClick.indexOf('o.onObjectTap(res.target)') < onClick.indexOf('open(res.target'));
   check('popover: the sidebar flip that hook made is absorbed (takeRecords), not a card close',
-    /syncSidebarOpen\(\);\s*\}\s*open\(res\.target/.test(onClick) && /sidebarObs\.takeRecords\(\)/.test(src));
+    // Camera focus (src/camera-focus.js) may fly before the card opens; the
+    // flip is still absorbed before either path opens it.
+    /syncSidebarOpen\(\);\s*\}[\s\S]*?open\((res\.)?target/.test(onClick) && /sidebarObs\.takeRecords\(\)/.test(src));
   check('popover: a closing sidebar is not dodged', /if \(sb\.classList && !sb\.classList\.contains\('open'\)\) return null;/.test(src));
 }
 
