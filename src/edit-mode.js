@@ -62,10 +62,11 @@ import { readDraft, writeDraft, clearDraft, makeDraft, baseHashOf, poseToFocusVi
   setOwnerView, clearOwnerView, findOwner, removeDraftEscape } from './profile-draft.js';
 import { exportProfile } from './profile-export.js';
 import { moveItem, rotateItem, setParam, deleteItem, addItem, dropItemBindings, findItem, isWallAnchored, checkFurnitureItem,
-  confineFootprint, footprintOverhang, nearestFit, wallSpan, wallCentreRange, clamp, snapCm, liveRange, paramWrites, nudgeDir,
+  confineFootprint, footprintOverhang, footprintDepthOut, nearestFit, wallSpan, wallCentreRange, clamp, snapCm, liveRange, paramWrites, nudgeDir,
   distToSlider, sliderToDist, DIST_STEPS } from './edit-ops.js';
 import { controlsFor, visibleControls, optionValue } from './furniture/controls.js';
-import { paletteGroups, entryKey, placeNew, mountFor, roomAtPoint } from './edit-library.js';
+import { paletteGroups, entryKey, placeNew, mountFor, roomAtPoint, resolvePlacement, kindOptionsFor } from './edit-library.js';
+import { createBindingPanels } from './edit-bindings.js';
 
 /** The lens "Reset to derived" returns to: the scene camera's own default. */
 export const DEFAULT_FOV = 50;
@@ -141,10 +142,16 @@ const CSS = `
   .em-frame h2 { font-size: 14px; margin: 0; }
   .em-frame .em-row { margin: 4px 0 6px; }
   .em-frame.lib { width: auto; max-height: 55vh; }
+  /* The banner sits at the foot of the screen here: keep the sidebar's own
+     foot (the Settings button) above it (B2 review: it covered it). */
+  body.em-has-banner #panel { box-sizing: border-box; padding-bottom: calc(var(--em-banner-h, 48px) + 12px); }
+  /* The sidebar is a full-screen sheet here: while it is open the edit panel
+     steps aside rather than covering it (it is back when the sheet closes). */
+  body:has(#panel.open) .em-frame { display: none; }
 }
 `;
 
-const KIND_LABEL = { room: 'Room', furniture: 'Furniture item', curtain: 'Curtain' };
+const KIND_LABEL = { room: 'Room', furniture: 'Furniture item', curtain: 'Curtain', light: 'Light' };
 const num = v => typeof v === 'number' && Number.isFinite(v);
 
 let ctl = null;   // the one controller per page
@@ -209,6 +216,9 @@ function createController(ctx) {
   let downAt = null;       // { x, y, id } the pointer down of a would-be placing tap
   let replaying = false;   // a pointerdown edit mode is handing to the camera itself
   let escapeTimer = null;
+  // Bindings and the sidebar (B3 / B4).
+  let roomsChanged = false;  // workRooms differs from what the page booted with
+  let needsReload = false;   // a saved rooms.json change the running page has not applied
 
   if (!document.getElementById('em-style')) {
     const st = el('style'); st.id = 'em-style'; st.textContent = CSS; document.head.appendChild(st);
@@ -224,6 +234,32 @@ function createController(ctx) {
     const [g, rm] = await Promise.all([get('geometry.json'), get('rooms.json')]);
     served = { geometryText: g, roomsText: rm, hash: baseHashOf(g, rm) };
     return served;
+  }
+
+  // ---- Bindings and sidebar panels (src/edit-bindings.js) -------------------
+  const bind = createBindingPanels({
+    rooms: () => workRooms || {},
+    geometry: () => work,
+    setRooms: next => { workRooms = next; roomsChanged = true; markDirty(); },
+    setGeometry: next => { work = next; lastGood = next; markDirty(); },
+    rerender: () => renderFrame(),
+    listEntities: domains => (ctx.listEntities ? ctx.listEntities(domains) : Promise.reject(new Error('Home Assistant is not configured here'))),
+    previewCurtain: (id, pct) => { if (typeof home.setCurtainOpen === 'function') home.setCurtainOpen(id, pct, null); },
+    previewLight: (room, channel, st) => { if (ctx.previewLight) ctx.previewLight(room, channel, st); },
+    previewSidebar: (room, cfg) => { if (ctx.previewSidebar) ctx.previewSidebar(room, cfg); },
+    derivedRows: room => (ctx.derivedRows ? ctx.derivedRows(room) : []),
+    roomFurniture: room => ((work && Array.isArray(work.furniture) ? work.furniture : [])
+      .filter(f => f && f.room === room).map(f => ({ id: f.id, label: f.label || f.id }))),
+    lightChannels: room => (ctx.lightChannels ? ctx.lightChannels(room) : []),
+    curtainOpen: id => {
+      const c = work && Array.isArray(work.curtains) ? work.curtains.find(x => x && x.id === id) : null;
+      return c && typeof c.openPct === 'number' ? c.openPct : 100;
+    },
+    message: text => message(text),
+  });
+  function markDirty() {
+    if (!dirty) dirty = true;
+    renderBanner();
   }
 
   // ---- Draft writes ------------------------------------------------------
@@ -284,6 +320,7 @@ function createController(ctx) {
       requestAnimationFrame(publish);
     }
     banner.textContent = '';
+    document.body.classList.add('em-has-banner');
     const tag = el('span', 'em-tag', active ? 'EDIT MODE' : 'DRAFT');
     const text = el('span', 'em-text', dirty ? 'unsaved changes'
       : draft ? (active ? 'DRAFT on this device, not live' : 'on this device, not live')
@@ -294,6 +331,12 @@ function createController(ctx) {
       save.title = 'Keep these changes in the draft on this device';
       save.addEventListener('click', () => doSave());
       banner.append(save);
+    }
+    if (needsReload && !dirty) {
+      const rl = el('button', 'em-btn', 'Reload to apply'); rl.id = 'em-reload';
+      rl.title = 'Home Assistant bindings and sidebar rows apply when the page loads the saved draft';
+      rl.addEventListener('click', () => window.location.reload());
+      banner.append(rl);
     }
     const exp = el('button', 'em-btn', 'Export'); exp.id = 'em-export'; exp.disabled = !draft && !dirty;
     exp.title = 'Download geometry.json and rooms.json to apply to the server';
@@ -313,6 +356,7 @@ function createController(ctx) {
     if (!draft && !active && !ctx.draftBroken) {
       if (bannerObserver) { bannerObserver.disconnect(); bannerObserver = null; }
       banner.remove(); banner = null;
+      document.body.classList.remove('em-has-banner');
     }
   }
 
@@ -377,7 +421,7 @@ function createController(ctx) {
     if (target) {
       const x = el('button', 'em-x', '×'); x.id = 'em-close';
       x.setAttribute('aria-label', target.kind === 'furniture' ? 'Deselect' : target.kind === 'library' ? 'Close the library'
-        : target.kind === 'new' ? 'Cancel adding' : 'Stop framing'); x.title = x.getAttribute('aria-label');
+        : target.kind === 'new' ? 'Cancel adding' : target.kind === 'light' ? 'Close' : 'Stop framing'); x.title = x.getAttribute('aria-label');
       x.addEventListener('click', () => setTarget(null));
       head.append(x);
     }
@@ -445,12 +489,30 @@ function createController(ctx) {
     if (isItem) {
       frame.append(el('h2', null, target.label || target.id));
       itemSection(body);
+      const raw = work ? findItem(work, target.id) : null;
+      if (furnReady && raw) {
+        const ha = el('details', 'em-section'); ha.id = 'em-ha-section';
+        ha.open = sectionOpen.ha;
+        ha.addEventListener('toggle', () => { sectionOpen.ha = ha.open; });
+        ha.append(el('summary', null, 'Home Assistant'));
+        bind.itemSection(ha, raw.id, raw.room);
+        body.append(ha);
+      }
       const det = el('details', 'em-section'); det.id = 'em-frame-section';
       det.append(el('summary', null, 'Frame the view'));
       frameSection(det);
       body.append(det, msg);
       frame.append(body);
       syncSliders();
+      return;
+    }
+    if (target.kind === 'light') {
+      frame.append(el('h2', null, target.label || target.id));
+      body.append(el('div', 'em-sub', 'Light · ' + (ctx.roomLabel ? ctx.roomLabel(target.room) : target.room)));
+      if (bindingsReady()) bind.lightBlock(body, target.room, target.channel, 'Static or Home Assistant');
+      else body.append(el('div', 'em-sub', bindingsWaitText()));
+      body.append(msg);
+      frame.append(body);
       return;
     }
     frame.append(el('h2', null, 'Frame the view'));
@@ -460,10 +522,33 @@ function createController(ctx) {
       frame.append(body);
       return;
     }
+    if (target.kind === 'curtain') {
+      if (bindingsReady()) bind.curtainSection(body, target.id);
+      else body.append(el('div', 'em-sub', bindingsWaitText()));
+    }
     frameSection(body);
+    if (target.kind === 'room') {
+      const lights = el('details', 'em-section'); lights.id = 'em-lights-section';
+      lights.open = sectionOpen.lights;
+      lights.addEventListener('toggle', () => { sectionOpen.lights = lights.open; });
+      lights.append(el('summary', null, 'Lights'));
+      if (bindingsReady()) bind.roomLightsSection(lights, target.id); else lights.append(el('div', 'em-sub', bindingsWaitText()));
+      const side = el('details', 'em-section'); side.id = 'em-sidebar-section';
+      side.open = sectionOpen.sidebar;
+      side.addEventListener('toggle', () => { sectionOpen.sidebar = side.open; });
+      side.append(el('summary', null, 'Sidebar rows'));
+      if (bindingsReady()) bind.sidebarSection(side, target.id); else side.append(el('div', 'em-sub', bindingsWaitText()));
+      body.append(lights, side);
+    }
     body.append(msg);
     frame.append(body);
     syncSliders();
+  }
+  // Which collapsible sections are open (kept across re-renders).
+  const sectionOpen = { ha: true, lights: false, sidebar: false };
+  function bindingsReady() { return furnReady && !!work; }
+  function bindingsWaitText() {
+    return ctx.draftBroken ? 'Discard the broken draft to edit bindings.' : 'Getting the profile ready to edit…';
   }
 
   // ---- Furniture: the param panel (shared by a placed item and a new one) ----
@@ -496,6 +581,7 @@ function createController(ctx) {
    */
   function paramRows(type, src) {
     const { all, controls, values } = controlsOf(type, src.params());
+    optionsCtx = src.mount ? { mount: src.mount() } : null;
     const box = el('div'); box.id = 'em-params';
     controls.forEach(c => box.append(controlRow(type, c, values, val => {
       const cur = controlsOf(type, src.params());
@@ -540,7 +626,14 @@ function createController(ctx) {
       into.append(rot);
     }
     const id = raw.id;
+    const poke = wall ? wallItemOverhang(raw) : 0;
+    if (poke > 0) {
+      const w = el('div', 'em-sub', 'It sticks out of the room by about ' + Math.round(poke) + ' cm: it is deeper than the room here, or runs past a corner. Make it shallower or narrower.');
+      w.id = 'em-overhang'; w.style.color = '#fca5a5';
+      into.append(w);
+    }
     into.append(paramRows(raw.type, {
+      mount: () => (isWallAnchored(findItem(work, id) || raw) ? 'wall' : 'floor'),
       params: () => (findItem(work, id) || raw).params || {},
       write: (writes, c) => applyEdit(w => {
         let next = w;
@@ -606,6 +699,9 @@ function createController(ctx) {
       ? 'Tap the floor near a wall of a room: it goes on the nearest wall, facing into the room.'
       : 'Tap the floor of a room to place it there.'));
     into.append(paramRows(adding.entry.type, {
+      // An entry whose kinds pick the mount (a speaker) may change it; any
+      // other keeps the mount it was chosen for (a floor plant: no wall-planter).
+      mount: () => (adding.entry.kinds ? null : adding.entry.mount),
       params: () => adding.params,
       write: (writes, c) => { adding.params = withWrites(adding.params, writes, c); refreshGhost(); },
     }));
@@ -622,10 +718,15 @@ function createController(ctx) {
     return { width: num(v.width) ? v.width : 0, depth: num(v.depth) ? v.depth : 0 };
   }
   /** Where a tap at a client point would put the new item: placeNew's result, or { error }. */
+  // The room comes from the SAME picker a room tap uses (room-pick.js via
+  // the scene's placementPick): a tap on a wall's base or face resolves to
+  // the side tapped, never through the wall into the neighbour, and the
+  // point is pulled back into that room (edit-library resolvePlacement).
   function placementAt(clientX, clientY) {
     const plan = home.screenToPlan(clientX, clientY, 0);
-    const room = plan ? roomAtPoint(compiled, plan) : null;
-    return placeNew({ doc: work, compiled, entry: adding.entry, room, point: plan || [0, 0], params: adding.params,
+    const pick = typeof home.placementPick === 'function' ? home.placementPick(clientX, clientY) : null;
+    const r = pick ? resolvePlacement(compiled, pick, plan) : { room: plan ? roomAtPoint(compiled, plan) : null, point: plan };
+    return placeNew({ doc: work, compiled, entry: adding.entry, room: r.room, point: r.point || [0, 0], params: adding.params,
       size: newSize(), label: adding.entry.label });
   }
 
@@ -689,6 +790,9 @@ function createController(ctx) {
     ghost = { sig, anchor: Array.isArray(anchor) ? anchor.slice() : anchor, axis: res.axis };
   }
 
+  // What the select being drawn belongs to: a placed item (wall-anchored or
+  // free) or a new one, so a kind that changes how it mounts is not offered.
+  let optionsCtx = null;
   function controlRow(type, c, values, onValue) {
     const id = 'em-p-' + c.key;
     const v = values[c.key];
@@ -717,7 +821,7 @@ function createController(ctx) {
       inp.addEventListener('input', () => onValue(inp.value));
     } else if (c.kind === 'select') {
       inp = el('select');
-      (c.options || []).forEach(o => {
+      kindOptionsFor(type, c, values, optionsCtx).forEach(o => {
         const opt = el('option', null, o !== null && typeof o === 'object' ? (o.label || String(o.value)) : String(o));
         opt.value = JSON.stringify(optionValue(o));
         if (optionValue(o) === v) opt.selected = true;
@@ -767,19 +871,26 @@ function createController(ctx) {
     let next;
     try { next = fn(work); } catch (e) { message(e.message); return false; }
     // A turn or a resize can push the footprint through a wall: settle it
-    // back inside (B1 review: confine by footprint, not centre).
-    if (settleIt) { try { next = settle(work, next, id); } catch (e) { /* keep the edit as made */ } }
+    // back inside (B1 review: confine by footprint, not centre). A slider
+    // (delay > 0) settles once, when its debounce fires (B2 review: the
+    // search ran on every tick), against the doc of the last rebuild.
+    if (settleIt && !(delay > 0)) { try { next = settle(work, next, id); } catch (e) { /* keep the edit as made */ } }
     const problems = checkFurnitureItem(findItem(next, id));
     if (problems.length) { message('Not kept: ' + problems.join('; ')); return false; }
     work = next;
     if (!dirty) { dirty = true; renderBanner(); }
-    scheduleRebuild(id, op, delay);
+    scheduleRebuild(id, op, delay, settleIt && delay > 0);
     return true;
   }
-  function scheduleRebuild(id, op, delay) {
+  function scheduleRebuild(id, op, delay, settleLater) {
+    const wasSettle = !!(pending && pending.settle && pending.id === id);
     if (pending) { if (pending.timer) clearTimeout(pending.timer); if (pending.raf) cancelAnimationFrame(pending.raf); }
-    pending = { id, op };
-    const run = () => { pending = null; rebuildItem(id, op); };
+    pending = { id, op, settle: settleLater || wasSettle };
+    const run = () => {
+      const p = pending; pending = null;
+      if (p && p.settle && lastGood) { try { work = settle(lastGood, work, id); } catch (e) { /* keep the edit as made */ } }
+      rebuildItem(id, op);
+    };
     if (delay > 0) pending.timer = setTimeout(run, delay);
     else pending.raf = requestAnimationFrame(run);
   }
@@ -788,6 +899,7 @@ function createController(ctx) {
     const p = pending;
     if (p.timer) clearTimeout(p.timer); if (p.raf) cancelAnimationFrame(p.raf);
     pending = null;
+    if (p.settle && lastGood) { try { work = settle(lastGood, work, p.id); } catch (e) { /* keep the edit as made */ } }
     rebuildItem(p.id, p.op);
   }
   let lastGood = null;
@@ -846,8 +958,10 @@ function createController(ctx) {
     try {
       await saveDocs(work, workRooms);
       dirty = false;
+      if (roomsChanged) { needsReload = true; roomsChanged = false; }
       renderBanner();
-      message('Saved to the draft on this device.');
+      message(needsReload ? 'Saved to the draft on this device. Home Assistant bindings and sidebar rows apply after a reload.'
+        : 'Saved to the draft on this device.');
     } catch (e) { message('Could not save: ' + e.message); window.alert('Could not save the draft: ' + e.message); }
   }
   function doDelete() {
@@ -893,6 +1007,25 @@ function createController(ctx) {
     const fit = nearestFit(poly, after.at, sa, 1);
     if (!fit) { message('It no longer fits inside the room like this.'); return nextDoc; }
     return moveItem(nextDoc, id, { at: fit });
+  }
+
+  /**
+   * How far (cm, the deepest sample) a wall item's footprint leaves its room:
+   * a deep item on a narrow room reaches the opposite wall (B2 review). Wall
+   * moves only slide along the wall, so depth is never confined; it is flagged.
+   */
+  function wallItemOverhang(raw) {
+    const item = compiled && (compiled.furniture || []).find(f => f.id === raw.id);
+    const poly = roomPoly(raw.room);
+    if (!item || !poly || !num(item.x) || !num(item.y)) return 0;
+    const sz = sizeOf(raw);
+    if (!(sz.width > 0) || !(sz.depth > 0)) return 0;
+    // A wall item's x / y is its BACK-centre (origin 'back'): its footprint
+    // centre is half its depth in front of that.
+    const rad = (item.rotationDeg || 0) * Math.PI / 180;
+    const back = item.origin === 'back' ? sz.depth / 2 : 0;
+    const at = [item.x - Math.sin(rad) * back, item.y + Math.cos(rad) * back];
+    return footprintDepthOut(poly, at, { width: sz.width, depth: sz.depth, rotation: item.rotationDeg || 0 });
   }
 
   // ---- Furniture: pointer and keys -----------------------------------------
@@ -1156,6 +1289,10 @@ function createController(ctx) {
     adding = null;
     clearGhost();
     setListeners(false);
+    // The picker's entity list lives only while editing (plan review #10).
+    bind.reset();
+    if (dirty && roomsChanged && ctx.previewSidebar) ctx.previewSidebar(null, null);
+    roomsChanged = false;
     if (target && target.kind === 'furniture') home.highlightFurniture(null);
     target = null;
     if (unRender) { unRender(); unRender = null; }
@@ -1188,6 +1325,12 @@ function createController(ctx) {
   }
   function selectDevice(device, point) {
     if (!active || !device || busyAdding()) return;
+    if (device.kind === 'light' && device.roomId && device.channel) {
+      const lc = ctx.lightChannels ? ctx.lightChannels(device.roomId).find(c => c.channel === device.channel) : null;
+      setTarget({ kind: 'light', id: device.roomId + '/' + device.channel, room: device.roomId, channel: device.channel,
+        label: (lc && lc.label) || device.label || device.channel });
+      return;
+    }
     const owner = ctx.resolveOwner ? ctx.resolveOwner(Object.assign({}, device, { focusPoint: point || null })) : null;
     setTarget(owner || { kind: 'none', label: device.label || device.id,
       reason: 'This device has no profile entry that can hold a view (a light frames from its fixture). Frame its room instead.' });
@@ -1213,6 +1356,9 @@ function createController(ctx) {
     adding: () => (adding ? { key: entryKey(adding.entry), params: Object.assign({}, adding.params) } : null),
     save: doSave,
     exportTexts,
+    rooms: () => workRooms,
+    needsReload: () => needsReload,
+    hasEntityList: () => bind.hasEntityList(),
   };
   if (ctx.debug) window.__home3dEdit = api;
   return api;

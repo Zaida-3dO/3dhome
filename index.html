@@ -1033,8 +1033,14 @@
     import { parseSunTime }   from './src/sun-position.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
              haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml,
-             boundLightChannels, hasAmbientRow, ambientRowLabel, fillRange }
+             boundLightChannels, hasAmbientRow, ambientRowLabel, fillRange,
+             sidebarRows, normaliseSidebar, extraLightRowHtml, extraSwitchRowHtml, extraCoverRowHtml, coverRowModel }
                               from './src/room-panel.js?v=__VERSION__';
+    // rooms.json `bindings` (1.11): folded into the legacy shapes for the
+    // page; the HA client takes the raw slots plus the block (src/bindings.js).
+    import { foldBindings, normaliseBindings } from './src/bindings.js?v=__VERSION__';
+    import { normaliseItemBindings, lightRowModel, switchRowModel, lightRowToggleCommand, switchCommand,
+             mediaPowerCommand, applyCommand, shortLabel } from './src/item-cards.js?v=__VERSION__';
     // Dev-only wall-numbering debug overlay (off by default; ?debugWalls=1,
     // Shift+D, or the Settings sidebar "Wall numbers" switch).
     import { WallDebugOverlay } from './src/overlays/wall-debug-overlay.js?v=__VERSION__';
@@ -1380,6 +1386,11 @@
       // the binding, not of whether HA is connected (a bound row with no
       // reading shows "unavailable").
       let sensors = null;
+      // rooms.json as read (draft or served), for what the folded `rooms` /
+      // `sensors` above do not carry: the raw slots and `bindings` for the
+      // HA client, and the room `sidebar` config. `var`: renderPanel() is
+      // hoisted and reads the sidebar config.
+      var roomsDocLoaded = null;
       // A draft on this device (and allowed here): its two documents replace
       // the served ones for this load. bootDraft() returns null under
       // ?preview=true, ?embed=1 and in an iframe whatever is stored.
@@ -1401,8 +1412,16 @@
         const roomsResp = draftApplied && draftBoot.rooms ? null : await fetch('houses/' + cfg.house + '/rooms.json', { cache: 'no-store' });
         if (!roomsResp || roomsResp.ok) {
           const roomsDoc = roomsResp ? await roomsResp.json() : draftBoot.rooms;
-          rooms = roomsDoc && roomsDoc.rooms ? roomsDoc.rooms : null;
-          sensors = roomsDoc && roomsDoc.sensors ? roomsDoc.sensors : null;
+          roomsDocLoaded = roomsDoc || null;
+          // A `bindings` entry is folded into the slot the page reads (a
+          // curtain into sensors.curtains, a light into rooms[room][ch]), so
+          // every row and command path finds it where it always looks. One
+          // the normaliser refuses (bound twice, malformed) is reported here.
+          normaliseBindings(roomsDoc).errors.forEach(er =>
+            console.warn('[home3d] rooms.json bindings["' + er.key + '"]: ' + er.message + ' -- ignored.'));
+          const folded = foldBindings(roomsDoc);
+          rooms = roomsDoc && roomsDoc.rooms ? folded.rooms : null;
+          sensors = folded.sensors && Object.keys(folded.sensors).length ? folded.sensors : null;
           Object.keys((sensors && sensors.doors) || {}).forEach(id => doorSensorIds.add(id));
         } else {
           console.warn('[home3d] houses/' + cfg.house + '/rooms.json returned HTTP ' +
@@ -1424,6 +1443,11 @@
           fallbackUrl: cfg.fallbackUrl || null,
           rooms: rooms,
           sensors: sensors,
+          // The client indexes the raw slots and the `bindings` block itself
+          // (a binding's attribute and transform are applied there).
+          rawRooms: (roomsDocLoaded && roomsDocLoaded.rooms) || {},
+          rawSensors: (roomsDocLoaded && roomsDocLoaded.sensors) || null,
+          bindings: (roomsDocLoaded && roomsDocLoaded.bindings) || null,
           wsReconnectMs: cfg.wsReconnectMs,
           pollIntervalMs: cfg.pollIntervalMs
         };
@@ -1508,8 +1532,15 @@
       // Open / Close buttons do); the guard re-checks when a debounced send
       // actually fires; and applyCurtainAvailable cancels a pending send the
       // moment the cover drops off.
+      // A curtain bound through `bindings` with transform 'invert' reads
+      // 100 - position, so its commands are mirrored too (slider, Open/Close).
+      const curtainInverted = new Set();
+      normaliseBindings(roomsDocLoaded).block.forEach(t => {
+        if (t.kind === 'curtain' && t.channels.openPct.transform === 'invert') curtainInverted.add(t.id);
+      });
+      const curtainOut = (curtainId, pct) => (curtainInverted.has(curtainId) && Number.isFinite(+pct) ? 100 - (+pct) : pct);
       const curtainSender = createDragSender({
-        build: (curtainId, pct) => curtainSliderCommand(HAClient.coverPositionCommand, pct,
+        build: (curtainId, pct) => curtainSliderCommand(HAClient.coverPositionCommand, curtainOut(curtainId, pct),
           curtainEntities.get(curtainId), curtainIsAvailable(curtainId)),
         dispatch: (cmd, curtainId, delayMs) => {
           if (!ha) return;
@@ -2470,6 +2501,34 @@
             flyTo: pose => home.flyTo(pose),
             onModeChange: () => { if (panelView === 'settings') renderPanel(); },
             debug: params.get('debug') === '1',
+            // Bindings (B3) and the sidebar editor (B4). The entity list is
+            // the client's own on-demand get_states, never the boot snapshot.
+            listEntities: domains => (ha && typeof ha.listEntities === 'function'
+              ? ha.listEntities(domains) : Promise.reject(new Error('Home Assistant is not configured on this page'))),
+            lightChannels: rid => Object.keys(home.lightState[rid] || {}).map(ch => {
+              const lc = (Home3DScene.LIGHTS[rid] || {})[ch], rm = Home3DScene.ROOMS[rid];
+              return { channel: ch, label: ch === 'main' ? 'Main light' : ch === 'ambient' ? ambientRowLabel(lc, rm && rm.name)
+                : ch === 'galaxy' ? 'Galaxy projector' : ((lc && lc.name) || ch) };
+            }),
+            previewLight: (rid, ch, st) => {
+              const ls = home.lightState[rid] && home.lightState[rid][ch];
+              if (!ls) return;
+              if (typeof st.on === 'boolean') ls.on = st.on;
+              if (typeof st.bri === 'number') ls.bri = st.bri;
+              if (typeof st.color === 'string' && ch !== 'main') ls.color = st.color;
+              home.updateLights();
+              if (selectedRoom === rid) refreshRoomRow(ch);
+            },
+            // A room's sidebar as edited, before Save (room null: drop every preview).
+            previewSidebar: (rid, raw) => {
+              if (rid == null) sidebarPreview = null;
+              else {
+                if (!sidebarPreview) sidebarPreview = new Map();
+                sidebarPreview.set(rid, normaliseSidebar({ [rid]: raw || {} }).get(rid) || null);
+              }
+              if (panelReady && (!rid || selectedRoom === rid)) renderPanel();
+            },
+            derivedRows: rid => derivedRowKeys(rid).filter(k => k !== 'ha-offline').map(k => ({ key: k, label: derivedRowLabel(rid, k) })),
           } }));
           editLoading.catch(e => { editLoading = null; console.error('[home3d] edit mode failed to load: ' + e.message); });
         }
@@ -2545,8 +2604,11 @@
           url: haConfig.url,
           fallbackUrl: haConfig.fallbackUrl,
           token: haToken,
-          rooms: haConfig.rooms,
-          sensors: haConfig.sensors,
+          rooms: haConfig.rawRooms,
+          sensors: haConfig.rawSensors,
+          bindings: haConfig.bindings,
+          // Sidebar `extra` rows show their entity raw: record it too.
+          watch: sidebarWatchEntities(),
           wsReconnectMs: haConfig.wsReconnectMs || 5000,
           pollIntervalMs: haConfig.pollIntervalMs || 5000
         });
@@ -2644,6 +2706,10 @@
         // Losing Home Assistant disarms every room script: a second tap after
         // a reconnect must not be the confirm of a tap made before it.
         ha.onStatusChange(status => { if (status !== 'connected') disarmRoomScripts(null); });
+        ha.onStatusChange(status => { if (status !== 'connected') extraConfirms.forEach(c => c.reset()); });
+        // Sidebar extra / item rows follow their entity.
+        ha.onWatchedChange(entityId => refreshEntityRows(entityId));
+        ha.onItemEntityChange(entityId => refreshEntityRows(entityId));
 
         // Cover -> animate that curtain (and, through it, the room's
         // daylight). Cornice light -> that curtain's cornice strip. Both fire
@@ -3321,7 +3387,137 @@
       // "Updated 3 min ago" ages with the clock, not only with a reading.
       if (plantBindings.size) setInterval(refreshPlantBlock, 30000);
 
+      // ---- Sidebar config (rooms.json 1.11 `sidebar`, src/room-panel.js) ----
+      // roomRowKeys = the DERIVED rows reshaped by the room's config: hidden
+      // rows, opt-in item rows (`show`) and manual `extra` rows. A profile
+      // with no `sidebar` gets exactly the derived rows (sidebarRows(keys,
+      // null) is the identity). Edit mode previews a config through
+      // sidebarPreview before it is saved. `var`: renderPanel() is hoisted.
+      var sidebarCfgMap = null, sidebarPreview = null;
+      function sidebarConfig(rid) {
+        if (sidebarPreview && sidebarPreview.has(rid)) return sidebarPreview.get(rid);
+        if (!sidebarCfgMap) sidebarCfgMap = normaliseSidebar(roomsDocLoaded && roomsDocLoaded.sidebar);
+        return sidebarCfgMap.get(rid) || null;
+      }
       function roomRowKeys(rid) {
+        return sidebarRows(derivedRowKeys(rid), sidebarConfig(rid));
+      }
+      // Every entity a sidebar extra row shows raw (scripts need no state).
+      function sidebarWatchEntities() {
+        const out = new Set();
+        normaliseSidebar(roomsDocLoaded && roomsDocLoaded.sidebar).forEach(c =>
+          c.extra.forEach(x => { if (x.kind !== 'script') out.add(x.entity); }));
+        return Array.from(out);
+      }
+      // What an 'extra:<n>' or 'item:<id>' row shows: { kind, entity, label, confirm, variables }.
+      var itemRowBindings = null;
+      function sidebarRowBinding(rid, key) {
+        if (key.startsWith('extra:')) {
+          const c = sidebarConfig(rid);
+          return c ? c.extra[+key.slice(6)] || null : null;
+        }
+        if (key.startsWith('item:')) {
+          if (!itemRowBindings) itemRowBindings = normaliseItemBindings(sensors && sensors.items);
+          const id = key.slice(5);
+          const cards = itemRowBindings.get(id);
+          if (!cards) return null;
+          for (const card of cards) {
+            const row = card.lights[0] ? ['light', card.lights[0]] : card.switches[0] ? ['switch', card.switches[0]]
+              : card.media[0] ? ['media', card.media[0]] : null;
+            if (!row) continue;
+            const f = (house.furniture || []).find(x => x.id === id);
+            const label = card.title || row[1].label || shortLabel((f && f.label) || '') || id;
+            return { kind: row[0], entity: row[1].entity, label, confirm: false, variables: {} };
+          }
+        }
+        return null;
+      }
+      // The raw state an extra / item row paints: HA's, or with no Home
+      // Assistant at all (the demo) a local sample its controls move.
+      const sidebarMock = new Map();
+      function sidebarRaw(b) {
+        if (ha) return ha.getRawState ? ha.getRawState(b.entity) : null;
+        if (!sidebarMock.has(b.entity)) sidebarMock.set(b.entity, b.kind === 'cover'
+          ? { state: 'open', attributes: { current_position: 100 } } : { state: 'off', attributes: {} });
+        return sidebarMock.get(b.entity);
+      }
+      const sidebarLastBri = new Map();
+      // An extra script row: a two-step confirm (confirm: true, exactly the
+      // room script's) or a one-tap send, keyed by room + row.
+      const extraConfirms = new Map(), extraScriptState = new Map();
+      function extraScriptConfirm(rid, key, b) {
+        const id = rid + '|' + key;
+        let c = extraConfirms.get(id);
+        if (c) return c;
+        c = createTwoStepConfirm({
+          writable: () => roomScriptHaState() === 'ok',
+          send: () => sendScript(ha, { entity: b.entity, variables: b.variables }, () => roomScriptHaState() === 'ok'),
+          onChange: () => paintExtraScriptRow(rid, key)
+        });
+        extraConfirms.set(id, c);
+        return c;
+      }
+      function paintExtraScriptRow(rid, key) {
+        if (selectedRoom !== rid || !panelReady) return;
+        const row = panelBody.querySelector('[data-row="' + esc(key) + '"]');
+        const b = sidebarRowBinding(rid, key);
+        if (!row || !b) return;
+        const c = extraConfirms.get(rid + '|' + key);
+        const st = b.confirm ? (c ? c.state : 'idle') : (extraScriptState.get(rid + '|' + key) || 'idle');
+        if (!applyRoomScriptView(row, roomScriptView({ label: b.label }, st, roomScriptHaState()))) refreshRoomRow(key);
+      }
+      function sidebarRowHtml(key, rid, offline) {
+        const b = sidebarRowBinding(rid, key);
+        if (!b) return '';
+        if (b.kind === 'script') {
+          const id = rid + '|' + key, c = extraConfirms.get(id);
+          const st = b.confirm ? (c ? c.state : 'idle') : (extraScriptState.get(id) || 'idle');
+          return roomScriptRowHtml({ label: b.label }, st, roomScriptHaState(), { rowKey: key, action: 'x-script' });
+        }
+        const raw = sidebarRaw(b);
+        if (b.kind === 'light') return extraLightRowHtml(key, b.label, lightRowModel(raw, false, null, sidebarLastBri.get(b.entity)), offline);
+        if (b.kind === 'cover') return extraCoverRowHtml(key, b.label, coverRowModel(raw), offline);
+        if (b.kind === 'media') {
+          const st = raw ? raw.state : undefined;
+          const na = !st || st === 'unavailable' || st === 'unknown';
+          return extraSwitchRowHtml(key, b.label, { na, on: !na && st !== 'off' && st !== 'standby',
+            stateText: na ? 'Unavailable' : st.charAt(0).toUpperCase() + st.slice(1) }, offline, ICONS.tv);
+        }
+        return extraSwitchRowHtml(key, b.label, switchRowModel(raw), offline);
+      }
+      // A command from an extra / item row: to Home Assistant, or (no HA) to
+      // the local sample, which then repaints.
+      function sidebarSend(b, cmd, key) {
+        if (!cmd) return;
+        if (ha) { if (!haOffline(ha)) ha.callService(cmd.domain, cmd.service, cmd.data, cmd.target); return; }
+        sidebarMock.set(b.entity, applyCommand(sidebarRaw(b), cmd));
+        refreshRoomRow(key);
+      }
+      // A watched / item entity changed: repaint the open room's rows that show it.
+      function refreshEntityRows(entityId) {
+        if (!selectedRoom || !panelReady) return;
+        roomRowKeys(selectedRoom).forEach(key => {
+          if (!key.startsWith('extra:') && !key.startsWith('item:')) return;
+          const b = sidebarRowBinding(selectedRoom, key);
+          if (b && b.entity === entityId && b.kind !== 'script') refreshRoomRow(key);
+        });
+      }
+
+      // A derived row's name in the sidebar editor.
+      function derivedRowLabel(rid, key) {
+        const rm = Home3DScene.ROOMS[rid];
+        if (key === 'main') return 'Main light';
+        if (key === 'ambient') return ambientRowLabel((Home3DScene.LIGHTS[rid] || {}).ambient, rm && rm.name);
+        if (key === 'galaxy') return 'Galaxy projector';
+        if (key === 'motion') return 'Motion';
+        if (key === 'climate') return 'Temperature';
+        if (key === 'room-script') { const b = roomScriptBindings().get(rid); return (b && b.label) || 'Room script'; }
+        if (key.startsWith('door:')) { const d = (roomDoorRows[rid] || []).find(x => 'door:' + x.id === key); return 'Door: ' + ((d && d.name) || key.slice(5)); }
+        if (key.startsWith('curtain:')) { const c = (roomCurtains[rid] || []).find(x => 'curtain:' + x.id === key); return (c && c.label) || key.slice(8); }
+        return key;
+      }
+      // The rows a room DERIVES from its bindings, before its sidebar config.
+      function derivedRowKeys(rid) {
         const s = home.lightState[rid] || {};
         const keys = [];
         if (haOffline(ha)) keys.push('ha-offline');
@@ -3423,6 +3619,7 @@
           return curtainRowHtml(cu, pct, curtainIsAvailable(cu.id), offline);
         }
         if (key === 'climate') return climateRowHtml(climateReading.get(rid) || null, offline, climateHeating(rid));
+        if (key.startsWith('extra:') || key.startsWith('item:')) return sidebarRowHtml(key, rid, offline);
         if (key === 'room-script') {
           const b = roomScriptBindings().get(rid);
           if (!b) return '';
@@ -3548,14 +3745,66 @@
             el.addEventListener('keyup', e => { if (intent.keyUp(e.key)) roomScriptConfirm(rid).keyUp(); });
             el.addEventListener('blur', () => intent.blur());
           }
+          // Sidebar extra / item rows (rooms.json `sidebar`). Same offline gate.
+          if (action === 'x-toggle' || action === 'x-bri' || action === 'x-cover-cmd' || action === 'x-cover-pos' || action === 'x-script') {
+            const key = el.dataset.key;
+            const b = sidebarRowBinding(rid, key);
+            if (!b) return;
+            if (action === 'x-toggle') onWrite(el, 'click', () => {
+              const raw = sidebarRaw(b);
+              if (b.kind === 'light') sidebarSend(b, lightRowToggleCommand(b.entity, lightRowModel(raw, false, null, sidebarLastBri.get(b.entity))), key);
+              else if (b.kind === 'media') sidebarSend(b, mediaPowerCommand(b.entity, !(raw && raw.state !== 'off' && raw.state !== 'standby')), key);
+              else sidebarSend(b, switchCommand(b.entity, !(raw && raw.state === 'on')), key);
+            });
+            if (action === 'x-bri') {
+              onWrite(el, 'input', e => {
+                const pct = +e.target.value;
+                sidebarLastBri.set(b.entity, pct);
+                fillRange(el);
+                if (el.nextElementSibling) el.nextElementSibling.textContent = pct + '%';
+                const data = { brightness: Math.round(Math.max(1, Math.min(100, pct)) * 2.55) };
+                if (ha) ha.callServiceDebounced('light', 'turn_on', data, { entity_id: b.entity }, 'x-' + b.entity, 200);
+                else sidebarMock.set(b.entity, applyCommand(sidebarRaw(b), { domain: 'light', service: 'turn_on', data, target: { entity_id: b.entity } }));
+              });
+            }
+            if (action === 'x-cover-cmd') onWrite(el, 'click', () => sidebarSend(b, HAClient.coverOpenCloseCommand(el.dataset.cmd, [b.entity]), key));
+            if (action === 'x-cover-pos') {
+              onWrite(el, 'input', e => {
+                fillRange(el);
+                if (el.previousElementSibling) el.previousElementSibling.textContent = 'Open: ' + (+e.target.value) + '%';
+              });
+              onWrite(el, 'change', e => sidebarSend(b, HAClient.coverPositionCommand(+e.target.value, [b.entity]), key));
+            }
+            if (action === 'x-script') {
+              // confirm: the room script's two-step (and its key-intent and
+              // repeat guards, src/room-script.js); otherwise one tap sends.
+              const intent = createKeyIntent();
+              const id = rid + '|' + key;
+              onWrite(el, 'click', e => {
+                if (el.disabled) return;
+                if (b.confirm) {
+                  const keyboard = intent.click(e.detail);
+                  extraScriptConfirm(rid, key, b).press({ keyboard, synthetic: !keyboard && e.detail === 0 });
+                  return;
+                }
+                const ok = sendScript(ha, { entity: b.entity, variables: b.variables }, () => roomScriptHaState() === 'ok');
+                extraScriptState.set(id, ok ? 'sent' : 'failed');
+                paintExtraScriptRow(rid, key);
+                setTimeout(() => { extraScriptState.delete(id); paintExtraScriptRow(rid, key); }, 2500);
+              });
+              el.addEventListener('keydown', e => intent.keyDown(e.key));
+              el.addEventListener('keyup', e => { if (intent.keyUp(e.key) && b.confirm) extraScriptConfirm(rid, key, b).keyUp(); });
+              el.addEventListener('blur', () => intent.blur());
+            }
+          }
           // Curtain Open / Close buttons: one press, one command, to every
           // bound motor. The 3D curtain then follows HA's own reports.
           if (action === 'curtain-cmd') {
             const curtainId = el.dataset.curtain;
             onWrite(el, 'click', () => {
               if (!curtainIsAvailable(curtainId)) return; // belt-and-braces with `disabled`
-              curtainSender.press(curtainId,
-                HAClient.coverOpenCloseCommand(el.dataset.cmd, curtainEntities.get(curtainId)));
+              const cmd = curtainInverted.has(curtainId) ? (el.dataset.cmd === 'open' ? 'close' : 'open') : el.dataset.cmd;
+              curtainSender.press(curtainId, HAClient.coverOpenCloseCommand(cmd, curtainEntities.get(curtainId)));
             });
           }
           // Temperature target slider: the curtain slider's exact rules,

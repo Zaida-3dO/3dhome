@@ -256,6 +256,34 @@ console.log('4. confinement by footprint');
   // Sampling the edges, not only the corners: a thin item across the L's notch.
   check('edge samples catch an inner corner between two inside corners',
     E.footprintOverhang(L_, [650, 200], { width: 20, depth: 200, rotation: 90 }) > 0);
+  // A U-shaped room (B2 review finding 2): a long thin item spanning the two
+  // arms has ALL FOUR corners inside, yet its middle crosses the notch. Only
+  // the edge samples between the corners can see that -- a corners-only
+  // footprintSamples passes the L case above but fails this one.
+  const U = [[0, 0], [300, 0], [300, 300], [200, 300], [200, 100], [100, 100], [100, 300], [0, 300]];
+  const uSpan = { width: 280, depth: 40, rotation: 0 };
+  check('(fixture) the U-spanning item has every corner inside', E.footprintSamples([150, 200], 280, 40, 0).length > 4 &&
+    [[10, 180], [290, 180], [290, 220], [10, 220]].every(p => E.footprintOverhang(U, p, { width: 0.001, depth: 0.001, rotation: 0 }) === 0));
+  check('U-shaped room: a footprint across the notch overhangs (edge samples, not corners)', E.footprintOverhang(U, [150, 200], uSpan) > 0);
+  check('U-shaped room: a drag across the notch is refused', (() => { const p = E.confineFootprint(U, [150, 50], [150, 200], uSpan); return E.footprintOverhang(U, p, uSpan) === 0; })());
+  // nearestFit: the item's own region (B2 review finding 3): in an L, a
+  // resize must not make the item jump into the other arm when it can still
+  // fit in the arm it stands in.
+  const L2 = [[0, 0], [600, 0], [600, 120], [120, 120], [120, 600], [0, 600]];
+  const tall = { width: 100, depth: 100, rotation: 0 };
+  const g = E.nearestFit(L2, [60, 400], tall, 1);
+  check('nearestFit stays in the item\'s own arm of an L', g && g[0] <= 70 && g[1] > 120, g);
+  check('segmentInside: a straight line across the L\'s notch leaves the room', E.segmentInside(L2, [60, 400], [400, 60]) === false &&
+    E.segmentInside(L2, [60, 400], [60, 100]) === true);
+  // ... and it is bounded: a big room, an item that does not fit at the tap.
+  const big = [[0, 0], [1200, 0], [1200, 900], [0, 900]];
+  let t0 = performance.now();
+  for (let k = 0; k < 20; k++) E.nearestFit(big, [1190, 890], { width: 200, depth: 90, rotation: 0 }, 1);
+  const per = (performance.now() - t0) / 20;
+  check('nearestFit is coarse-to-fine: a 12x9 m room at 1 cm takes < 30 ms', per < 30, Math.round(per) + ' ms');
+  check('... and still finds the nearest whole-cm fit', JSON.stringify(E.nearestFit(big, [1190, 890], { width: 200, depth: 90, rotation: 0 }, 1)) === '[1100,855]',
+    E.nearestFit(big, [1190, 890], { width: 200, depth: 90, rotation: 0 }, 1));
+  check('footprintDepthOut: a deep item in a narrow room reports how far it pokes out', Math.round(E.footprintDepthOut(sq, [200, 150], { width: 100, depth: 360, rotation: 0 })) === 29);
   // nearestFit
   const f = E.nearestFit(sq, [395, 295], sz, 1);
   check('nearestFit: the nearest centre where it fits', f && f[0] === 350 && f[1] === 270, f);
@@ -298,6 +326,45 @@ console.log('5. control filtering');
   check('the derived TV width rounds to sensible bounds', (() => { const w = ctl('tv', {}).all.find(c => c.key === 'width'); return w.min === 80 && w.max === 340 && w.unit === 'cm'; })(),
     ctl('tv', {}).all.find(c => c.key === 'width'));
   check('visibleControls drops unsupported', C.visibleControls([{ key: 'a', kind: 'unsupported' }, { key: 'b', kind: 'toggle' }], {}).map(c => c.key).join() === 'b');
+  // B2 review finding 5: a placed floor plant's Kind list never offers the
+  // wall planter (that would change how it mounts); a wall planter offers
+  // only itself; a speaker on the wall offers no floor-standing kinds.
+  const kindOf = (type, params, mount) => {
+    const b = builders.get(type);
+    const defaults = typeof b.defaultsFor === 'function' ? b.defaultsFor(params || {}) : b.DEFAULTS;
+    const k = C.controlsFor(type, defaults, b.CONTROLS, b.CONTROL_RULES).find(c => c.key === 'kind');
+    return L.kindOptionsFor(type, k, Object.assign({}, defaults, params), mount ? { mount } : null).map(C.optionValue);
+  };
+  const floorKinds = kindOf('plant', { kind: 'corn-plant' }, 'floor');
+  check('a floor plant\'s Kind list has no wall-planter', floorKinds.length > 1 && !floorKinds.includes('wall-planter'), floorKinds);
+  check('a wall planter\'s Kind list is the wall kinds only', JSON.stringify(kindOf('plant', { kind: 'wall-planter' }, 'wall')) === '["wall-planter"]');
+  check('with no mount (a new speaker, whose kind picks its mount) every kind is offered', kindOf('plant', {}, null).includes('wall-planter'));
+  check('a wall speaker is not offered the floor-standing kinds', (() => { const k = kindOf('speaker', { kind: 'bookshelf' }, 'wall'); return k.length > 0 && !k.includes('floor-standing'); })(),
+    kindOf('speaker', {}, 'wall'));
+  // B2 review finding 5: an added cabinet has Width / Height, which scale its fronts.
+  {
+    const cab = builders.get('cabinet');
+    const all = C.controlsFor('cabinet', cab.DEFAULTS, cab.CONTROLS, cab.CONTROL_RULES);
+    const vals = Object.assign({}, cab.DEFAULTS);
+    check('cabinet: Width and Height are sliders now', C.visibleControls(all, vals).filter(c => c.key === 'width' || c.key === 'height').length === 2);
+    const w = E.paramWrites('cabinet', all, vals, 'width', 150);
+    check('cabinet width 150: every fronts row fills it', w.width === 150 && w.fronts.every(r => Math.abs(r.cells.reduce((a, c) => a + c.width, 0) - 150) < 1e-9), w);
+    const h = E.paramWrites('cabinet', all, vals, 'height', 200);
+    check('cabinet height 200: the rows shrink by the same 36 cm', Math.abs(h.fronts.reduce((a, r) => a + r.height, 0) - (228 - 36)) < 1e-9, h);
+    let built = true;
+    try { cab.build(THREE, Object.assign({}, vals, w), {}); cab.build(THREE, Object.assign({}, vals, h), {}); } catch (e) { built = e.message; }
+    check('... and both build', built === true, built);
+  }
+  // B2 review finding 1: the room a placing tap means comes from the picker.
+  const room0 = h2.rooms[ROOM];
+  const poly0 = room0.poly || [[room0.x1, room0.y1], [room0.x2, room0.y1], [room0.x2, room0.y2], [room0.x1, room0.y2]];
+  const inside = [(Math.min(...poly0.map(p => p[0])) + Math.max(...poly0.map(p => p[0]))) / 2, (Math.min(...poly0.map(p => p[1])) + Math.max(...poly0.map(p => p[1]))) / 2];
+  check('resolvePlacement: a floor tap inside the picked room keeps its point', JSON.stringify(L.resolvePlacement(h2, { room: ROOM, point: [0, 0] }, inside)) ===
+    JSON.stringify({ room: ROOM, point: inside }));
+  const outside = [-500, -500];
+  const r1 = L.resolvePlacement(h2, { room: ROOM, point: inside }, outside);
+  check('resolvePlacement: a wall tap whose floor point is outside the room uses the picker\'s point, in the PICKED room', r1.room === ROOM && r1.point === inside, r1);
+  check('resolvePlacement: the picker found no room -> no room (never the room under the floor point)', L.resolvePlacement(h2, { room: null, point: null }, inside).room === null);
   check('when: a list of values', C.visibleControls([{ key: 'a', kind: 'toggle', when: { m: ['x', 'y'] } }], { m: 'y' }).length === 1 &&
     C.visibleControls([{ key: 'a', kind: 'toggle', when: { m: ['x', 'y'] } }], { m: 'z' }).length === 0);
   check('isLengthKey: lengths yes; counts, angles, seeds, gains no', C.isLengthKey('width') && C.isLengthKey('potTopDiameter') && C.isLengthKey('frameWidth') &&

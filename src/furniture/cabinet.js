@@ -151,7 +151,7 @@
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 import { WASH_OPACITY } from './light-parts.js';
-import { select, unsupported } from './controls.js';
+import { select, unsupported, range } from './controls.js';
 
 export const TYPE = 'cabinet';
 
@@ -1376,11 +1376,12 @@ export const MIRROR_CABINET_PRESETS = {
 // ---- edit-mode controls ---------------------------------------------------------
 // Ranges, steps, options and labels are copied from the spec page (see controls.js).
 export const CONTROLS = [
-  // CabinetSpec has no slider: its size is the sum of its fronts rows and cells, so
-  // width and height are edited THROUGH `fronts`/`columns`, not on their own (the
-  // builder throws if a cell row does not fill the width).
-  unsupported('width', 'Width', 'coupled'),
-  unsupported('height', 'Height', 'coupled'),
+  // CabinetSpec has no slider: its size is the sum of its fronts rows and cells.
+  // Edit mode's Width / Height therefore SCALE the fronts with it (every cell /
+  // every row in proportion, src/edit-ops.js paramWrites + scaleCabinetFronts),
+  // so a row always fills the width. A columns-grid cabinet keeps them fixed.
+  range('width', 'Width', 30, 320, 1, 'cm'),
+  range('height', 'Height', 30, 260, 1, 'cm'),
   select('finish', 'Finish', [{ value: null, label: 'Default' }, 'matte', 'satin', 'gloss']),
   unsupported('fronts', 'Fronts', 'array'),
   unsupported('columns', 'Columns', 'null'),

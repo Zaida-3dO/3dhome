@@ -345,7 +345,11 @@ console.log('6b. roomPolygons and sceneToHouse, against the real loader');
 console.log('7. the scene\'s room click is wired through pickRoom');
 {
   const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
-  ok(/import \{ pickRoom, roomPolygons, sceneToHouse(, isFurniture)? \} from '\.\/room-pick\.js';/.test(src), 'home3d-scene.js imports pickRoom and its helpers');
+  ok(/import \{ pickRoom, roomPolygons, sceneToHouse(, isFurniture)?(, stepBack)? \} from '\.\/room-pick\.js';/.test(src), 'home3d-scene.js imports pickRoom and its helpers');
+  // Edit mode's placing tap (B2 review finding 1) decides its room with the
+  // SAME picker: pickRoom over the scene, and a wall hit stepped back.
+  ok(/function placementPick\(clientX, clientY\) \{[\s\S]{0,400}pickRoom\(rc\.intersectObjects\(scene\.children, true\), rc\.ray\.direction, roomPolygons\(ROOMS\), toHouse, null\)[\s\S]{0,300}stepBack\(h, rc\.ray\.direction\)/.test(src),
+    'placing a new item picks its room through pickRoom (walls resolve to the side tapped)');
   // Camera focus passes the focused room as a fifth argument (room-pick.js
   // preferFocused); the transform is still read per tap.
   ok(/const toHouse = sceneToHouse\(S, OX, OY\);[\s\S]{0,900}pickRoom\(rc\.intersectObjects\(scene\.children, true\), rc\.ray\.direction,\s*roomPolygons\(ROOMS\), toHouse, focus\)/.test(src),

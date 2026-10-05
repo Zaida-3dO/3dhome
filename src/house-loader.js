@@ -1327,6 +1327,14 @@ export const HouseLoader = (() => {
     // is a channel with a list of explicit positions, or a `count` to auto-place
     // over the room's bounding box when the author has not said where they go.
     const lights = {};
+    const lightStatic = v => {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+      const out = {};
+      if (typeof v.on === 'boolean') out.on = v.on;
+      if (typeof v.brightness === 'number' && isFinite(v.brightness)) out.bri = Math.max(0, Math.min(100, Math.round(v.brightness)));
+      if (typeof v.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(v.color)) out.color = v.color.toLowerCase();
+      return Object.keys(out).length ? out : null;
+    };
     (geo.lights || []).forEach(entry => {
       const rid = entry.room;
       if (!rooms[rid]) {
@@ -1353,6 +1361,11 @@ export const HouseLoader = (() => {
           positions: positions,
           autoPlaced: !explicit
         };
+        // A fixture's STATIC look (schemaVersion 1.5, edit mode): what an
+        // UNBOUND channel shows instead of the engine's default (off). A
+        // rooms.json binding always wins (src/light-state.js).
+        const st = lightStatic(f.static);
+        if (st) groups[f.channel].static = st;
       });
       lights[rid] = groups;
     });

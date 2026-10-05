@@ -256,6 +256,7 @@ def check_geometry(geo, report, schema=None):
     check_furniture(geo, wall_ids, rooms_by_id, report, schema)
     check_wall_finishes(geo, room_ids, report)
     check_focus_views(geo, report)
+    check_fixture_statics(geo, report)
 
     seen_channels = set()
     for entry in geo.get("lights", []):
@@ -326,6 +327,30 @@ def check_focus_views(geo, report):
         report.warn(
             "geometry.json/schemaVersion",
             f"a camera-focus `view` ({owners[0]}) needs schemaVersion 1.4 or newer, but this profile "
+            f"declares '{version}' -- bump it",
+        )
+
+
+def check_fixture_statics(geo, report):
+    """A light fixture's `static` look (schemaVersion 1.5, edit mode's Static
+    switch). A warning, like `view`: an older engine ignores the key and the
+    unbound channel renders off, as it always did."""
+    owners = []
+    for entry in geo.get("lights") or []:
+        for fx in (entry or {}).get("fixtures") or []:
+            if isinstance(fx, dict) and fx.get("static") is not None:
+                owners.append(f"{entry.get('room')}/{fx.get('channel')}")
+    if not owners:
+        return
+    version = str(geo.get("schemaVersion") or "")
+    try:
+        major, minor = (int(part) for part in version.split(".", 1))
+    except ValueError:
+        major = minor = -1
+    if (major, minor) < (1, 5):
+        report.warn(
+            "geometry.json/schemaVersion",
+            f"a light fixture's `static` ({owners[0]}) needs schemaVersion 1.5 or newer, but this profile "
             f"declares '{version}' -- bump it",
         )
 
@@ -1013,15 +1038,109 @@ def check_rooms_binding(rooms_doc, geo, report):
                     "(fine for an ambient group whose members are a cornice or a desk strip on their own entities)",
                 )
 
+    block = rooms_doc.get("bindings") or {}
+    statics = set()
+    for entry in geo.get("lights", []):
+        for fixture in entry.get("fixtures", []):
+            if fixture.get("static"):
+                statics.add((entry.get("room"), fixture.get("channel")))
     for rid, ch in sorted(x for x in geo_channels if x[0] is not None):
         bound = (rooms_doc.get("rooms") or {}).get(rid, {})
-        if ch not in bound:
+        # Bound through the `bindings` block, or given a static look: not "always off".
+        if ch not in bound and f"light:{rid}/{ch}" not in block and (rid, ch) not in statics:
             report.warn(
                 f"geometry.json/lights/{rid}/{ch}",
                 "fixtures with no entity binding in rooms.json -- they will render as permanently off",
             )
 
     check_sensor_binding(rooms_doc, geo, geo_room_ids, report)
+    check_bindings_and_sidebar(rooms_doc, geo, geo_room_ids, geo_channels, report)
+
+
+def _rooms_version(rooms_doc):
+    version = str(rooms_doc.get("schemaVersion") or "")
+    try:
+        major, minor = (int(part) for part in version.split(".", 1))
+    except ValueError:
+        major = minor = -1
+    return (major, minor)
+
+
+BINDING_CHANNELS = {"curtain": {"openPct": ("cover",)}, "light": {"on": ("light",), "brightness": ("light",), "color": ("light",)}}
+
+
+def check_bindings_and_sidebar(rooms_doc, geo, geo_room_ids, geo_channels, report):
+    """rooms.json 1.11: `bindings` (targets the legacy slots cannot say) and
+    `sidebar` (each room's rows: hidden derived rows, opt-in item rows,
+    manual extras). See src/bindings.js and src/room-panel.js.
+
+    A target bound in BOTH `bindings` and its legacy slot is an ERROR: the
+    engine would have to pick one (it keeps the legacy slot and ignores the
+    other), and edit mode never writes both -- so a file that does was
+    hand-edited into a contradiction. A channel's entity must be of the
+    domain the channel reads (a cover for openPct, a light for a light).
+    """
+    bindings = rooms_doc.get("bindings") or {}
+    sidebar = rooms_doc.get("sidebar") or {}
+    if not bindings and not sidebar:
+        return
+    if _rooms_version(rooms_doc) < (1, 11):
+        report.warn(
+            "rooms.json/schemaVersion",
+            "`bindings` / `sidebar` need schemaVersion 1.11 or newer, but this profile declares "
+            f"'{rooms_doc.get('schemaVersion')}' -- bump it; nothing else enforces this coupling",
+        )
+    sensors = rooms_doc.get("sensors") or {}
+    legacy_rooms = rooms_doc.get("rooms") or {}
+    geo_curtains = {c.get("id") for c in geo.get("curtains", [])}
+    for key, entry in bindings.items():
+        where = f"rooms.json/bindings/{key}"
+        kind, _, rest = key.partition(":")
+        if kind == "curtain":
+            if rest not in geo_curtains:
+                report.error(where, f"binds curtain '{rest}', which has no matching curtain in geometry.json")
+            if rest in (sensors.get("curtains") or {}):
+                report.error(where, f"curtain '{rest}' is bound both here and in sensors.curtains -- remove one (the engine uses sensors.curtains)")
+        elif kind == "light":
+            rid, _, ch = rest.partition("/")
+            if rid not in geo_room_ids:
+                report.error(where, f"binds a light in room '{rid}', which has no matching room in geometry.json")
+            elif (rid, ch) not in geo_channels:
+                report.warn(where, f"room '{rid}' draws no '{ch}' fixture -- the sidebar still switches it, but nothing drawn follows it")
+            if ch in (legacy_rooms.get(rid) or {}):
+                report.error(where, f"light channel '{rid}/{ch}' is bound both here and in rooms.{rid}.{ch} -- remove one (the engine uses rooms.{rid}.{ch})")
+        for ch, b in (entry or {}).items():
+            domains = BINDING_CHANNELS.get(kind, {}).get(ch)
+            if domains is None:
+                report.error(f"{where}/{ch}", f"a {kind} has no '{ch}' channel (expected {', '.join(BINDING_CHANNELS.get(kind, {})) or 'none'})")
+                continue
+            ent = str((b or {}).get("entity") or "")
+            if ent.split(".", 1)[0] not in domains:
+                report.error(f"{where}/{ch}", f"'{ch}' reads a {' / '.join(domains)} entity, not '{ent}'")
+
+    geo_furniture = {f.get("id"): f for f in geo.get("furniture", []) if isinstance(f, dict)}
+    geo_doors = {d.get("id") for d in geo.get("doors", [])}
+    items = sensors.get("items") or {}
+    for rid, cfg in sidebar.items():
+        where = f"rooms.json/sidebar/{rid}"
+        if rid not in geo_room_ids:
+            report.error(where, f"sidebar config for room '{rid}', which has no matching room in geometry.json")
+            continue
+        for h in (cfg or {}).get("hide") or []:
+            if h.startswith("door:") and h[5:] not in geo_doors:
+                report.warn(f"{where}/hide", f"'{h}' names no door in geometry.json -- it hides nothing")
+            if h.startswith("curtain:") and h[8:] not in geo_curtains:
+                report.warn(f"{where}/hide", f"'{h}' names no curtain in geometry.json -- it hides nothing")
+        for k in (cfg or {}).get("show") or []:
+            iid = k[5:]
+            f = geo_furniture.get(iid)
+            if f is None:
+                report.error(f"{where}/show", f"'{k}' names no furniture item in geometry.json")
+                continue
+            if f.get("room") != rid:
+                report.warn(f"{where}/show", f"'{k}' stands in room '{f.get('room')}', not '{rid}' -- shown here anyway")
+            if iid not in items:
+                report.warn(f"{where}/show", f"'{k}' has no sensors.items card, so it has no row to show")
 
 
 def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):

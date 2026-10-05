@@ -98,12 +98,19 @@ check('the draft geometry is compiled only when bootDraft returned one', /if \(d
 console.log('5. edit-mode.js is a leaf');
 const em = read('src/edit-mode.js');
 const imports = [...em.matchAll(/\bfrom\s*'([^']+)'/g)].map(m => m[1]);
-check('imports only the pure draft / export / edit-ops / library / control-descriptor modules', JSON.stringify(imports.sort()) ===
-  JSON.stringify(['./edit-library.js', './edit-ops.js', './furniture/controls.js', './profile-draft.js', './profile-export.js']), imports);
+check('imports only the pure draft / export / edit-ops / library / control-descriptor modules and its bindings panels', JSON.stringify(imports.sort()) ===
+  JSON.stringify(['./edit-bindings.js', './edit-library.js', './edit-ops.js', './furniture/controls.js', './profile-draft.js', './profile-export.js']), imports);
 const lib = read('src/edit-library.js');
 const libImports = [...lib.matchAll(/\bfrom\s*'([^']+)'/g)].map(m => m[1]);
-check('edit-library.js imports only edit-ops and the pure polygon helper (no builder, no scene)',
-  JSON.stringify(libImports.sort()) === JSON.stringify(['./edit-ops.js', './footstep-walk.js']), libImports);
+check('edit-library.js imports only edit-ops, the pure polygon helper and the control descriptors (no builder, no scene)',
+  JSON.stringify(libImports.sort()) === JSON.stringify(['./edit-ops.js', './footstep-walk.js', './furniture/controls.js']), libImports);
+// The B3 / B4 panels: DOM over the pure bindings writers and edit-ops only.
+const eb = read('src/edit-bindings.js');
+const ebImports = [...eb.matchAll(/\bfrom\s*'([^']+)'/g)].map(m => m[1]);
+check('edit-bindings.js imports only the pure bindings writers and edit-ops (no scene, no HA client)',
+  JSON.stringify(ebImports.sort()) === JSON.stringify(['./bindings.js', './edit-ops.js']), ebImports);
+check('edit-bindings.js is reached only through edit-mode.js (never from the page at boot)',
+  !/edit-bindings/.test(html), 'index.html names edit-bindings');
 const ops = read('src/edit-ops.js');
 const opsImports = [...ops.matchAll(/\bfrom\s*'([^']+)'/g)].map(m => m[1]);
 check('edit-ops.js imports only the pure polygon helper', JSON.stringify(opsImports) === JSON.stringify(['./footstep-walk.js']), opsImports);

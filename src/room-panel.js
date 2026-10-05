@@ -11,6 +11,7 @@
 
 import { ICONS, svgIcon } from './ui-icons.js';
 import { swatchColor } from './light-color.js';
+import { SIDEBAR_GROUPS } from './bindings.js';
 // One sentence-case rule for sidebar headers and popover titles alike.
 import { sentenceCase } from './tap-popovers.js';
 export { sentenceCase };
@@ -493,4 +494,132 @@ export function roomAccentSummary(geometry, roomsDoc, roomId) {
     emitters.push({ kind: 'cornice', id: c.id, entities: ((sensors.corniceLights || {})[c.id] || []).slice() });
   });
   return { emitters, floorFixtures, ambientRows: hasAmbientRow(rooms, roomId, hasGeometryAmbient) ? 1 : 0 };
+}
+
+// ---- Sidebar configuration (rooms.json 1.11 `sidebar`) -----------------------
+//
+// A room's rows are DERIVED (roomRowKeys in index.html: main, ambient,
+// galaxy, door:<id>, motion, curtain:<id>, climate, room-script), and the
+// profile may reshape them per room:
+//
+//   sidebar: { <roomId>: {
+//     hide:  ['ambient', 'curtain:lounge_sheer', 'doors', ...],  derived rows to drop
+//     show:  ['item:desk_lamp', ...],                           furniture rows, OPT-IN
+//     extra: [{ kind: 'light'|'cover'|'switch'|'script', entity, label, confirm? }]
+//   } }
+//
+// A room with no entry, and a profile with no `sidebar`, keeps EXACTLY its
+// derived rows. Item rows exist only where `show` names them: no profile
+// grows a row it did not ask for. The HA-offline note can never be hidden.
+
+// `hide` group names ('doors', 'curtains'): one entry hides every row of that kind.
+export { SIDEBAR_GROUPS };
+/** What the sidebar editor offers to hide (besides each door / curtain by id). */
+export const DERIVED_ROW_NAMES = Object.freeze(['main', 'ambient', 'galaxy', 'doors', 'motion', 'curtains', 'climate', 'room-script']);
+export const EXTRA_ROW_KINDS = Object.freeze({ light: ['light'], cover: ['cover'], switch: ['switch', 'input_boolean'], script: ['script'] });
+const SIDEBAR_ENTITY_RE = /^[a-z_]+\.[a-z0-9_]+$/;
+
+/**
+ * rooms.json `sidebar` -> Map roomId -> { hide: Set, show: [itemKey], extra: [entry] }.
+ * An `extra` entry with an unknown kind, an entity of the wrong domain or no
+ * label is dropped (the validator reports it).
+ */
+export function normaliseSidebar(raw) {
+  const out = new Map();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  Object.entries(raw).forEach(([rid, c]) => {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return;
+    const hide = new Set((Array.isArray(c.hide) ? c.hide : []).filter(k => typeof k === 'string' && k));
+    const show = (Array.isArray(c.show) ? c.show : []).filter(k => typeof k === 'string' && /^item:./.test(k));
+    const extra = [];
+    (Array.isArray(c.extra) ? c.extra : []).forEach(x => {
+      const doms = x && EXTRA_ROW_KINDS[x.kind];
+      if (!doms || typeof x.entity !== 'string' || !SIDEBAR_ENTITY_RE.test(x.entity)) return;
+      if (doms.indexOf(x.entity.split('.')[0]) === -1) return;
+      if (typeof x.label !== 'string' || !x.label.trim()) return;
+      const v = x.variables;
+      extra.push({ kind: x.kind, entity: x.entity, label: x.label.trim(), confirm: x.kind === 'script' && x.confirm === true,
+        variables: v && typeof v === 'object' && !Array.isArray(v) ? Object.assign({}, v) : {} });
+    });
+    out.set(rid, { hide, show, extra });
+  });
+  return out;
+}
+
+const groupOfRow = key => { const i = key.indexOf(':'); return i > 0 ? SIDEBAR_GROUPS[key.slice(0, i)] || null : null; };
+
+/**
+ * A room's row keys: `derivedKeys` (roomRowKeys) reshaped by `cfg` (one
+ * room's normaliseSidebar entry, or null). No cfg: the derived keys,
+ * untouched. Otherwise: the derived rows minus `hide` (by key, or by group:
+ * 'doors', 'curtains'), then the `show` item rows in order, then one
+ * 'extra:<n>' per extra entry, and the room script last as always.
+ */
+export function sidebarRows(derivedKeys, cfg) {
+  const keys = Array.isArray(derivedKeys) ? derivedKeys : [];
+  if (!cfg) return keys.slice();
+  const hide = cfg.hide instanceof Set ? cfg.hide : new Set(cfg.hide || []);
+  const hidden = k => k !== 'ha-offline' && (hide.has(k) || (groupOfRow(k) !== null && hide.has(groupOfRow(k))));
+  const out = keys.filter(k => k !== 'room-script' && !hidden(k));
+  (cfg.show || []).forEach(k => { if (/^item:./.test(k) && out.indexOf(k) === -1 && !hide.has(k)) out.push(k); });
+  (cfg.extra || []).forEach((x, i) => out.push('extra:' + i));
+  if (keys.indexOf('room-script') !== -1 && !hidden('room-script')) out.push('room-script');
+  return out;
+}
+
+/** An extra / item light row: a power toggle and, while on, a brightness slider. `m` is item-cards' lightRowModel. */
+export function extraLightRowHtml(key, label, m, offline) {
+  const dis = offline || m.na ? ' disabled' : '';
+  let h = '<div class="control-group" data-row="' + esc(key) + '">' +
+    '<div class="control-header">' +
+      sectionTitleHtml(m.on ? ICONS.bulb : ICONS.bulbOff, sentenceCase(label), m.on ? 'light-on' : m.na ? 'dim' : '') +
+      '<button class="toggle ' + (m.on ? 'on' : '') + '" data-action="x-toggle" data-key="' + esc(key) + '" aria-label="' + esc(label) + '"' + dis + '>' +
+        '<div class="toggle-knob"></div></button>' +
+    '</div>';
+  if (m.na) h += '<div class="slider-row"><div class="slider-label">Unavailable</div></div>';
+  else if (m.on) {
+    h += '<div class="slider-row inline-row">' +
+      '<input type="range" class="slider" min="1" max="100" value="' + m.bri + '"' + rangeFillStyle(m.bri, 1, 100) +
+        ' data-action="x-bri" data-key="' + esc(key) + '" aria-label="Brightness"' + dis + '>' +
+      '<span class="inline-val">' + m.bri + '%</span></div>';
+  }
+  return h + '</div>';
+}
+
+/** An extra / item switch (or media player) row: its state and a power toggle. `m`: { na, on, stateText }. */
+export function extraSwitchRowHtml(key, label, m, offline, icon) {
+  const dis = offline || m.na ? ' disabled' : '';
+  return '<div class="control-group" data-row="' + esc(key) + '">' +
+    '<div class="control-header">' +
+      sectionTitleHtml(icon || ICONS.plug, sentenceCase(label), m.on ? 'light-on' : m.na ? 'dim' : '') +
+      '<span class="row-btns"><span class="status-sub">' + esc(m.stateText || (m.on ? 'On' : 'Off')) + '</span>' +
+        '<button class="toggle ' + (m.on ? 'on' : '') + '" data-action="x-toggle" data-key="' + esc(key) + '" aria-label="' + esc(label) + '"' + dis + '>' +
+        '<div class="toggle-knob"></div></button></span>' +
+    '</div></div>';
+}
+
+/** An extra cover row: Close / Open and a position slider. `m`: { na, pct }. */
+export function extraCoverRowHtml(key, label, m, offline) {
+  const dis = offline || m.na ? ' disabled' : '';
+  const pct = Math.round(m.pct || 0);
+  return '<div class="control-group" data-row="' + esc(key) + '">' +
+    '<div class="control-header">' +
+      sectionTitleHtml(pct > 0 ? ICONS.curtains : ICONS.curtainsClosed, sentenceCase(label), m.na ? 'dim' : '') +
+      '<span class="row-btns">' +
+        '<button class="row-ib" data-action="x-cover-cmd" data-cmd="close" data-key="' + esc(key) + '" aria-label="Close" title="Close"' + dis + '>' + svgIcon(ICONS.cClose) + '</button>' +
+        '<button class="row-ib" data-action="x-cover-cmd" data-cmd="open" data-key="' + esc(key) + '" aria-label="Open" title="Open"' + dis + '>' + svgIcon(ICONS.cOpen) + '</button>' +
+      '</span></div>' +
+    '<div class="slider-row"><div class="slider-label">' + (m.na ? 'Unavailable' : 'Open: ' + pct + '%') + '</div>' +
+      '<input type="range" class="slider" min="0" max="100" value="' + pct + '"' + rangeFillStyle(pct, 0, 100) +
+        ' data-action="x-cover-pos" data-key="' + esc(key) + '"' + dis + '></div>' +
+  '</div>';
+}
+
+/** A cover's raw HA state -> { na, pct } for extraCoverRowHtml. */
+export function coverRowModel(raw) {
+  const st = raw ? raw.state : undefined;
+  if (!st || st === 'unavailable' || st === 'unknown') return { na: true, pct: 0 };
+  const p = raw.attributes ? raw.attributes.current_position : undefined;
+  const pct = typeof p === 'number' && isFinite(p) ? p : st === 'closed' ? 0 : 100;
+  return { na: false, pct: Math.max(0, Math.min(100, pct)) };
 }

@@ -34,6 +34,17 @@ export function seedLightState(rooms, lights, boundChannels) {
       // brightness; that is a display default, not a fact about the house.
       state[id][channel] = { on: false, bri: 80, color: "#ff3300" };
     });
+    // A fixture's geometry `static` look (on / bri / color) applies to a
+    // channel rooms.json does NOT bind: a binding beats a static value,
+    // which beats the defaults above (docs/house-profile.md, "Bindings").
+    const boundHere = Array.isArray(bound[id]) ? bound[id] : [];
+    Object.keys(groups).forEach(channel => {
+      const st = groups[channel] && groups[channel].static;
+      if (!st || boundHere.indexOf(channel) !== -1 || !state[id][channel]) return;
+      if (typeof st.on === 'boolean') state[id][channel].on = st.on;
+      if (typeof st.bri === 'number') state[id][channel].bri = st.bri;
+      if (typeof st.color === 'string' && channel !== 'main') state[id][channel].color = st.color;
+    });
   });
   return state;
 }

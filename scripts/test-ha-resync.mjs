@@ -357,11 +357,14 @@ await quiet(async () => {
   check('wireRoomControls found', wire.length > 200);
   check('onWrite gates on haOffline', /const onWrite = \(el, type, fn\) => el\.addEventListener\(type, e => \{ if \(!haOffline\(ha\)\) fn\(e\); \}\)/.test(wire));
   const writes = wire.match(/onWrite\(el, '(click|input)'/g) || [];
-  check('every light / ambience / curtain / climate / room-script write handler is gated (12)', writes.length === 12, writes.length);
+  // 12, plus five for the sidebar's extra / item rows (rooms.json 1.11
+  // `sidebar`): x-toggle, x-bri, x-cover-cmd, x-cover-pos (input), x-script.
+  check('every light / ambience / curtain / climate / room-script / extra-row write handler is gated (17)', writes.length === 17, writes.length);
   check('no ungated click/input handler left', !/el\.addEventListener\('(click|input)'/.test(wire));
-  // Seven: the six drag-lock releases (curtain + climate x pointerup /
-  // pointercancel / blur) and the room script's key-intent reset on blur.
-  check('lock-release handlers stay ungated', (wire.match(/el\.addEventListener\('(pointerup|pointercancel|blur)'/g) || []).length === 7);
+  // Eight: the six drag-lock releases (curtain + climate x pointerup /
+  // pointercancel / blur) and the room script's and an extra script row's
+  // key-intent reset on blur.
+  check('lock-release handlers stay ungated', (wire.match(/el\.addEventListener\('(pointerup|pointercancel|blur)'/g) || []).length === 8);
   check('sendToHA refuses while offline', /function sendToHA\([^)]*\) \{\s*if \(!ha \|\| !haConfig \|\| haOffline\(ha\)\) return;/.test(html));
   check('both senders are writable-gated', (html.match(/writable: \(\) => !haOffline\(ha\),/g) || []).length === 2);
   const statusAt = html.indexOf('ha.onStatusChange(status => {');
