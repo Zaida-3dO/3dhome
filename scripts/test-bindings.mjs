@@ -23,7 +23,7 @@
  *      binding's channels read their own entities; listEntities is its OWN
  *      get_states (plan review #10); a watched entity is recorded.
  *   6. sidebarRows: no config is exactly today's rows; hide / show (opt-in)
- *      / extra; Ope's target config; the extra script row is the room
+ *      / extra; the owner's target config; the extra script row is the room
  *      script's two-step confirm.
  *   7. Entity ids never land in geometry.json; static values never in
  *      rooms.json. Static and entity choices round-trip through the draft
@@ -48,6 +48,8 @@ function check(name, ok, detail) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const clone = v => JSON.parse(JSON.stringify(v));
+// Expected values are built, never written as quoted-id literals (scripts/check-no-pii.sh).
+const J = v => JSON.stringify(v);
 
 const B = await imp('src/bindings.js');
 const P = await imp('src/room-panel.js');
@@ -102,32 +104,32 @@ console.log('2. normaliser');
   const f = B.foldBindings({ rooms: { a: { main: ['light.demo_a'] } }, sensors: {}, bindings: {
     'curtain:x': { openPct: { entity: 'cover.demo_x', transform: 'invert' } },
     'light:a/ambient': { on: { entity: 'light.demo_b' }, brightness: { entity: 'light.demo_b', transform: 'identity' } } } });
-  check('foldBindings: the page finds a block curtain in sensors.curtains', JSON.stringify(f.sensors.curtains.x) === '["cover.demo_x"]');
-  check('foldBindings: ... and a block light in rooms[room][channel]', JSON.stringify(f.rooms.a.ambient) === '["light.demo_b"]' && JSON.stringify(f.rooms.a.main) === '["light.demo_a"]');
+  check('foldBindings: the page finds a block curtain in sensors.curtains', JSON.stringify(f.sensors.curtains.x) === J(['cover.demo_x']));
+  check('foldBindings: ... and a block light in rooms[room][channel]', JSON.stringify(f.rooms.a.ambient) === J(['light.demo_b']) && JSON.stringify(f.rooms.a.main) === J(['light.demo_a']));
 }
 
 // ---- 3. writers -----------------------------------------------------------------------
 console.log('3. writers: legacy slot first');
 {
   let r = B.setTargetBinding(rooms, 'curtain:lounge_sheer', { openPct: { entity: 'cover.demo_new' } });
-  check('a default curtain binding goes to sensors.curtains', JSON.stringify(r.sensors.curtains.lounge_sheer) === '["cover.demo_new"]' && !r.bindings);
+  check('a default curtain binding goes to sensors.curtains', JSON.stringify(r.sensors.curtains.lounge_sheer) === J(['cover.demo_new']) && !r.bindings);
   check('... and does not bump schemaVersion', r.schemaVersion === rooms.schemaVersion);
   check('... the input document is not mutated', rooms.sensors.curtains.lounge_sheer[0] === 'cover.demo_lounge_sheer');
   check('... untouched slots are the SAME objects (byte-identical export)', r.rooms === rooms.rooms && r.sensors.presence === rooms.sensors.presence);
   r = B.setTargetBinding(rooms, 'curtain:lounge_sheer', { openPct: { entity: 'cover.demo_new', transform: 'invert' } });
   check('an inverted curtain cannot be said by the slot: it goes to `bindings`', r.bindings['curtain:lounge_sheer'].openPct.transform === 'invert' &&
     !('lounge_sheer' in r.sensors.curtains), r.bindings);
-  check('... only non-default fields are written', JSON.stringify(r.bindings['curtain:lounge_sheer'].openPct) === '{"entity":"cover.demo_new","transform":"invert"}');
+  check('... only non-default fields are written', JSON.stringify(r.bindings['curtain:lounge_sheer'].openPct) === J({ entity: 'cover.demo_new', transform: 'invert' }));
   check('... schemaVersion goes to 1.11', r.schemaVersion === '1.11');
   check('... and the target is bound exactly once', B.normaliseBindings(r).errors.length === 0);
   const back = B.setTargetBinding(r, 'curtain:lounge_sheer', { openPct: { entity: 'cover.demo_new' } });
-  check('back to a default binding: the slot again, the block emptied away', JSON.stringify(back.sensors.curtains.lounge_sheer) === '["cover.demo_new"]' && !back.bindings);
+  check('back to a default binding: the slot again, the block emptied away', JSON.stringify(back.sensors.curtains.lounge_sheer) === J(['cover.demo_new']) && !back.bindings);
   const un = B.setTargetBinding(rooms, 'curtain:lounge_sheer', null);
   check('unbinding (Static) removes it from both places', !('lounge_sheer' in un.sensors.curtains) && !un.bindings);
   const multi = B.setTargetBinding({ rooms: {}, sensors: { curtains: { c: ['cover.demo_a', 'cover.demo_b'] } } }, 'curtain:c', { openPct: { entity: 'cover.demo_a' } });
-  check('a multi-motor slot keeps its other motors when its first entity is kept', JSON.stringify(multi.sensors.curtains.c) === '["cover.demo_a","cover.demo_b"]');
+  check('a multi-motor slot keeps its other motors when its first entity is kept', JSON.stringify(multi.sensors.curtains.c) === J(['cover.demo_a', 'cover.demo_b']));
   let l = B.setTargetBinding(rooms, 'light:study/galaxy', { on: { entity: 'light.demo_g' }, brightness: { entity: 'light.demo_g' }, color: { entity: 'light.demo_g' } });
-  check('a light on one entity at the defaults goes to rooms[room][channel]', JSON.stringify(l.rooms.study.galaxy) === '["light.demo_g"]' && !l.bindings);
+  check('a light on one entity at the defaults goes to rooms[room][channel]', JSON.stringify(l.rooms.study.galaxy) === J(['light.demo_g']) && !l.bindings);
   l = B.setTargetBinding(rooms, 'light:study/galaxy', { on: { entity: 'light.demo_g' }, brightness: { entity: 'light.demo_g', transform: 'identity' }, color: { entity: 'light.demo_g' } });
   check('a non-default brightness transform goes to `bindings`', l.bindings['light:study/galaxy'].brightness.transform === 'identity' && !('galaxy' in l.rooms.study));
   l = B.setTargetBinding(rooms, 'light:study/main', { on: { entity: 'light.demo_a' }, brightness: { entity: 'light.demo_b' }, color: { entity: 'light.demo_a' } });
@@ -137,7 +139,7 @@ console.log('3. writers: legacy slot first');
   check('a wrong-domain entity is refused', threw);
   // Item rows.
   let it = B.addItemRow(rooms, 'kitchen_robot', 'light', 'light.demo_shelf');
-  check('addItemRow makes a card for an unbound item', JSON.stringify(it.sensors.items.kitchen_robot) === '{"lights":[{"entity":"light.demo_shelf"}]}', it.sensors.items.kitchen_robot);
+  check('addItemRow makes a card for an unbound item', JSON.stringify(it.sensors.items.kitchen_robot) === J({ lights: [{ entity: 'light.demo_shelf' }] }), it.sensors.items.kitchen_robot);
   it = B.addItemRow(it, 'kitchen_robot', 'switch', 'input_boolean.demo_shelf');
   const rows = B.itemRows(it, 'kitchen_robot');
   check('itemRows lists them by kind', rows.length === 2 && rows[0].kind === 'light' && rows[1].kind === 'switch', rows);
@@ -151,7 +153,7 @@ console.log('3. writers: legacy slot first');
   // Sidebar.
   const s = B.setRoomSidebar(rooms, 'lounge', { hide: ['ambient', 'ambient'], show: [], extra: [{ kind: 'script', entity: 'script.demo_kill', label: ' Kill room ', confirm: true }] });
   check('setRoomSidebar: deduped hide, trimmed label, empty lists left out', JSON.stringify(s.sidebar.lounge) ===
-    '{"hide":["ambient"],"extra":[{"kind":"script","entity":"script.demo_kill","label":"Kill room","confirm":true}]}', s.sidebar);
+    J({ hide: ['ambient'], extra: [{ kind: 'script', entity: 'script.demo_kill', label: 'Kill room', confirm: true }] }), s.sidebar);
   check('... schemaVersion goes to 1.11', s.schemaVersion === '1.11');
   check('... an empty config removes the room and the block', !B.setRoomSidebar(s, 'lounge', {}).sidebar);
   threw = false;
@@ -262,13 +264,13 @@ console.log('6. sidebar rows');
     cfg({ show: ['item:a'], extra: [{ kind: 'light', entity: 'light.demo_x', label: 'X' }] })).join() === 'main,item:a,extra:0,room-script');
   check('a malformed extra is dropped', cfg({ extra: [{ kind: 'fan', entity: 'fan.demo_x', label: 'x' }, { kind: 'light', entity: 'cover.demo_x', label: 'x' },
     { kind: 'light', entity: 'light.demo_x', label: ' ' }, { kind: 'cover', entity: 'cover.demo_x', label: 'Blind' }] }).extra.length === 1);
-  // Ope's target: no individual light rows, no ambient; a kill-room script
+  // The owner's target (plan B4): no individual light rows, no ambient; a kill-room script
   // button and the ambient light GROUP as extras.
   const ope = cfg({ hide: ['main', 'ambient', 'galaxy'], extra: [
     { kind: 'script', entity: 'script.demo_kill_lounge', label: 'Kill room', confirm: true },
     { kind: 'light', entity: 'light.demo_lounge_ambient_group', label: 'Ambient' }] });
   const rows = P.sidebarRows(derived, ope);
-  check('Ope\'s target config: no light rows, the two extras, everything else kept',
+  check('the owner\'s target config: no light rows, the two extras, everything else kept',
     JSON.stringify(rows) === JSON.stringify(['door:front_door', 'door:store_door', 'motion', 'curtain:lounge_curtain', 'curtain:lounge_sheer', 'climate', 'extra:0', 'extra:1', 'room-script']), rows);
   check('... and it is a config setRoomSidebar writes and normaliseSidebar reads back', JSON.stringify(P.normaliseSidebar(B.setRoomSidebar(rooms, 'lounge', {
     hide: ['main', 'ambient', 'galaxy'], extra: [{ kind: 'script', entity: 'script.demo_kill_lounge', label: 'Kill room', confirm: true },

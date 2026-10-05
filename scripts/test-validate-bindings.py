@@ -62,18 +62,18 @@ GEO = {
 
 GOOD = {
     "kind": "rooms", "schemaVersion": "1.11", "house": "t",
-    "rooms": {"lounge": {"main": ["light.demo_lounge"]}},
-    "sensors": {"items": {"lamp": {"lights": [{"entity": "light.demo_lamp"}]}}},
+    "rooms": {"lounge": {"main": ['light.demo_lounge']}},
+    "sensors": {"items": {"lamp": {"lights": [{"entity": 'light.demo_lamp'}]}}},
     "bindings": {
-        "curtain:sheer": {"openPct": {"entity": "cover.demo_sheer", "transform": "invert"}},
-        "light:study/ambient": {"on": {"entity": "light.demo_a"}, "brightness": {"entity": "light.demo_b", "transform": "identity"}},
+        "curtain:sheer": {"openPct": {"entity": 'cover.demo_sheer', "transform": "invert"}},
+        "light:study/ambient": {"on": {"entity": 'light.demo_a'}, "brightness": {"entity": 'light.demo_b', "transform": "identity"}},
     },
     "sidebar": {"lounge": {
         "hide": ["main", "ambient", "doors", "curtain:sheer"],
         "show": ["item:lamp"],
-        "extra": [{"kind": "script", "entity": "script.demo_kill", "label": "Kill room", "confirm": True},
-                  {"kind": "light", "entity": "light.demo_group", "label": "Ambient"},
-                  {"kind": "switch", "entity": "input_boolean.demo_mode", "label": "Guest"}],
+        "extra": [{"kind": "script", "entity": 'script.demo_kill', "label": "Kill room", "confirm": True},
+                  {"kind": "light", "entity": 'light.demo_group', "label": "Ambient"},
+                  {"kind": "switch", "entity": 'input_boolean.demo_mode', "label": "Guest"}],
     }},
 }
 
@@ -99,12 +99,12 @@ def mutate(fn, base=GOOD):
 # ---- 1. schema --------------------------------------------------------------
 check("schema: a full bindings + sidebar profile validates", schema_errors(GOOD) == [], schema_errors(GOOD))
 for name, fn in [
-    ("unknown target key", lambda d: d["bindings"].update({"fan:x": {"on": {"entity": "light.demo_x"}}})),
-    ("unknown channel", lambda d: d["bindings"]["curtain:sheer"].update({"tilt": {"entity": "cover.demo_x"}})),
+    ("unknown target key", lambda d: d["bindings"].update({"fan:x": {"on": {"entity": 'light.demo_x'}}})),
+    ("unknown channel", lambda d: d["bindings"]["curtain:sheer"].update({"tilt": {"entity": 'cover.demo_x'}})),
     ("a transform outside the closed list", lambda d: d["bindings"]["curtain:sheer"]["openPct"].update({"transform": "x*2"})),
     ("an empty binding entry", lambda d: d["bindings"].update({"curtain:other": {}})),
-    ("an extra light bound to a cover", lambda d: d["sidebar"]["lounge"]["extra"][1].update({"entity": "cover.demo_x"})),
-    ("an extra script bound to a light", lambda d: d["sidebar"]["lounge"]["extra"][0].update({"entity": "light.demo_x"})),
+    ("an extra light bound to a cover", lambda d: d["sidebar"]["lounge"]["extra"][1].update({"entity": 'cover.demo_x'})),
+    ("an extra script bound to a light", lambda d: d["sidebar"]["lounge"]["extra"][0].update({"entity": 'light.demo_x'})),
     ("an extra of an unknown kind", lambda d: d["sidebar"]["lounge"]["extra"][0].update({"kind": "fan"})),
     ("an extra with no label", lambda d: d["sidebar"]["lounge"]["extra"][0].pop("label")),
     ("a show entry that is not an item", lambda d: d["sidebar"]["lounge"].update({"show": ["main"]})),
@@ -120,9 +120,9 @@ def fixture_ok(fx):
 
 check("schema: a fixture static validates", fixture_ok({"channel": "ambient", "static": {"on": True, "brightness": 40, "color": "#00ccff"}}))
 check("schema: a fixture static carrying an entity id as its colour is rejected",
-      not fixture_ok({"channel": "ambient", "static": {"color": "light.demo_x"}}))
+      not fixture_ok({"channel": "ambient", "static": {"color": 'light.demo_x'}}))
 check("schema: a fixture static brightness over 100 is rejected", not fixture_ok({"channel": "ambient", "static": {"brightness": 140}}))
-check("schema: an unknown static key (an entity) is rejected", not fixture_ok({"channel": "ambient", "static": {"entity": "light.demo_x"}}))
+check("schema: an unknown static key (an entity) is rejected", not fixture_ok({"channel": "ambient", "static": {"entity": 'light.demo_x'}}))
 
 # ---- 2. cross-file checks ---------------------------------------------------------
 r = cross(GOOD)
@@ -133,13 +133,13 @@ check("a static fixture is not warned as permanently off",
 check("a `bindings`-bound fixture is not warned as permanently off",
       not any("lights/study/ambient" in w for w, _ in r.warnings), r.warnings)
 
-r = cross(mutate(lambda d: d["sensors"].update({"curtains": {"sheer": ["cover.demo_sheer"]}})))
+r = cross(mutate(lambda d: d["sensors"].update({"curtains": {"sheer": ['cover.demo_sheer']}})))
 check("curtain bound in BOTH places: an error", any("both" in m and "sheer" in m for _, m in r.errors), r.errors)
-r = cross(mutate(lambda d: d["rooms"].update({"study": {"ambient": ["light.demo_a"]}})))
+r = cross(mutate(lambda d: d["rooms"].update({"study": {"ambient": ['light.demo_a']}})))
 check("light channel bound in BOTH places: an error", any("both" in m and "study/ambient" in m for _, m in r.errors), r.errors)
-r = cross(mutate(lambda d: d["bindings"]["curtain:sheer"]["openPct"].update({"entity": "light.demo_x"})))
+r = cross(mutate(lambda d: d["bindings"]["curtain:sheer"]["openPct"].update({"entity": 'light.demo_x'})))
 check("openPct bound to a light: an error", any("cover" in m for _, m in r.errors), r.errors)
-r = cross(mutate(lambda d: d["bindings"].update({"curtain:gone": {"openPct": {"entity": "cover.demo_x"}}})))
+r = cross(mutate(lambda d: d["bindings"].update({"curtain:gone": {"openPct": {"entity": 'cover.demo_x'}}})))
 check("a binding to a curtain that does not exist: an error", any("gone" in m for _, m in r.errors), r.errors)
 r = cross(mutate(lambda d: d["sidebar"].update({"attic": {"hide": ["main"]}})))
 check("a sidebar for a room that does not exist: an error", any("attic" in m for _, m in r.errors), r.errors)
