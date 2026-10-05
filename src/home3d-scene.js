@@ -4526,9 +4526,12 @@ export const Home3DScene = (() => {
       const c = { root: editFurn.root, beauty: [], shadowProxies: [], dynamicByItemId: {}, byId: {}, warnings: [],
         stats: { items: 0, beautyDraws: 0, proxyDraws: 0, dynamicDraws: 0, parts: editFurn.parts.size },
         depthPrecompile: null, materials: [], extraDisposables: [] };
-      editFurn.parts.forEach(r => {
+      editFurn.parts.forEach((r, key) => {
         r.beauty.forEach(m => c.beauty.push(m));
         r.shadowProxies.forEach(m => c.shadowProxies.push(m));
+        // The placement ghost is drawn but is not an item: never picked,
+        // never a live clock or TV screen.
+        if (key === 'ghost') return;
         Object.assign(c.dynamicByItemId, r.dynamicByItemId);
         Object.assign(c.byId, r.byId);
         r.warnings.forEach(w => c.warnings.push(w));
@@ -4567,9 +4570,12 @@ export const Home3DScene = (() => {
       return editFurn.items.filter(it => it.room === room && it.id !== editFurn.lifted);
     }
     function editItem(id) { return editFurn.items.find(it => it.id === id) || null; }
+    // Edit mode turned furniture ON (it was hidden by ?furniture=0): Done hides it again.
+    let editShowedFurniture = false;
     async function beginFurnitureEdit() {
       if (editFurn) return { ms: 0 };
-      if (!furnitureStarted) { furnitureVisible = true; startFurniture(); }
+      if (!furnitureVisible) { editShowedFurniture = true; furnitureVisible = true; }
+      if (!furnitureStarted) startFurniture();
       if (furnitureAttached) await furnitureAttached;
       if (_disposed || editFurn) return { ms: 0 };
       const builders = await (furnitureModules || loadFurnitureModules(furnitureItems));
@@ -4623,6 +4629,57 @@ export const Home3DScene = (() => {
       editCompose();
       return { ms: performance.now() - t0, buildMs };
     }
+    // A NEW item (the library, B2): appended to the items and built LIFTED
+    // (standalone), because it arrives selected -- its room is not rebuilt
+    // at all. Only a previously lifted item goes back into its own room.
+    function addFurnitureItem(item) {
+      if (!editFurn || !item) return null;
+      const t0 = performance.now();
+      if (editItem(item.id)) return updateFurnitureItem(item);
+      const prev = editFurn.lifted;
+      editFurn.lifted = null;
+      if (prev) {
+        const p = editItem(prev);
+        editDisposePart('item:' + prev);
+        if (p) editBuildPart('room:' + p.room, editRoomItems(p.room));
+      }
+      editFurn.items.push(item);
+      editFurn.lifted = item.id;
+      const buildMs = editBuildPart('item:' + item.id, [item]);
+      editCompose();
+      return { ms: performance.now() - t0, buildMs };
+    }
+    // The builder for `type`, loaded now if no item in the house uses it yet
+    // (the library offers every type). Resolves to it, or null.
+    async function loadFurnitureBuilder(type) {
+      const map = editFurn ? editFurn.builders : await (furnitureModules || (furnitureModules = loadFurnitureModules(furnitureItems)));
+      if (map.has(type)) return map.get(type);
+      const m = await loadFurnitureModules([{ type }]);
+      const b = m.get(type) || null;
+      if (b) map.set(type, b);
+      return b;
+    }
+    // The placement preview: one item built on its own ('ghost' part) and
+    // then only TRANSLATED while it follows the pointer (offset in house
+    // cm from where it was built), so hovering costs no rebuilds.
+    function setFurnitureGhost(item) {
+      if (!editFurn) return null;
+      const t0 = performance.now();
+      editDisposePart('ghost');
+      if (item) {
+        editBuildPart('ghost', [item]);
+        const g = editFurn.parts.get('ghost');
+        if (g) { g.root.name = 'furniture-edit-ghost'; g.root.traverse(o => { o.raycast = () => {}; }); }
+      }
+      editCompose();
+      return { ms: performance.now() - t0 };
+    }
+    function moveFurnitureGhost(dxCm, dyCm) {
+      const g = editFurn && editFurn.parts.get('ghost');
+      if (!g) return;
+      g.root.position.set(dxCm * S, 0, dyCm * S);
+      requestRender();
+    }
     function removeFurnitureItem(id) {
       if (!editFurn) return null;
       const t0 = performance.now();
@@ -4653,6 +4710,15 @@ export const Home3DScene = (() => {
       applyFurnitureExtras({ byId: {}, dynamicByItemId: {}, beauty: [] }, false);
       invalidateShadows();
       requestRender();
+      if (editShowedFurniture) {
+        // Back to hidden (?furniture=0): nothing to build until someone shows
+        // it, and then setFurnitureVisible starts it from these items.
+        editShowedFurniture = false;
+        furnitureVisible = false;
+        furnitureStarted = false;
+        furnitureAttached = null;
+        return Promise.resolve(null);
+      }
       if (!next.length) return Promise.resolve(null);
       furnitureAttached = scheduleFurnitureAttach({
         precompileDone: Promise.resolve(),
@@ -6182,6 +6248,10 @@ export const Home3DScene = (() => {
       liftFurnitureItem(id) { return liftFurnitureItem(id); },
       updateFurnitureItem(item) { return updateFurnitureItem(item); },
       removeFurnitureItem(id) { return removeFurnitureItem(id); },
+      addFurnitureItem(item) { return addFurnitureItem(item); },
+      loadFurnitureBuilder(type) { return loadFurnitureBuilder(type); },
+      setFurnitureGhost(item) { return setFurnitureGhost(item); },
+      moveFurnitureGhost(dxCm, dyCm) { moveFurnitureGhost(dxCm, dyCm); },
       endFurnitureEdit(items) { return endFurnitureEdit(items); },
       furnitureEditing() { return !!editFurn; },
       // { parts, lifted, items } while editing, else null (checks and diagnostics).

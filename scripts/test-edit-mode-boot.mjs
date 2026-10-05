@@ -98,8 +98,12 @@ check('the draft geometry is compiled only when bootDraft returned one', /if \(d
 console.log('5. edit-mode.js is a leaf');
 const em = read('src/edit-mode.js');
 const imports = [...em.matchAll(/\bfrom\s*'([^']+)'/g)].map(m => m[1]);
-check('imports only the pure draft / export / edit-ops / control-descriptor modules', JSON.stringify(imports.sort()) ===
-  JSON.stringify(['./edit-ops.js', './furniture/controls.js', './profile-draft.js', './profile-export.js']), imports);
+check('imports only the pure draft / export / edit-ops / library / control-descriptor modules', JSON.stringify(imports.sort()) ===
+  JSON.stringify(['./edit-library.js', './edit-ops.js', './furniture/controls.js', './profile-draft.js', './profile-export.js']), imports);
+const lib = read('src/edit-library.js');
+const libImports = [...lib.matchAll(/\bfrom\s*'([^']+)'/g)].map(m => m[1]);
+check('edit-library.js imports only edit-ops and the pure polygon helper (no builder, no scene)',
+  JSON.stringify(libImports.sort()) === JSON.stringify(['./edit-ops.js', './footstep-walk.js']), libImports);
 const ops = read('src/edit-ops.js');
 const opsImports = [...ops.matchAll(/\bfrom\s*'([^']+)'/g)].map(m => m[1]);
 check('edit-ops.js imports only the pure polygon helper', JSON.stringify(opsImports) === JSON.stringify(['./footstep-walk.js']), opsImports);
@@ -112,7 +116,15 @@ check('... right after bootDraft, before the draft is compiled', escAt > html.in
   escAt < html.indexOf('HouseLoader.compile(draftBoot.geometry'));
 check('... before the scene is created (where a bad draft crashes)', escAt < html.indexOf('const home = Home3DScene.create('));
 check('... imported statically with bootDraft (no lazy import to fail first)', /import \{ bootDraft, draftAllowed, mountDraftEscape \} from '\.\/src\/profile-draft\.js\?v=__VERSION__';/.test(html));
-check('the draft banner takes it away when it mounts', /function renderBanner\(\) \{\s*(\/\/[^\n]*\n\s*)*removeDraftEscape\(document\);/.test(em));
+check('the draft banner releases it when it mounts', /function renderBanner\(\) \{\s*(\/\/[^\n]*\n\s*)*releaseDraftEscape\(\);/.test(em));
+// ... but only once nothing covers the banner (B1 review finding 1): the
+// loading card (z 9999) and the house error card (z 10000) both sit above it.
+const rel = fnBody(em, 'releaseDraftEscape');
+check('... the release waits for the loading card (isDone) and the house error card',
+  /isDone\(\)/.test(rel) && /home3d-house-error/.test(rel) && /removeDraftEscape\(document\)/.test(rel), rel.slice(0, 300));
+check('... and re-checks until they are gone, rather than giving up', /setInterval\(releaseDraftEscape/.test(rel));
+check('... the remove comes only AFTER the covered check returns',
+  rel.indexOf('if (covered)') >= 0 && rel.indexOf('if (covered)') < rel.indexOf('removeDraftEscape(document)'));
 
 console.log('7. a furniture tap in edit mode is edit mode\'s');
 const tp = read('src/tap-popovers.js');

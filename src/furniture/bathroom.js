@@ -737,14 +737,19 @@ const SHOWER_TRAY_CONTROLS = []; // BathroomFittingsSpec has no slider for this 
 
 const TOWEL_RAIL_CONTROLS = []; // BathroomFittingsSpec has no slider for this type: controlsFor() derives all of it
 
+// Dependencies for the edit panel (controls.js controlsFor RULES).
+const TOILET_RULES = Object.freeze({ plateWidth: { when: { flushPlate: true } }, plateHeight: { when: { flushPlate: true } }, plateColor: { when: { flushPlate: true } } });
+const VANITY_RULES = Object.freeze({ basinWidth: { when: { basin: true } }, basinDepth: { when: { basin: true } }, basinHeight: { when: { basin: true } },
+  basinLip: { when: { basin: true } }, ceramicColor: { when: { basin: true } } });
+
 export const TYPES = Object.freeze({
   'bathtub': Object.freeze({ DEFAULTS: BATHTUB_DEFAULTS, build: buildBathtub, CONTROLS: BATHTUB_CONTROLS }),
   'shower-screen': Object.freeze({ DEFAULTS: SHOWER_SCREEN_DEFAULTS, build: buildShowerScreen, CONTROLS: SHOWER_SCREEN_CONTROLS }),
   'shower-set': Object.freeze({ DEFAULTS: SHOWER_SET_DEFAULTS, build: buildShowerSet, CONTROLS: SHOWER_SET_CONTROLS }),
   'shower-tray': Object.freeze({ DEFAULTS: SHOWER_TRAY_DEFAULTS, build: buildShowerTray, CONTROLS: SHOWER_TRAY_CONTROLS }),
-  'toilet': Object.freeze({ DEFAULTS: TOILET_DEFAULTS, build: buildToilet, CONTROLS: TOILET_CONTROLS }),
+  'toilet': Object.freeze({ DEFAULTS: TOILET_DEFAULTS, build: buildToilet, CONTROLS: TOILET_CONTROLS, CONTROL_RULES: TOILET_RULES }),
   'towel-rail': Object.freeze({ DEFAULTS: TOWEL_RAIL_DEFAULTS, build: buildTowelRail, CONTROLS: TOWEL_RAIL_CONTROLS }),
-  'vanity-counter': Object.freeze({ DEFAULTS: VANITY_DEFAULTS, build: buildVanity, CONTROLS: VANITY_CONTROLS })
+  'vanity-counter': Object.freeze({ DEFAULTS: VANITY_DEFAULTS, build: buildVanity, CONTROLS: VANITY_CONTROLS, CONTROL_RULES: VANITY_RULES })
 });
 
 export { buildBathtub, buildToilet, buildVanity, buildShowerSet, buildShowerScreen, buildShowerTray, buildTowelRail };

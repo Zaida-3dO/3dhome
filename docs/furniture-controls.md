@@ -45,11 +45,38 @@ a control for these.
 `mirror: ['depth']` on a range means "also write this value to those keys" (a round table has
 one Diameter slider that sets width and depth).
 
+### Which controls a panel draws: `kinds`, `when` and `CONTROL_RULES`
+
+Two optional descriptor fields say when a control means something:
+
+- `kinds: ['wall-planter']`: only for an item whose `params.kind` is one of these (a wall
+  planter's "contents" means nothing on a floor plant).
+- `when: { led: true }`: only while every named param has that value, or one of a list of
+  values (`when: { habit: ['trailing'] }`). The LED colour hides while the LED is off.
+
+`visibleControls(controls, values)` applies both, plus dropping `unsupported`, to the item's
+`values` (its `DEFAULTS` merged with its `params`). Edit mode redraws the panel when a param that
+another control's `when` names (or `kind`) changes.
+
+A builder whose controls are mostly DERIVED adds a dependency without listing every control by
+exporting `CONTROL_RULES` (a multi-type module puts it on `TYPES[key]`): `{ key: { when?, kinds?,
+label?, min?, max?, step?, unit? } }`, patched onto that key's control, explicit or derived,
+without moving it. `controlsFor(type, DEFAULTS, CONTROLS, CONTROL_RULES)` takes it as its fourth
+argument, and `loadBuilder()` passes it (and a builder's plain-object `PRESETS`) through. The
+cabinet uses it to turn the derived `gain` (0..2, step 1) into "Brightness lift" (0.5..2, step
+0.05). `only(control, { kinds, when })` adds the fields to an entry in a `CONTROLS` table.
+
+### Units
+
+A range with no `unit` whose key names a length (`width`, `depth`, `height`, `*Width`,
+`*Height`, `*Diameter`, `*Thickness`, `*Offset`, ... see `isLengthKey`) gets `unit: 'cm'` from
+`controlsFor`, so every length row in the panel says cm. Counts, angles, seeds and gains never do.
+
 ## The derived fallback
 
 | Default | Derived range |
 |---|---|
-| positive `d` | `0.5d .. 2d` |
+| positive `d` | `0.5d .. 2d`, rounded OUTWARD to a grid by size (10 from 100, 5 from 10, 1 from 1, else 0.1); the minimum never rounds to 0 or below. A 167.1 cm TV width gives 80..340, not 83.55..334.2 |
 | `0` | absolute `0..100` (a count: `0..10`) |
 | negative `d` | symmetric `-2|d| .. 2|d|` (0.5x..2x would invert) |
 | count-like key (`count`, `n`, `num*`, `*Count`) or integer default | step 1, whole-number bounds |

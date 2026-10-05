@@ -998,11 +998,18 @@ or the tablet never needs devtools to get back to the served profile.
 
 In edit mode, **tap a piece of furniture** to select it (an amber box). Then:
 
-- **Drag it** on the floor to move it. Moves snap to 1 cm and stay inside the
-  item's own room polygon (dragging into a wall slides along it). A
-  wall-anchored item (`wall` + `centre`) slides along its wall, kept to its
-  room's stretch of that wall. Dragging empty space still orbits the camera.
-- **−90° / −15° / +15° / +90°** turn a free-standing item (`rotation`). A
+- **Drag it** on the floor to move it. Moves snap to 1 cm and keep the item's
+  whole **footprint** (width × depth at its rotation) inside its own room
+  polygon: it stops flush against a wall, and dragging into a wall slides
+  along it. An item authored overhanging its room (a deck on a room edge) can
+  still be slid along or pulled in, but never further out, and does not jump
+  when first touched. A wall-anchored item (`wall` + `centre`) slides along
+  its wall with its whole width kept on its room's stretch of that wall.
+  Dragging empty space still orbits the camera; a two-finger pinch that starts
+  on an item zooms the camera.
+- **−90° / −15° / +15° / +90°** turn a free-standing item (`rotation`). If the
+  turn (or a wider setting) pushes it through a wall it moves to the nearest
+  place it fits; if it fits nowhere it stays and the panel says so. A
   wall-anchored item always faces into its room, so it has no rotate buttons.
 - **Arrow keys** nudge 1 cm (Shift: 10 cm), relative to the camera.
 - The item's **settings** come from its type's control descriptors
@@ -1012,6 +1019,30 @@ In edit mode, **tap a piece of furniture** to select it (an amber box). Then:
   top height between its min and max height) follows it live.
 - **Delete** removes the item, and any `sensors.items` / `plants` / `vacuums`
   binding to it in `rooms.json`.
+
+#### Adding furniture from the library
+
+With nothing selected, **Add an item** opens the library: every furniture type
+there is a builder for (except `model`, which needs a `.glb` in the profile),
+grouped by room and searchable. Plants are offered by species (each starts
+from its preset). Picking one shows its settings at the type's defaults; set
+them, then **tap the floor of a room**:
+
+- A **floor** type stands where you tapped (`at`, `rotation: 0`), pulled in to
+  the nearest spot where its whole footprint fits; a type too big for the room
+  is refused.
+- A **wall** type (a TV, a clock, a sign, panels, a shelf, a radiator, a
+  kitchen run, a bed's headboard...) goes on the nearest wall of that room
+  (`wall` + `centre` + `offset: 0`), facing into it, at its usual height
+  (`elevation`), with its whole width on the wall.
+- A tap outside every room is refused.
+
+The new item gets the id `<room>_<type>_<n>` (the first free `n`) and arrives
+selected, so it can be dragged, turned, re-tuned or deleted at once. On a
+desktop a preview follows the pointer before you tap. It is saved, exported
+and validated exactly like an edit: the export appends **one line** for it
+and leaves every other line untouched. `Escape` goes back from an item to the
+library, and from the library to the layout.
 
 Edits render at once but stay in memory until **Save** (in the banner) writes
 them to the draft; **Done** with unsaved changes asks whether to save them.

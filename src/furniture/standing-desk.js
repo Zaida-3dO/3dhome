@@ -294,3 +294,6 @@ export const CONTROLS = [
   unsupported('height', 'Height', 'derived'),
   unsupported('ledSides', 'LED sides', 'array'),
 ];
+
+// Edit panel dependencies (controls.js controlsFor RULES): the LED colour only while the strip is on.
+export const CONTROL_RULES = Object.freeze({ ledColor: { when: { ledStrip: true } } });

@@ -114,6 +114,19 @@ export function setParam(doc, id, key, value, o) {
   });
 }
 
+/**
+ * Add a new item (B2, the library) at the END of furniture[] -- the export
+ * then appends one line and leaves every existing line byte-identical. The
+ * id must be new; the item must pass the shape check.
+ */
+export function addItem(doc, item) {
+  const list = doc && Array.isArray(doc.furniture) ? doc.furniture : [];
+  const problems = checkFurnitureItem(item);
+  if (problems.length) throw new Error('addItem: ' + problems.join('; '));
+  if (list.some(f => f && f.id === item.id)) throw new Error('there is already a furniture item "' + item.id + '"');
+  return Object.assign({}, doc, { furniture: list.concat([item]) });
+}
+
 /** Remove an item. */
 export function deleteItem(doc, id) {
   const list = furnitureOf(doc);
@@ -222,6 +235,211 @@ export function wallSpan(wall, poly, perp, inDir) {
 }
 
 export function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// ---- Footprint confinement (B1 review: by footprint, not centre) ----------
+
+/** A sample point within this distance (cm) of the room outline counts as inside. */
+export const EDGE_TOLERANCE_CM = 1;
+
+/**
+ * Points on the outline of a free item's footprint: `at` is its centre,
+ * `width` runs along (cos r, sin r) and `depth` along the front (-sin r,
+ * cos r), r = rotation clockwise in plan (src/furniture/place.js). Corners
+ * plus a point every <= 10 cm along each edge, so an L-shaped room's inner
+ * corner cannot poke through an edge whose four corners are all inside.
+ */
+export function footprintSamples(at, width, depth, rotationDeg) {
+  const r = (rotationDeg || 0) * Math.PI / 180;
+  const u = [Math.cos(r), Math.sin(r)], f = [-Math.sin(r), Math.cos(r)];
+  const hw = (width || 0) / 2, hd = (depth || 0) / 2;
+  const corner = (a, b) => [at[0] + u[0] * hw * a + f[0] * hd * b, at[1] + u[1] * hw * a + f[1] * hd * b];
+  const cs = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
+  const out = [];
+  for (let k = 0; k < 4; k++) {
+    const a = cs[k], b = cs[(k + 1) % 4];
+    const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 10));
+    for (let i = 0; i < n; i++) out.push([a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n]);
+  }
+  return out;
+}
+
+function segDist(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const L = dx * dx + dy * dy;
+  const t = L ? clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L, 0, 1) : 0;
+  return Math.hypot(p[0] - (a[0] + dx * t), p[1] - (a[1] + dy * t));
+}
+/** Distance from p to the polygon's outline. */
+export function polyEdgeDist(poly, p) {
+  let best = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) best = Math.min(best, segDist(p, poly[j], poly[i]));
+  return best;
+}
+
+/**
+ * How far a footprint sticks out of `poly`: the summed distance of every
+ * outline sample that lies outside it (less EDGE_TOLERANCE_CM each). 0 when
+ * it is wholly inside. A sum, not a max, so sliding an overhanging item
+ * further out always reads as worse.
+ */
+export function footprintOverhang(poly, at, size) {
+  if (!Array.isArray(poly) || poly.length < 3) return 0;
+  let sum = 0;
+  footprintSamples(at, size.width, size.depth, size.rotation).forEach(p => {
+    if (insidePoly(poly, p[0], p[1])) return;
+    const d = polyEdgeDist(poly, p) - EDGE_TOLERANCE_CM;
+    if (d > 0) sum += d;
+  });
+  return sum;
+}
+
+/**
+ * Where a free item's CENTRE may go, dragged from `from` toward `to` (house
+ * cm), so its whole rotated footprint (`size`: { width, depth, rotation })
+ * stays inside `poly`.
+ *
+ * The rule is "never more overhang than it started with", not "always
+ * inside": an item authored overhanging its room (a deck on a room edge) can
+ * still be slid along or pulled in, and does not jump. When the target is
+ * refused, the furthest acceptable point along the full drag, along x alone
+ * and along y alone is found (a drag into a wall slides along it, which an
+ * L-shaped room needs), and the one that goes furthest in the drag's
+ * direction wins. With no size this is the old centre-only rule.
+ */
+export function confineFootprint(poly, from, to, size) {
+  if (!Array.isArray(poly) || poly.length < 3) return to.slice();
+  if (!size || !(size.width > 0) || !(size.depth > 0)) return confineToPoly(poly, from, to);
+  const base = footprintOverhang(poly, from, size);
+  const ok = p => footprintOverhang(poly, p, size) <= base + 1e-6;
+  if (ok(to)) return to.slice();
+  const want = [to[0] - from[0], to[1] - from[1]];
+  // The furthest acceptable point from `a` toward `target` (a binary search;
+  // `a` itself is acceptable).
+  const furthest = (a, target) => {
+    if (ok(target)) return target;
+    let lo = 0, hi = 1;
+    for (let k = 0; k < 14; k++) {
+      const m = (lo + hi) / 2;
+      if (ok([a[0] + (target[0] - a[0]) * m, a[1] + (target[1] - a[1]) * m])) lo = m; else hi = m;
+    }
+    return [a[0] + (target[0] - a[0]) * lo, a[1] + (target[1] - a[1]) * lo];
+  };
+  const gainOf = p => (p[0] - from[0]) * want[0] + (p[1] - from[1]) * want[1];
+  let best = from.slice(), bestGain = 0;
+  // Straight toward the target until it touches, then slide the rest of the
+  // way along whichever axis goes further; or along one axis from the start.
+  const first = furthest(from, to);
+  [first, furthest(first, [to[0], first[1]]), furthest(first, [first[0], to[1]]),
+    furthest(from, [to[0], from[1]]), furthest(from, [from[0], to[1]])].forEach(p => {
+    const gain = gainOf(p);
+    if (gain > bestGain + 1e-9) { best = p; bestGain = gain; }
+  });
+  // Rounded TOWARD `from`, so a snapped result never crosses the line.
+  const snapped = best.map((v, i) => (v >= from[i] ? Math.floor(v) : Math.ceil(v)));
+  return ok(snapped) ? snapped : from.slice();
+}
+
+/**
+ * The nearest centre to `near` (whole cm, on a `step` grid) where the
+ * footprint fits wholly inside `poly`, or null when it fits nowhere. For
+ * placing a new item at a tap, and for re-settling an item a rotation or a
+ * resize pushed through a wall.
+ */
+export function nearestFit(poly, near, size, step) {
+  if (!Array.isArray(poly) || poly.length < 3) return near.slice();
+  const fits = p => footprintOverhang(poly, p, size) === 0;
+  const n0 = [Math.round(near[0]), Math.round(near[1])];
+  if (fits(n0)) return n0;
+  const s = step || 5;
+  const xs = poly.map(p => p[0]), ys = poly.map(p => p[1]);
+  const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
+  const r = (size.rotation || 0) * Math.PI / 180;
+  const ex = (Math.abs(Math.cos(r)) * size.width + Math.abs(Math.sin(r)) * size.depth) / 2;
+  const ey = (Math.abs(Math.sin(r)) * size.width + Math.abs(Math.cos(r)) * size.depth) / 2;
+  if (2 * ex > x2 - x1 + 2 * EDGE_TOLERANCE_CM || 2 * ey > y2 - y1 + 2 * EDGE_TOLERANCE_CM) return null;
+  const cand = [];
+  for (let x = Math.ceil(x1 + ex); x <= Math.floor(x2 - ex) + 1e-9; x += s) {
+    for (let y = Math.ceil(y1 + ey); y <= Math.floor(y2 - ey) + 1e-9; y += s) {
+      cand.push([x, y, (x - near[0]) * (x - near[0]) + (y - near[1]) * (y - near[1])]);
+    }
+  }
+  // The room's own bbox-limited centre range, as an exact point too (a
+  // room exactly the item's size has no grid point inside the range).
+  cand.push([Math.round((x1 + x2) / 2), Math.round((y1 + y2) / 2), Infinity]);
+  cand.sort((a, b) => a[2] - b[2]);
+  for (const c of cand) if (fits([c[0], c[1]])) return [c[0], c[1]];
+  return null;
+}
+
+/**
+ * The range a wall-anchored item's `centre` may take so its whole WIDTH
+ * stays on `span` (wallSpan's room stretch): [lo + w/2, hi - w/2], whole cm.
+ * An item already authored past an end keeps that end of the range at its
+ * own centre (a move never makes it jump, and never takes it further out).
+ * An item wider than the span sits at the span's middle.
+ */
+export function wallCentreRange(span, width, current) {
+  const hw = (width > 0 ? width : 0) / 2;
+  let lo = Math.ceil(span.lo + hw), hi = Math.floor(span.hi - hw);
+  if (lo > hi) lo = hi = Math.round((span.lo + span.hi) / 2);
+  if (num(current)) { lo = Math.min(lo, current); hi = Math.max(hi, current); }
+  return { lo, hi };
+}
+
+// ---- Placing a new item (B2) ------------------------------------------------
+
+/**
+ * A new furniture id: `<room>_<type>_<n>`, lower-case with `_` for every
+ * other character (the schema's `^[a-z][a-z0-9_]*$`), n the smallest
+ * positive number not already taken.
+ */
+export function newItemId(doc, room, type) {
+  const clean = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  let base = clean(room) + '_' + clean(type);
+  if (!/^[a-z]/.test(base)) base = 'item_' + base;
+  const used = new Set((doc && Array.isArray(doc.furniture) ? doc.furniture : []).map(f => f && f.id));
+  for (let n = 1; ; n++) if (!used.has(base + '_' + n)) return base + '_' + n;
+}
+
+/**
+ * The wall of `roomId` a wall-mounted item tapped at `point` (house cm)
+ * hangs on: the nearest axis-aligned wall whose ROOM face borders that room
+ * there (probed 5 cm past the face, as the loader does), long enough for
+ * `width`. Returns { wall, centre, inDir, axis, span } or null.
+ *
+ * @param compiled  the compiled house (wallsById, rooms)
+ */
+export function wallPlacement(compiled, roomId, point, width) {
+  const room = compiled && compiled.rooms ? compiled.rooms[roomId] : null;
+  const poly = room && (room.poly || [[room.x1, room.y1], [room.x2, room.y1], [room.x2, room.y2], [room.x1, room.y2]]);
+  if (!poly) return null;
+  const walls = compiled.wallsById ? Object.keys(compiled.wallsById).map(k => compiled.wallsById[k]) : [];
+  const cands = [];
+  walls.forEach(w => {
+    const dx = Math.abs(w.x1 - w.x2), dy = Math.abs(w.y1 - w.y2);
+    if (dx >= 0.5 && dy >= 0.5) return;                // not axis-aligned
+    const horiz = dy < dx;
+    const at = horiz ? w.y1 : w.x1;
+    const lo = Math.min(horiz ? w.x1 : w.y1, horiz ? w.x2 : w.y2), hi = Math.max(horiz ? w.x1 : w.y1, horiz ? w.x2 : w.y2);
+    const along = horiz ? point[0] : point[1], perp = horiz ? point[1] : point[0];
+    const inDir = perp >= at ? 1 : -1;
+    const t = (w.thickness || 0) / 2;
+    const probeAlong = clamp(along, lo, hi);
+    const pp = at + inDir * (t + 5);
+    if (!(horiz ? insidePoly(poly, probeAlong, pp) : insidePoly(poly, pp, probeAlong))) return;
+    const gapAlong = along < lo ? lo - along : along > hi ? along - hi : 0;
+    cands.push({ w, horiz, inDir, face: at + inDir * t, d: Math.hypot(Math.max(0, Math.abs(perp - at) - t), gapAlong) });
+  });
+  cands.sort((a, b) => a.d - b.d);
+  for (const c of cands) {
+    const span = wallSpan(c.w, poly, c.face, c.inDir);
+    if (width > 0 && span.hi - span.lo < width) continue;
+    const r = wallCentreRange(span, width);
+    const along = c.horiz ? point[0] : point[1];
+    return { wall: c.w.id, centre: clamp(snapCm(along), r.lo, r.hi), inDir: c.inDir, axis: c.horiz ? 'x' : 'y', span };
+  }
+  return null;
+}
 
 // ---- Live slider bounds ---------------------------------------------------
 

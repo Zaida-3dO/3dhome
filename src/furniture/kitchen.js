@@ -1085,7 +1085,9 @@ const WALL_RUN_CONTROLS = [
 export const TYPES = Object.freeze({
   'kitchen-base-run': Object.freeze({ DEFAULTS: BASE_DEFAULTS, build: buildBaseRun, CONTROLS: BASE_RUN_CONTROLS }),
   'kitchen-wall-run': Object.freeze({ DEFAULTS: WALL_DEFAULTS, build: buildWallRun, CONTROLS: WALL_RUN_CONTROLS }),
-  'fridge-freezer': Object.freeze({ DEFAULTS: FRIDGE_DEFAULTS, build: buildFridge, CONTROLS: FRIDGE_CONTROLS }),
+  'fridge-freezer': Object.freeze({ DEFAULTS: FRIDGE_DEFAULTS, build: buildFridge, CONTROLS: FRIDGE_CONTROLS,
+    // Edit panel dependencies (controls.js controlsFor RULES).
+    CONTROL_RULES: Object.freeze({ ledColor: { when: { plinthLed: true } }, topLedColor: { when: { topLed: true } } }) }),
 });
 
 export { buildBaseRun, buildWallRun, buildFridge };

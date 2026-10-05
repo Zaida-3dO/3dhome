@@ -1387,3 +1387,9 @@ export const CONTROLS = [
   unsupported('plinth', 'Plinth', 'object'),
   unsupported('glassSidePanel', 'Glass side panel', 'null'),
 ];
+
+// Edit panel patches (controls.js controlsFor RULES). `gain` lifts a white the
+// tone mapping renders grey: a fine multiplier, not the derived 0..2 step 1.
+export const CONTROL_RULES = Object.freeze({
+  gain: { label: 'Brightness lift', min: 0.5, max: 2, step: 0.05, unit: '×' },
+});
