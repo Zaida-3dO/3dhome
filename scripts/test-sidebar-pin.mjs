@@ -104,13 +104,13 @@ check('opts omitted -> collapsible (the safe reading)', is(P.sidebarReduce({ ope
   check('wheel zoom -> cameraStart', /container\.addEventListener\('wheel', \(\) => sidebarEvent\('cameraStart'\)/.test(html));
   check('pinch -> cameraStart', /e\.touches\.length >= 2\) sidebarEvent\('cameraStart'\)/.test(html));
   check('page scroll -> scroll', /window\.addEventListener\('scroll', \(\) => sidebarEvent\('scroll'\)/.test(html));
-  check('object tap -> objectTap', /onObjectTap: \(\) => sidebarEvent\('objectTap'\)/.test(html));
+  check('object tap -> objectTap', /onObjectTap: \(target, point\) => \{\s*sidebarEvent\('objectTap'\);/.test(html));
   check('pin state is not persisted', !/localStorage|sessionStorage/.test(html.slice(html.indexOf('let sidebarState'), html.indexOf('let sidebarState') + 4000)));
 
   const src = read('src/tap-popovers.js');
   const onClick = src.slice(src.indexOf('const onClick = e =>'), src.indexOf('const onWheel'));
   check('popover: onObjectTap runs BEFORE the card opens',
-    onClick.indexOf('o.onObjectTap(res.target)') > -1 && onClick.indexOf('o.onObjectTap(res.target)') < onClick.indexOf('open(res.target'));
+    onClick.indexOf('o.onObjectTap(res.target, res.point)') > -1 && onClick.indexOf('o.onObjectTap(res.target, res.point)') < onClick.indexOf('open(res.target'));
   check('popover: the sidebar flip that hook made is absorbed (takeRecords), not a card close',
     // Camera focus (src/camera-focus.js) may fly before the card opens; the
     // flip is still absorbed before either path opens it.

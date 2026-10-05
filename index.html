@@ -504,6 +504,7 @@
       text-align: left; text-decoration: none; transition: background 0.15s, border-color 0.15s;
     }
     .spec-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); }
+    .spec-btn.edit-mode-btn { width: auto; flex: none; padding: 6px 14px; }
     .spec-btn .spec-ext { opacity: 0.35; }
 
     /* Spec groups — collapsible sections within the Specs list. Each group
@@ -1048,6 +1049,9 @@
     import { sidebarReduce, SIDEBAR_INITIAL } from './src/sidebar-pin.js?v=__VERSION__';
     // Camera focus: the camera flies to a tapped room or device, and back.
     import { createFocusController, deviceKey } from './src/camera-focus.js?v=__VERSION__';
+    // Edit-mode drafts (src/profile-draft.js): the boot-time read only. The
+    // edit UI itself (src/edit-mode.js) is a dynamic import -- loadEditMode().
+    import { bootDraft, draftAllowed } from './src/profile-draft.js?v=__VERSION__';
     import { createThemeController } from './src/theme.js?v=__VERSION__';
     import { colorFromAttributes, supportsColor, lightServiceCall } from './src/light-color.js?v=__VERSION__';
     import { ICONS, svgIcon }  from './src/ui-icons.js?v=__VERSION__';
@@ -1137,6 +1141,15 @@
       // the behaviour from before the feature: no flights, no home pose, and a
       // background tap on a wide screen does not deselect the room.
       const focusParamOff = params.get('focus') === '0';
+      // Edit mode and drafts (src/profile-draft.js, src/edit-mode.js). A draft
+      // kept on this device is rendered INSTEAD of the served profile -- but
+      // never in the preview tile, the HA popup (?embed=1) or any other
+      // iframe: those always show the served house. Edit mode is offered in
+      // the same places a draft may apply, and nowhere else.
+      const isFramed = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
+      const editFlags = { isPreview, isEmbed, isFramed };
+      const editAllowed = draftAllowed(editFlags);
+      const pageStorage = (() => { try { return window.localStorage; } catch (e) { return null; } })();
 
       // ── Power/quality settings (overridable via URL for A/B testing) ──
       //   ?shadows=auto|low|off   ?fps=<n>
@@ -1367,10 +1380,23 @@
       // the binding, not of whether HA is connected (a bound row with no
       // reading shows "unavailable").
       let sensors = null;
+      // A draft on this device (and allowed here): its two documents replace
+      // the served ones for this load. bootDraft() returns null under
+      // ?preview=true, ?embed=1 and in an iframe whatever is stored.
+      // A draft compiles exactly as a served profile does. One that fails to
+      // compile never strands the page: the served profile renders (both
+      // files) and the banner says the draft is broken.
+      const draftBoot = bootDraft(pageStorage, cfg.house, editFlags);
+      let draftHouse = null, draftBroken = false;
+      if (draftBoot && HouseLoader.isValidHouseId(cfg.house)) {
+        try { draftHouse = HouseLoader.compile(draftBoot.geometry, 'houses/' + cfg.house + '/'); }
+        catch (e) { draftBroken = true; console.warn('[home3d] the draft on this device does not compile (' + e.message + '); showing the served profile.'); }
+      }
+      const draftApplied = !!draftHouse;
       try {
-        const roomsResp = await fetch('houses/' + cfg.house + '/rooms.json', { cache: 'no-store' });
-        if (roomsResp.ok) {
-          const roomsDoc = await roomsResp.json();
+        const roomsResp = draftApplied && draftBoot.rooms ? null : await fetch('houses/' + cfg.house + '/rooms.json', { cache: 'no-store' });
+        if (!roomsResp || roomsResp.ok) {
+          const roomsDoc = roomsResp ? await roomsResp.json() : draftBoot.rooms;
           rooms = roomsDoc && roomsDoc.rooms ? roomsDoc.rooms : null;
           sensors = roomsDoc && roomsDoc.sensors ? roomsDoc.sensors : null;
           Object.keys((sensors && sensors.doors) || {}).forEach(id => doorSensorIds.add(id));
@@ -1422,7 +1448,7 @@
       // An UNSET HOME3D_HOUSE still defaults to 'demo' (deploy/generate-config.sh),
       // and an explicit 'demo' still loads the demo house. Only SUBSTITUTION
       // for an explicitly-named house is refused.
-      const house = await HouseLoader.loadWithFallback(cfg.house, 'demo');
+      const house = draftHouse || await HouseLoader.loadWithFallback(cfg.house, 'demo');
       console.info('[home3d] House "' + house.id + '" (' + house.name + '): ' +
         Object.keys(house.rooms).length + ' rooms, ' + house.walls.length + ' walls, ' +
         house.doors.length + ' doors.');
@@ -2394,6 +2420,66 @@
         const gesture = why === 'wheel' || why === 'camera' || why === 'resize';
         focusCtl.request({ device: null }, gesture ? 'gesture' : 'explicit');
       }
+      // ---- Edit mode (src/edit-mode.js -- LAZY) ----
+      // The edit UI is a dynamic import, reached ONLY from loadEditMode():
+      // the Settings "Edit mode" button, or a draft this device is rendering
+      // (its banner). A view-mode load with no draft never fetches it, so the
+      // wall tablet pays nothing (scripts/test-edit-mode-boot.mjs).
+      // `var`: renderPanel() is hoisted and reads editApi before this line runs.
+      var editApi = null;
+      let editLoading = null;
+      // The profile entry a tapped device's view is stored on, or null (a
+      // light fixture has none). Mirrors focusViewFor's choice of item.
+      function editOwnerFor(d) {
+        const label = (kind, id) => {
+          const list = kind === 'curtain' ? house.curtains : house.furniture;
+          const e = (list || []).find(x => x.id === id);
+          return (e && (e.label || e.name)) || id;
+        };
+        if (d.kind === 'curtain') return (house.curtains || []).some(c => c.id === d.id) ? { kind: 'curtain', id: d.id, label: label('curtain', d.id) } : null;
+        if (d.kind === 'light' || d.kind === 'door') return null;
+        const ownId = d.itemId || (d.kind === 'plant' || d.kind === 'vacuum' || d.kind === 'clock' ? d.id : null);
+        if (ownId && (house.furniture || []).some(f => f.id === ownId)) return { kind: 'furniture', id: ownId, label: label('furniture', ownId) };
+        const it = d.focusPoint && typeof home.furnitureItemAt === 'function' ? home.furnitureItemAt(d.focusPoint) : null;
+        return it ? { kind: 'furniture', id: it.id, label: label('furniture', it.id) } : null;
+      }
+      function editViewFor(owner) {
+        const inset = panelInset();
+        if (owner.kind === 'room') return home.roomView(owner.id, { inset });
+        if (owner.kind === 'curtain') return home.curtainView(owner.id, { inset });
+        if (owner.kind === 'furniture') return home.itemView(owner.id, null, { inset });
+        return null;
+      }
+      function loadEditMode() {
+        if (!editLoading) {
+          editLoading = import('./src/edit-mode.js?v=__VERSION__').then(m => ({ m, ctx: {
+            home, houseId: cfg.house, houseDir: 'houses/' + cfg.house + '/', storage: pageStorage,
+            draftApplied, draftBroken,
+            resolveOwner: editOwnerFor,
+            roomLabel: id => (Home3DScene.ROOMS[id] && Home3DScene.ROOMS[id].name) || id,
+            viewFor: editViewFor,
+            flyTo: pose => home.flyTo(pose),
+            onModeChange: () => { if (panelView === 'settings') renderPanel(); },
+            debug: params.get('debug') === '1',
+          } }));
+          editLoading.catch(e => { editLoading = null; console.error('[home3d] edit mode failed to load: ' + e.message); });
+        }
+        return editLoading;
+      }
+      function toggleEditMode() {
+        if (!editAllowed) return;
+        if (editApi && editApi.isActive()) { editApi.exit(); return; }
+        loadEditMode().then(({ m, ctx }) => {
+          editApi = m.enterEditMode(ctx);
+          if (selectedRoom) editApi.selectRoom(selectedRoom);
+        });
+      }
+      // A draft is being rendered (or failed to): its banner, without
+      // entering edit mode.
+      if (editAllowed && (draftApplied || draftBroken)) {
+        loadEditMode().then(({ m, ctx }) => { m.mountDraftBanner(ctx); editApi = m.editController(); });
+      }
+
       // The pointer hold. Registered BEFORE attachTapPopovers below, so a
       // pointer down that closes a card already finds the batch open.
       let cardClosedThisPointer = false;
@@ -2583,7 +2669,11 @@
         getHa: () => ha, HAClient,
         sendLight: (roomId, channel, state, debounceMs, withColor, power) => sendToHA(roomId, channel, state, debounceMs, withColor, power),
         // Close an UNPINNED sidebar on an object tap; the popover still opens.
-        onObjectTap: () => sidebarEvent('objectTap'),
+        onObjectTap: (target, point) => {
+          sidebarEvent('objectTap');
+          // Edit mode: a tapped device becomes the thing being framed.
+          if (editApi && editApi.isActive()) editApi.selectDevice(target, point && point.clone ? point.clone() : point);
+        },
         // Camera focus: fly to the device, then the card opens. null when
         // focus is off, so the card opens at once exactly as before.
         focus: focusAllowed ? ((target, point) => {
@@ -2716,6 +2806,10 @@
         // A room script armed in a room that is no longer open disarms: its
         // second tap must be in the view where the first one was.
         disarmRoomScripts(selectedRoom);
+        // Edit mode: a room chosen (sidebar or tap) becomes the thing being
+        // framed. Clearing the room does not clear the frame target -- an
+        // orbit closing the phone sidebar must not drop it mid-framing.
+        if (editApi && selectedRoom) editApi.selectRoom(selectedRoom);
 
         // ===== SETTINGS view (only when no room is open) =====
         if (!selectedRoom && panelView === 'settings') {
@@ -2769,6 +2863,18 @@
             html += '<div class="panel-toggle-row">' +
               '<span class="panel-toggle-label">Camera follows selection</span>' +
               '<button class="toggle ' + (focusPref ? 'on' : '') + '" id="panel-focus-toggle" aria-pressed="' + focusPref + '" aria-label="Camera follows selection"><div class="toggle-knob"></div></button>' +
+              '</div>';
+          }
+
+          // Edit mode (src/edit-mode.js): frame the camera views, kept as a
+          // draft on this device. Never offered in the preview tile, the HA
+          // popup or any iframe (editAllowed).
+          if (editAllowed) {
+            const editingNow = !!(editApi && editApi.isActive());
+            html += '<div class="panel-toggle-row">' +
+              '<span class="panel-toggle-label">Edit mode</span>' +
+              '<button class="spec-btn edit-mode-btn" id="panel-edit-mode" aria-pressed="' + editingNow + '" ' +
+              'title="Frame the camera views; edits are a draft on this device, not live">' + (editingNow ? 'Leave' : 'Enter') + '</button>' +
               '</div>';
           }
 
@@ -2901,6 +3007,8 @@
           if (panelFocusToggle) {
             panelFocusToggle.addEventListener('click', () => { setFocusPref(!focusPref); renderPanel(); });
           }
+          const panelEditMode = document.getElementById('panel-edit-mode');
+          if (panelEditMode) panelEditMode.addEventListener('click', () => toggleEditMode());
           const panelGridToggle = document.getElementById('panel-grid-toggle');
           if (panelGridToggle) {
             panelGridToggle.addEventListener('click', () => { grid.toggle(); renderPanel(); });
