@@ -261,10 +261,14 @@ export function roomScriptView(binding, state, haState) {
  * stays in the DOM while the button changes state (a live region must exist
  * before its content changes to be announced).
  */
-export function roomScriptRowHtml(binding, state, haState) {
+export function roomScriptRowHtml(binding, state, haState, opts) {
   const v = roomScriptView(binding, state, haState);
-  return `<div class="control-group room-script-row" data-row="room-script">
-    <button class="room-script-btn ${esc(v.state)}" data-action="room-script" data-state="${esc(v.state)}"${v.disabled ? ' disabled' : ''}>${esc(v.text)}</button>
+  // A sidebar `extra` script row (rooms.json 1.11) is this same row under
+  // its own key ('extra:<n>') and action ('x-script'); see index.html.
+  const rowKey = (opts && opts.rowKey) || 'room-script';
+  const action = (opts && opts.action) || 'room-script';
+  return `<div class="control-group room-script-row" data-row="${esc(rowKey)}">
+    <button class="room-script-btn ${esc(v.state)}" data-action="${esc(action)}" data-key="${esc(rowKey)}" data-state="${esc(v.state)}"${v.disabled ? ' disabled' : ''}>${esc(v.text)}</button>
     <div class="room-script-note"${v.note ? '' : ' hidden'}>${esc(v.note)}</div>
     <div class="sr-only" role="status" aria-live="polite" data-room-script-live></div>
   </div>`;
@@ -276,7 +280,7 @@ export function roomScriptRowHtml(binding, state, haState) {
  * instead. DOM-light: only textContent / className / attributes.
  */
 export function applyRoomScriptView(row, view) {
-  const btn = row && row.querySelector('[data-action="room-script"]');
+  const btn = row && (row.querySelector('[data-action="room-script"]') || row.querySelector('[data-action="x-script"]'));
   const note = row && row.querySelector('.room-script-note');
   const live = row && row.querySelector('[data-room-script-live]');
   if (!btn || !note || !live) return false;

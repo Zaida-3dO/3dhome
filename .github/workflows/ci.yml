@@ -716,6 +716,8 @@ jobs:
         run: node scripts/test-edit-ops.mjs
       - name: Edit library -- every palette type places in the tapped room and builds, footprint confinement, control filtering, one-line export
         run: node scripts/test-edit-library.mjs
+      - name: Bindings and sidebar -- legacy slot first, refused when bound twice, bindings-only curtain moves, own get_states picker, opt-in item rows, no entity in geometry
+        run: node scripts/test-bindings.mjs
       - name: Sliders and popover -- every range part styled, diamond matches the card, color-scheme dark
         run: node scripts/test-range-styles.mjs
       - name: Theme -- Auto/Dark/Light resolution, persistence, system listener, pre-paint script
@@ -822,6 +824,15 @@ jobs:
           cp -r houses/demo/. "$tmp/"
           node scripts/test-edit-library.mjs --write "$tmp"
           python scripts/validate-house.py --strict "$tmp"
+      - name: An edit-mode bindings export (static curtain + light, a legacy and a bindings entry, an item row, a sidebar) passes validate-house.py --strict
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cp -r houses/demo/. "$tmp/"
+          node scripts/test-bindings.mjs --write "$tmp"
+          python scripts/validate-house.py --strict "$tmp"
+      - name: rooms.json bindings / sidebar and fixture static schema and validator checks
+        run: python scripts/test-validate-bindings.py
       - name: Furniture schema and validator checks
         run: python scripts/test-validate-furniture.py
       - name: footstepPath validator checks (outside waypoint, segment leaving the room, door gap empties the trail)

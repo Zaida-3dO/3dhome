@@ -39,7 +39,7 @@ import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { createTvScreens } from './furniture/tv-screen.js';
 import { rugPatternForBox } from './rug-pattern.js';
-import { pickRoom, roomPolygons, sceneToHouse, isFurniture } from './room-pick.js';
+import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './room-pick.js';
 import { lerpPose, easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView } from './camera-focus.js';
 import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
@@ -4785,6 +4785,25 @@ export const Home3DScene = (() => {
       }
       return null;
     }
+    // Edit mode, placing a new item (B2 review finding 1): the room a tap
+    // means, decided by the SAME picker as a room tap (room-pick.js: walls
+    // block and resolve to the side tapped, furniture passes the tap on),
+    // plus a point inside it -- where the ray met the floor catcher, or a
+    // wall hit stepped back off its face. { room, point: [x, y] house cm, via }.
+    function placementPick(clientX, clientY) {
+      const rc = editRay(clientX, clientY);
+      const toHouse = sceneToHouse(S, OX, OY);
+      const picked = pickRoom(rc.intersectObjects(scene.children, true), rc.ray.direction, roomPolygons(ROOMS), toHouse, null);
+      let point = null;
+      const h = picked.hit;
+      if (h && h.point) {
+        if (picked.via === 'wall') {
+          const st = stepBack(h, rc.ray.direction);
+          point = toHouse(h.point.x + st.x * 0.05, h.point.z + st.z * 0.05);
+        } else point = toHouse(h.point.x, h.point.z);
+      }
+      return { room: picked.roomId || null, point, via: picked.via };
+    }
     // Where a client-pixel ray meets the horizontal plane at height y
     // (metres), in house cm [x, y]; null when it never does (looking up).
     function screenToPlan(clientX, clientY, y) {
@@ -6261,6 +6280,7 @@ export const Home3DScene = (() => {
       highlightFurniture(id) { editHighlight(id); },
       furnitureEditPick(clientX, clientY) { return furnitureEditPick(clientX, clientY); },
       screenToPlan(clientX, clientY, y) { return screenToPlan(clientX, clientY, y); },
+      placementPick(clientX, clientY) { return placementPick(clientX, clientY); },
       // The loaded builders (type -> { DEFAULTS, CONTROLS?, defaultsFor? }): the param panel's source.
       furnitureBuilders() { return furnitureModules || (furnitureModules = loadFurnitureModules(furnitureItems)); },
       // Diagnostics for the perf measurement and the visual review: what was

@@ -17,6 +17,7 @@ import { colorFromAttributes, DEFAULT_ACCENT_COLOR } from './light-color.js';
 import { normaliseVacuumBindings, parseVacuum, vacuumCommand, vacuumSegmentCommand } from './vacuum-control.js';
 import { normalisePlantBindings, plantEntities, parsePlant } from './plant-status.js';
 import { normaliseItemBindings, itemBindingEntities, itemWatchedAttributes } from './item-cards.js';
+import { normaliseBindings, readBinding, pickerEntities } from './bindings.js';
 
 /**
  * Slider value -> a `cover.set_cover_position` call, fanned out to every
@@ -180,6 +181,13 @@ export const HAClient = (() => {
       token,
       rooms,
       sensors = null,
+      // rooms.json 1.11 `bindings` (src/bindings.js): targets the legacy
+      // slots cannot express. Indexed below beside the legacy slots, so
+      // their entities are recorded and their updates are not dropped.
+      bindings = null,
+      // Entity ids the page shows raw (a sidebar `extra` row): recorded like
+      // a bound entity, and announced through onWatchedChange.
+      watch = null,
       wsReconnectMs = 5000
       // pollIntervalMs is still accepted (config files carry it) and ignored:
       // there is no REST polling any more. See "Transport" below.
@@ -363,6 +371,37 @@ export const HAClient = (() => {
       indexFitting('cornice', sensors.corniceLights);
     }
 
+    // ---- rooms.json `bindings` (src/bindings.js) ----
+    // A binding the legacy slots cannot say: a curtain read from another
+    // attribute or inverted, a light whose on / brightness / colour follow
+    // their own entities or transforms. normaliseBindings has already
+    // refused any target ALSO bound in its legacy slot, so nothing here is
+    // driven twice. A curtain joins the fitting index (availability, the
+    // multi-motor fold and the resync all apply unchanged) with its binding
+    // as the reading's override; a light gets its own composite fold.
+    const bindBlock = normaliseBindings({ rooms, sensors, bindings }).block;
+    const coverOverride = new Map();          // cover entity -> its openPct binding
+    const lightBindings = new Map();          // target key -> { roomId, group, channels }
+    const lightBindIndex = new Map();         // entity -> [target key]
+    const lightComposite = new Map();         // target key -> { on, bri, color?, temp? } last emitted
+    bindBlock.forEach((t, key) => {
+      if (t.kind === 'curtain') {
+        const b = t.channels.openPct;
+        fittingGroups.curtain[t.id] = [b.entity];
+        fittingIndex.set(b.entity, { kind: 'curtain', targetId: t.id });
+        coverOverride.set(b.entity, b);
+      } else {
+        lightBindings.set(key, { roomId: t.room, group: t.channel, channels: t.channels });
+        Object.values(t.channels).forEach(c => {
+          const list = lightBindIndex.get(c.entity) || [];
+          if (list.indexOf(key) === -1) list.push(key);
+          lightBindIndex.set(c.entity, list);
+        });
+      }
+    });
+    const watchSet = new Set(Array.isArray(watch) ? watch.filter(e => typeof e === 'string' && e) : []);
+    const watchedCallbacks = [];
+
     /**
      * One cover entity's state -> { pct, moving } or null when it has no
      * usable reading ('unavailable'/'unknown'), in which case the curtain
@@ -383,6 +422,24 @@ export const HAClient = (() => {
       const moving = (st === 'opening' || st === 'closing') ? st : null;
       if (pct == null) pct = moving === 'opening' ? 0 : 100;   // start of travel
       return { pct: Math.max(0, Math.min(100, Math.round(pct))), moving };
+    }
+
+    /**
+     * A cover read through a `bindings` openPct binding (another attribute,
+     * or inverted). Falls back to the cover's own state (open / closed /
+     * opening / closing) when the attribute is not reported, inverted too
+     * when the binding is.
+     */
+    function parseCoverBound(haState, b) {
+      const base = parseCover(haState);
+      const inv = b.transform === 'invert';
+      const flip = m => (m === 'opening' ? 'closing' : m === 'closing' ? 'opening' : m);
+      const v = readBinding(haState, b);
+      if (typeof v === 'number' && isFinite(v)) {
+        return { pct: Math.max(0, Math.min(100, Math.round(v))), moving: base ? (inv ? flip(base.moving) : base.moving) : null };
+      }
+      if (!base) return null;
+      return inv ? { pct: 100 - base.pct, moving: flip(base.moving) } : base;
     }
 
     /** One light entity's state -> { on, bri, color|null }. */
@@ -437,7 +494,9 @@ export const HAClient = (() => {
 
       if (kind === 'curtain') maybeUpdateCurtainAvailability(entityId, targetId, haState);
 
-      const reading = kind === 'curtain' ? parseCover(haState) : parseCorniceLight(haState);
+      const override = kind === 'curtain' ? coverOverride.get(entityId) : null;
+      const reading = kind === 'curtain' ? (override ? parseCoverBound(haState, override) : parseCover(haState))
+        : parseCorniceLight(haState);
       if (!reading) return false;
       fittingEntity.set(entityId, reading);
       const resolved = resolveFitting(kind, targetId);
@@ -579,13 +638,21 @@ export const HAClient = (() => {
     // attribute). Any other attribute-only republish (volume, media
     // position) does not fire, so a consumer may repaint on every call.
     const itemEntityCallbacks = [];
+    // A watched entity's row repaints on these, besides its state string.
+    const WATCHED_ATTRS = ['brightness', 'rgb_color', 'hs_color', 'current_position'];
     function noteRaw(st) {
       if (!st || !st.entity_id) return;
       if (!entityIndex.has(st.entity_id) && !climateIndex.has(st.entity_id) && !itemEntityIds.has(st.entity_id) &&
-        !fittingIndex.has(st.entity_id)) return;
+        !fittingIndex.has(st.entity_id) && !lightBindIndex.has(st.entity_id) && !watchSet.has(st.entity_id)) return;
       const prev = rawStates.get(st.entity_id);
       const raw = { state: st.state, attributes: st.attributes || {} };
       rawStates.set(st.entity_id, raw);
+      if (watchSet.has(st.entity_id) && (!prev || prev.state !== raw.state ||
+        WATCHED_ATTRS.some(a => JSON.stringify(prev.attributes[a]) !== JSON.stringify(raw.attributes[a])))) {
+        watchedCallbacks.forEach(cb => {
+          try { cb(st.entity_id, raw); } catch (e) { console.warn('HAClient watchedCb:', e); }
+        });
+      }
       const watched = itemWatched.get(st.entity_id);
       const attrChanged = !!prev && !!watched && watched.some(a => prev.attributes[a] !== raw.attributes[a]);
       if (itemEntityIds.has(st.entity_id) && (!prev || prev.state !== raw.state || attrChanged)) {
@@ -806,6 +873,76 @@ export const HAClient = (() => {
       });
     }
 
+    /**
+     * One entity of a `bindings` light target -> that target's composite
+     * { on, bri, color?, temp? }, each channel read from ITS entity through
+     * its attribute and transform (src/bindings.js readBinding). A channel
+     * that cannot be read keeps its last value. Fires the same onStateChange
+     * callbacks as a legacy channel, only when the composite changed (a
+     * snapshot always fires, like processStateUpdate).
+     */
+    function processLightBinding(entityId, haState, bypassEcho) {
+      const keys = lightBindIndex.get(entityId);
+      if (!keys) return;
+      if (!bypassEcho) {
+        const pendingTs = pendingCommands.get(entityId);
+        if (pendingTs && (Date.now() - pendingTs) < 2000) return;
+      }
+      keys.forEach(key => {
+        const lb = lightBindings.get(key);
+        const prev = lightComposite.get(key) || { on: false, bri: 0 };
+        const next = Object.assign({}, prev);
+        const ch = lb.channels;
+        if (ch.on && ch.on.entity === entityId) {
+          const on = readBinding(haState, ch.on);
+          if (typeof on === 'boolean') next.on = on;
+          if (lb.group === 'main') {
+            const k = (haState.attributes || {}).color_temp_kelvin;
+            next.temp = typeof k === 'number' ? k : 4000;
+          }
+        }
+        if (ch.brightness && ch.brightness.entity === entityId) {
+          const bri = readBinding(haState, ch.brightness);
+          if (typeof bri === 'number' && isFinite(bri)) next.bri = Math.max(0, Math.min(100, Math.round(bri)));
+          else if (!ch.on || ch.on.entity === entityId) next.bri = next.on ? (prev.bri || 100) : 0;
+        }
+        if (ch.color && ch.color.entity === entityId) {
+          const c = readBinding(haState, ch.color);
+          if (typeof c === 'string') next.color = c;
+        }
+        const same = JSON.stringify(next) === JSON.stringify(lightComposite.get(key));
+        lightComposite.set(key, next);
+        if (same && !bypassEcho) return;
+        const out = { on: next.on, bri: next.bri };
+        if (next.temp !== undefined) out.temp = next.temp;
+        if (next.color !== undefined) out.color = next.color;
+        stateCallbacks.forEach(cb => {
+          try { cb(lb.roomId, lb.group, out); } catch (e) { console.warn('HAClient stateCb:', e); }
+        });
+      });
+    }
+
+    // ---- The entity picker (edit mode) ----
+    // Edit mode asks for the entity list on demand: its OWN get_states, whose
+    // result is mapped straight to { entity_id, friendly_name, domain } in
+    // the supported domains (src/bindings.js pickerEntities) and never
+    // stored here. Nothing else the client does needs the full list.
+    const pendingResults = new Map();   // request id -> { resolve, reject, timer, domains }
+    function listEntities(domains, timeoutMs) {
+      if (!authed || !ws || ws.readyState !== WebSocket.OPEN) {
+        return Promise.reject(new Error('Home Assistant is not connected'));
+      }
+      const id = wsId++;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingResults.delete(id);
+          reject(new Error('Home Assistant did not answer'));
+        }, timeoutMs || 15000);
+        pendingResults.set(id, { resolve, reject, timer, domains });
+        wsSend({ id, type: 'get_states' });
+      });
+    }
+
     // ---- WebSocket ----
 
     let getStatesId = null;
@@ -882,6 +1019,12 @@ export const HAClient = (() => {
           console.error('HAClient: Auth failed');
           setStatus('auth_failed');
           ws.close();
+        } else if (msg.type === 'result' && pendingResults.has(msg.id)) {
+          const req = pendingResults.get(msg.id);
+          pendingResults.delete(msg.id);
+          clearTimeout(req.timer);
+          if (msg.success && Array.isArray(msg.result)) req.resolve(pickerEntities(msg.result, req.domains));
+          else req.reject(new Error('Home Assistant refused the entity list'));
         } else if (msg.type === 'result' && msg.id === getStatesId) {
           if (msg.success && Array.isArray(msg.result)) {
             const fired = snapshotFired = new Set();
@@ -890,6 +1033,7 @@ export const HAClient = (() => {
                 noteRaw(state);
                 if (state.entity_id === 'sun.sun') processSun(state);
                 if (entityIndex.has(state.entity_id)) processStateUpdate(state.entity_id, state, true);
+                if (lightBindIndex.has(state.entity_id)) processLightBinding(state.entity_id, state, true);
                 // Sensors are folded in from the SAME get_states snapshot, so a
                 // room that is already occupied (or a door already open) is
                 // correct on first paint rather than only after the sensor
@@ -920,6 +1064,7 @@ export const HAClient = (() => {
           noteRaw(new_state);
           if (entity_id === 'sun.sun') processSun(new_state);
           if (entityIndex.has(entity_id)) processStateUpdate(entity_id, new_state, false);
+          if (lightBindIndex.has(entity_id)) processLightBinding(entity_id, new_state, false);
           else if (sensorIndex.has(entity_id)) processSensorUpdate(entity_id, new_state);
           if (fittingIndex.has(entity_id)) processFittingUpdate(entity_id, new_state);
           if (climateIndex.has(entity_id)) processClimateUpdate(entity_id, new_state);
@@ -930,6 +1075,8 @@ export const HAClient = (() => {
       ws.onclose = () => {
         ws = null;
         authed = false;
+        pendingResults.forEach(r => { clearTimeout(r.timer); r.reject(new Error('Home Assistant disconnected')); });
+        pendingResults.clear();
         // Drop every debounced send still pending: it could only fire into a
         // dead socket now, or -- after a fast reconnect -- replay a value the
         // user set before the outage. The reconnect resync repaints the UI.
@@ -1099,6 +1246,12 @@ export const HAClient = (() => {
       getRawState(entityId) { return rawStates.get(entityId) || null; },
       // cb(entityId, raw) -- see itemEntityCallbacks above.
       onItemEntityChange(cb) { itemEntityCallbacks.push(cb); },
+      // cb(entityId, raw) for a `watch`ed entity (a sidebar extra row): its
+      // state string or a displayed attribute changed.
+      onWatchedChange(cb) { watchedCallbacks.push(cb); },
+      // Edit mode's entity picker: a fresh get_states, mapped to
+      // [{ entity_id, friendly_name, domain }] in `domains` (src/bindings.js).
+      listEntities,
       onStatusChange(cb) { statusCallbacks.push(cb); },
       // Test/diagnostic seam: drive a sensor without a live HA socket. Returns
       // true if the resolved boolean changed (and callbacks fired).

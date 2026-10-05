@@ -294,6 +294,21 @@ export function footprintOverhang(poly, at, size) {
 }
 
 /**
+ * The DEEPEST a footprint reaches out of `poly` (cm, the largest distance
+ * of any outside sample, less EDGE_TOLERANCE_CM), 0 when wholly inside. For
+ * flagging a wall item deeper than its room (B2 review finding 4).
+ */
+export function footprintDepthOut(poly, at, size) {
+  if (!Array.isArray(poly) || poly.length < 3) return 0;
+  let worst = 0;
+  footprintSamples(at, size.width, size.depth, size.rotation).forEach(p => {
+    if (insidePoly(poly, p[0], p[1])) return;
+    worst = Math.max(worst, polyEdgeDist(poly, p) - EDGE_TOLERANCE_CM);
+  });
+  return worst;
+}
+
+/**
  * Where a free item's CENTRE may go, dragged from `from` toward `to` (house
  * cm), so its whole rotated footprint (`size`: { width, depth, rotation })
  * stays inside `poly`.
@@ -344,31 +359,68 @@ export function confineFootprint(poly, from, to, size) {
  * footprint fits wholly inside `poly`, or null when it fits nowhere. For
  * placing a new item at a tap, and for re-settling an item a rotation or a
  * resize pushed through a wall.
+ *
+ * Bounded, coarse to fine (B2 review: a 1 cm search of the whole room ran
+ * on every slider tick): a COARSE grid (10 cm, or `step` if coarser) is
+ * tried nearest first, stopping at the first fit, then the fine `step` grid
+ * only around that fit. And it prefers the item's own REGION: a fit the
+ * straight line from `near` reaches without leaving the room (the same arm
+ * of an L) wins over a nearer one round a corner, so a resize never makes
+ * an item jump into the other arm. Only when no such fit exists is any fit
+ * taken.
  */
 export function nearestFit(poly, near, size, step) {
   if (!Array.isArray(poly) || poly.length < 3) return near.slice();
   const fits = p => footprintOverhang(poly, p, size) === 0;
   const n0 = [Math.round(near[0]), Math.round(near[1])];
   if (fits(n0)) return n0;
-  const s = step || 5;
+  const fine = step || 5;
+  const coarse = Math.max(fine, 10);
   const xs = poly.map(p => p[0]), ys = poly.map(p => p[1]);
   const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
   const r = (size.rotation || 0) * Math.PI / 180;
   const ex = (Math.abs(Math.cos(r)) * size.width + Math.abs(Math.sin(r)) * size.depth) / 2;
   const ey = (Math.abs(Math.sin(r)) * size.width + Math.abs(Math.cos(r)) * size.depth) / 2;
   if (2 * ex > x2 - x1 + 2 * EDGE_TOLERANCE_CM || 2 * ey > y2 - y1 + 2 * EDGE_TOLERANCE_CM) return null;
+  const lox = Math.ceil(x1 + ex), hix = Math.floor(x2 - ex), loy = Math.ceil(y1 + ey), hiy = Math.floor(y2 - ey);
+  const d2 = (x, y) => (x - near[0]) * (x - near[0]) + (y - near[1]) * (y - near[1]);
   const cand = [];
-  for (let x = Math.ceil(x1 + ex); x <= Math.floor(x2 - ex) + 1e-9; x += s) {
-    for (let y = Math.ceil(y1 + ey); y <= Math.floor(y2 - ey) + 1e-9; y += s) {
-      cand.push([x, y, (x - near[0]) * (x - near[0]) + (y - near[1]) * (y - near[1])]);
-    }
+  for (let x = lox; x <= hix + 1e-9; x += coarse) {
+    for (let y = loy; y <= hiy + 1e-9; y += coarse) cand.push([x, y, d2(x, y)]);
   }
   // The room's own bbox-limited centre range, as an exact point too (a
   // room exactly the item's size has no grid point inside the range).
   cand.push([Math.round((x1 + x2) / 2), Math.round((y1 + y2) / 2), Infinity]);
   cand.sort((a, b) => a[2] - b[2]);
-  for (const c of cand) if (fits([c[0], c[1]])) return [c[0], c[1]];
-  return null;
+  const nearInside = insidePoly(poly, near[0], near[1]);
+  const sameRegion = p => nearInside && segmentInside(poly, near, p);
+  let best = null, regional = false;
+  for (const c of cand) if (sameRegion(c) && fits(c)) { best = c; regional = true; break; }
+  if (!best) for (const c of cand) if (fits(c)) { best = c; break; }
+  if (!best) return null;
+  if (fine < coarse) {
+    // Refine on the fine grid within one coarse cell of the coarse fit.
+    let refined = best, rd = d2(best[0], best[1]);
+    for (let x = best[0] - coarse; x <= best[0] + coarse; x += fine) {
+      for (let y = best[1] - coarse; y <= best[1] + coarse; y += fine) {
+        const d = d2(x, y);
+        if (d >= rd || x < lox || x > hix || y < loy || y > hiy) continue;
+        if ((!regional || sameRegion([x, y])) && fits([x, y])) { refined = [x, y]; rd = d; }
+      }
+    }
+    best = refined;
+  }
+  return [best[0], best[1]];
+}
+
+/** Does the straight segment a -> b stay inside `poly` (sampled every 5 cm)? */
+export function segmentInside(poly, a, b) {
+  const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 5));
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    if (!insidePoly(poly, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)) return false;
+  }
+  return true;
 }
 
 /**
@@ -534,4 +586,70 @@ export function distToSlider(r) {
 export function sliderToDist(s) {
   const t = clamp(s, 0, DIST_STEPS) / DIST_STEPS;
   return Math.round(DIST_MIN * Math.pow(DIST_MAX / DIST_MIN, t) * 100) / 100;
+}
+
+// ---- Static values (plan B3): geometry-side, never an entity id ------------
+
+/** The geometry schemaVersion that introduced a light fixture's `static`. */
+export const FIXTURE_STATIC_SCHEMA_VERSION = '1.5';
+
+function raiseVersion(doc, v) {
+  const a = String(doc.schemaVersion || '0').split('.').map(Number), b = v.split('.').map(Number);
+  if ((a[0] || 0) < b[0] || ((a[0] || 0) === b[0] && (a[1] || 0) < b[1])) doc.schemaVersion = v;
+}
+
+/** A curtain's static `openPct` (0..100, whole %): how it hangs with no cover bound. */
+export function setCurtainOpenPct(doc, id, pct) {
+  const list = doc && Array.isArray(doc.curtains) ? doc.curtains : null;
+  const k = list ? list.findIndex(c => c && c.id === id) : -1;
+  if (k < 0) throw new Error('no curtain "' + id + '" in this profile');
+  if (!num(pct)) throw new Error('openPct must be a number');
+  const curtains = list.slice();
+  curtains[k] = setKey(list[k], 'openPct', Math.max(0, Math.min(100, Math.round(pct))));
+  return Object.assign({}, doc, { curtains });
+}
+
+/**
+ * A light channel's static look on its geometry fixture (`static`: { on,
+ * brightness 0..100, color '#rrggbb' }), or null to remove it. Raises
+ * schemaVersion to 1.5. Throws when the room draws no fixture on that
+ * channel (a bound-only channel has nothing to hold a static value).
+ */
+export function setFixtureStatic(doc, room, channel, st) {
+  const lights = doc && Array.isArray(doc.lights) ? doc.lights : null;
+  const li = lights ? lights.findIndex(l => l && l.room === room && Array.isArray(l.fixtures) && l.fixtures.some(f => f && f.channel === channel)) : -1;
+  if (li < 0) throw new Error('room "' + room + '" draws no "' + channel + '" fixture');
+  const fixtures = lights[li].fixtures.slice();
+  const fi = fixtures.findIndex(f => f && f.channel === channel);
+  let fx;
+  if (!st) { fx = Object.assign({}, fixtures[fi]); delete fx.static; }
+  else {
+    const out = {};
+    if (typeof st.on === 'boolean') out.on = st.on;
+    if (num(st.brightness)) out.brightness = Math.max(0, Math.min(100, Math.round(st.brightness)));
+    if (typeof st.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(st.color)) out.color = st.color.toLowerCase();
+    fx = setKey(fixtures[fi], 'static', out);
+  }
+  fixtures[fi] = fx;
+  const nextLights = lights.slice();
+  nextLights[li] = setKey(lights[li], 'fixtures', fixtures);
+  const next = Object.assign({}, doc, { lights: nextLights });
+  if (st) raiseVersion(next, FIXTURE_STATIC_SCHEMA_VERSION);
+  return next;
+}
+
+/** A channel's static look as authored, or null. */
+export function fixtureStatic(doc, room, channel) {
+  for (const l of (doc && Array.isArray(doc.lights) ? doc.lights : [])) {
+    if (!l || l.room !== room || !Array.isArray(l.fixtures)) continue;
+    const f = l.fixtures.find(x => x && x.channel === channel);
+    if (f) return f.static ? Object.assign({}, f.static) : null;
+  }
+  return null;
+}
+
+/** Does the room draw a fixture on this channel? */
+export function hasFixture(doc, room, channel) {
+  return (doc && Array.isArray(doc.lights) ? doc.lights : []).some(l => l && l.room === room &&
+    Array.isArray(l.fixtures) && l.fixtures.some(f => f && f.channel === channel));
 }

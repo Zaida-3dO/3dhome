@@ -4408,6 +4408,27 @@
           "type": "integer",
           "minimum": 1,
           "description": "How many fixtures to auto-place when `positions` is absent. Ignored when `positions` is given."
+        },
+        "static": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "description": "The channel's STATIC look, shown while rooms.json binds no entity to it (a binding always wins). Without it an unbound channel renders off. Set by edit mode's Static switch. Added in schemaVersion 1.5.",
+          "properties": {
+            "on": {
+              "type": "boolean"
+            },
+            "brightness": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100,
+              "description": "Percent."
+            },
+            "color": {
+              "$ref": "#/$defs/hexColor",
+              "description": "Accent channels only; the main channel uses its colorTemperatureK."
+            }
+          }
         }
       },
       "required": [
@@ -4834,6 +4855,35 @@
       ],
       "additionalProperties": false
     },
+    "channelBinding": {
+      "type": "object",
+      "required": [
+        "entity"
+      ],
+      "additionalProperties": false,
+      "description": "One channel bound to a Home Assistant entity: the entity, which attribute of it to read (none: its state), and a transform from the CLOSED list -- never an expression.",
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/entityId"
+        },
+        "attribute": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "description": "The attribute read (e.g. current_position, brightness, rgb_color). Omitted: the channel's default (a cover's current_position, a light's brightness / rgb_color; `on` reads the state)."
+        },
+        "transform": {
+          "type": "string",
+          "enum": [
+            "identity",
+            "pct255",
+            "invert",
+            "onOff",
+            "rgb"
+          ],
+          "description": "identity: as reported. pct255: 0-255 to 0-100. invert: 100 - value. onOff: 'on' / 'open' to true. rgb: [r, g, b] to #rrggbb. Omitted: the channel's default."
+        }
+      }
+    },
     "roomsProfile": {
       "type": "object",
       "title": "rooms.json — the Home Assistant binding",
@@ -5139,6 +5189,168 @@
             }
           },
           "additionalProperties": false
+        },
+        "bindings": {
+          "type": "object",
+          "description": "Bindings the legacy slots cannot say (src/bindings.js). A target is `curtain:<curtainId>` (channel openPct) or `light:<roomId>/<channel>` (channels on, brightness, color). Edit mode writes a binding into its usual slot -- sensors.curtains, rooms[room][channel] -- whenever that slot can say it exactly (default attribute and transform, a light's three channels on one entity), and here only otherwise: a cover read inverted or from another attribute, a light whose channels follow different entities or transforms. A target bound BOTH here and in its usual slot is an error (scripts/validate-house.py) and the engine uses the usual slot. Precedence for what a channel shows: a rooms.json binding, else the geometry static value (a curtain's openPct, a fixture's `static`), else the engine default. Needs rooms schemaVersion 1.11.",
+          "propertyNames": {
+            "pattern": "^(curtain:[a-z][a-z0-9_]*|light:[a-z][a-z0-9_]*/[a-z][a-z0-9_]*)$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": false,
+            "properties": {
+              "openPct": {
+                "$ref": "#/$defs/channelBinding"
+              },
+              "on": {
+                "$ref": "#/$defs/channelBinding"
+              },
+              "brightness": {
+                "$ref": "#/$defs/channelBinding"
+              },
+              "color": {
+                "$ref": "#/$defs/channelBinding"
+              }
+            }
+          }
+        },
+        "sidebar": {
+          "type": "object",
+          "description": "Per-room shape of the sidebar's room view (src/room-panel.js sidebarRows). A room with no entry -- and a profile with no `sidebar` -- shows exactly the rows it derives from its bindings: main, ambient, galaxy, a door per bound contact, motion, a curtain per bound cover, temperature, and the room script last. Needs rooms schemaVersion 1.11.",
+          "propertyNames": {
+            "$ref": "#/$defs/roomId"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "hide": {
+                "type": "array",
+                "uniqueItems": true,
+                "description": "Derived rows NOT to show: 'main', 'ambient', 'galaxy', 'motion', 'climate', 'room-script', one door or curtain by id ('door:<doorId>', 'curtain:<curtainId>'), or every door / curtain ('doors', 'curtains'). The 'HA offline' note cannot be hidden.",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(main|ambient|galaxy|motion|climate|room-script|doors|curtains|door:[a-z][a-z0-9_]*|curtain:[a-z][a-z0-9_]*)$"
+                }
+              },
+              "show": {
+                "type": "array",
+                "uniqueItems": true,
+                "description": "Furniture rows, OPT-IN: 'item:<furnitureId>' shows that item's first light / switch / media row (its sensors.items card) in the room's sidebar, in this order, after the derived rows. An item not named here never gets a row.",
+                "items": {
+                  "type": "string",
+                  "pattern": "^item:[a-z][a-z0-9_]*$"
+                }
+              },
+              "extra": {
+                "type": "array",
+                "description": "Manual rows, in order, after the item rows and before the room script: a light (a group, say, that no one fixture owns), a cover, a switch, or a script button. A script with `confirm: true` is the room script's two-step button (tap, then tap again within 4 s); without it, one tap runs it.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "entity",
+                    "label"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "light",
+                        "cover",
+                        "switch",
+                        "script"
+                      ]
+                    },
+                    "entity": {
+                      "$ref": "#/$defs/entityId"
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 40
+                    },
+                    "confirm": {
+                      "type": "boolean",
+                      "description": "Script rows only: tap twice to run."
+                    },
+                    "variables": {
+                      "type": "object",
+                      "description": "Script rows only: passed as `variables` to script.turn_on."
+                    }
+                  },
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "kind": {
+                            "const": "light"
+                          }
+                        }
+                      },
+                      "then": {
+                        "properties": {
+                          "entity": {
+                            "pattern": "^light\\."
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "kind": {
+                            "const": "cover"
+                          }
+                        }
+                      },
+                      "then": {
+                        "properties": {
+                          "entity": {
+                            "pattern": "^cover\\."
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "kind": {
+                            "const": "switch"
+                          }
+                        }
+                      },
+                      "then": {
+                        "properties": {
+                          "entity": {
+                            "pattern": "^(switch|input_boolean)\\."
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "kind": {
+                            "const": "script"
+                          }
+                        }
+                      },
+                      "then": {
+                        "properties": {
+                          "entity": {
+                            "pattern": "^script\\."
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
         }
       },
       "required": [

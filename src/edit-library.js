@@ -27,6 +27,7 @@
 
 import { newItemId, wallPlacement, nearestFit, isWallAnchored } from './edit-ops.js';
 import { insidePoly } from './footstep-walk.js';
+import { optionValue } from './furniture/controls.js';
 
 export const GROUPS = Object.freeze([
   { id: 'living', label: 'Living room' },
@@ -183,4 +184,43 @@ export function roomAtPoint(compiled, point) {
     if (insidePoly(poly, point[0], point[1])) return id;
   }
   return null;
+}
+
+/**
+ * Where a placing tap lands: the room the scene's picker chose (a wall tap
+ * resolves to the side tapped) and a point inside it -- the floor-plane
+ * point when that is inside the room, else the picker's own point (a wall
+ * hit stepped back off its face). B2 review finding 1: a straight-down
+ * projection alone put a tap at a wall's base or top in the wall strip, or
+ * through the wall into the neighbour.
+ * @param pick  { room, point } from home.placementPick, or null
+ * @param plan  the floor-plane point of the tap (house cm), or null
+ */
+export function resolvePlacement(compiled, pick, plan) {
+  const room = pick && pick.room && compiled && compiled.rooms && compiled.rooms[pick.room] ? pick.room : null;
+  if (!room) return { room: null, point: plan || null };
+  const r = compiled.rooms[room];
+  const poly = r.poly || [[r.x1, r.y1], [r.x2, r.y1], [r.x2, r.y2], [r.x1, r.y2]];
+  if (plan && insidePoly(poly, plan[0], plan[1])) return { room, point: plan };
+  return { room, point: (pick && pick.point) || plan || null };
+}
+
+/** The `kind` values that change how an item MOUNTS, per type (the rest mount as BASE_MOUNT says). */
+export const MOUNT_KINDS = Object.freeze({ plant: { 'wall-planter': 'wall' }, speaker: { 'floor-standing': 'floor', centre: 'floor' } });
+const BASE_MOUNT = { plant: 'floor', speaker: 'wall' };
+
+/**
+ * The options a select offers. For a `kind` whose values change how the
+ * item mounts, a PLACED item is offered only the kinds of its own mount
+ * (B2 review: a floor plant listed wall-planter) -- its current value is
+ * always kept. `ctx` { mount: 'wall'|'floor' } (null: every option).
+ */
+export function kindOptionsFor(type, control, values, ctx) {
+  const opts = control.options || [];
+  const kinds = MOUNT_KINDS[type];
+  if (control.key !== 'kind' || !kinds || !ctx || !ctx.mount) return opts;
+  return opts.filter(o => {
+    const v = optionValue(o);
+    return (kinds[v] || BASE_MOUNT[type]) === ctx.mount || (values && v === values.kind);
+  });
 }

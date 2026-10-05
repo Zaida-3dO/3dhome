@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.10"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card, `1.9` its `cameras` rows and `1.10` its `actions` rows and a TV row's `art` condition. `geometry.json` is at `"1.4"`: `1.1` added the optional `windows` and `curtains`, `1.2` the optional `furniture`, `1.3` a wall's optional `finishes`, and `1.4` the optional camera-focus `view` on a room, a furniture item or a curtain. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.11"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card, `1.9` its `cameras` rows, `1.10` its `actions` rows and a TV row's `art` condition, and `1.11` the optional top-level `bindings` and `sidebar`. `geometry.json` is at `"1.5"`: `1.1` added the optional `windows` and `curtains`, `1.2` the optional `furniture`, `1.3` a wall's optional `finishes`, `1.4` the optional camera-focus `view` on a room, a furniture item or a curtain, and `1.5` a light fixture's optional `static` look. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -891,6 +891,12 @@ the engine tucks it just under the ceiling; you need it for a wall strip or an
 under-desk light. `size` (a `[length, height, depth]` in centimetres) applies to
 `strip` fixtures so a 2 m cornice run reads as a line rather than a point.
 
+A channel with **no** Home Assistant entity renders off, unless its fixture
+carries a `static` look: `"static": { "on": true, "brightness": 40, "color":
+"#00ccff" }` (brightness in percent; colour for accent channels only). A
+binding in `rooms.json` always wins over it. Edit mode's **Static** switch
+writes it. Needs `schemaVersion` `"1.5"`.
+
 ### Materials and textures
 
 `materials.wallColor` is your interior paint. If you know only the product name,
@@ -1052,6 +1058,49 @@ untouched item is copied byte for byte.
 While editing, the furniture is built one piece per room and the selected item
 on its own, so a change rebuilds only that item. Leaving edit mode puts back
 the merged house-wide build view mode uses.
+
+A placing tap picks its room the way a room tap does (`src/room-pick.js`): a
+tap on a wall's base, its top or its face belongs to the side you tapped, never
+to the room behind the wall. Re-sizing or turning an item that then no longer
+fits moves it to the nearest place it does fit **in the same part of the room**
+(it never jumps into the other arm of an L-shaped room), once the slider stops.
+A wall item deeper than the room in front of it is flagged in the panel ("It
+sticks out of the room by about N cm"); make it shallower or narrower.
+
+#### Binding to Home Assistant in edit mode
+
+Every control the app drives from Home Assistant has a **Static | Entity**
+switch in edit mode:
+
+| Select | Control | Static (geometry.json) | Entity (rooms.json) |
+|---|---|---|---|
+| a room (Lights) or a light | each light channel: on, brightness, colour | the fixture's `static` look | a `light.*`, with a brightness transform |
+| a curtain | open position | the curtain's `openPct` | a `cover.*`, with the attribute and transform it is read through |
+| a furniture item (Home Assistant) | its tap-card rows: media / light / switch | — | a `media_player.*`, `light.*`, `switch.*` / `input_boolean.*` per row |
+
+**Choose…** opens a searchable list of what Home Assistant has, by friendly
+name, filtered to the domains that control can take (lights, covers, switches,
+input booleans, media players and scripts are the only domains it ever lists).
+Edit mode asks Home Assistant for that list itself when you open it (its own
+`get_states`), keeps only each entity's id, name and domain, and forgets it when
+you leave edit mode. With no Home Assistant connected you can type an entity id
+instead.
+
+Entity ids are written **only** to `rooms.json`, and static values **only** to
+`geometry.json`. A binding goes into its usual `rooms.json` slot whenever that
+slot can say it (`sensors.curtains`, `rooms[room][channel]`, `sensors.items`);
+only a binding it cannot say (an inverted cover, a light channel read with a
+different brightness transform) goes into the `bindings` block. Bindings and
+sidebar changes are saved to the draft like any edit, and apply when the page
+next loads it (**Reload to apply** appears in the banner after Save); static
+looks show at once.
+
+A selected room also has a **Sidebar rows** section: tick off the rows it
+derives that you do not want, opt furniture rows in, and add extra rows (a
+light group, a cover, a switch or a script button, labelled, reorderable, a
+script optionally two-step). See `sidebar` below. A furniture item's Home
+Assistant section has the same opt-in as a tick box, **Show in the room
+sidebar**.
 
 ### Camera presets — why they are optional
 
@@ -1683,6 +1732,97 @@ room's variables need. Several rooms may pass **identical** variables — two
 rooms the script treats as one area — and the validator does not report that.
 `roomScripts` needs `schemaVersion` `"1.7"`; the validator errors on a room id
 the geometry does not have, and the schema requires a `script.*` entity.
+
+### `bindings` — what the usual slots cannot say
+
+```json
+"bindings": {
+  "curtain:lounge_sheer": { "openPct": { "entity": "cover.demo_lounge_sheer", "transform": "invert" } },
+  "light:study/ambient": {
+    "on":         { "entity": "light.demo_study_strip" },
+    "brightness": { "entity": "light.demo_study_dimmer", "transform": "identity" },
+    "color":      { "entity": "light.demo_study_strip" }
+  }
+}
+```
+
+A **target** is something the app already drives: `curtain:<curtainId>` (its
+`openPct`) or `light:<roomId>/<channel>` (its `on`, `brightness` and `color`).
+Each channel names an `entity`, optionally the `attribute` to read (none: the
+state) and a `transform` from a closed list — never an expression:
+
+| transform | reads |
+|---|---|
+| `identity` | the value as reported |
+| `pct255` | 0–255 as 0–100 (a light's `brightness`) |
+| `invert` | 100 − the value (a cover that reports how *closed* it is) |
+| `onOff` | `on` / `open` as on |
+| `rgb` | `[r, g, b]` as a colour |
+
+The usual slots mean the defaults: `sensors.curtains[id]` **is**
+`curtain:id.openPct` read from `current_position` as reported, and
+`rooms[room][channel]` **is** `light:room/channel` with all three channels on
+that entity (`on` from the state, brightness `pct255`, colour `rgb`). Write a
+binding in its usual slot whenever it can be said there — edit mode does — and
+in `bindings` only when it cannot. A target bound in **both** is an error in
+the validator, and the engine uses the usual slot and ignores the other. The
+client subscribes to every `bindings` entity, so a curtain bound only here
+moves on its cover's updates like any other. An inverted curtain's slider and
+Open / Close buttons are mirrored too. Needs `schemaVersion` `"1.11"`.
+
+### Precedence: binding, then static value, then default
+
+What a control shows is decided in this order:
+
+1. a **rooms.json binding** (its usual slot or `bindings`), while Home
+   Assistant reports;
+2. else the **geometry static value**: a curtain's `openPct`, a light
+   fixture's `static` look (`{ "on", "brightness", "color" }`, geometry
+   `schemaVersion` `"1.5"`);
+3. else the engine's **default** (a builder's `DEFAULTS`; an unbound light
+   channel off).
+
+A static look on a channel that is also bound is ignored. A bound channel
+with no reading yet shows the default until Home Assistant reports.
+
+### `sidebar` — which rows a room shows
+
+```json
+"sidebar": {
+  "lounge": {
+    "hide":  ["main", "ambient"],
+    "show":  ["item:lounge_lamp"],
+    "extra": [
+      { "kind": "script", "entity": "script.demo_lounge_off", "label": "Kill room", "confirm": true },
+      { "kind": "light",  "entity": "light.demo_lounge_ambience", "label": "Ambient" }
+    ]
+  }
+}
+```
+
+A room's view lists the rows it **derives** from its bindings — main light,
+ambient, galaxy, a door per bound contact, motion, a curtain per bound cover,
+temperature, and the room script last. `sidebar` reshapes one room's list:
+
+- `hide` drops derived rows: `main`, `ambient`, `galaxy`, `motion`,
+  `climate`, `room-script`, one door or curtain by id (`door:<id>`,
+  `curtain:<id>`), or all of them (`doors`, `curtains`). The "HA offline"
+  note cannot be hidden.
+- `show` adds **furniture rows**, which are **opt-in**: an item gets a row
+  only when it is named here (`item:<furnitureId>`), showing the first light,
+  switch or media row of its `sensors.items` card. Nothing appears that the
+  profile did not ask for.
+- `extra` adds manual rows, in order, after the furniture rows: a `light`
+  (on / off and brightness — an ambience **group** that no single fixture
+  owns, say), a `cover` (open / close and position), a `switch` (a
+  `switch.*` or `input_boolean.*`) or a `script` button. A script with
+  `"confirm": true` is the Kill room button exactly — tap, then tap again
+  within about 4 seconds; without it one tap runs it. `variables` (script
+  only) are passed to `script.turn_on`.
+
+A room with no entry, and a profile with no `sidebar` at all, shows exactly
+the rows it always did. The validator errors on a room, or a `show` item, that
+the geometry does not have. Needs `schemaVersion` `"1.11"`.
 
 Leave `url` and `fallbackUrl` out of a committed profile. A hostname in a
 tracked file discloses infrastructure; supply them through runtime config

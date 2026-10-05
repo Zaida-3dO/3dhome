@@ -446,7 +446,7 @@ const onReading = (over = {}) => HAClient.parseClimate({
     /'curtain-' \+ curtainId, delayMs,\s*\(\) => curtainIsAvailable\(curtainId\)\)/.test(html) &&
     /'climate-' \+ roomId, delayMs,\s*\(\) => climateCanTakeTarget\(roomId\)\)/.test(html));
   check('index: curtain slider build checks availability',
-    /curtainSliderCommand\(HAClient\.coverPositionCommand, pct,\s*curtainEntities\.get\(curtainId\), curtainIsAvailable\(curtainId\)\)/.test(html));
+    /curtainSliderCommand\(HAClient\.coverPositionCommand, curtainOut\(curtainId, pct\),\s*curtainEntities\.get\(curtainId\), curtainIsAvailable\(curtainId\)\)/.test(html));
   check('index: a reading held by the lock marks the row dirty (both kinds)',
     /climateSender\.markDirty\(roomId\)/.test(html) && (html.match(/curtainSender\.markDirty\(curtainId\)/g) || []).length === 2);
   check('index: curtain row paints the reported position, not the animated one',
@@ -457,10 +457,20 @@ const onReading = (over = {}) => HAClient.parseClimate({
   // through the shared sendScript (src/script-call.js), gated likewise --
   // one call site, checked here; its guard is tested in
   // scripts/test-frame-art.mjs and scripts/test-room-script.mjs.
-  check('index: no callService outside the senders, sendToHA and vacuumSend',
-    (html.match(/ha\.callService(Debounced)?\(/g) || []).length === 4);
-  check('index: the only other send is the room script, through sendScript',
-    (html.match(/sendScript\(/g) || []).length === 1);
+  // Plus two for the sidebar's extra / item rows (rooms.json 1.11 `sidebar`):
+  // sidebarSend (refuses while offline) and the extra light's brightness
+  // slider (an onWrite handler, so the offline gate holds).
+  check('index: no callService outside the senders, sendToHA, vacuumSend and the sidebar extra rows',
+    (html.match(/ha\.callService(Debounced)?\(/g) || []).length === 6);
+  const sbSend = (html.match(/function sidebarSend\([\s\S]*?\n      \}/) || [''])[0];
+  check('index: sidebarSend refuses while HA is offline',
+    /if \(ha\) \{ if \(!haOffline\(ha\)\) ha\.callService\(/.test(sbSend), sbSend.slice(0, 200));
+  check('index: the extra light brightness send is inside an onWrite handler',
+    /onWrite\(el, 'input', e => \{[\s\S]{0,500}ha\.callServiceDebounced\('light', 'turn_on'/.test(html));
+  // The room script, and an extra script row (its two-step confirm, or a
+  // one-tap send), all through sendScript.
+  check('index: the only other sends are the room script and extra script rows, through sendScript',
+    (html.match(/sendScript\(/g) || []).length === 3);
   const vacSend = (html.match(/function vacuumSend\([\s\S]*?\n      \}/) || [''])[0];
   check('index: vacuumSend refuses offline and sends only when connected',
     /if \(!b \|\| haOffline\(ha\)\) return;/.test(vacSend) && /ha\.status === 'connected'/.test(vacSend) &&
