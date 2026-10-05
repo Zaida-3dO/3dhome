@@ -42,6 +42,7 @@
  * simple primitives.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { range, color, toggle } from './controls.js';
 
 export const TYPE = 'robot-vacuum';
 
@@ -327,3 +328,20 @@ export function toFurnitureJSON(params) {
   }
   return { type: TYPE, params: out };
 }
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  toggle('dock', 'Dock'),
+  range('width', 'Width', 20, 60, 1, 'cm'),
+  range('depth', 'Depth', 20, 70, 1, 'cm'),
+  range('height', 'Height', 6, 80, 1, 'cm'),
+  range('robotDiameter', 'Robot diameter', 20, 45, 1, 'cm'),
+  range('robotHeight', 'Robot height', 6, 15, 0.5, 'cm'),
+  range('towerWidth', 'Tower width', 15, 50, 1, 'cm'),
+  range('towerDepth', 'Tower depth', 10, 40, 1, 'cm'),
+  color('bodyColor', 'Body (robot, tower, plate)'),
+  color('bandColor', 'Band'),
+  color('puckColor', 'Lidar puck'),
+  color('ledColor', 'Status LED (glows)'),
+];

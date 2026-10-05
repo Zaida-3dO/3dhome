@@ -29,6 +29,7 @@
  * publishable corner-sofa shape only.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { range, color, select } from './controls.js';
 
 export const TYPE = 'sofa';
 
@@ -244,3 +245,23 @@ export function toFurnitureJSON(params) {
   }
   return { type: TYPE, params: out };
 }
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  select('chaise', 'Chaise', ['left', 'none', 'right']),
+  range('cushions', 'Seat cushions', 1, 4, 1),
+  range('width', 'Width', 120, 360, 1, 'cm'),
+  range('depth', 'Depth', 70, 260, 1, 'cm'),
+  range('height', 'Height (back top)', 60, 110, 1, 'cm'),
+  range('seatDepth', 'Seat depth (main leg)', 60, 130, 1, 'cm'),
+  range('chaiseWidth', 'Chaise width', 60, 160, 1, 'cm'),
+  range('seatHeight', 'Seat height', 30, 60, 1, 'cm'),
+  range('baseHeight', 'Plinth height', 5, 40, 1, 'cm'),
+  range('backDepth', 'Back depth', 10, 40, 1, 'cm'),
+  range('armWidth', 'Arm width', 8, 40, 1, 'cm'),
+  range('armHeight', 'Arm height', 40, 90, 1, 'cm'),
+  color('upholsteryColor', 'Upholstery (fabric)'),
+  color('baseColor', 'Plinth base'),
+  select('baseFinish', 'Plinth finish', ['matte', 'satin', 'gloss']),
+];

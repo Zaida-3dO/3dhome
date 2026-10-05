@@ -64,6 +64,7 @@
  * mechanism (also used by the desk LED strip, item 816d71ee).
  */
 import { makeFinish, isKeptFinish, FINISH_PARAMS } from './finishes.js';
+import { range, color, select, unsupported } from './controls.js';
 
 const TAU = Math.PI * 2;
 
@@ -930,3 +931,20 @@ export function build(THREE, params, opts) {
   wrapper.add(group);
   return wrapper;
 }
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  select('kind', 'Kind', ['framed', 'diy-numerals', 'diy-words']),
+  // The spec has one Diameter slider; width and height follow it (mirror).
+  Object.assign(range('diameter', 'Diameter', 20, 45, 1, 'cm'), { mirror: ['width', 'height'] }),
+  range('depth', 'Depth', 2, 8, 0.5, 'cm'),
+  color('faceColor', 'Face colour'),
+  color('rimColor', 'Rim colour'),
+  color('numeralColor', 'Numeral/dot colour'),
+  select('numeralFinish', 'Numeral finish', ['matte', 'satin']),
+  color('handColor', 'Hand colour'),
+  color('secondHandColor', 'Second hand colour'),
+  unsupported('width', 'Width', 'derived'),
+  unsupported('height', 'Height', 'derived'),
+];

@@ -42,6 +42,7 @@
  * helper says how big it came out and at what `elevation` to hang it.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { select, unsupported } from './controls.js';
 
 const CM = 0.01;
 
@@ -700,14 +701,50 @@ function buildTowelRail(THREE, params, opts) {
 
 // ---- the module's types ------------------------------------------------------------------
 
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+const BATHTUB_CONTROLS = [
+  select('wasteEnd', 'Waste end', ['left', 'right']),
+];
+
+const SHOWER_SCREEN_CONTROLS = [
+  select('frame', 'Frame', ['rail', 'full']),
+  select('hinge', 'Hinge', ['left', 'right']),
+  unsupported('panels', 'Panels', 'array'),
+  unsupported('width', 'Width', 'coupled'),
+];
+
+const SHOWER_SET_CONTROLS = [
+  unsupported('width', 'Width', 'derived'),
+  unsupported('depth', 'Depth', 'derived'),
+  unsupported('height', 'Height', 'derived'),
+];
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+const TOILET_CONTROLS = [
+  // The height is the cistern/plate top, not a free dimension: it follows seatHeight and the flush plate.
+  unsupported('height', 'Height', 'derived'),
+];
+
+const VANITY_CONTROLS = [
+  // depth and height follow counterDepth / counterHeight / the basin.
+  unsupported('depth', 'Depth', 'derived'),
+  unsupported('height', 'Height', 'derived'),
+];
+
+const SHOWER_TRAY_CONTROLS = []; // BathroomFittingsSpec has no slider for this type: controlsFor() derives all of it
+
+const TOWEL_RAIL_CONTROLS = []; // BathroomFittingsSpec has no slider for this type: controlsFor() derives all of it
+
 export const TYPES = Object.freeze({
-  'bathtub': Object.freeze({ DEFAULTS: BATHTUB_DEFAULTS, build: buildBathtub }),
-  'shower-screen': Object.freeze({ DEFAULTS: SHOWER_SCREEN_DEFAULTS, build: buildShowerScreen }),
-  'shower-set': Object.freeze({ DEFAULTS: SHOWER_SET_DEFAULTS, build: buildShowerSet }),
-  'shower-tray': Object.freeze({ DEFAULTS: SHOWER_TRAY_DEFAULTS, build: buildShowerTray }),
-  'toilet': Object.freeze({ DEFAULTS: TOILET_DEFAULTS, build: buildToilet }),
-  'towel-rail': Object.freeze({ DEFAULTS: TOWEL_RAIL_DEFAULTS, build: buildTowelRail }),
-  'vanity-counter': Object.freeze({ DEFAULTS: VANITY_DEFAULTS, build: buildVanity })
+  'bathtub': Object.freeze({ DEFAULTS: BATHTUB_DEFAULTS, build: buildBathtub, CONTROLS: BATHTUB_CONTROLS }),
+  'shower-screen': Object.freeze({ DEFAULTS: SHOWER_SCREEN_DEFAULTS, build: buildShowerScreen, CONTROLS: SHOWER_SCREEN_CONTROLS }),
+  'shower-set': Object.freeze({ DEFAULTS: SHOWER_SET_DEFAULTS, build: buildShowerSet, CONTROLS: SHOWER_SET_CONTROLS }),
+  'shower-tray': Object.freeze({ DEFAULTS: SHOWER_TRAY_DEFAULTS, build: buildShowerTray, CONTROLS: SHOWER_TRAY_CONTROLS }),
+  'toilet': Object.freeze({ DEFAULTS: TOILET_DEFAULTS, build: buildToilet, CONTROLS: TOILET_CONTROLS }),
+  'towel-rail': Object.freeze({ DEFAULTS: TOWEL_RAIL_DEFAULTS, build: buildTowelRail, CONTROLS: TOWEL_RAIL_CONTROLS }),
+  'vanity-counter': Object.freeze({ DEFAULTS: VANITY_DEFAULTS, build: buildVanity, CONTROLS: VANITY_CONTROLS })
 });
 
 export { buildBathtub, buildToilet, buildVanity, buildShowerSet, buildShowerScreen, buildShowerTray, buildTowelRail };
