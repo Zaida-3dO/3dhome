@@ -1634,9 +1634,10 @@
         // already, switches it to that room): see src/sidebar-pin.js.
         onRoomClick: isPreview ? undefined : (roomId => {
           roomTapPending = true;   // this tap is a room, not the empty background
+          selectedRoom = roomId; sidebarEvent('roomTap');
           // Edit mode: a tapped room is framed, even the one already open.
           if (editApi && editApi.isActive()) editApi.selectRoom(roomId, true);
-          selectedRoom = roomId; sidebarEvent('roomTap'); renderPanel(); focusRoom('explicit');
+          renderPanel(); focusRoom('explicit');
         })
       });
 

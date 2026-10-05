@@ -191,6 +191,10 @@ console.log('5. live slider bounds');
   const params = Object.assign({}, desk.DEFAULTS, { minHeight: 70, maxHeight: 120 });
   const r = E.liveRange('standing-desk', top, params);
   check('desk topHeight narrowed to [minHeight, maxHeight]', r.min === 70 && r.max === 120, r);
+  check('the static range widens to hold the item own value (a 120 cm box, derived max 80)',
+    JSON.stringify(E.liveRange('box', { key: 'width', min: 20, max: 80 }, { width: 120 })) === '{"min":20,"max":120}');
+  check('... and below its minimum too', E.liveRange('box', { key: 'width', min: 20, max: 80 }, { width: 10 }).min === 10);
+  check('... but the live rules still narrow it', E.liveRange('standing-desk', top, Object.assign({}, params, { topHeight: 60 })).min === 70);
   check('a type with no rule keeps its static range', JSON.stringify(E.liveRange('box', { key: 'width', min: 1, max: 9 }, {})) === '{"min":1,"max":9}');
   const w = E.paramWrites('standing-desk', controls, params, 'topHeight', 140);
   check('a write above maxHeight is clamped', w.topHeight === 120, w);

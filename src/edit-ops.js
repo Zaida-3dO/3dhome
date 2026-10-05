@@ -237,11 +237,18 @@ export const LIVE_BOUNDS = Object.freeze({
   'wall-sign': { panelDepth: { max: 'depth' } },
 });
 
-/** A range control's effective { min, max } given the item's current params. */
+/**
+ * A range control's effective { min, max } given the item's current params.
+ * The STATIC bounds first widen to hold the item's own value (a box authored
+ * 120 cm wide must not show, or snap to, a derived 80 cm maximum); the LIVE
+ * rules then narrow them.
+ */
 export function liveRange(type, control, params) {
-  let min = control.min, max = control.max;
-  const rule = (LIVE_BOUNDS[type] || {})[control.key];
   const p = params || {};
+  const own = p[control.key];
+  let min = num(own) ? Math.min(control.min, own) : control.min;
+  let max = num(own) ? Math.max(control.max, own) : control.max;
+  const rule = (LIVE_BOUNDS[type] || {})[control.key];
   if (rule && rule.min && num(p[rule.min])) min = Math.max(min, p[rule.min]);
   if (rule && rule.max && num(p[rule.max])) max = Math.min(max, p[rule.max]);
   if (min > max) max = min;

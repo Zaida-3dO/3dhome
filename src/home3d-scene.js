@@ -4707,10 +4707,15 @@ export const Home3DScene = (() => {
         const h = hits[i], o = h.object;
         if (!o || !o.isMesh || !isDrawn(o)) continue;
         if (o.userData && (o.userData.clickable || o.userData.furniture === 'proxy')) continue;
+        // Furniture first: an item fading with its exterior wall is see-through
+        // only because that wall is, so it is still what was tapped.
+        if (isFurniture(o)) {
+          const it = furnitureItemAt(furnitureResult.byId, h.point);
+          if (it) return { id: it.id, point: [h.point.x, h.point.y, h.point.z] };
+          continue;
+        }
         if (materialOpacity(o.material, h.face ? h.face.materialIndex : 0) < OPACITY_SOLID) continue;
-        if (!isFurniture(o)) return null;
-        const it = furnitureItemAt(furnitureResult.byId, h.point);
-        return it ? { id: it.id, point: [h.point.x, h.point.y, h.point.z] } : null;
+        return null;
       }
       return null;
     }

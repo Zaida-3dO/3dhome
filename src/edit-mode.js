@@ -110,6 +110,7 @@ const CSS = `
 .em-frame.collapsed .em-body { display: none; }
 :root[data-theme="light"] .em-frame { background: rgba(248,249,252,0.96); color: #1a1d29; border-color: rgba(0,0,0,0.10); }
 :root[data-theme="light"] .em-frame .em-btn:not(.primary) { border-color: rgba(0,0,0,0.18); background: rgba(0,0,0,0.04); }
+:root[data-theme="light"] .em-frame .em-btn.danger { color: #b91c1c; border-color: rgba(185,28,28,0.45); }
 :root[data-theme="light"] .em-frame .em-row select, :root[data-theme="light"] .em-frame .em-row input[type=text] {
   border-color: rgba(0,0,0,0.2); background: rgba(0,0,0,0.04); }
 @media (max-width: 600px) {
