@@ -20,6 +20,14 @@
  *     control descriptors (src/furniture/controls.js), or delete it. Edits
  *     render live and are kept in memory until Save writes them to the draft.
  *     Dragging empty space still orbits; dragging an item never does.
+ *   - Add from the library (B2): "Add an item" opens a searchable palette of
+ *     every furniture type (src/edit-library.js). Picking one shows its
+ *     controls at the type's defaults; on a desktop a preview follows the
+ *     pointer; a tap on the floor places it in that room (a wall type snaps
+ *     to the nearest wall), and it arrives selected, so the move / turn /
+ *     tune flow above applies to it at once.
+ *   - Every move keeps the item's whole FOOTPRINT in its room (an item
+ *     authored overhanging may move, but never further out).
  *   - Frame the view: with a room, a device or an item selected, orbit as
  *     normal, fine-tune Distance / Aim height / Lens, then "Use this view"
  *     writes the camera's pose as that owner's `view` into the draft.
@@ -53,10 +61,11 @@
 import { readDraft, writeDraft, clearDraft, makeDraft, baseHashOf, poseToFocusView,
   setOwnerView, clearOwnerView, findOwner, removeDraftEscape } from './profile-draft.js';
 import { exportProfile } from './profile-export.js';
-import { moveItem, rotateItem, setParam, deleteItem, dropItemBindings, findItem, isWallAnchored, checkFurnitureItem,
-  confineToPoly, wallSpan, clamp, snapCm, liveRange, paramWrites, nudgeDir,
+import { moveItem, rotateItem, setParam, deleteItem, addItem, dropItemBindings, findItem, isWallAnchored, checkFurnitureItem,
+  confineFootprint, footprintOverhang, nearestFit, wallSpan, wallCentreRange, clamp, snapCm, liveRange, paramWrites, nudgeDir,
   distToSlider, sliderToDist, DIST_STEPS } from './edit-ops.js';
-import { controlsFor, optionValue } from './furniture/controls.js';
+import { controlsFor, visibleControls, optionValue } from './furniture/controls.js';
+import { paletteGroups, entryKey, placeNew, mountFor, roomAtPoint } from './edit-library.js';
 
 /** The lens "Reset to derived" returns to: the scene camera's own default. */
 export const DEFAULT_FOV = 50;
@@ -108,6 +117,14 @@ const CSS = `
 .em-frame .em-section > summary::before { content: '\\25B8  '; opacity: 0.6; }
 .em-frame .em-section[open] > summary::before { content: '\\25BE  '; }
 .em-frame.collapsed .em-body { display: none; }
+.em-frame.lib { width: 320px; }
+.em-frame .em-search { width: 100%; box-sizing: border-box; font: inherit; padding: 6px 8px; margin: 2px 0 4px; border-radius: 7px;
+  border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.08); color: inherit; }
+.em-frame .em-group { margin: 9px 0 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; opacity: 0.6; text-transform: uppercase; }
+.em-frame .em-lib { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.em-frame .em-lib .em-btn { text-align: left; padding: 7px 8px; font-weight: 550; line-height: 1.2; }
+.em-frame .em-add { width: 100%; margin-top: 10px; padding: 9px 8px; }
+:root[data-theme="light"] .em-frame .em-search { border-color: rgba(0,0,0,0.2); background: rgba(0,0,0,0.04); }
 :root[data-theme="light"] .em-frame { background: rgba(248,249,252,0.96); color: #1a1d29; border-color: rgba(0,0,0,0.10); }
 :root[data-theme="light"] .em-frame .em-btn:not(.primary) { border-color: rgba(0,0,0,0.18); background: rgba(0,0,0,0.04); }
 :root[data-theme="light"] .em-frame .em-btn.danger { color: #b91c1c; border-color: rgba(185,28,28,0.45); }
@@ -123,10 +140,12 @@ const CSS = `
     max-height: 30vh; padding: 8px 12px 10px; }
   .em-frame h2 { font-size: 14px; margin: 0; }
   .em-frame .em-row { margin: 4px 0 6px; }
+  .em-frame.lib { width: auto; max-height: 55vh; }
 }
 `;
 
 const KIND_LABEL = { room: 'Room', furniture: 'Furniture item', curtain: 'Curtain' };
+const num = v => typeof v === 'number' && Number.isFinite(v);
 
 let ctl = null;   // the one controller per page
 
@@ -182,6 +201,14 @@ function createController(ctx) {
   let pending = null;      // { id, timer|raf } the scheduled item rebuild
   let listenersOn = false;
   const perf = [];         // { op, ms, buildMs } per rebuild, for the perf report
+  // Adding from the library (B2).
+  let libQuery = '';       // the palette's search text
+  let adding = null;       // { entry, params } while target.kind === 'new'
+  let ghost = null;        // { sig, anchor, axis } the placement preview built in the scene
+  let ghostRaf = 0, ghostPt = null;
+  let downAt = null;       // { x, y, id } the pointer down of a would-be placing tap
+  let replaying = false;   // a pointerdown edit mode is handing to the camera itself
+  let escapeTimer = null;
 
   if (!document.getElementById('em-style')) {
     const st = el('style'); st.id = 'em-style'; st.textContent = CSS; document.head.appendChild(st);
@@ -233,10 +260,21 @@ function createController(ctx) {
   }
 
   // ---- Banner ------------------------------------------------------------
-  function renderBanner() {
-    // The boot-time escape (profile-draft.js mountDraftEscape) is only for a
-    // page that never got this far.
+  // The boot-time escape (profile-draft.js mountDraftEscape) is only for a
+  // page that never got this far -- but the banner sits UNDER the loading
+  // card (z 9999) and the house error card (z 10000), so the escape stays
+  // until neither covers the page (B1 review finding 1).
+  function releaseDraftEscape() {
+    const loading = window.__home3dLoading;
+    const covered = (loading && typeof loading.isDone === 'function' && !loading.isDone()) ||
+      !!document.getElementById('home3d-house-error');
+    if (covered) { if (!escapeTimer) escapeTimer = setInterval(releaseDraftEscape, 500); return; }
+    if (escapeTimer) { clearInterval(escapeTimer); escapeTimer = null; }
     removeDraftEscape(document);
+  }
+
+  function renderBanner() {
+    releaseDraftEscape();
     if (!banner) {
       banner = el('div', 'em-banner'); banner.setAttribute('role', 'status'); banner.id = 'em-banner'; document.body.appendChild(banner);
       // The phone layout stacks the frame panel above the banner: publish its height.
@@ -338,7 +376,8 @@ function createController(ctx) {
     head.append(fold);
     if (target) {
       const x = el('button', 'em-x', '×'); x.id = 'em-close';
-      x.setAttribute('aria-label', target.kind === 'furniture' ? 'Deselect' : 'Stop framing'); x.title = x.getAttribute('aria-label');
+      x.setAttribute('aria-label', target.kind === 'furniture' ? 'Deselect' : target.kind === 'library' ? 'Close the library'
+        : target.kind === 'new' ? 'Cancel adding' : 'Stop framing'); x.title = x.getAttribute('aria-label');
       x.addEventListener('click', () => setTarget(null));
       head.append(x);
     }
@@ -368,7 +407,9 @@ function createController(ctx) {
     frame.textContent = '';
     frame.classList.toggle('collapsed', collapsed);
     const isItem = target && target.kind === 'furniture';
-    frame.append(panelHead(isItem ? 'EDIT ITEM' : 'EDIT LAYOUT'));
+    const isLib = target && target.kind === 'library', isNew = target && target.kind === 'new';
+    frame.classList.toggle('lib', !!isLib);
+    frame.append(panelHead(isItem ? 'EDIT ITEM' : isLib || isNew ? 'ADD ITEM' : 'EDIT LAYOUT'));
     const body = el('div', 'em-body');
     const msg = el('div', 'em-msg'); msg.setAttribute('aria-live', 'polite');
     if (!target) {
@@ -376,6 +417,27 @@ function createController(ctx) {
       body.append(el('div', 'em-empty', ctx.draftBroken
         ? 'This draft could not be rendered, so the furniture cannot be edited until it is discarded. Pick a room to frame its view.'
         : 'Tap a piece of furniture to move or re-tune it. Pick a room (tap it, or choose it in the sidebar) or tap a device to frame the view the camera flies to.'));
+      if (!ctx.draftBroken) {
+        const add = el('button', 'em-btn primary em-add', 'Add an item'); add.id = 'em-add';
+        add.disabled = !furnReady;
+        add.title = furnReady ? 'Pick a piece of furniture from the library and place it' : 'Getting the furniture ready to edit…';
+        add.addEventListener('click', () => setTarget({ kind: 'library', id: 'library', label: 'Library' }));
+        body.append(add);
+      }
+      body.append(msg);
+      frame.append(body);
+      return;
+    }
+    if (isLib) {
+      frame.append(el('h2', null, 'Add an item'));
+      librarySection(body);
+      body.append(msg);
+      frame.append(body);
+      return;
+    }
+    if (isNew) {
+      frame.append(el('h2', null, target.label));
+      newSection(body);
       body.append(msg);
       frame.append(body);
       return;
@@ -404,14 +466,56 @@ function createController(ctx) {
     syncSliders();
   }
 
-  // ---- Furniture: the item panel -------------------------------------------
-  function itemControls(raw) {
-    const b = builders && builders.get(raw.type);
-    if (!b) return { controls: [], values: Object.assign({}, raw.params || {}) };
-    // A per-kind type (wall-clock, speaker, wall-sconce, plant): that kind's own DEFAULTS.
-    const defaults = typeof b.defaultsFor === 'function' ? b.defaultsFor(raw.params || {}) : b.DEFAULTS;
-    const controls = controlsFor(raw.type, defaults, b.CONTROLS).filter(c => c.kind !== 'unsupported');
-    return { controls, values: Object.assign({}, defaults, raw.params || {}) };
+  // ---- Furniture: the param panel (shared by a placed item and a new one) ----
+  /**
+   * The controls for `type` with `params`: `all` (every drawable control,
+   * for clamping), `controls` (what the panel draws: per-kind and dependent
+   * controls filtered by visibleControls), `values` (defaults + params).
+   */
+  function controlsOf(type, params) {
+    const b = builders && builders.get(type);
+    if (!b) return { all: [], controls: [], values: Object.assign({}, params || {}) };
+    // A per-kind type (wall-clock, speaker, wall-sconce): that kind's own DEFAULTS.
+    const defaults = typeof b.defaultsFor === 'function' ? b.defaultsFor(params || {}) : b.DEFAULTS;
+    const all = controlsFor(type, defaults, b.CONTROLS, b.CONTROL_RULES).filter(c => c.kind !== 'unsupported');
+    const values = Object.assign({}, defaults, params || {});
+    return { all, controls: visibleControls(all, values), values };
+  }
+  function itemControls(raw) { return controlsOf(raw.type, raw.params); }
+  /** The resolved footprint of a raw item: { width, depth, rotation }. */
+  function sizeOf(raw) {
+    const v = itemControls(raw).values;
+    return { width: num(v.width) ? v.width : 0, depth: num(v.depth) ? v.depth : 0, rotation: num(raw.rotation) ? raw.rotation : 0 };
+  }
+  // A change to this key shows or hides other controls: redraw the panel.
+  const reshapes = (all, key) => key === 'kind' || all.some(c => c.when && Object.prototype.hasOwnProperty.call(c.when, key));
+
+  /**
+   * The param rows for `type`. `src` = { params(): the current params,
+   * write(writes, control): keep them }.
+   */
+  function paramRows(type, src) {
+    const { all, controls, values } = controlsOf(type, src.params());
+    const box = el('div'); box.id = 'em-params';
+    controls.forEach(c => box.append(controlRow(type, c, values, val => {
+      const cur = controlsOf(type, src.params());
+      const writes = paramWrites(type, cur.all, cur.values, c.key, val);
+      src.write(writes, c);
+      if (reshapes(all, c.key)) { renderFrame(); return; }
+      // A clamped value or a dependent re-clamp shows at once.
+      Object.keys(writes).forEach(k => syncControl(type, src.params(), k, writes[k]));
+    })));
+    if (!controls.length) box.append(el('div', 'em-sub', 'This type has no adjustable settings.'));
+    return box;
+  }
+  /** Write `writes` onto `params` (a mirrored control writes its mirror keys too). */
+  function withWrites(params, writes, c) {
+    const out = Object.assign({}, params || {});
+    Object.keys(writes).forEach(k => {
+      out[k] = writes[k];
+      if (k === c.key && Array.isArray(c.mirror)) c.mirror.forEach(m => { out[m] = writes[k]; });
+    });
+    return out;
   }
 
   function itemSection(into) {
@@ -430,16 +534,22 @@ function createController(ctx) {
         const b = el('button', 'em-btn', (d > 0 ? '+' : '−') + Math.abs(d) + '°');
         b.id = 'em-rot-' + (d < 0 ? 'm' : 'p') + Math.abs(d);
         b.title = 'Turn ' + (d > 0 ? 'clockwise' : 'anticlockwise') + ' by ' + Math.abs(d) + '°';
-        b.addEventListener('click', () => applyEdit(w => rotateItem(w, target.id, d), 'rotate', 0));
+        b.addEventListener('click', () => applyEdit(w => rotateItem(w, target.id, d), 'rotate', 0, true));
         rot.append(b);
       });
       into.append(rot);
     }
-    const { controls, values } = itemControls(raw);
-    const params = el('div'); params.id = 'em-params';
-    controls.forEach(c => params.append(controlRow(raw, c, values)));
-    if (!controls.length) params.append(el('div', 'em-sub', 'This type has no adjustable settings.'));
-    into.append(params);
+    const id = raw.id;
+    into.append(paramRows(raw.type, {
+      params: () => (findItem(work, id) || raw).params || {},
+      write: (writes, c) => applyEdit(w => {
+        let next = w;
+        Object.keys(writes).forEach(k => {
+          next = setParam(next, id, k, writes[k], k === c.key && Array.isArray(c.mirror) ? { mirror: c.mirror } : null);
+        });
+        return next;
+      }, 'param', PARAM_DEBOUNCE_MS, true),
+    }));
     const acts = el('div', 'em-actions');
     const del = el('button', 'em-btn danger', 'Delete'); del.id = 'em-delete';
     del.addEventListener('click', () => doDelete());
@@ -447,29 +557,148 @@ function createController(ctx) {
     into.append(acts);
   }
 
-  function controlRow(raw, c, values) {
+  // ---- Adding: the library and the new item's panel (B2) ---------------------
+  function librarySection(into) {
+    into.append(el('div', 'em-sub', 'Pick an item, set it up, then tap the floor of a room to place it.'));
+    const q = el('input', 'em-search'); q.type = 'search'; q.id = 'em-lib-search';
+    q.placeholder = 'Search: sofa, lamp, plant…'; q.value = libQuery;
+    q.setAttribute('aria-label', 'Search the furniture library');
+    const list = el('div'); list.id = 'em-lib-list';
+    const paint = () => {
+      list.textContent = '';
+      const groups = paletteGroups(libQuery);
+      if (!groups.length) list.append(el('div', 'em-sub', 'Nothing matches "' + libQuery + '".'));
+      groups.forEach(g => {
+        list.append(el('div', 'em-group', g.label));
+        const grid = el('div', 'em-lib');
+        g.entries.forEach(x => {
+          const b = el('button', 'em-btn', x.label);
+          b.dataset.entry = entryKey(x);
+          b.title = x.mount === 'wall' ? 'Hangs on (or stands against) a wall' : 'Stands on the floor';
+          b.addEventListener('click', () => startAdding(x));
+          grid.append(b);
+        });
+        list.append(grid);
+      });
+    };
+    q.addEventListener('input', () => { libQuery = q.value; paint(); });
+    into.append(q, list);
+    paint();
+  }
+
+  async function startAdding(entry) {
+    if (!furnReady) return;
+    let b = builders && builders.get(entry.type);
+    if (!b) {
+      try { b = await home.loadFurnitureBuilder(entry.type); } catch (e) { b = null; }
+      if (b && builders && !builders.has(entry.type)) builders.set(entry.type, b);
+    }
+    if (!b) { message('"' + entry.label + '" could not be loaded (the console says why).'); return; }
+    const preset = entry.preset && b.PRESETS ? b.PRESETS[entry.preset] : null;
+    adding = { entry, params: preset ? Object.assign({}, preset) : {} };
+    setTarget({ kind: 'new', id: entryKey(entry), label: entry.label });
+  }
+
+  function newSection(into) {
+    if (!adding) return;
+    const { mount } = mountFor(adding.entry, adding.params);
+    into.append(el('div', 'em-sub', mount === 'wall'
+      ? 'Tap the floor near a wall of a room: it goes on the nearest wall, facing into the room.'
+      : 'Tap the floor of a room to place it there.'));
+    into.append(paramRows(adding.entry.type, {
+      params: () => adding.params,
+      write: (writes, c) => { adding.params = withWrites(adding.params, writes, c); refreshGhost(); },
+    }));
+    const acts = el('div', 'em-actions');
+    const back = el('button', 'em-btn', 'Back to the library'); back.id = 'em-lib-back';
+    back.addEventListener('click', () => setTarget({ kind: 'library', id: 'library', label: 'Library' }));
+    acts.append(back);
+    into.append(acts);
+  }
+
+  /** The new item's resolved { width, depth } (defaults + what was set). */
+  function newSize() {
+    const v = controlsOf(adding.entry.type, adding.params).values;
+    return { width: num(v.width) ? v.width : 0, depth: num(v.depth) ? v.depth : 0 };
+  }
+  /** Where a tap at a client point would put the new item: placeNew's result, or { error }. */
+  function placementAt(clientX, clientY) {
+    const plan = home.screenToPlan(clientX, clientY, 0);
+    const room = plan ? roomAtPoint(compiled, plan) : null;
+    return placeNew({ doc: work, compiled, entry: adding.entry, room, point: plan || [0, 0], params: adding.params,
+      size: newSize(), label: adding.entry.label });
+  }
+
+  function placeAt(clientX, clientY) {
+    if (!adding || !furnReady || !work) return null;
+    const t0 = performance.now();
+    const res = placementAt(clientX, clientY);
+    if (res.error) { message(res.error); return null; }
+    let next, house;
+    try { next = addItem(work, res.item); house = ctx.compile(next); } catch (e) { message('It could not be placed: ' + e.message); return null; }
+    const item = (house.furniture || []).find(f => f.id === res.item.id);
+    if (!item) { message('It could not be placed there (the console says why).'); return null; }
+    const tc = performance.now();
+    clearGhost();
+    work = next; lastGood = next; compiled = house;
+    const r = home.addFurnitureItem(item);
+    const ms = performance.now() - t0;
+    perf.push({ op: 'place', ms: Math.round(ms * 10) / 10, compileMs: Math.round((tc - t0) * 10) / 10,
+      buildMs: r && r.buildMs != null ? Math.round(r.buildMs * 10) / 10 : null });
+    dirty = true;
+    renderBanner();
+    adding = null;
+    setTarget(ownerFor(res.item.id));
+    message('Placed. Drag it, turn it or tune it; Save keeps it.');
+    return res.item.id;
+  }
+
+  // The placement preview: rebuilt only when what it looks like changes (the
+  // room, the wall, the params); otherwise slid to the pointer.
+  function clearGhost() {
+    if (ghostRaf) { cancelAnimationFrame(ghostRaf); ghostRaf = 0; }
+    ghostPt = null;
+    if (ghost) { ghost = null; if (home.setFurnitureGhost) home.setFurnitureGhost(null); }
+  }
+  function refreshGhost() {
+    if (!ghost || !ghostPt) return;
+    ghost.sig = null;   // the params changed: rebuild at the last pointer position
+    scheduleGhost(ghostPt.x, ghostPt.y);
+  }
+  function scheduleGhost(x, y) {
+    ghostPt = { x, y };
+    if (ghostRaf || typeof home.setFurnitureGhost !== 'function') return;
+    ghostRaf = requestAnimationFrame(() => { ghostRaf = 0; if (ghostPt) updateGhost(ghostPt.x, ghostPt.y); });
+  }
+  function updateGhost(x, y) {
+    if (!adding || !furnReady) return;
+    const res = placementAt(x, y);
+    if (res.error) { if (ghost) { ghost = null; home.setFurnitureGhost(null); } return; }
+    const it = res.item;
+    const sig = it.room + '|' + (it.wall != null ? 'w' + it.wall : 'f') + '|' + JSON.stringify(adding.params);
+    const anchor = it.wall != null ? it.centre : it.at;
+    if (ghost && ghost.sig === sig) {
+      if (it.wall != null) home.moveFurnitureGhost(res.axis === 'x' ? anchor - ghost.anchor : 0, res.axis === 'y' ? anchor - ghost.anchor : 0);
+      else home.moveFurnitureGhost(anchor[0] - ghost.anchor[0], anchor[1] - ghost.anchor[1]);
+      return;
+    }
+    let item = null;
+    try { item = (ctx.compile(addItem(work, it)).furniture || []).find(f => f.id === it.id); } catch (e) { item = null; }
+    if (!item) { if (ghost) { ghost = null; home.setFurnitureGhost(null); } return; }
+    home.setFurnitureGhost(item);
+    ghost = { sig, anchor: Array.isArray(anchor) ? anchor.slice() : anchor, axis: res.axis };
+  }
+
+  function controlRow(type, c, values, onValue) {
     const id = 'em-p-' + c.key;
     const v = values[c.key];
-    const onValue = val => {
-      const cur = itemControls(findItem(work, raw.id) || raw);
-      const writes = paramWrites(raw.type, cur.controls, cur.values, c.key, val);
-      applyEdit(w => {
-        let next = w;
-        Object.keys(writes).forEach(k => {
-          next = setParam(next, raw.id, k, writes[k], k === c.key && Array.isArray(c.mirror) ? { mirror: c.mirror } : null);
-        });
-        return next;
-      }, 'param', PARAM_DEBOUNCE_MS);
-      // A clamped value or a dependent re-clamp shows at once.
-      Object.keys(writes).forEach(k => syncControl(k, writes[k]));
-    };
     if (c.kind === 'range') {
       const row = el('div', 'em-row');
       const lab = el('label');
       const val = el('span', 'em-val'); val.id = id + '-val';
       lab.append(el('span', null, c.label), val);
       const inp = el('input', 'slider'); inp.id = id;
-      const r = liveRange(raw.type, c, values);
+      const r = liveRange(type, c, values);
       Object.assign(inp, { type: 'range', min: r.min, max: r.max, step: c.step });
       inp.value = String(typeof v === 'number' ? v : r.min);
       inp.dataset.unit = c.unit || '';
@@ -512,16 +741,14 @@ function createController(ctx) {
   }
   // Re-read one control from the live params (after a clamp), and re-narrow
   // every range whose live bounds depend on it.
-  function syncControl(key, v) {
-    if (!frame || !target || target.kind !== 'furniture') return;
-    const raw = findItem(work, target.id);
-    if (!raw) return;
-    const { controls, values } = itemControls(raw);
+  function syncControl(type, params, key, v) {
+    if (!frame) return;
+    const { controls, values } = controlsOf(type, params);
     controls.forEach(c => {
       if (c.kind !== 'range') return;
       const inp = frame.querySelector('#em-p-' + c.key);
       if (!inp) return;
-      const r = liveRange(raw.type, c, values);
+      const r = liveRange(type, c, values);
       inp.min = String(r.min); inp.max = String(r.max);
       if (c.key === key && document.activeElement !== inp) inp.value = String(v);
       paintRange(inp, frame.querySelector('#em-p-' + c.key + '-val'), parseFloat(c.key === key ? v : inp.value));
@@ -534,11 +761,14 @@ function createController(ctx) {
    * (0: on the next frame). An edit that fails the shape check or does not
    * compile is refused and `work` is left as it was.
    */
-  function applyEdit(fn, op, delay) {
+  function applyEdit(fn, op, delay, settleIt) {
     if (!furnReady || !work || !target || target.kind !== 'furniture') return false;
     const id = target.id;
     let next;
     try { next = fn(work); } catch (e) { message(e.message); return false; }
+    // A turn or a resize can push the footprint through a wall: settle it
+    // back inside (B1 review: confine by footprint, not centre).
+    if (settleIt) { try { next = settle(work, next, id); } catch (e) { /* keep the edit as made */ } }
     const problems = checkFurnitureItem(findItem(next, id));
     if (problems.length) { message('Not kept: ' + problems.join('; ')); return false; }
     work = next;
@@ -638,6 +868,33 @@ function createController(ctx) {
     renderFrame();
   }
 
+  /**
+   * After a rotation or a param change: if the item now sticks out of its
+   * room FURTHER than before, move it to the nearest place it fits (a free
+   * item), or back along its wall (a wall item). An item that fits nowhere
+   * keeps the edit and says so -- a resize is the user's call.
+   */
+  function settle(prevDoc, nextDoc, id) {
+    const before = findItem(prevDoc, id), after = findItem(nextDoc, id);
+    if (!before || !after) return nextDoc;
+    if (isWallAnchored(after)) {
+      const span = spanFor(after);
+      if (!span) return nextDoc;
+      const was = wallCentreRange(span, sizeOf(before).width);
+      if (before.centre < was.lo || before.centre > was.hi) return nextDoc;   // authored past an end: leave it
+      const r = wallCentreRange(span, sizeOf(after).width);
+      const c = clamp(after.centre, r.lo, r.hi);
+      return c === after.centre ? nextDoc : moveItem(nextDoc, id, { centre: c });
+    }
+    const poly = roomPoly(after.room);
+    if (!poly) return nextDoc;
+    const sa = sizeOf(after);
+    if (footprintOverhang(poly, after.at, sa) <= footprintOverhang(poly, before.at, sizeOf(before)) + 1e-6) return nextDoc;
+    const fit = nearestFit(poly, after.at, sa, 1);
+    if (!fit) { message('It no longer fits inside the room like this.'); return nextDoc; }
+    return moveItem(nextDoc, id, { at: fit });
+  }
+
   // ---- Furniture: pointer and keys -----------------------------------------
   function roomPoly(roomId) {
     const r = compiled && compiled.rooms ? compiled.rooms[roomId] : null;
@@ -659,11 +916,35 @@ function createController(ctx) {
     return applyEdit(w => moveItem(w, raw.id, anchor), 'move', 0);
   }
   const inScene = e => ctx.container && ctx.container.contains(e.target);
+  // A second finger landed while the first was dragging an item: the camera
+  // never saw the first one (its pointerdown was edit mode's), so hand it
+  // over now -- the pair then pinches or pans instead of the second finger
+  // orbiting alone (B1 review finding 4).
+  function handFirstFingerToCamera(g) {
+    if (!ctx.container || typeof PointerEvent !== 'function') return;
+    replaying = true;
+    try {
+      ctx.container.dispatchEvent(new PointerEvent('pointerdown', { pointerId: g.pointerId, pointerType: g.pointerType,
+        isPrimary: true, clientX: g.lastX, clientY: g.lastY, button: 0, buttons: 1, bubbles: true, cancelable: true }));
+    } catch (e) { /* the camera keeps today's behaviour */ } finally { replaying = false; }
+  }
   function onPointerDown(e) {
+    if (replaying) return;
     claimed = false;
     if (!active || !furnReady || !inScene(e)) return;
-    if (gesture) { gesture = null; return; }      // a second finger: let the pinch through
+    if (gesture) {                                 // a second finger: let the pinch through
+      const g = gesture;
+      gesture = null;
+      flushRebuild();
+      if (e.pointerType === 'touch' && g.pointerType === 'touch') handFirstFingerToCamera(g);
+      return;
+    }
     if (e.button !== 0) return;
+    if (target && target.kind === 'new') {
+      // Placing: the tap (a click with no drag) places; a drag orbits as normal.
+      downAt = { x: e.clientX, y: e.clientY, id: e.pointerId };
+      return;
+    }
     const hit = home.furnitureEditPick(e.clientX, e.clientY);
     if (!hit) return;                              // empty space: orbit as normal
     e.stopPropagation();                           // the scene never sees it: no orbit
@@ -674,12 +955,18 @@ function createController(ctx) {
     if (!target || target.kind !== 'furniture' || target.id !== hit.id) setTarget(ownerFor(hit.id));
     const start = home.screenToPlan(e.clientX, e.clientY, hit.point[1]);
     if (!start) return;
-    gesture = { pointerId: e.pointerId, id: hit.id, y: hit.point[1], start, moved: false,
+    gesture = { pointerId: e.pointerId, pointerType: e.pointerType, lastX: e.clientX, lastY: e.clientY,
+      id: hit.id, y: hit.point[1], start, moved: false,
       from: isWallAnchored(raw) ? raw.centre : raw.at.slice(), span: isWallAnchored(raw) ? spanFor(raw) : null };
   }
   function onPointerMove(e) {
+    if (!gesture && target && target.kind === 'new' && e.pointerType === 'mouse' && !e.buttons && inScene(e)) {
+      scheduleGhost(e.clientX, e.clientY);       // the placement preview follows the mouse
+      return;
+    }
     if (!gesture || e.pointerId !== gesture.pointerId) return;
     e.stopPropagation();
+    gesture.lastX = e.clientX; gesture.lastY = e.clientY;
     const p = home.screenToPlan(e.clientX, e.clientY, gesture.y);
     if (!p) return;
     const raw = findItem(work, gesture.id);
@@ -688,12 +975,15 @@ function createController(ctx) {
     if (!gesture.moved && Math.hypot(dx, dy) < 1) return;
     gesture.moved = true;
     if (gesture.span) {
-      const c = clamp(snapCm(gesture.from + (gesture.span.axis === 'x' ? dx : dy)), Math.ceil(gesture.span.lo), Math.floor(gesture.span.hi));
+      // The whole width stays on the room's stretch of the wall; an item
+      // authored past an end may still move, never further out.
+      const r = wallCentreRange(gesture.span, sizeOf(raw).width, gesture.from);
+      const c = clamp(snapCm(gesture.from + (gesture.span.axis === 'x' ? dx : dy)), r.lo, r.hi);
       if (c !== raw.centre) moveTo(raw, { centre: c });
       return;
     }
     const want = [snapCm(gesture.from[0] + dx), snapCm(gesture.from[1] + dy)];
-    const at = confineToPoly(roomPoly(raw.room), raw.at, want).map(snapCm);
+    const at = confineFootprint(roomPoly(raw.room), raw.at, want, sizeOf(raw));
     if (at[0] !== raw.at[0] || at[1] !== raw.at[1]) moveTo(raw, { at });
   }
   function onPointerEnd(e) {
@@ -702,16 +992,30 @@ function createController(ctx) {
     flushRebuild();
   }
   // The click that ends a claimed pointer is edit mode's: no popover (the
-  // page's tap-popovers asks tapClaimed()), no room tap, no click-away.
+  // page's tap-popovers asks tapClaimed()), no room tap, no click-away. A
+  // tap while placing is edit mode's too: it places.
   function onClick(e) {
+    if (target && target.kind === 'new' && active && inScene(e)) {
+      const d = downAt; downAt = null;
+      if (!d || Math.abs(e.clientX - d.x) > 6 || Math.abs(e.clientY - d.y) > 6) return;   // that was an orbit
+      claimed = true;
+      e.stopPropagation();
+      placeAt(e.clientX, e.clientY);
+      return;
+    }
     if (!claimed) return;
     claimed = false;
     if (inScene(e)) e.stopPropagation();
   }
   function onKey(e) {
-    if (!active || !furnReady || !target || target.kind !== 'furniture') return;
+    if (!active || !furnReady || !target) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (target.kind === 'new' || target.kind === 'library') {
+      if (e.key === 'Escape') setTarget(target.kind === 'new' ? { kind: 'library', id: 'library', label: 'Library' } : null);
+      return;
+    }
+    if (target.kind !== 'furniture') return;
     if (e.key === 'Escape') { setTarget(null); return; }
     const d = nudgeDir(e.key, home.getPose().th);
     if (!d) return;
@@ -724,11 +1028,13 @@ function createController(ctx) {
       if (!span) return;
       const along = span.axis === 'x' ? d[0] : d[1];
       if (!along) return;                          // across the wall: nothing to do
-      moveTo(raw, { centre: clamp(raw.centre + along * step, Math.ceil(span.lo), Math.floor(span.hi)) });
+      const r = wallCentreRange(span, sizeOf(raw).width, raw.centre);
+      const c = clamp(raw.centre + along * step, r.lo, r.hi);
+      if (c !== raw.centre) moveTo(raw, { centre: c });
       return;
     }
     const want = [raw.at[0] + d[0] * step, raw.at[1] + d[1] * step];
-    const at = confineToPoly(roomPoly(raw.room), raw.at, want);
+    const at = confineFootprint(roomPoly(raw.room), raw.at, want, sizeOf(raw));
     if (at[0] !== raw.at[0] || at[1] !== raw.at[1]) moveTo(raw, { at });
   }
   function setListeners(on) {
@@ -752,6 +1058,9 @@ function createController(ctx) {
     const wasItem = target && target.kind === 'furniture' ? target.id : null;
     const isItem = next && next.kind === 'furniture' ? next.id : null;
     if (wasItem !== isItem) { flushRebuild(); liftSelected(isItem); }
+    if (!next || next.kind !== 'new') { adding = null; clearGhost(); }
+    if (next && next.kind === 'new' && target && target.kind === 'new' && next.id !== target.id) clearGhost();
+    downAt = null;
     target = next;
     renderFrame();
   }
@@ -844,6 +1153,8 @@ function createController(ctx) {
     }
     active = false;
     gesture = null;
+    adding = null;
+    clearGhost();
     setListeners(false);
     if (target && target.kind === 'furniture') home.highlightFurniture(null);
     target = null;
@@ -862,8 +1173,11 @@ function createController(ctx) {
     renderBanner();
     if (ctx.onModeChange) ctx.onModeChange(false);
   }
+  // Choosing from the library or placing: a room tap or a sidebar repaint
+  // never takes the panel away (the tap that places is edit mode's anyway).
+  const busyAdding = () => !!(target && (target.kind === 'new' || target.kind === 'library'));
   function selectRoom(id, force) {
-    if (!active || !id) return;
+    if (!active || !id || busyAdding()) return;
     // The page calls this on every sidebar repaint while a room is open: only
     // a NEW room (or a tap on one: `force`) takes the target, so a repaint
     // never drops a selected item or device.
@@ -873,7 +1187,7 @@ function createController(ctx) {
     setTarget({ kind: 'room', id, label: ctx.roomLabel ? ctx.roomLabel(id) : id });
   }
   function selectDevice(device, point) {
-    if (!active || !device) return;
+    if (!active || !device || busyAdding()) return;
     const owner = ctx.resolveOwner ? ctx.resolveOwner(Object.assign({}, device, { focusPoint: point || null })) : null;
     setTarget(owner || { kind: 'none', label: device.label || device.id,
       reason: 'This device has no profile entry that can hold a view (a light frames from its fixture). Frame its room instead.' });
@@ -891,6 +1205,12 @@ function createController(ctx) {
     tapClaimed: () => claimed,
     perf: () => perf.slice(),
     selectItem: id => setTarget(id ? ownerFor(id) : null),
+    // B2: open the library / start adding an entry (by key) / place at a client point.
+    openLibrary: () => setTarget({ kind: 'library', id: 'library', label: 'Library' }),
+    startAdding: key => { const x = paletteGroups('').flatMap(g => g.entries).find(en => entryKey(en) === key); return x ? startAdding(x) : Promise.resolve(); },
+    placeAt: (x, y) => placeAt(x, y),
+    planAt: (x, y) => { const p = home.screenToPlan(x, y, 0); return p ? { plan: p, room: roomAtPoint(compiled, p) } : null; },
+    adding: () => (adding ? { key: entryKey(adding.entry), params: Object.assign({}, adding.params) } : null),
     save: doSave,
     exportTexts,
   };

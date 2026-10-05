@@ -460,3 +460,6 @@ export const CONTROLS = [
   color('handleColor', 'Handle'),
   color('coverColor', 'Cover'),
 ];
+
+// Edit panel dependencies (controls.js controlsFor RULES): the cover colour only with a cover.
+export const CONTROL_RULES = Object.freeze({ coverColor: { when: { cover: true } } });

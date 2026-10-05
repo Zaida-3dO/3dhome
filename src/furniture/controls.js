@@ -26,13 +26,20 @@
  *                'fixed'    (a measured constant the spec page does not expose)
  *   mirror   optional, on a range: other keys to set to the same value (a round
  *            table's one Diameter slider sets both width and depth)
+ *   kinds    optional: the params.kind values this control applies to (a wall
+ *            planter's "contents" means nothing on a floor plant). Absent: all.
+ *   when     optional: { otherKey: value | [values] } -- shown only while
+ *            every named param has one of those values (the LED colour only
+ *            while the LED is on). visibleControls() applies both.
  *
  * Declaring CONTROLS never changes what a builder renders: this file only
  * describes, it is never read by build().
  *
  * AUTO-DERIVED FALLBACKS (plan-review amendment 14)
  *
- *   number, default d > 0   0.5 x d .. 2 x d
+ *   number, default d > 0   0.5 x d .. 2 x d, rounded OUTWARD to a grid by size
+ *                           (10 from 100, 5 from 10, 1 from 1, else 0.1); the
+ *                           minimum never rounds to 0 or below
  *   number, d === 0         an absolute 0..100 (counts: 0..10)
  *   number, d < 0           symmetric: -2|d| .. 2|d| (a bare 0.5x..2x would
  *                           INVERT, min > max)
@@ -85,6 +92,17 @@ export function humanize(key) {
 export function isCountKey(key) {
   const k = String(key);
   return /^(count|n)$/.test(k) || /^num([A-Z_]|$)/.test(k) || /Counts?$/.test(k);
+}
+
+/**
+ * True for keys that name a length in cm (a range with no `unit` gets 'cm'
+ * from controlsFor). Counts, angles, gains and seeds never match.
+ */
+export function isLengthKey(key) {
+  const k = String(key);
+  if (isCountKey(k) || isAngleKey(k)) return false;
+  return /^(width|depth|height|length|thickness|diameter|radius|offset|gap|pitch|spread|trail|rim|bezel|side|reach)$/i.test(k) ||
+    /(Width|Depth|Height|Length|Thickness|Thick|Diameter|Radius|Offset|Gap|Pitch|Spread|Overhang|Reach|Drop|Elevation|Lip|Extend\w*|From|To)$/.test(k);
 }
 
 /** True for keys that name an angle in degrees. */
@@ -153,10 +171,20 @@ export function deriveNumber(key, d) {
     out.step = a >= 10 ? 0.5 : (a < 1 ? 0.01 : 0.1);
     // A finer default (2.25) needs a finer step than the default grid.
     if (decimals(d) > decimals(out.step)) out.step = tidy(Math.pow(10, -Math.min(decimals(d), 4)));
-    out.min = tidy(lo);
-    out.max = tidy(hi);
+    // Round outward to a sensible grid (a TV's 167.1 cm default gives
+    // 80..340, not 83.55..334.2). The minimum never rounds down to zero or
+    // below: a positive size must stay buildable at its minimum.
+    const g = niceGrid(a);
+    const nlo = Math.floor(lo / g) * g, nhi = Math.ceil(hi / g) * g;
+    out.min = tidy(d > 0 && nlo <= 0 ? lo : nlo);
+    out.max = tidy(nhi);
   }
   return out;
+}
+
+/** The grid a derived range's ends round to, by the default's size. */
+export function niceGrid(a) {
+  return a >= 100 ? 10 : a >= 10 ? 5 : a >= 1 ? 1 : 0.1;
 }
 
 /** The fallback control for one DEFAULTS entry. */
@@ -185,12 +213,13 @@ export function deriveControl(key, value) {
  * @param {string} type        only used to label thrown/diagnostic context
  * @param {Object} DEFAULTS    the builder's DEFAULTS
  * @param {Array}  [CONTROLS]  the builder's explicit CONTROLS, if it has any
+ * @param {Object} [RULES]     the builder's CONTROL_RULES, if any (see below)
  * @returns {Array<Object>} fresh descriptors: explicit entries first (their
  *   own order, a repeated key keeps only its first entry, a key absent from
  *   DEFAULTS is dropped), then one derived entry per uncovered DEFAULTS key in
  *   DEFAULTS order. Never throws on odd input; never mutates it.
  */
-export function controlsFor(type, DEFAULTS, CONTROLS) { // eslint-disable-line no-unused-vars
+export function controlsFor(type, DEFAULTS, CONTROLS, RULES) { // eslint-disable-line no-unused-vars
   const defaults = DEFAULTS && typeof DEFAULTS === 'object' ? DEFAULTS : {};
   const out = [];
   const seen = new Set();
@@ -201,6 +230,8 @@ export function controlsFor(type, DEFAULTS, CONTROLS) { // eslint-disable-line n
       seen.add(c.key);
       const copy = Object.assign({}, c);
       if (Array.isArray(c.options)) copy.options = c.options.slice();
+      if (Array.isArray(c.kinds)) copy.kinds = c.kinds.slice();
+      if (c.when && typeof c.when === 'object') copy.when = Object.assign({}, c.when);
       if (copy.label === undefined) copy.label = humanize(c.key);
       out.push(copy);
     });
@@ -209,8 +240,50 @@ export function controlsFor(type, DEFAULTS, CONTROLS) { // eslint-disable-line n
     if (seen.has(key)) return;
     out.push(deriveControl(key, defaults[key]));
   });
+  // RULES (a builder's optional CONTROL_RULES): { key: { when?, kinds?, label?,
+  // min?, max?, step?, unit? } } patched onto that key's control, explicit or
+  // derived, WITHOUT moving it -- how a derived control gets a dependency
+  // (an LED colour shown only while the LED is on) or a readable label.
+  if (RULES && typeof RULES === 'object') {
+    out.forEach((c, i) => {
+      const r = Object.prototype.hasOwnProperty.call(RULES, c.key) ? RULES[c.key] : null;
+      if (!r || typeof r !== 'object') return;
+      const next = Object.assign({}, c, r);
+      if (r.when) next.when = Object.assign({}, r.when);
+      if (Array.isArray(r.kinds)) next.kinds = r.kinds.slice();
+      out[i] = next;
+    });
+  }
+  // Every length slider says it is in cm (the panel showed bare numbers for
+  // half of them).
+  out.forEach(c => { if (c.kind === 'range' && !c.unit && isLengthKey(c.key)) c.unit = 'cm'; });
   return out;
 }
+
+/** Does `value` satisfy one `when` condition (a value, or a list of them)? */
+function matches(cond, value) {
+  return Array.isArray(cond) ? cond.indexOf(value) !== -1 : cond === value;
+}
+
+/**
+ * The controls a panel should DRAW for an item whose params are `values`
+ * (DEFAULTS merged with its own): no `unsupported` ones, none whose `kinds`
+ * leave out values.kind, none whose `when` is not met. Pure.
+ */
+export function visibleControls(controls, values) {
+  const v = values || {};
+  return (controls || []).filter(c => {
+    if (!c || c.kind === 'unsupported') return false;
+    if (Array.isArray(c.kinds) && c.kinds.indexOf(v.kind) === -1) return false;
+    if (c.when && typeof c.when === 'object') {
+      for (const k of Object.keys(c.when)) if (!matches(c.when[k], v[k])) return false;
+    }
+    return true;
+  });
+}
+
+/** A copy of `control` with `extra` fields (kinds / when) added: for CONTROLS tables. */
+export const only = (control, extra) => Object.assign({}, control, extra);
 
 /** The value a select option stands for. */
 export function optionValue(o) {

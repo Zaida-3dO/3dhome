@@ -80,7 +80,7 @@
  * pothos 64, ficus 80, jade 24).
  */
 import { makeFinish } from './finishes.js';
-import { range, color, select } from './controls.js';
+import { range, color, select, only } from './controls.js';
 
 export const TYPE = 'plant';
 
@@ -1233,27 +1233,30 @@ export const PRESETS = Object.freeze({
 
 // ---- edit-mode controls ---------------------------------------------------------
 // Ranges, steps, options and labels are copied from the spec page (see controls.js).
+// The free-standing kinds (everything but the wall planter): the pot controls are theirs.
+const FREE_KINDS = KINDS.filter(k => k !== 'wall-planter');
 export const CONTROLS = [
   select('kind', 'Kind', KINDS.slice()),
   range('width', 'Width', 8, 100, 0.5, 'cm'),
   range('depth', 'Depth', 5, 100, 0.5, 'cm'),
   range('height', 'Height', 10, 220, 0.5, 'cm'),
-  select('potStyle', 'Pot style', POT_STYLES.slice()),
-  range('potHeight', 'Pot height', 5, 100, 1, 'cm'),
-  range('potTopDiameter', 'Pot opening diameter', 5, 50, 1, 'cm'),
+  only(select('potStyle', 'Pot style', POT_STYLES.slice()), { kinds: FREE_KINDS }),
+  only(range('potHeight', 'Pot height', 5, 100, 1, 'cm'), { kinds: FREE_KINDS }),
+  only(range('potTopDiameter', 'Pot opening diameter', 5, 50, 1, 'cm'), { kinds: FREE_KINDS }),
   color('potColor', 'Pot colour'),
-  range('plantHeight', 'Plant height (above pot)', 5, 200, 0.5, 'cm'),
-  range('stemCount', 'Stems / canes / branches', 1, 8, 1),
-  range('spread', 'Widest leaf spread', 10, 100, 1, 'cm'),
+  only(range('plantHeight', 'Plant height (above pot)', 5, 200, 0.5, 'cm'), { kinds: FREE_KINDS }),
+  only(range('stemCount', 'Stems / canes / branches', 1, 8, 1), { kinds: ['corn-plant', 'pothos', 'ficus', 'jade'] }),
+  only(range('spread', 'Widest leaf spread', 10, 100, 1, 'cm'), { kinds: FREE_KINDS }),
   range('leafLength', 'Leaf length', 2, 70, 0.5, 'cm'),
   range('leafWidth', 'Leaf width', 1, 15, 0.1, 'cm'),
   range('leafCount', 'Leaf count', 1, 60, 1),
-  select('habit', 'Habit', ['upright', 'trailing']),
-  range('trail', 'Trail below pot', 0, 120, 1, 'cm'),
+  only(select('habit', 'Habit', ['upright', 'trailing']), { kinds: ['pothos'] }),
+  only(range('trail', 'Trail below pot', 0, 120, 1, 'cm'), { kinds: ['pothos'], when: { habit: 'trailing' } }),
   color('leafColor', 'Leaf colour'),
   color('accentColor', 'Leaf margin / variegation'),
-  color('glassColor', 'Glass tint'),
-  color('frameColor', 'Wire frame colour'),
-  select('contents', 'Wall planter contents', WALL_CONTENTS.slice()),
-  range('seed', 'Seed', 1, 999, 1),
+  only(color('glassColor', 'Glass tint'), { when: { potStyle: 'glass-bubble' } }),
+  only(color('frameColor', 'Wire frame colour'), { kinds: ['wall-planter'] }),
+  only(select('contents', 'Wall planter contents', WALL_CONTENTS.slice()), { kinds: ['wall-planter'] }),
+  // `seed` lays the leaves out (mulberry32): a different arrangement, same plant.
+  range('seed', 'Leaf arrangement (variation)', 1, 999, 1),
 ];

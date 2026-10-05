@@ -56,7 +56,15 @@ const get = (list, key) => list.find(c => c.key === key);
   const d = C.deriveNumber;
   // positive, the plain case: 0.5x .. 2x
   let c = d('widthish', 40.5);
-  check('positive: 0.5x..2x', c.kind === 'range' && c.min === 20.25 && c.max === 81, c);
+  // 0.5x..2x (20.25..81), rounded OUTWARD to the 5 cm grid a 10..100 default takes.
+  check('positive: 0.5x..2x, rounded outward', c.kind === 'range' && c.min === 20 && c.max === 85, c);
+  c = d('widthish', 167.1);
+  check('positive: a TV-sized default rounds to the 10 cm grid (not 83.55..334.2)', c.min === 80 && c.max === 340, c);
+  c = d('widthish', 1.5);
+  check('positive: the minimum never rounds down to zero', c.min === 0.75 && c.max === 3, c);
+  c = d('widthish', 0.4);
+  check('positive below 1: 0.1 grid', c.min === 0.2 && c.max === 0.8, c);
+  c = d('widthish', 40.5);
   check('positive: step > 0', c.step > 0, c);
   check('positive fraction: step fine enough for the default', Number.isFinite(c.step) && c.step <= 0.5, c);
 

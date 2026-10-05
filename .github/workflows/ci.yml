@@ -714,6 +714,8 @@ jobs:
         run: node scripts/test-json-layout.mjs
       - name: Edit ops -- move/rotate/param/delete change only their item, export keeps untouched items byte-identical, moves stay in the room
         run: node scripts/test-edit-ops.mjs
+      - name: Edit library -- every palette type places in the tapped room and builds, footprint confinement, control filtering, one-line export
+        run: node scripts/test-edit-library.mjs
       - name: Sliders and popover -- every range part styled, diamond matches the card, color-scheme dark
         run: node scripts/test-range-styles.mjs
       - name: Theme -- Auto/Dark/Light resolution, persistence, system listener, pre-paint script
@@ -812,6 +814,13 @@ jobs:
           tmp="$(mktemp -d)"
           cp -r houses/demo/. "$tmp/"
           node scripts/test-edit-ops.mjs --write "$tmp"
+          python scripts/validate-house.py --strict "$tmp"
+      - name: An edit-mode library export (one of every palette type placed) passes validate-house.py --strict
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cp -r houses/demo/. "$tmp/"
+          node scripts/test-edit-library.mjs --write "$tmp"
           python scripts/validate-house.py --strict "$tmp"
       - name: Furniture schema and validator checks
         run: python scripts/test-validate-furniture.py

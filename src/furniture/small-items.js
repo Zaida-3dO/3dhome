@@ -1412,15 +1412,24 @@ const MONITOR_CONTROLS = []; // SmallItemsSpec has no slider for this type: cont
 
 const PC_TOWER_CONTROLS = []; // SmallItemsSpec has no slider for this type: controlsFor() derives all of it
 
+// Dependencies for the edit panel (controls.js controlsFor RULES): a
+// control that means nothing while its parent toggle is off is hidden.
+const W = when => ({ when });
+const TV_RULES = { standHeight: W({ stand: true }), standWidth: W({ stand: true }), standDepth: W({ stand: true }) };
+const SHELF_RULES = { ledColor: W({ led: true }), backPanelHeight: W({ backPanel: true }), backPanelColor: W({ backPanel: true }) };
+const MONITOR_RULES = { riserHeight: W({ riser: true }), riserWidth: W({ riser: true }), riserDepth: W({ riser: true }),
+  curveRadius: W({ curved: true }), coreLightColor: W({ coreLight: true }) };
+const PC_TOWER_RULES = { glassColor: W({ glassPanel: true }), interiorColor: W({ glassPanel: true }) };
+
 export const TYPES = {
-  'tv': { TYPE: 'tv', DEFAULTS: TV_DEFAULTS, build: buildTv, CONTROLS: TV_CONTROLS },
+  'tv': { TYPE: 'tv', DEFAULTS: TV_DEFAULTS, build: buildTv, CONTROLS: TV_CONTROLS, CONTROL_RULES: TV_RULES },
   'photo-frame': { TYPE: 'photo-frame', DEFAULTS: PHOTO_FRAME_DEFAULTS, build: buildPhotoFrame, CONTROLS: PHOTO_FRAME_CONTROLS },
   'speaker': { TYPE: 'speaker', DEFAULTS: SPEAKER_DEFAULTS, build: buildSpeaker, CONTROLS: SPEAKER_CONTROLS },
   'subwoofer': { TYPE: 'subwoofer', DEFAULTS: SUBWOOFER_DEFAULTS, build: buildSubwoofer, CONTROLS: SUBWOOFER_CONTROLS },
   'tube-floor-lamp': { TYPE: 'tube-floor-lamp', DEFAULTS: TUBE_FLOOR_LAMP_DEFAULTS, build: buildTubeFloorLamp, CONTROLS: TUBE_FLOOR_LAMP_CONTROLS },
   'coat-rack': { TYPE: 'coat-rack', DEFAULTS: COAT_RACK_DEFAULTS, build: buildCoatRack, CONTROLS: COAT_RACK_CONTROLS },
   'mirror': { TYPE: 'mirror', DEFAULTS: MIRROR_DEFAULTS, build: buildMirror, CONTROLS: MIRROR_CONTROLS },
-  'shelf': { TYPE: 'shelf', DEFAULTS: SHELF_DEFAULTS, build: buildShelf, CONTROLS: SHELF_CONTROLS },
-  'monitor': { TYPE: 'monitor', DEFAULTS: MONITOR_DEFAULTS, build: buildMonitor, CONTROLS: MONITOR_CONTROLS },
-  'pc-tower': { TYPE: 'pc-tower', DEFAULTS: PC_TOWER_DEFAULTS, build: buildPcTower, CONTROLS: PC_TOWER_CONTROLS }
+  'shelf': { TYPE: 'shelf', DEFAULTS: SHELF_DEFAULTS, build: buildShelf, CONTROLS: SHELF_CONTROLS, CONTROL_RULES: SHELF_RULES },
+  'monitor': { TYPE: 'monitor', DEFAULTS: MONITOR_DEFAULTS, build: buildMonitor, CONTROLS: MONITOR_CONTROLS, CONTROL_RULES: MONITOR_RULES },
+  'pc-tower': { TYPE: 'pc-tower', DEFAULTS: PC_TOWER_DEFAULTS, build: buildPcTower, CONTROLS: PC_TOWER_CONTROLS, CONTROL_RULES: PC_TOWER_RULES }
 };

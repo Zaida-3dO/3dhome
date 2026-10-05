@@ -2481,6 +2481,9 @@
         loadEditMode().then(({ m, ctx }) => {
           editApi = m.enterEditMode(ctx);
           if (selectedRoom) editApi.selectRoom(selectedRoom);
+          // On a phone the sidebar (Settings, where this was tapped) is a
+          // full-screen sheet over the scene being edited: close it.
+          if (!isWideScreen()) sidebarEvent('close');
         });
       }
       // A draft is being rendered (or failed to): its banner, without

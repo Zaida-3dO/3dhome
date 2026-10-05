@@ -218,6 +218,11 @@ export async function loadBuilder(type, opts) {
   // Optional: CONTROLS, the type's slider/colour/select descriptors for edit
   // mode (see controls.js). Descriptive only -- build() never reads them.
   if (Array.isArray(impl.CONTROLS)) out.CONTROLS = impl.CONTROLS;
+  // Optional: CONTROL_RULES (controls.js controlsFor's RULES) and PRESETS (a
+  // plain object of named param sets: the edit library starts a plant from
+  // its species preset). Both descriptive; build() never reads them.
+  if (impl.CONTROL_RULES && typeof impl.CONTROL_RULES === 'object' && !Array.isArray(impl.CONTROL_RULES)) out.CONTROL_RULES = impl.CONTROL_RULES;
+  if (impl.PRESETS && typeof impl.PRESETS === 'object' && !Array.isArray(impl.PRESETS)) out.PRESETS = impl.PRESETS;
   if (typeof impl.defaultsFor === 'function') out.defaultsFor = impl.defaultsFor;
   else if (impl.defaultsFor !== undefined) {
     warn('type "' + type + '": ' + entry.path + ' exports defaultsFor but it is not a function -- ignored, DEFAULTS used');
