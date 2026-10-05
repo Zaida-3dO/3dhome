@@ -142,6 +142,12 @@ const CSS = `
   .em-frame h2 { font-size: 14px; margin: 0; }
   .em-frame .em-row { margin: 4px 0 6px; }
   .em-frame.lib { width: auto; max-height: 55vh; }
+  /* The banner sits at the foot of the screen here: keep the sidebar's own
+     foot (the Settings button) above it (B2 review: it covered it). */
+  body.em-has-banner #panel { box-sizing: border-box; padding-bottom: calc(var(--em-banner-h, 48px) + 12px); }
+  /* The sidebar is a full-screen sheet here: while it is open the edit panel
+     steps aside rather than covering it (it is back when the sheet closes). */
+  body:has(#panel.open) .em-frame { display: none; }
 }
 `;
 
@@ -314,6 +320,7 @@ function createController(ctx) {
       requestAnimationFrame(publish);
     }
     banner.textContent = '';
+    document.body.classList.add('em-has-banner');
     const tag = el('span', 'em-tag', active ? 'EDIT MODE' : 'DRAFT');
     const text = el('span', 'em-text', dirty ? 'unsaved changes'
       : draft ? (active ? 'DRAFT on this device, not live' : 'on this device, not live')
@@ -349,6 +356,7 @@ function createController(ctx) {
     if (!draft && !active && !ctx.draftBroken) {
       if (bannerObserver) { bannerObserver.disconnect(); bannerObserver = null; }
       banner.remove(); banner = null;
+      document.body.classList.remove('em-has-banner');
     }
   }
 
@@ -1012,7 +1020,12 @@ function createController(ctx) {
     if (!item || !poly || !num(item.x) || !num(item.y)) return 0;
     const sz = sizeOf(raw);
     if (!(sz.width > 0) || !(sz.depth > 0)) return 0;
-    return footprintDepthOut(poly, [item.x, item.y], { width: sz.width, depth: sz.depth, rotation: item.rotationDeg || 0 });
+    // A wall item's x / y is its BACK-centre (origin 'back'): its footprint
+    // centre is half its depth in front of that.
+    const rad = (item.rotationDeg || 0) * Math.PI / 180;
+    const back = item.origin === 'back' ? sz.depth / 2 : 0;
+    const at = [item.x - Math.sin(rad) * back, item.y + Math.cos(rad) * back];
+    return footprintDepthOut(poly, at, { width: sz.width, depth: sz.depth, rotation: item.rotationDeg || 0 });
   }
 
   // ---- Furniture: pointer and keys -----------------------------------------

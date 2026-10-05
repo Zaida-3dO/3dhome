@@ -41,6 +41,7 @@ const THREE = await imp('vendor/three-r160/three.module.min.js');
 const Fin = await imp('src/furniture/finishes.js');
 const R = await imp('src/furniture/registry.js');
 const C = await imp('src/furniture/controls.js');
+const EOps = await imp('src/edit-ops.js');
 
 let failures = 0, passes = 0;
 function check(name, cond, detail) {
@@ -338,6 +339,13 @@ for (const [type, entry] of Object.entries(R.REGISTRY)) {
         nBuilds++;
         const p = Object.assign({}, D, { [c.key]: v });
         (c.mirror || []).forEach(k => { p[k] = v; });
+        // A cabinet's Width / Height scale its fronts with it (edit-ops
+        // paramWrites): build it the way edit mode writes it.
+        if (type === 'cabinet' && (c.key === 'width' || c.key === 'height')) {
+          const fronts = EOps.scaleCabinetFronts(D, c.key, v);
+          check(tag + ' ' + v + ': its fronts scale with it', !!fronts);
+          if (fronts) p.fronts = fronts;
+        }
         // The envelope contract (bbox == width/depth/height) is only meaningful
         // for the controls that ARE the envelope: width / depth / height, or a
         // control that declares it mirrors them. Every other control moves the

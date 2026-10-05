@@ -1065,7 +1065,11 @@ to the room behind the wall. Re-sizing or turning an item that then no longer
 fits moves it to the nearest place it does fit **in the same part of the room**
 (it never jumps into the other arm of an L-shaped room), once the slider stops.
 A wall item deeper than the room in front of it is flagged in the panel ("It
-sticks out of the room by about N cm"); make it shallower or narrower.
+sticks out of the room by about N cm"); make it shallower or narrower. A
+cabinet's **Width** and **Height** scale its fronts with it (every cell and
+row in proportion), so its rows always fill it. A placed plant's **Kind** list
+offers only kinds that mount the same way (a floor plant cannot become a wall
+planter).
 
 #### Binding to Home Assistant in edit mode
 

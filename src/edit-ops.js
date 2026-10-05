@@ -538,6 +538,11 @@ export function paramWrites(type, controls, params, key, value) {
   let v = value;
   if (c && c.kind === 'range' && num(v)) { const r = liveRange(type, c, params); v = clamp(v, r.min, r.max); }
   out[key] = v;
+  // A cabinet's size IS its fronts: scale them with it (B2 review finding 5).
+  if (type === 'cabinet' && (key === 'width' || key === 'height') && num(v)) {
+    const fronts = scaleCabinetFronts(params, key, v);
+    if (fronts) out.fronts = fronts; else delete out[key];
+  }
   const next = Object.assign({}, params, out);
   const rules = LIVE_BOUNDS[type] || {};
   Object.keys(rules).forEach(dep => {
@@ -550,6 +555,41 @@ export function paramWrites(type, controls, params, key, value) {
     if (cv !== next[dep]) out[dep] = cv;
   });
   return out;
+}
+
+/**
+ * A cabinet's `fronts` rescaled to a new width (every cell in proportion) or
+ * height (every row in proportion; the plinth stays), in 0.1 cm, the last
+ * cell / row taking the rounding so a row still fills the width exactly.
+ * null when it cannot be scaled (a columns grid, no fronts) -- the write is
+ * then refused.
+ */
+export function scaleCabinetFronts(params, key, value) {
+  const p = params || {};
+  if (Array.isArray(p.columns) && p.columns.length) return null;
+  if (!Array.isArray(p.fronts) || !p.fronts.length || !num(p[key]) || !(p[key] > 0) || !(value > 0)) return null;
+  const r1 = x => Math.round(x * 10) / 10;
+  if (key === 'width') {
+    const k = value / p.width;
+    return p.fronts.map(row => {
+      if (!row || !Array.isArray(row.cells)) return row;
+      const cells = row.cells.map(c => (c && num(c.width) ? Object.assign({}, c, { width: r1(c.width * k) }) : c));
+      const fixed = cells.filter(c => c && num(c.width));
+      if (fixed.length === cells.length && cells.length) {
+        const last = cells[cells.length - 1];
+        last.width = r1(value - cells.slice(0, -1).reduce((a, c) => a + c.width, 0));
+      }
+      return Object.assign({}, row, { cells });
+    });
+  }
+  const rowsTotal = p.fronts.reduce((a, row) => a + (row && num(row.height) ? row.height : 0), 0);
+  const target = rowsTotal + (value - p.height);
+  if (!(rowsTotal > 0) || !(target > 0)) return null;
+  const k = target / rowsTotal;
+  const rows = p.fronts.map(row => (row && num(row.height) ? Object.assign({}, row, { height: r1(row.height * k) }) : row));
+  const last = rows[rows.length - 1];
+  if (last && num(last.height)) last.height = r1(target - rows.slice(0, -1).reduce((a, row) => a + (num(row.height) ? row.height : 0), 0));
+  return rows;
 }
 
 // ---- Arrow-key nudge ------------------------------------------------------

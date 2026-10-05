@@ -341,6 +341,20 @@ console.log('5. control filtering');
   check('with no mount (a new speaker, whose kind picks its mount) every kind is offered', kindOf('plant', {}, null).includes('wall-planter'));
   check('a wall speaker is not offered the floor-standing kinds', (() => { const k = kindOf('speaker', { kind: 'bookshelf' }, 'wall'); return k.length > 0 && !k.includes('floor-standing'); })(),
     kindOf('speaker', {}, 'wall'));
+  // B2 review finding 5: an added cabinet has Width / Height, which scale its fronts.
+  {
+    const cab = builders.get('cabinet');
+    const all = C.controlsFor('cabinet', cab.DEFAULTS, cab.CONTROLS, cab.CONTROL_RULES);
+    const vals = Object.assign({}, cab.DEFAULTS);
+    check('cabinet: Width and Height are sliders now', C.visibleControls(all, vals).filter(c => c.key === 'width' || c.key === 'height').length === 2);
+    const w = E.paramWrites('cabinet', all, vals, 'width', 150);
+    check('cabinet width 150: every fronts row fills it', w.width === 150 && w.fronts.every(r => Math.abs(r.cells.reduce((a, c) => a + c.width, 0) - 150) < 1e-9), w);
+    const h = E.paramWrites('cabinet', all, vals, 'height', 200);
+    check('cabinet height 200: the rows shrink by the same 36 cm', Math.abs(h.fronts.reduce((a, r) => a + r.height, 0) - (228 - 36)) < 1e-9, h);
+    let built = true;
+    try { cab.build(THREE, Object.assign({}, vals, w), {}); cab.build(THREE, Object.assign({}, vals, h), {}); } catch (e) { built = e.message; }
+    check('... and both build', built === true, built);
+  }
   // B2 review finding 1: the room a placing tap means comes from the picker.
   const room0 = h2.rooms[ROOM];
   const poly0 = room0.poly || [[room0.x1, room0.y1], [room0.x2, room0.y1], [room0.x2, room0.y2], [room0.x1, room0.y2]];
