@@ -147,16 +147,49 @@ export function stepBack(hit, direction) {
  *   via: 'floor' (a catcher), 'wall' (a blocking hit, resolved or not),
  *   or 'none' (the ray met nothing that decides).
  */
-export function pickRoom(hits, direction, rooms, toHouse) {
+export function pickRoom(hits, direction, rooms, toHouse, focus) {
+  const r = pickRoomRaw(hits, direction, rooms, toHouse);
+  return focus && focus.roomId ? preferFocused(r, focus, rooms) : r;
+}
+
+/**
+ * Camera focus (src/camera-focus.js): while a room is focused, a tap must
+ * not select a NEIGHBOUR the user never meant.
+ *   - A tap whose ray meets the floor plane inside the focused room's
+ *     polygon is that room (`focus.floorPoint`, house cm).
+ *   - A tap that reached another room only by passing through a faded WALL
+ *     (a see-through, vertical surface -- the camera-facing exterior walls
+ *     the focus view fades) selects nothing: it is the click-away, as the
+ *     user sees empty space or the faded shell there, not a room.
+ * A neighbour seen directly (over a wall top, through an open doorway) is
+ * still selected.
+ * @param focus  { roomId, floorPoint: [hx, hy] | null }
+ */
+export function preferFocused(r, focus, rooms) {
+  const fr = (rooms || []).find(x => x && x.id === focus.roomId);
+  const fp = focus.floorPoint;
+  if (r.roomId === focus.roomId) return r;
+  if (fr && fp && Array.isArray(fr.poly) && insidePoly(fr.poly, fp[0], fp[1])) return { roomId: focus.roomId, via: 'focus', hit: r.hit };
+  if (r.roomId && r.throughFadedWall) return { roomId: null, via: 'faded-wall', hit: r.hit };
+  return r;
+}
+
+function pickRoomRaw(hits, direction, rooms, toHouse) {
   const list = hits || [];
+  let throughFadedWall = false;
   for (let i = 0; i < list.length; i++) {
     const h = list[i];
     const o = h && h.object;
     if (!o || !o.isMesh) continue;
     if (!isDrawn(o)) continue;
     const u = o.userData || {};
-    if (u.clickable && u.roomId) return { roomId: u.roomId, via: 'floor', hit: h };
-    if (materialOpacity(o.material, h.face ? h.face.materialIndex : 0) < OPACITY_SOLID) continue;
+    if (u.clickable && u.roomId) return { roomId: u.roomId, via: 'floor', hit: h, throughFadedWall };
+    if (materialOpacity(o.material, h.face ? h.face.materialIndex : 0) < OPACITY_SOLID) {
+      // A see-through VERTICAL surface (a faded wall, glass): noted for
+      // preferFocused. The ceiling seen from above is horizontal: not noted.
+      if (h.face && Math.abs(stepBack(h, direction).y) < 0.5) throughFadedWall = true;
+      continue;
+    }
     if (isFurniture(o)) continue;
     const s = stepBack(h, direction);
     if (s.y > 0.9 && h.point.y > TOP_MIN_M) return { roomId: null, via: 'wall', hit: h };
@@ -164,7 +197,7 @@ export function pickRoom(hits, direction, rooms, toHouse) {
     for (let k = 1; k <= steps; k++) {
       const [hx, hy] = toHouse(h.point.x + s.x * STEP_BACK_M * k, h.point.z + s.z * STEP_BACK_M * k);
       const roomId = roomAt(rooms || [], hx, hy);
-      if (roomId) return { roomId, via: 'wall', hit: h };
+      if (roomId) return { roomId, via: 'wall', hit: h, throughFadedWall };
     }
     return { roomId: null, via: 'wall', hit: h };
   }

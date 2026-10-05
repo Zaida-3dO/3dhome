@@ -345,8 +345,10 @@ console.log('6b. roomPolygons and sceneToHouse, against the real loader');
 console.log('7. the scene\'s room click is wired through pickRoom');
 {
   const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
-  ok(/import \{ pickRoom, roomPolygons, sceneToHouse \} from '\.\/room-pick\.js';/.test(src), 'home3d-scene.js imports pickRoom and its helpers');
-  ok(/pickRoom\(rc\.intersectObjects\(scene\.children, true\), rc\.ray\.direction,\s*roomPolygons\(ROOMS\), sceneToHouse\(S, OX, OY\)\)/.test(src),
+  ok(/import \{ pickRoom, roomPolygons, sceneToHouse(, isFurniture)? \} from '\.\/room-pick\.js';/.test(src), 'home3d-scene.js imports pickRoom and its helpers');
+  // Camera focus passes the focused room as a fifth argument (room-pick.js
+  // preferFocused); the transform is still read per tap.
+  ok(/const toHouse = sceneToHouse\(S, OX, OY\);[\s\S]{0,900}pickRoom\(rc\.intersectObjects\(scene\.children, true\), rc\.ray\.direction,\s*roomPolygons\(ROOMS\), toHouse, focus\)/.test(src),
     'the click handler calls it with the ray, the rooms and the current transform');
   ok(!/\.find\(x => x\.object\.userData\.clickable\)/.test(src), 'the old first-catcher rule is gone');
 }

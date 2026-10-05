@@ -100,6 +100,16 @@ function project(pose, aspect, p) {
     check('L room: framed tight, not from orbit (largest |ndc| > 0.8) at aspect ' + aspect.toFixed(2), worst > 0.8, worst);
   }
   const v1 = F.deriveRoomView({ poly: L, toWorld, th: HOME_TH, ph: HOME_PH, fov: 50, aspect: 1.6 });
+  // With the room's height: the ceiling corners are in frame too (so are its lights).
+  {
+    const aspect = 1280 / 800;
+    const vh = F.deriveRoomView({ poly: L, toWorld, th: HOME_TH, ph: HOME_PH, fov: 50, aspect, minR: 0, height: 2.5 });
+    const all = [];
+    L.forEach(p => { const w = toWorld(p[0], p[1]); all.push([w[0], 0, w[1]], [w[0], 2.5, w[1]]); });
+    const worst = Math.max(...all.map(p => { const n = project(vh, aspect, p); return Math.max(Math.abs(n.x), Math.abs(n.y)); }));
+    check('room view with height: floor AND ceiling corners on screen', worst <= 1 + 1e-9, worst);
+    check('room view with height: target at mid-height', near(vh.tgt[1], 1.25));
+  }
   check('room view uses the FIXED home angle given, whatever the camera is doing', v1.th === HOME_TH && v1.ph === HOME_PH);
   check('room view target is at floor level, inside the room', v1.tgt[1] === 0);
   // Sidebar inset: frame in the uncovered left part; the room's vertices
@@ -127,6 +137,93 @@ console.log('item view');
   check('item view distance is diag x 2.2', near(v.r, Math.sqrt(3) * 2.2));
   const tiny = F.deriveItemView({ box: { min: [0, 0, 0], max: [0.1, 0.1, 0.1] }, front: null, th: 1.25 });
   check('no front: keeps the given azimuth; tiny item gets the 1.2 m minimum', tiny.th === 1.25 && tiny.r === 1.2);
+}
+
+// ---- 4b. occlusion-aware device framing ------------------------------------
+console.log('occlusion-aware framing');
+{
+  // Segment p->q against an axis-aligned box (slab method).
+  const segHitsBox = (p, q, b) => {
+    let t0 = 0, t1 = 1;
+    for (let k = 0; k < 3; k++) {
+      const d = q[k] - p[k];
+      if (Math.abs(d) < 1e-12) { if (p[k] < b.min[k] || p[k] > b.max[k]) return false; continue; }
+      let a = (b.min[k] - p[k]) / d, c = (b.max[k] - p[k]) / d;
+      if (a > c) [a, c] = [c, a];
+      t0 = Math.max(t0, a); t1 = Math.min(t1, c);
+      if (t0 > t1) return false;
+    }
+    return true;
+  };
+  // A fake raycaster: a ray is blocked when it crosses any occluder box.
+  const fakeOccluded = occluders => {
+    const calls = { rays: 0 };
+    const fn = (eye, samples, limit) => {
+      let n = 0;
+      for (const s of samples) { calls.rays++; if (occluders.some(b => segHitsBox(eye, s, b))) n++; if (n >= limit) break; }
+      return n;
+    };
+    fn.calls = calls;
+    return fn;
+  };
+  // A plant (0.4 x 0.9 x 0.4 m) facing +Z (th = PI/2), and a shelf right in
+  // front of it, waist-high, as wide as the view.
+  const plant = { min: [-0.2, 0, -0.2], max: [0.2, 0.9, 0.2] };
+  const shelf = { min: [-1.2, 0, 0.5], max: [1.2, 1.1, 0.9] };
+  const front = Math.PI / 2, ph = F.ITEM_VIEW.ph;
+  const cands = F.deviceCandidates(front, ph);
+  check('candidates: the preferred view first, penalty 0', cands[0].th === front && cands[0].ph === ph && cands[0].penalty === 0);
+  check('candidates: a few dozen at most, penalties ascending, all < 1 ray',
+    cands.length <= 40 && cands.every((c, i) => i === 0 || c.penalty >= cands[i - 1].penalty) && cands.every(c => c.penalty < 1), cands.length);
+  check('candidates reach near top-down', Math.min(...cands.map(c => c.ph)) <= Math.PI * 0.1 + 1e-9);
+  const clear = F.chooseItemView({ box: plant, baseTh: front, basePh: ph, fov: 50, aspect: 1.6, occluded: fakeOccluded([]) });
+  check('nothing in the way: the front view, after ONE candidate', clear.pose.th === front && clear.pose.ph === ph && clear.tried === 1 && clear.occluded === 0);
+  // The whole item is in frame, tight.
+  const ndc = F.boxCorners(plant).map(p => project(clear.pose, 1.6, p));
+  const worst = Math.max(...ndc.map(n => Math.max(Math.abs(n.x), Math.abs(n.y))));
+  check('distance fits the WHOLE box, tight (every corner on screen, largest |ndc| > 0.6)', worst <= 1 && worst > 0.6, worst);
+  const occ = fakeOccluded([shelf]);
+  const frontScore = occ(F.backVector(front, ph).map((b, i) => [0, 0.45, 0][i] + b * clear.pose.r), F.boxSamples(plant), 99);
+  check('the fixture is a real trap: from the front the shelf blocks rays', frontScore > 0, frontScore);
+  const blocked = F.chooseItemView({ box: plant, baseTh: front, basePh: ph, fov: 50, aspect: 1.6, occluded: fakeOccluded([shelf]) });
+  check('shelf in front: the chosen view has NO blocked ray', blocked.occluded === 0, blocked);
+  check('...and is not the plain front view', !(blocked.pose.th === front && blocked.pose.ph === ph));
+  const eye = F.backVector(blocked.pose.th, blocked.pose.ph).map((b, i) => blocked.pose.tgt[i] + b * blocked.pose.r);
+  check('...verified independently: every sample ray from that camera is clear', F.boxSamples(plant).every(s => !segHitsBox(eye, s, shelf)));
+  check('...and the cheapest such view (no lower-penalty candidate is clear)', F.deviceCandidates(front, ph).filter(c => c.penalty < blocked.penalty).every(c => {
+    const r = F.fitDistance(F.boxCorners(plant), [0, 0.45, 0], c.th, c.ph, 50, 1.6, F.OCCLUSION_VIEW.margin);
+    const rr = Math.min(F.OCCLUSION_VIEW.maxR, Math.max(F.OCCLUSION_VIEW.minR, r));
+    const e = F.backVector(c.th, c.ph).map((b, i) => [0, 0.45, 0][i] + b * rr);
+    return F.boxSamples(plant).some(s => segHitsBox(e, s, shelf));
+  }));
+  // Fully boxed in: least-blocked wins, never throws.
+  // A closed shell round the plant (four walls and a lid).
+  const cage = [{ min: [-3, -1, -3], max: [3, 5, -0.3] }, { min: [-3, -1, 0.3], max: [3, 5, 3] },
+    { min: [-3, -1, -3], max: [-0.3, 5, 3] }, { min: [0.3, -1, -3], max: [3, 5, 3] }, { min: [-3, 1.2, -3], max: [3, 5, 3] }];
+  const caged = F.chooseItemView({ box: plant, baseTh: front, basePh: ph, fov: 50, aspect: 1.6, occluded: fakeOccluded(cage) });
+  check('no clear view anywhere: still returns the least-blocked candidate', caged.pose && caged.occluded > 0 && caged.tried === cands.length, caged.tried);
+  // allowed(): a camera behind a wall is never chosen.
+  const eastOnly = e => e[0] > 0.3;   // only cameras east of the item are "inside the room"
+  const walled = F.chooseItemView({ box: plant, baseTh: front, basePh: ph, fov: 50, aspect: 1.6, occluded: fakeOccluded([]), allowed: eastOnly });
+  const we = F.backVector(walled.pose.th, walled.pose.ph).map((b, i) => walled.pose.tgt[i] + b * walled.pose.r);
+  check('a disallowed camera position (the plain front, here) is skipped', we[0] > 0.3 && walled.pose.th !== front, we);
+  // The ray test can stop early: the clear case costs one candidate's rays.
+  const counted = fakeOccluded([]);
+  F.chooseItemView({ box: plant, baseTh: front, basePh: ph, fov: 50, aspect: 1.6, occluded: counted });
+  check('clear front view costs only the 10 sample rays', counted.calls.rays === 10, counted.calls.rays);
+}
+
+// ---- 4c. room pick prefers the focused room -------------------------------
+console.log('room pick with a focused room');
+{
+  const R = await imp('src/room-pick.js');
+  const rooms = [{ id: 'room_a', poly: [[0, 0], [100, 0], [100, 100], [0, 100]] }, { id: 'room_b', poly: [[100, 0], [200, 0], [200, 100], [100, 100]] }];
+  const viaFaded = { roomId: 'room_b', via: 'floor', hit: null, throughFadedWall: true };
+  const direct = { roomId: 'room_b', via: 'floor', hit: null, throughFadedWall: false };
+  check('neighbour reached only through a faded wall: no selection (click-away)', R.preferFocused(viaFaded, { roomId: 'room_a', floorPoint: [150, 50] }, rooms).roomId === null);
+  check('neighbour seen directly: still selected', R.preferFocused(direct, { roomId: 'room_a', floorPoint: [150, 50] }, rooms).roomId === 'room_b');
+  check('floor point inside the focused room: the focused room wins', R.preferFocused(direct, { roomId: 'room_a', floorPoint: [50, 50] }, rooms).roomId === 'room_a');
+  check('no focus: pickRoom is unchanged (the raw result)', R.pickRoom([], { x: 0, y: -1, z: 0 }, rooms, (x, z) => [x, z]).roomId === null);
 }
 
 // ---- 5. reducer ----------------------------------------------------------------
@@ -246,6 +343,41 @@ console.log('controller');
     c3.markGesture();
     c3.request({ room: 'room_a' }, 'explicit');
     check('a drag after click-away: the next selection captures where the user left it', c3.state().home.r === 88, c3.state().home);
+  }
+  // Review finding (5a69069): a drag that changes no selection must not
+  // leave its gesture flag set for the NEXT action.
+  {
+    const fl = [];
+    const q = [];
+    const mk = () => F.createFocusController({ getPose: () => HOME, fly: p => { fl.push(p); return Promise.resolve('landed'); },
+      resolveView: resolve, schedule: fn => q.push(fn) });
+    const dragNoChange = async c => { c.hold(); c.markGesture(); await c.release('gesture'); };
+    // room tap after a no-op drag
+    let c = mk(); fl.length = 0;
+    await dragNoChange(c);
+    c.hold(); c.request({ room: 'room_a' }, 'explicit'); await c.release('explicit');
+    check('no-op drag, then a room tap: exactly 1 flight', fl.length === 1 && fl[0] === VIEWS['r:room_a'], fl.length);
+    // device tap (flushNow inside the tap's hold) after a no-op drag
+    c = mk(); fl.length = 0;
+    await dragNoChange(c);
+    c.hold(); c.request({ device: DEV }, 'explicit'); await c.flushNow(); await c.release('explicit');
+    check('no-op drag, then a device tap: exactly 1 flight', fl.length === 1 && fl[0] === VIEWS['d:light:room_a/main'], fl.length);
+    // click-away after a no-op drag while a room is focused
+    c = mk(); fl.length = 0;
+    c.request({ room: 'room_a' }, 'explicit'); while (q.length) q.shift()();
+    await dragNoChange(c);
+    c.hold(); c.request({ room: null }, 'explicit'); await c.release('explicit');
+    check('room, no-op drag, then click-away: flies home (2 flights total)', fl.length === 2 && fl[1].r === HOME.r, fl.length);
+    // markGesture outside any hold, with nothing pending (a wheel), then a keyboard selection
+    c = mk(); fl.length = 0;
+    c.markGesture(); c.request({ room: 'room_b' }, 'explicit'); while (q.length) q.shift()();
+    check('a wheel with nothing pending does not make the next keyboard selection a gesture', fl.length === 1, fl.length);
+    // A scheduled flush does not fire mid-hold; the hold's release decides.
+    c = mk(); fl.length = 0;
+    c.request({ room: 'room_a' }, 'explicit'); c.hold(); while (q.length) q.shift()();
+    check('a scheduled flush waits while a pointer is held', fl.length === 0);
+    await c.release('explicit');
+    check('...and the release decides it', fl.length === 1);
   }
   ctl.reset();
   check('reset forgets selection and home', ctl.state().home === null && !ctl.selection().room);

@@ -255,6 +255,10 @@ no stored home pose, and a background tap on a wide screen does not deselect the
 room. `?preview=true` never focuses. `?camera=` still sets the initial pose
 either way.
 
+While a room is focused, a tap that would reach a neighbouring room only
+through the faded shell of the house counts as a click-away, and a tap whose
+ray lands inside the focused room's floor stays on that room.
+
 Under `prefers-reduced-motion` a flight is a jump. A house can author the view
 each room, item or curtain flies to — see `view` in
 [house-profile.md](house-profile.md#camera-focus-views).

@@ -939,10 +939,13 @@ nothing authored, every view is **derived**, so any house works unchanged:
   azimuth and polar, which `cameraPresets.iso` overrides), aimed at a point
   inside its polygon (the centroid, or for an L-shaped room whose centroid falls
   outside it, the middle of its widest part), at the smallest distance that
-  keeps the whole floor polygon on screen.
-- **A furniture item** is framed from its front, at its world box's centre, from
-  2.2 × the box diagonal (at least 1.2 m). A curtain the same, from the room side.
-  A light is framed from the current azimuth at the tapped fixture.
+  keeps the whole room on screen, floor to ceiling (so its ceiling lights are in frame too).
+- **A furniture item** is framed whole and close: the distance fits its world box
+  to the screen. The angle is its front if nothing stands in the way; otherwise
+  the nearest of a few dozen candidate angles (up to 90° round, and up to nearly
+  top-down) from which no other furniture, wall or fixture blocks the view. Below
+  wall height the camera stays inside the item's room. A curtain is treated the
+  same way, preferred from the room side; a light, from the current azimuth.
 
 When a derived view is not the one you want, add `view` to the room, the
 furniture item or the curtain (`schemaVersion` `"1.4"`):

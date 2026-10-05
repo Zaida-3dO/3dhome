@@ -195,13 +195,19 @@ export const ITEM_VIEW = Object.freeze({ minR: 1.2, diagFactor: 2.2, ph: Math.PI
  *                   the right of the canvas; the room is framed in what is
  *                   left and the target shifted so it sits in the middle of it
  * @param o.maxR     upper clamp (the house's own framing distance)
+ * @param o.height   the room's ceiling height (metres): the fit covers the
+ *                   floor-to-ceiling volume. 0 / absent: the floor only.
  */
 export function deriveRoomView(o) {
   const fov = o.fov || ROOM_VIEW.fov;
   const ip = interiorPoint(o.poly);
   const w = o.toWorld(ip[0], ip[1]);
-  let tgt = [w[0], 0, w[1]];
-  const pts = o.poly.map(p => { const q = o.toWorld(p[0], p[1]); return [q[0], 0, q[1]]; });
+  // The room's VOLUME, floor to ceiling, so its ceiling lights are in frame
+  // (and tappable) too; the target sits at mid-height to centre it.
+  const hgt = o.height > 0 ? o.height : 0;
+  let tgt = [w[0], hgt / 2, w[1]];
+  const pts = [];
+  o.poly.forEach(p => { const q = o.toWorld(p[0], p[1]); pts.push([q[0], 0, q[1]]); if (hgt) pts.push([q[0], hgt, q[1]]); });
   const inset = o.inset && o.inset.right > 0 && o.inset.width > o.inset.right ? o.inset : null;
   const aspect = inset ? (inset.width - inset.right) / inset.height : (o.aspect || 1);
   let r = Math.max(o.minR != null ? o.minR : ROOM_VIEW.minR, fitDistance(pts, tgt, o.th, o.ph, fov, aspect, o.margin || ROOM_VIEW.margin));
@@ -237,6 +243,133 @@ export function deriveItemView(o) {
   const r = Math.max(o.minR != null ? o.minR : ITEM_VIEW.minR, diag * ITEM_VIEW.diagFactor);
   const th = o.front && (o.front[0] || o.front[1]) ? Math.atan2(o.front[1], o.front[0]) : o.th;
   return { th, ph: o.ph != null ? o.ph : ITEM_VIEW.ph, r, tgt, fov: o.fov || ITEM_VIEW.fov };
+}
+
+/**
+ * OCCLUSION-AWARE DEVICE FRAMING.
+ *
+ * A device view must show the WHOLE item, as close as that allows, from an
+ * angle where nothing stands between the camera and the item (a shelf in
+ * front of a plant). So, per tap (never per frame):
+ *   1. candidate directions around the item's preferred one -- azimuth
+ *      offsets of 0, +-20, +-40, +-60, +-90 deg, each at the default polar
+ *      and at steeper ones up to near top-down -- sorted by how far they
+ *      stray from the preferred view (a small penalty, always < 1 ray);
+ *   2. for each, the distance that fits the item's whole box in the frustum
+ *      (both FOV axes, the canvas beside the sidebar), with a margin;
+ *   3. a score: the number of sample rays (box centre, top centre, eight
+ *      shrunken corners) from the camera to the item that something else
+ *      blocks, plus the penalty. A candidate the caller disallows (a camera
+ *      outside the item's room below wall height, i.e. behind a wall) is
+ *      skipped.
+ * The first candidate with NO blocked ray is the answer (they are tried in
+ * penalty order, so it is also the best score); otherwise the lowest score.
+ * The caller supplies the ray test, so this stays pure and testable.
+ */
+export const OCCLUSION_VIEW = Object.freeze({
+  azOffsetsDeg: [0, 20, -20, 40, -40, 60, -60, 90, -90],
+  margin: 1.25, minR: 0.8, maxR: 14,
+  topPolar: Math.PI * 0.1,
+  azPenalty: 0.3,      // at a 90 deg offset
+  polarPenalty: 0.25,  // at near top-down
+});
+
+/** The eight corners of a box { min, max }. */
+export function boxCorners(box) {
+  const out = [];
+  for (const x of [box.min[0], box.max[0]]) for (const y of [box.min[1], box.max[1]]) for (const z of [box.min[2], box.max[2]]) out.push([x, y, z]);
+  return out;
+}
+
+/** Ray targets on a box: its centre, its top centre and its corners pulled 15% toward the centre. */
+export function boxSamples(box) {
+  const c = [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2];
+  const pts = [c, [c[0], box.max[1] - (box.max[1] - box.min[1]) * 0.1, c[2]]];
+  boxCorners(box).forEach(p => pts.push([p[0] + (c[0] - p[0]) * 0.15, p[1] + (c[1] - p[1]) * 0.15, p[2] + (c[2] - p[2]) * 0.15]));
+  return pts;
+}
+
+/**
+ * Does the segment p -> q cross the axis-aligned box { min, max }? (Slab
+ * method.) Furniture occludes as its world box: conservative, and a box test
+ * costs nothing next to raycasting a merged furniture mesh's triangles.
+ */
+export function segmentHitsBox(p, q, b) {
+  let t0 = 0, t1 = 1;
+  for (let k = 0; k < 3; k++) {
+    const d = q[k] - p[k];
+    if (Math.abs(d) < 1e-12) { if (p[k] < b.min[k] || p[k] > b.max[k]) return false; continue; }
+    let a = (b.min[k] - p[k]) / d, c = (b.max[k] - p[k]) / d;
+    if (a > c) { const x = a; a = c; c = x; }
+    if (a > t0) t0 = a;
+    if (c < t1) t1 = c;
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
+/** Candidate (th, ph) around a preferred one, sorted by penalty (ascending). */
+export function deviceCandidates(baseTh, basePh, opts) {
+  const o = Object.assign({}, OCCLUSION_VIEW, opts || {});
+  const top = Math.min(o.topPolar, basePh);
+  const polars = [basePh];
+  [0.66, 0.33, 0].forEach(f => { const ph = top + (basePh - top) * f; if (polars.every(q => Math.abs(q - ph) > 1e-3)) polars.push(ph); });
+  const out = [];
+  o.azOffsetsDeg.forEach(d => polars.forEach(ph => {
+    const az = Math.abs(d) / 90;
+    const pol = basePh > top ? (basePh - ph) / (basePh - top) : 0;
+    out.push({ th: baseTh + d * Math.PI / 180, ph, penalty: o.azPenalty * az + o.polarPenalty * pol });
+  }));
+  out.sort((a, b) => a.penalty - b.penalty);
+  return out;
+}
+
+/**
+ * Choose the device view.
+ * @param o.box       { min, max } world metres -- the item
+ * @param o.baseTh    preferred azimuth (the item's front, or the current one)
+ * @param o.basePh    preferred polar
+ * @param o.fov       vertical FOV, degrees
+ * @param o.aspect    canvas width / height
+ * @param o.inset     { right, width, height } -- a covering sidebar, or null
+ * @param o.occluded  (eye, samples, limit) => number of sample rays blocked
+ *                    (may stop counting at `limit`)
+ * @param o.allowed   (eye) => bool -- false for a camera behind a wall
+ * @returns { pose, occluded, penalty, tried }
+ */
+export function chooseItemView(o) {
+  const opt = Object.assign({}, OCCLUSION_VIEW, o.options || {});
+  const box = o.box;
+  const centre = [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2];
+  const corners = boxCorners(box), samples = boxSamples(box);
+  const fov = o.fov || 50;
+  const inset = o.inset && o.inset.right > 0 && o.inset.width > o.inset.right ? o.inset : null;
+  const aspect = inset ? (inset.width - inset.right) / inset.height : (o.aspect || 1);
+  let best = null, tried = 0, first = null;
+  for (const c of deviceCandidates(o.baseTh, o.basePh, opt)) {
+    let r = fitDistance(corners, centre, c.th, c.ph, fov, aspect, opt.margin);
+    r = Math.min(opt.maxR, Math.max(o.minR != null ? o.minR : opt.minR, r));
+    let tgt = centre;
+    if (inset) {
+      const s = (inset.right / 2) * (2 * r * Math.tan((fov * Math.PI / 180) / 2) / inset.height);
+      const { right } = cameraBasis(c.th, c.ph);
+      tgt = [centre[0] + right[0] * s, centre[1], centre[2] + right[2] * s];
+    }
+    const b = backVector(c.th, c.ph);
+    const eye = [tgt[0] + b[0] * r, tgt[1] + b[1] * r, tgt[2] + b[2] * r];
+    const pose = { th: c.th, ph: c.ph, r, tgt, fov };
+    if (!first) first = pose;
+    if (o.allowed && !o.allowed(eye)) continue;
+    tried++;
+    // Only a count that could still beat the best is worth finishing.
+    const limit = best ? Math.ceil(best.occluded + best.penalty - c.penalty) : samples.length;
+    const occ = o.occluded ? o.occluded(eye, samples, limit) : 0;
+    const score = occ + c.penalty;
+    if (!best || score < best.occluded + best.penalty) best = { pose, occluded: occ, penalty: c.penalty };
+    if (occ === 0) break;   // penalty order: nothing later can score lower
+  }
+  if (!best) return { pose: first, occluded: null, penalty: 0, tried };
+  return { pose: best.pose, occluded: best.occluded, penalty: best.penalty, tried };
 }
 
 /** The plan-space front of an item rotated `deg` clockwise (docs/house-profile.md): (-sin r, cos r). */
@@ -342,7 +475,10 @@ export function createFocusController(o) {
   function sel() { return pending || { room: state.room, device: state.device }; }
   function flush() {
     scheduled = false;
-    if (!pending) return Promise.resolve(null);
+    // A batch that closes with nothing to decide (a drag that changed no
+    // selection) must not leave its gesture flag for the next batch: that
+    // turned the next tap into a "gesture" -- no flight, home lost.
+    if (!pending) { gesture = false; return Promise.resolve(null); }
     const next = pending, mode = gesture ? 'gesture' : 'explicit';
     pending = null; gesture = false;
     // While the camera is still flying HOME, "where the camera was before
@@ -372,7 +508,7 @@ export function createFocusController(o) {
       const cur = sel();
       pending = Object.assign({}, cur, partial || {});
       if (mode === 'gesture') gesture = true;
-      if (!held && !scheduled) { scheduled = true; schedule(() => { if (scheduled) flush(); }); }
+      if (!held && !scheduled) { scheduled = true; schedule(() => { if (scheduled && !held) flush(); }); }
     },
     /** The user is driving the camera (a drag, wheel or pinch): the open
      *  batch, if any, is a gesture, and a cancelled return flight's home is
@@ -380,7 +516,13 @@ export function createFocusController(o) {
     markGesture() { returning = null; if (pending || held) gesture = true; },
     /** Decide the batch now; resolves to the flight's result (or null). */
     flushNow() { return flush(); },
-    hold() { held++; },
+    hold() {
+      // A new pointer opens a fresh batch: a stale gesture flag with nothing
+      // pending is dropped. Anything already pending joins this batch (its
+      // scheduled flush defers to the release).
+      if (held === 0 && !pending) gesture = false;
+      held++;
+    },
     release(mode) {
       if (held > 0) held--;
       if (mode === 'gesture') gesture = gesture || !!pending;

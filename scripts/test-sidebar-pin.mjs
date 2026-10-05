@@ -114,7 +114,9 @@ check('opts omitted -> collapsible (the safe reading)', is(P.sidebarReduce({ ope
   check('popover: the sidebar flip that hook made is absorbed (takeRecords), not a card close',
     // Camera focus (src/camera-focus.js) may fly before the card opens; the
     // flip is still absorbed before either path opens it.
-    /syncSidebarOpen\(\);\s*\}[\s\S]*?open\((res\.)?target/.test(onClick) && /sidebarObs\.takeRecords\(\)/.test(src));
+    // Absorbed IMMEDIATELY before the open path: only comments sit between
+    // it and the line that either flies (then opens) or opens at once.
+    /syncSidebarOpen\(\);\s*\}\s*(\/\/[^\n]*\n\s*)*const target = res\.target, point = res\.point;\s*const flight = [^\n]*\n\s*if \(flight\) \{[\s\S]*?open\(target[\s\S]*?\n\s*open\(res\.target/.test(onClick) && /sidebarObs\.takeRecords\(\)/.test(src));
   check('popover: a closing sidebar is not dodged', /if \(sb\.classList && !sb\.classList\.contains\('open'\)\) return null;/.test(src));
 }
 

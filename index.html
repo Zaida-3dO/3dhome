@@ -2351,12 +2351,18 @@
       }
       function focusViewFor(sel) {
         if (sel.device) {
-          const d = sel.device, pt = d.focusPoint || null;
-          if (d.kind === 'curtain') return home.curtainView(d.id) || (pt ? home.pointView(pt) : null);
-          if (d.kind === 'light') return pt ? home.pointView(pt) : null;
+          const d = sel.device, pt = d.focusPoint || null, inset = panelInset();
+          if (d.kind === 'curtain') return home.curtainView(d.id, { inset }) || (pt ? home.pointView(pt, { inset }) : null);
+          if (d.kind === 'light') return pt ? home.pointView(pt, { inset, room: d.roomId }) : null;
+          // The target's own furniture item when it names one (a vacuum, a
+          // plant or a clock by id, an item card by itemId); else the item
+          // whose box holds the tapped point. Guessing from the point alone
+          // could frame the stand a plant sits on, or nothing at all.
+          const ownId = d.itemId || (d.kind === 'plant' || d.kind === 'vacuum' || d.kind === 'clock' ? d.id : null);
+          if (ownId && typeof home.furnitureBox === 'function' && home.furnitureBox(ownId)) return home.itemView(ownId, pt, { inset });
           const it = pt && typeof home.furnitureItemAt === 'function' ? home.furnitureItemAt(pt) : null;
-          if (it) return home.itemView(it.id, pt);
-          return pt ? home.pointView(pt) : null;
+          if (it) return home.itemView(it.id, pt, { inset });
+          return pt ? home.pointView(pt, { inset }) : null;
         }
         if (sel.room) return home.roomView(sel.room, { inset: panelInset() });
         return null;
@@ -2366,6 +2372,10 @@
         fly: pose => home.flyTo(pose),
         resolveView: focusViewFor,
       });
+      // A tap while a room is focused prefers that room: its own floor, or
+      // a neighbour only "seen" through the faded shell, is not a neighbour
+      // selection (the latter is the click-away).
+      if (focusAllowed && typeof home.setPickFocus === 'function') home.setPickFocus(() => (focusOn() ? focusCtl.state().room : null));
       // Verification seam (?debug=1): the controller and the switch.
       if (params.get('debug') === '1') window.__home3dFocus = { ctl: focusCtl, on: focusOn, home, house };
       function focusRoom(mode) {
