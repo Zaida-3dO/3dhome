@@ -43,6 +43,7 @@
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 import { roundedBox, pillow, sweep, clothSheet, concatGeometries, prng } from './soft.js';
+import { range, color, select } from './controls.js';
 
 export const TYPE = 'bed';
 
@@ -768,3 +769,24 @@ export function toFurnitureJSON(params) {
   }
   return { type: TYPE, params: out };
 }
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  range('width', 'Width', 90, 200, 1, 'cm'),
+  range('depth', 'Depth', 180, 230, 1, 'cm'),
+  range('height', 'Height (headboard)', 80, 160, 1, 'cm'),
+  range('baseHeight', 'Rail height', 20, 50, 1, 'cm'),
+  range('mattressHeight', 'Mattress height', 15, 35, 1, 'cm'),
+  range('channelCount', 'Channel count', 3, 12, 1),
+  range('channelDepth', 'Channel depth', 1, 6, 0.1, 'cm'),
+  color('headboardColor', 'Headboard (velvet)'),
+  color('baseColor', 'Rails (velvet)'),
+  color('plinthColor', 'Plinth'),
+  color('mattressColor', 'Fitted sheet'),
+  color('pillowColor', 'Pillows'),
+  color('accentPillowColor', 'Accent pillows'),
+  color('cushionColor', 'Cushion'),
+  color('duvetColor', 'Duvet cover'),
+  select('beddingPreset', 'Bedding', ['botanical', 'plain']),
+];

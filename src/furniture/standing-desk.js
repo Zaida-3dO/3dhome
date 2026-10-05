@@ -30,6 +30,7 @@
  * own channel instead -- see docs/house-profile.md, "A desk strip".
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { range, color, select, toggle, unsupported } from './controls.js';
 
 export const TYPE = 'standing-desk';
 
@@ -273,3 +274,23 @@ export function build(THREE, params, opts) {
 export function buildStandingDesk(THREE, params, opts) {
   return build(THREE, params, opts);
 }
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  range('width', 'Width', 80, 200, 1, 'cm'),
+  range('depth', 'Depth', 50, 120, 1, 'cm'),
+  range('topThickness', 'Top thickness', 1.5, 5, 0.1, 'cm'),
+  // The page bounds topHeight by the live minHeight/maxHeight; as static data that
+  // is the union of their two ranges (55..140).
+  range('topHeight', 'Top height', 55, 140, 1, 'cm'),
+  range('minHeight', 'Min height (sit)', 55, 95, 1, 'cm'),
+  range('maxHeight', 'Max height (stand)', 100, 140, 1, 'cm'),
+  color('topColor', 'Top colour'),
+  color('frameColor', 'Frame colour'),
+  select('controlSide', 'Control panel side', ['left', 'right']),
+  toggle('ledStrip', 'LED strip'),
+  color('ledColor', 'LED colour'),
+  unsupported('height', 'Height', 'derived'),
+  unsupported('ledSides', 'LED sides', 'array'),
+];

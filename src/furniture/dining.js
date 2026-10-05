@@ -38,6 +38,7 @@
  * photos. See wall-clock.js for the clock's own history note.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { range, color, unsupported } from './controls.js';
 
 /**
  * A BoxGeometry with the two caps PERPENDICULAR TO `capAxis` dropped -- 4
@@ -552,7 +553,30 @@ function buildDiningChair(THREE, params, opts) {
   return group;
 }
 
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+const TABLE_CONTROLS = [
+  // The page has one Diameter slider; the builder takes width and depth and uses
+  // the smaller, so the slider sets both (mirror).
+  Object.assign(range('width', 'Diameter', 70, 160, 2, 'cm'), { mirror: ['depth'] }),
+  unsupported('depth', 'Depth', 'derived'),
+  range('height', 'Height', 65, 80, 1, 'cm'),
+  color('topColor', 'Top colour'),
+  range('frameHeight', 'Frame height', 10, 35, 1, 'cm'),
+  color('legColor', 'Leg colour'),
+];
+
+const CHAIR_CONTROLS = [
+  range('radius', 'Radius', 35, 55, 1, 'cm'),
+  range('backSweep', 'Back sweep', 60, 120, 5, '°'),
+  range('height', 'Height', 55, 71, 1, 'cm'),
+  range('seatHeight', 'Seat height', 45, 58, 1, 'cm'),
+  color('seatColor', 'Colour'),
+  unsupported('width', 'Width', 'derived'),
+  unsupported('depth', 'Depth', 'derived'),
+];
+
 export const TYPES = {
-  'dining-table': { DEFAULTS: TABLE_DEFAULTS, build: buildDiningTable },
-  'dining-chair': { DEFAULTS: CHAIR_DEFAULTS, build: buildDiningChair }
+  'dining-table': { DEFAULTS: TABLE_DEFAULTS, build: buildDiningTable, CONTROLS: TABLE_CONTROLS },
+  'dining-chair': { DEFAULTS: CHAIR_DEFAULTS, build: buildDiningChair, CONTROLS: CHAIR_CONTROLS }
 };

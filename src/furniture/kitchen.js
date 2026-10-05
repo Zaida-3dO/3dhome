@@ -112,6 +112,7 @@
  * one more -- a choice the author makes knowingly, named where it lives.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { range, select, unsupported } from './controls.js';
 
 const CM = 0.01;
 
@@ -1047,10 +1048,44 @@ function buildFridge(THREE, params, opts) {
 
 // ---- exports ---------------------------------------------------------------------
 
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+const FRIDGE_CONTROLS = [
+  select('frontFinish', 'Front finish', ['gloss', 'matte', 'metal']),
+  select('handleStyle', 'Handle style', ['bar', 'knob', 'rail', 'none']),
+  select('freezer', 'Freezer', ['bottom', 'top']),
+  select('hinge', 'Hinge', ['left', 'right']),
+];
+
+const BASE_RUN_CONTROLS = [
+  // width is the sum of the modules (resizing it alone only rescales them); the
+  // modules and the sink are nested structures that need their own editor.
+  unsupported('width', 'Width', 'coupled'),
+  unsupported('modules', 'Modules', 'array'),
+  unsupported('sink', 'Sink', 'null'),
+  // KitchenSpec edits the worktop height (number input, step 0.5, no bound); the
+  // 70..110 range is editorial. The run's `height` is then the worktop plus the
+  // tap, which the spec's editor recomputes, so it is not a free control.
+  range('worktopHeight', 'Worktop height', 70, 110, 0.5, 'cm'),
+  unsupported('height', 'Height', 'derived'),
+  // A corner needs a `corner` module at that end of the run, so it is not a free choice.
+  unsupported('corner', 'Corner', 'coupled'),
+  select('frontFinish', 'Front finish', ['gloss', 'matte', 'metal']),
+  select('handleStyle', 'Handle style', ['bar', 'knob', 'rail', 'none']),
+];
+
+const WALL_RUN_CONTROLS = [
+  unsupported('width', 'Width', 'coupled'),
+  unsupported('modules', 'Modules', 'array'),
+  select('fill', 'Fill', ['bare', 'filler']),
+  select('frontFinish', 'Front finish', ['gloss', 'matte', 'metal']),
+  select('handleStyle', 'Handle style', ['bar', 'knob', 'rail', 'none']),
+];
+
 export const TYPES = Object.freeze({
-  'kitchen-base-run': Object.freeze({ DEFAULTS: BASE_DEFAULTS, build: buildBaseRun }),
-  'kitchen-wall-run': Object.freeze({ DEFAULTS: WALL_DEFAULTS, build: buildWallRun }),
-  'fridge-freezer': Object.freeze({ DEFAULTS: FRIDGE_DEFAULTS, build: buildFridge }),
+  'kitchen-base-run': Object.freeze({ DEFAULTS: BASE_DEFAULTS, build: buildBaseRun, CONTROLS: BASE_RUN_CONTROLS }),
+  'kitchen-wall-run': Object.freeze({ DEFAULTS: WALL_DEFAULTS, build: buildWallRun, CONTROLS: WALL_RUN_CONTROLS }),
+  'fridge-freezer': Object.freeze({ DEFAULTS: FRIDGE_DEFAULTS, build: buildFridge, CONTROLS: FRIDGE_CONTROLS }),
 });
 
 export { buildBaseRun, buildWallRun, buildFridge };

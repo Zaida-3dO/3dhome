@@ -54,6 +54,7 @@
  * same few boxes.
  */
 import { makeFinish } from './finishes.js';
+import { range, color, select, toggle } from './controls.js';
 
 export const TYPE = 'dog-crate';
 
@@ -442,3 +443,20 @@ export function toFurnitureJSON(params) {
   }
   return { type: TYPE, params: out };
 }
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  range('width', 'Length (width)', 50, 130, 1, 'cm'),
+  range('depth', 'Depth', 35, 90, 1, 'cm'),
+  range('height', 'Height', 35, 100, 1, 'cm'),
+  range('wirePitch', 'Vertical-wire pitch', 1.5, 6, 0.1, 'cm'),
+  range('rowPitch', 'Horizontal-wire pitch', 2, 12, 0.5, 'cm'),
+  select('sideDoor', 'Side door', ['left', 'right', 'none']),
+  select('endDoor', 'End door', ['left', 'right', 'none']),
+  toggle('cover', 'Fabric cover'),
+  color('wireColor', 'Wire'),
+  color('panColor', 'Tray'),
+  color('handleColor', 'Handle'),
+  color('coverColor', 'Cover'),
+];

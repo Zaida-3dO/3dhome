@@ -31,6 +31,8 @@
  * of scope and comes later via a lights[] schema entry.
  */
 
+import { range, color, select, toggle, unsupported } from './controls.js';
+
 export const TYPE = 'wall-sconce';
 
 // DEFAULTS describes the default kind, 'swing-arm-globe'. width/height/depth
@@ -315,3 +317,18 @@ export function build(THREE, params, opts) {
   if (p.kind === 'up-down') return buildUpDown(THREE, p, detail);
   return buildSwingArmGlobe(THREE, p, detail);
 }
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  select('kind', 'Kind', ['swing-arm-globe', 'up-down']),
+  range('armLength', 'Arm length', 10, 40, 1, 'cm'),
+  range('dropLength', 'Drop length', 5, 40, 1, 'cm'),
+  range('globeDiameter', 'Globe diameter', 8, 30, 1, 'cm'),
+  color('metalColor', 'Metal colour'),
+  color('glassColor', 'Glass colour'),
+  toggle('on', 'On (glow)'),
+  unsupported('width', 'Width', 'derived'),
+  unsupported('height', 'Height', 'derived'),
+  unsupported('depth', 'Depth', 'derived'),
+];

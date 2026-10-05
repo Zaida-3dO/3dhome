@@ -106,6 +106,8 @@
  * furnitureTapTarget and docs/plans/tap-popovers.md.
  */
 
+import { range, color, select } from './controls.js';
+
 export const TYPE = 'radiator';
 
 export const VALVE_CORNERS = ['bottom-left', 'bottom-right', 'top-left', 'top-right'];
@@ -613,3 +615,19 @@ function buildValves(THREE, group, L, add, mat, bodyHex, CHROME) {
 
 // Named alias, per the shared contract.
 export const buildRadiator = build;
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  range('width', 'Width (outer envelope)', 40, 200, 1, 'cm'),
+  range('height', 'Height (outer envelope)', 30, 160, 0.1, 'cm'),
+  range('depth', 'Depth (outer envelope, wall to front)', 8, 40, 0.5, 'cm'),
+  range('thickness', 'Thickness (body slab depth)', 4, 20, 0.5, 'cm'),
+  range('bodyElevation', 'Body elevation (inside the envelope)', 0, 40, 1, 'cm'),
+  select('valveCorner', 'Valve corner', VALVE_CORNERS.slice()),
+  color('color', 'Panel colour'),
+  select('cover', 'Cover', COVERS.slice()),
+  color('coverColor', 'Cover colour'),
+  range('shelfExtendLeft', 'Shelf overrun left', 0, 30, 0.5, 'cm'),
+  range('shelfExtendRight', 'Shelf overrun right', 0, 30, 0.5, 'cm'),
+];

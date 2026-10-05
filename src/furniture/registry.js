@@ -215,6 +215,9 @@ export async function loadBuilder(type, opts) {
   // defaultsFor(params) -> that kind's DEFAULTS. furniture.js merges an
   // item's params onto it instead of DEFAULTS (item 7c056b3e). Anything
   // other than a function is ignored with a warning, never trusted.
+  // Optional: CONTROLS, the type's slider/colour/select descriptors for edit
+  // mode (see controls.js). Descriptive only -- build() never reads them.
+  if (Array.isArray(impl.CONTROLS)) out.CONTROLS = impl.CONTROLS;
   if (typeof impl.defaultsFor === 'function') out.defaultsFor = impl.defaultsFor;
   else if (impl.defaultsFor !== undefined) {
     warn('type "' + type + '": ' + entry.path + ' exports defaultsFor but it is not a function -- ignored, DEFAULTS used');

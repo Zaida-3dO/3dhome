@@ -80,6 +80,7 @@
  * pothos 64, ficus 80, jade 24).
  */
 import { makeFinish } from './finishes.js';
+import { range, color, select } from './controls.js';
 
 export const TYPE = 'plant';
 
@@ -1229,3 +1230,30 @@ export const PRESETS = Object.freeze({
     plantHeight: 26.8, stemCount: 5, spread: 22, leafCount: 22, leafLength: 5, leafWidth: 2.8, leafColor: '#6f9a45', seed: 16,
   }),
 });
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  select('kind', 'Kind', KINDS.slice()),
+  range('width', 'Width', 8, 100, 0.5, 'cm'),
+  range('depth', 'Depth', 5, 100, 0.5, 'cm'),
+  range('height', 'Height', 10, 220, 0.5, 'cm'),
+  select('potStyle', 'Pot style', POT_STYLES.slice()),
+  range('potHeight', 'Pot height', 5, 100, 1, 'cm'),
+  range('potTopDiameter', 'Pot opening diameter', 5, 50, 1, 'cm'),
+  color('potColor', 'Pot colour'),
+  range('plantHeight', 'Plant height (above pot)', 5, 200, 0.5, 'cm'),
+  range('stemCount', 'Stems / canes / branches', 1, 8, 1),
+  range('spread', 'Widest leaf spread', 10, 100, 1, 'cm'),
+  range('leafLength', 'Leaf length', 2, 70, 0.5, 'cm'),
+  range('leafWidth', 'Leaf width', 1, 15, 0.1, 'cm'),
+  range('leafCount', 'Leaf count', 1, 60, 1),
+  select('habit', 'Habit', ['upright', 'trailing']),
+  range('trail', 'Trail below pot', 0, 120, 1, 'cm'),
+  color('leafColor', 'Leaf colour'),
+  color('accentColor', 'Leaf margin / variegation'),
+  color('glassColor', 'Glass tint'),
+  color('frameColor', 'Wire frame colour'),
+  select('contents', 'Wall planter contents', WALL_CONTENTS.slice()),
+  range('seed', 'Seed', 1, 999, 1),
+];

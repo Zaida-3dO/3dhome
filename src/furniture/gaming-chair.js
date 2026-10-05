@@ -33,6 +33,7 @@
  */
 
 import { makeFinish, FINISHES } from './finishes.js';
+import { range, color, unsupported } from './controls.js';
 
 export const TYPE = 'gaming-chair';
 
@@ -443,3 +444,26 @@ export function toFurnitureJSON(params) {
   }
   return { type: TYPE, params: out };
 }
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  color('primaryColor', 'Colour (seat + backrest front)'),
+  color('backColor', 'Back + sides'),
+  color('frameColor', 'Frame (arms, base)'),
+  color('pillowColor', 'Neck pillow'),
+  range('reclineDeg', 'Recline', LIMITS.reclineDeg[0], LIMITS.reclineDeg[1], 1, '°'),
+  range('seatHeight', 'Seat height', LIMITS.seatHeight[0], LIMITS.seatHeight[1], 0.5, 'cm'),
+  range('armHeight', 'Arm height (above seat)', LIMITS.armHeight[0], LIMITS.armHeight[1], 1, 'cm'),
+  // The spec page exposes only the three adjustments and the colourway. The
+  // chair's measured body is fixed, and its envelope follows from it and the recline.
+  unsupported('seatWidth', 'Seat width', 'fixed'),
+  unsupported('seatDepth', 'Seat depth', 'fixed'),
+  unsupported('backrestHeight', 'Backrest height', 'fixed'),
+  unsupported('backrestWidth', 'Backrest width', 'fixed'),
+  unsupported('baseDiameter', 'Base diameter', 'fixed'),
+  unsupported('casterDiameter', 'Caster diameter', 'fixed'),
+  unsupported('width', 'Width', 'derived'),
+  unsupported('height', 'Height', 'derived'),
+  unsupported('depth', 'Depth', 'derived'),
+];

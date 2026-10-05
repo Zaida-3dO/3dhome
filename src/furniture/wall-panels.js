@@ -19,6 +19,7 @@
  * by a fixed pitch, protruding a fixed depth off the backing.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { range, color, unsupported } from './controls.js';
 
 // ---------------------------------------------------------------------------
 // slat-panel
@@ -554,7 +555,34 @@ function buildHexPanelCluster(THREE, params, opts) { // eslint-disable-line no-u
 // Multi-type export
 // ---------------------------------------------------------------------------
 
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+const SLAT_CONTROLS = [
+  range('width', 'Width', 60, 400, 1, 'cm'),
+  range('height', 'Height', 100, 300, 1, 'cm'),
+  range('slatWidth', 'Slat width', 2, 15, 0.1, 'cm'),
+  // The page bounds pitch below by the live slatWidth; as static data that is 2.
+  range('pitch', 'Pitch', 2, 20, 0.1, 'cm'),
+  range('slatDepth', 'Slat depth', 0.5, 4, 0.1, 'cm'),
+  range('backingDepth', 'Backing depth', 0.3, 3, 0.1, 'cm'),
+  unsupported('depth', 'Depth', 'derived'),
+];
+
+const HEX_CONTROLS = [
+  range('side', 'Hex side', 8, 30, 0.5, 'cm'),
+  range('thickness', 'Thickness', 0.5, 4, 0.1, 'cm'),
+  color('color', 'Felt colour'),
+  range('bevelWidth', 'Bevel width', 0, 3, 0.1, 'cm'),
+  // The page bounds bevelDepth by the live thickness; as static data that is 0..4.
+  range('bevelDepth', 'Bevel depth', 0, 4, 0.05, 'cm'),
+  unsupported('columns', 'Columns', 'array'),
+  unsupported('columnOffsets', 'Column offsets', 'array'),
+  unsupported('width', 'Width', 'derived'),
+  unsupported('height', 'Height', 'derived'),
+  unsupported('depth', 'Depth', 'derived'),
+];
+
 export const TYPES = {
-  'slat-panel': { DEFAULTS: SLAT_DEFAULTS, build: buildSlatPanel },
-  'hex-panel-cluster': { DEFAULTS: DEFAULTS_HEX_PANEL_CLUSTER, build: buildHexPanelCluster }
+  'slat-panel': { DEFAULTS: SLAT_DEFAULTS, build: buildSlatPanel, CONTROLS: SLAT_CONTROLS },
+  'hex-panel-cluster': { DEFAULTS: DEFAULTS_HEX_PANEL_CLUSTER, build: buildHexPanelCluster, CONTROLS: HEX_CONTROLS }
 };

@@ -28,6 +28,7 @@
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 import { makeTvScreenMaterial } from './tv-screen.js';
+import { range, select, unsupported } from './controls.js';
 
 const CM = 0.01;
 
@@ -1361,15 +1362,65 @@ function buildPcTower(THREE, params, opts) {
   return g;
 }
 
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+const TV_CONTROLS = [
+  select('bezelStyle', 'Bezel style', ['thin', 'picture-frame']),
+];
+
+const PHOTO_FRAME_CONTROLS = [
+  // The schema's minimum is 1 panel; the cap is editorial (no spec slider).
+  range('panels', 'Panels', 1, 4, 1),
+];
+
+const SPEAKER_CONTROLS = [
+  select('kind', 'Kind', ['wall-trapezoid', 'floor-standing', 'ceiling', 'centre']),
+  select('firing', 'Subwoofer firing', ['down', 'angled', 'up']),
+  // The schema allows 2 or 3 mid drivers.
+  range('midDrivers', 'Mid drivers', 2, 3, 1),
+];
+
+const SUBWOOFER_CONTROLS = []; // SmallItemsSpec has no slider for this type: controlsFor() derives all of it
+
+const TUBE_FLOOR_LAMP_CONTROLS = [
+  // The lamp is round: the footprint is the smaller of width and depth, so the one
+  // control sets both (mirror). No spec slider; the range is editorial.
+  Object.assign(range('width', 'Footprint', 10, 40, 1, 'cm'), { mirror: ['depth'] }),
+  unsupported('depth', 'Depth', 'derived'),
+];
+
+const COAT_RACK_CONTROLS = [
+  // The schema allows 0..3 coats.
+  range('coats', 'Coats', 0, 3, 1),
+  // The rail sits at the top of height and the coats hang to the floor, so height
+  // has to be set together with coats and coatHeight.
+  unsupported('height', 'Height', 'coupled'),
+  unsupported('coatColors', 'Coat colours', 'array'),
+];
+
+const MIRROR_CONTROLS = [
+  select('shape', 'Shape', ['round', 'rect', 'pebble', 'triangle']),
+];
+
+const SHELF_CONTROLS = [
+  // height is the shelf board band; with a backPanel it grows to the panel height.
+  unsupported('height', 'Height', 'coupled'),
+  unsupported('levels', 'Levels', 'array'),
+];
+
+const MONITOR_CONTROLS = []; // SmallItemsSpec has no slider for this type: controlsFor() derives all of it
+
+const PC_TOWER_CONTROLS = []; // SmallItemsSpec has no slider for this type: controlsFor() derives all of it
+
 export const TYPES = {
-  'tv': { TYPE: 'tv', DEFAULTS: TV_DEFAULTS, build: buildTv },
-  'photo-frame': { TYPE: 'photo-frame', DEFAULTS: PHOTO_FRAME_DEFAULTS, build: buildPhotoFrame },
-  'speaker': { TYPE: 'speaker', DEFAULTS: SPEAKER_DEFAULTS, build: buildSpeaker },
-  'subwoofer': { TYPE: 'subwoofer', DEFAULTS: SUBWOOFER_DEFAULTS, build: buildSubwoofer },
-  'tube-floor-lamp': { TYPE: 'tube-floor-lamp', DEFAULTS: TUBE_FLOOR_LAMP_DEFAULTS, build: buildTubeFloorLamp },
-  'coat-rack': { TYPE: 'coat-rack', DEFAULTS: COAT_RACK_DEFAULTS, build: buildCoatRack },
-  'mirror': { TYPE: 'mirror', DEFAULTS: MIRROR_DEFAULTS, build: buildMirror },
-  'shelf': { TYPE: 'shelf', DEFAULTS: SHELF_DEFAULTS, build: buildShelf },
-  'monitor': { TYPE: 'monitor', DEFAULTS: MONITOR_DEFAULTS, build: buildMonitor },
-  'pc-tower': { TYPE: 'pc-tower', DEFAULTS: PC_TOWER_DEFAULTS, build: buildPcTower }
+  'tv': { TYPE: 'tv', DEFAULTS: TV_DEFAULTS, build: buildTv, CONTROLS: TV_CONTROLS },
+  'photo-frame': { TYPE: 'photo-frame', DEFAULTS: PHOTO_FRAME_DEFAULTS, build: buildPhotoFrame, CONTROLS: PHOTO_FRAME_CONTROLS },
+  'speaker': { TYPE: 'speaker', DEFAULTS: SPEAKER_DEFAULTS, build: buildSpeaker, CONTROLS: SPEAKER_CONTROLS },
+  'subwoofer': { TYPE: 'subwoofer', DEFAULTS: SUBWOOFER_DEFAULTS, build: buildSubwoofer, CONTROLS: SUBWOOFER_CONTROLS },
+  'tube-floor-lamp': { TYPE: 'tube-floor-lamp', DEFAULTS: TUBE_FLOOR_LAMP_DEFAULTS, build: buildTubeFloorLamp, CONTROLS: TUBE_FLOOR_LAMP_CONTROLS },
+  'coat-rack': { TYPE: 'coat-rack', DEFAULTS: COAT_RACK_DEFAULTS, build: buildCoatRack, CONTROLS: COAT_RACK_CONTROLS },
+  'mirror': { TYPE: 'mirror', DEFAULTS: MIRROR_DEFAULTS, build: buildMirror, CONTROLS: MIRROR_CONTROLS },
+  'shelf': { TYPE: 'shelf', DEFAULTS: SHELF_DEFAULTS, build: buildShelf, CONTROLS: SHELF_CONTROLS },
+  'monitor': { TYPE: 'monitor', DEFAULTS: MONITOR_DEFAULTS, build: buildMonitor, CONTROLS: MONITOR_CONTROLS },
+  'pc-tower': { TYPE: 'pc-tower', DEFAULTS: PC_TOWER_DEFAULTS, build: buildPcTower, CONTROLS: PC_TOWER_CONTROLS }
 };

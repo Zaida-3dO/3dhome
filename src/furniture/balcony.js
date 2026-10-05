@@ -58,6 +58,7 @@
  * 78-bar balustrade is three draws, not 78.
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
+import { range, color, select } from './controls.js';
 
 export const TYPE = 'balcony';
 
@@ -495,3 +496,27 @@ export function toFurnitureJSON(params) {
   }
   return { type: TYPE, params: out };
 }
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  range('width', 'Width (along facade)', 120, 800, 1, 'cm'),
+  range('depth', 'Depth', 60, 300, 1, 'cm'),
+  range('height', 'Height (slab + railing)', 60, 150, 1, 'cm'),
+  range('slabThickness', 'Slab thickness', 5, 30, 1, 'cm'),
+  select('floor', 'Floor', ['grating', 'decking', 'slab']),
+  range('gratingPitch', 'Grating pitch', 1, 10, 0.5, 'cm'),
+  range('boardWidth', 'Board width', 8, 30, 0.5, 'cm'),
+  range('boardGap', 'Board gap', 0, 2, 0.1, 'cm'),
+  select('railing', 'Railing', ['bars', 'glass']),
+  range('railingThickness', 'Rail thickness', 2, 10, 0.5, 'cm'),
+  range('barSpacing', 'Bar spacing', 5, 20, 0.5, 'cm'),
+  select('leftSide', 'Left end', ['railing', 'solid', 'none']),
+  select('rightSide', 'Right end', ['railing', 'solid', 'none']),
+  color('gratingColor', 'Grating'),
+  color('deckColor', 'Decking boards'),
+  color('slabColor', 'Slab (plain floor)'),
+  color('railColor', 'Rails and bars (metal)'),
+  color('solidColor', 'Solid end panel'),
+  color('glassColor', 'Glass'),
+];

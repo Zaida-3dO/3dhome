@@ -22,6 +22,7 @@
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 import { roundedBox, concatGeometries } from './soft.js';
+import { range, color } from './controls.js';
 
 const CM = 0.01;
 
@@ -588,8 +589,40 @@ function buildOttoman(THREE, params, opts) {
 // Multi-type export
 // ---------------------------------------------------------------------------
 
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+const PIANO_CONTROLS = [
+  range('width', 'Width', 100, 160, 1, 'cm'),
+  range('depth', 'Depth', 30, 60, 1, 'cm'),
+  range('height', 'Height', 80, 110, 1, 'cm'),
+  range('caseTopHeight', 'Case top height', 66, 86, 1, 'cm'),
+  range('restLean', 'Music rest lean', 0, 25, 1, '°'),
+  color('bodyColor', 'Body'),
+  color('standColor', 'Stand'),
+];
+
+const BENCH_CONTROLS = [
+  range('width', 'Width', 50, 110, 1, 'cm'),
+  range('depth', 'Depth', 25, 45, 1, 'cm'),
+  range('height', 'Height', 40, 65, 1, 'cm'),
+  range('apronHeight', 'Apron height', 4, 10, 0.5, 'cm'),
+  color('seatColor', 'Seat'),
+  color('baseColor', 'Frame'),
+];
+
+const OTTOMAN_CONTROLS = [
+  range('width', 'Width', 60, 130, 1, 'cm'),
+  range('depth', 'Depth', 30, 65, 1, 'cm'),
+  range('height', 'Height', 30, 50, 1, 'cm'),
+  range('sideChannels', 'Rolls each side', 0, 6, 1),
+  range('centreWidth', 'Centre panel', 10, 60, 1, 'cm'),
+  range('channelDepth', 'Roll height', 1, 6, 0.5, 'cm'),
+  color('color', 'Body (velvet)'),
+  color('footColor', 'Feet'),
+];
+
 export const TYPES = {
-  'digital-piano': { DEFAULTS: PIANO_DEFAULTS, build: buildDigitalPiano },
-  'piano-bench': { DEFAULTS: BENCH_DEFAULTS, build: buildPianoBench },
-  'ottoman': { DEFAULTS: OTTOMAN_DEFAULTS, build: buildOttoman }
+  'digital-piano': { DEFAULTS: PIANO_DEFAULTS, build: buildDigitalPiano, CONTROLS: PIANO_CONTROLS },
+  'piano-bench': { DEFAULTS: BENCH_DEFAULTS, build: buildPianoBench, CONTROLS: BENCH_CONTROLS },
+  'ottoman': { DEFAULTS: OTTOMAN_DEFAULTS, build: buildOttoman, CONTROLS: OTTOMAN_CONTROLS }
 };

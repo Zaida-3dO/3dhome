@@ -151,6 +151,7 @@
  */
 import { makeFinish, isKeptFinish } from './finishes.js';
 import { WASH_OPACITY } from './light-parts.js';
+import { select, unsupported } from './controls.js';
 
 export const TYPE = 'cabinet';
 
@@ -1371,3 +1372,18 @@ export const MIRROR_CABINET_PRESETS = {
   mirrorCabinet3Door: { label: 'Mirror cabinet, 3 doors', params: mirrorCabinetParams(120, 70, 18, 3) },
   mirrorCabinet2Door: { label: 'Mirror cabinet, 2 doors', params: mirrorCabinetParams(80, 70, 16, 2) },
 };
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  // CabinetSpec has no slider: its size is the sum of its fronts rows and cells, so
+  // width and height are edited THROUGH `fronts`/`columns`, not on their own (the
+  // builder throws if a cell row does not fill the width).
+  unsupported('width', 'Width', 'coupled'),
+  unsupported('height', 'Height', 'coupled'),
+  select('finish', 'Finish', [{ value: null, label: 'Default' }, 'matte', 'satin', 'gloss']),
+  unsupported('fronts', 'Fronts', 'array'),
+  unsupported('columns', 'Columns', 'null'),
+  unsupported('plinth', 'Plinth', 'object'),
+  unsupported('glassSidePanel', 'Glass side panel', 'null'),
+];

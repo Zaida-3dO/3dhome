@@ -36,6 +36,7 @@
  * outside this repo.
  */
 import { makeFinish } from './finishes.js';
+import { range, color, text } from './controls.js';
 
 export const TYPE = 'wall-sign';
 
@@ -223,3 +224,19 @@ export function build(THREE, params, opts) {
 
   return group;
 }
+
+// ---- edit-mode controls ---------------------------------------------------------
+// Ranges, steps, options and labels are copied from the spec page (see controls.js).
+export const CONTROLS = [
+  range('width', 'Width', 60, 200, 1, 'cm'),
+  range('height', 'Height', 20, 100, 1, 'cm'),
+  range('depth', 'Depth (outer frame)', 1, 8, 0.5, 'cm'),
+  // The page bounds panelDepth by the live depth; as static data that is 0.5..8.
+  range('panelDepth', 'Panel depth (inner body)', 0.5, 8, 0.5, 'cm'),
+  range('frameThickness', 'Frame thickness', 1, 10, 0.5, 'cm'),
+  color('frameColor', 'Frame colour'),
+  color('panelColor', 'Panel colour'),
+  text('line1', 'Line 1 (serif caps)'),
+  text('line2', 'Line 2 (script)'),
+  color('textColor', 'Text colour'),
+];
