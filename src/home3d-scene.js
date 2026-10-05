@@ -31,7 +31,7 @@ import {
   corniceSpotLayout, corniceLightCount, corniceLightBudget
 } from './wall-fittings.js';
 import {
-  loadFurnitureModules, buildFurnitureSliced, scheduleFurnitureAttach, fadeRegistrations, furnitureItemAt,
+  loadFurnitureModules, buildFurnitureSliced, buildFurnitureSync, scheduleFurnitureAttach, fadeRegistrations, furnitureItemAt,
   wallFadeTarget, wallFadeDepthWrite,
   disposeFurniture
 } from './furniture.js';
@@ -3412,7 +3412,7 @@ export const Home3DScene = (() => {
     // Furniture builders start loading NOW, in parallel with the scene build
     // and its precompile (plan amendment A2). Nothing is built until both are
     // done -- see the furniture block after the precompile below.
-    const furnitureItems = (Array.isArray(HOUSE.furniture) ? HOUSE.furniture : [])
+    let furnitureItems = (Array.isArray(HOUSE.furniture) ? HOUSE.furniture : [])
       .filter(item => !(quality.dropMinorFurniture && item.priority === 'minor'));
     let furnitureVisible = opts.furniture !== false;
     let furnitureModules = (furnitureItems.length && furnitureVisible)
@@ -4373,6 +4373,7 @@ export const Home3DScene = (() => {
     // builds nothing at all until setFurnitureVisible(true) asks for it.
     let furnitureResult = null;
     let furnitureStarted = false;
+    let furnitureAttached = null;   // startFurniture's promise: the attached result, or null
     const furnitureTimeline = { start: null, buildStart: null, buildEnd: null, attachedAt: null, stats: null };
     // Live clocks (item 059873ed): itemId -> the stop() startLiveClock
     // returned. A wall-clock's hands are a "dynamic" part (merge.js), so
@@ -4394,10 +4395,16 @@ export const Home3DScene = (() => {
       liveClockStops.forEach(stop => stop());
       liveClockStops.clear();
     }
-    function attachFurniture(result) {
-      furnitureResult = result;
-      result.root.visible = furnitureVisible;
-      scene.add(result.root);
+    // What a furniture build needs beyond being in the scene graph: its wall
+    // fade registrations, the light-following parts, the TV screens and the
+    // live clocks. Called by attachFurniture for the one view-mode build, and
+    // again by edit mode (below) after any part of the furniture is rebuilt --
+    // so everything here first DROPS what the previous build registered.
+    // `snap`: start each new fade mesh at the opacity the fade loop is easing
+    // toward (an edit-mode rebuild mid-orbit must not flash solid).
+    function applyFurnitureExtras(result, snap) {
+      for (let k = wallMeshes.length - 1; k >= 0; k--) if (wallMeshes[k].furniture) wallMeshes.splice(k, 1);
+      stopLiveClocks();
       // Fade buckets join the wall fade with their host wall's DERIVED outward
       // normal, exactly as window and curtain fittings do. Each is registered
       // with the opacity it returns to (task f7324d3f: glass fades WITH its
@@ -4405,10 +4412,10 @@ export const Home3DScene = (() => {
       fadeRegistrations(result).forEach(({ mesh, wallId, baseOpacity, baseDepthWrite }) => {
         const host = wallEntryById[wallId];
         if (!host || !host.outer) return;
-        wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true, base: baseOpacity, baseDepthWrite });
+        const entry = { mesh, nx: host.nx, nz: host.nz, outer: true, base: baseOpacity, baseDepthWrite, furniture: true };
+        wallMeshes.push(entry);
+        if (snap) snapFade(entry);
       });
-      furnitureTimeline.attachedAt = performance.now();
-      furnitureTimeline.stats = result.stats;
       // Light-following parts (a bedside table's level strip and glow band):
       // index them by the item's room and their channel, then pose them.
       Object.keys(furnitureLightParts).forEach(k => delete furnitureLightParts[k]);
@@ -4439,6 +4446,20 @@ export const Home3DScene = (() => {
         const stop = startLiveClock(dyn.group, { onTick: () => requestRender() });
         liveClockStops.set(itemId, stop);
       });
+    }
+    function snapFade(entry) {
+      const camDir = new THREE.Vector3().subVectors(orb.tgt, cam.position).normalize();
+      const op = wallFadeTarget(entry.nx * camDir.x + entry.nz * camDir.z, entry.base == null ? 1 : entry.base);
+      entry.mesh.material.opacity = op;
+      entry.mesh.material.depthWrite = wallFadeDepthWrite(op, entry.base, entry.baseDepthWrite);
+    }
+    function attachFurniture(result) {
+      furnitureResult = result;
+      result.root.visible = furnitureVisible;
+      scene.add(result.root);
+      furnitureTimeline.attachedAt = performance.now();
+      furnitureTimeline.stats = result.stats;
+      applyFurnitureExtras(result, false);
       // Adaptive quality: the attach frame repaints every shadow map with the
       // new casters (a cold frame worth judging), and the frames around the
       // attach are not the steady cost -- go quiet before sampling again.
@@ -4455,7 +4476,7 @@ export const Home3DScene = (() => {
       furnitureStarted = true;
       furnitureTimeline.start = performance.now();
       if (!furnitureModules) furnitureModules = loadFurnitureModules(furnitureItems);
-      scheduleFurnitureAttach({
+      furnitureAttached = scheduleFurnitureAttach({
         precompileDone,
         modulesLoaded: furnitureModules,
         isDisposed: () => _disposed,
@@ -4481,6 +4502,228 @@ export const Home3DScene = (() => {
       });
     }
     if (furnitureVisible) startFurniture();
+
+    // ── Edit-mode furniture (src/edit-mode.js, plan B1 + plan-review #13) ──
+    // View mode keeps the ONE house-scope build above. Edit mode swaps it for
+    // one build per ROOM (each its own small result: buckets, proxy, dynamic
+    // parts), so changing one item rebuilds only its room. The selected item
+    // is LIFTED: its room is rebuilt without it and it is built standalone,
+    // so a drag or a slider change rebuilds that one item and nothing else.
+    // Deselecting drops it back into its room (one room rebuild). Moves are
+    // confined to the item's room, so a room rebuild is always enough. On
+    // leaving edit mode the house-scope build comes back, from the edited
+    // items. None of this runs unless edit mode asks: view mode is untouched.
+    //
+    //   parts    'room:<id>' | 'item:<id>' -> a buildFurnitureSync result
+    //   items    the compiled furniture, in profile order (edits land here)
+    //   lifted   the lifted item's id, or null
+    // `furnitureResult` is a COMPOSITE of the parts while editing, so every
+    // reader of it (furnitureItemAt, itemView, the occlusion test, dispose)
+    // keeps working unchanged.
+    let editFurn = null;
+    const editKeep = item => !(quality.dropMinorFurniture && item.priority === 'minor');
+    function editCompose() {
+      const c = { root: editFurn.root, beauty: [], shadowProxies: [], dynamicByItemId: {}, byId: {}, warnings: [],
+        stats: { items: 0, beautyDraws: 0, proxyDraws: 0, dynamicDraws: 0, parts: editFurn.parts.size },
+        depthPrecompile: null, materials: [], extraDisposables: [] };
+      editFurn.parts.forEach(r => {
+        r.beauty.forEach(m => c.beauty.push(m));
+        r.shadowProxies.forEach(m => c.shadowProxies.push(m));
+        Object.assign(c.dynamicByItemId, r.dynamicByItemId);
+        Object.assign(c.byId, r.byId);
+        r.warnings.forEach(w => c.warnings.push(w));
+        (r.extraDisposables || []).forEach(d => c.extraDisposables.push(d));
+        c.stats.items += r.stats.items; c.stats.beautyDraws += r.stats.beautyDraws;
+        c.stats.proxyDraws += r.stats.proxyDraws; c.stats.dynamicDraws += r.stats.dynamicDraws;
+      });
+      furnitureResult = c;
+      editFurn.root.visible = furnitureVisible;
+      applyFurnitureExtras(c, true);
+      editHighlight(editFurn.highlight);
+      invalidateShadows();
+      requestRender();
+    }
+    function editDisposePart(key) {
+      const r = editFurn.parts.get(key);
+      if (!r) return;
+      editFurn.parts.delete(key);
+      // Its live clocks are stopped by the applyFurnitureExtras that follows.
+      disposeFurniture(r);
+    }
+    // (Re)build one part synchronously. Returns ms.
+    function editBuildPart(key, items) {
+      const t0 = performance.now();
+      editDisposePart(key);
+      const list = items.filter(editKeep);
+      if (list.length) {
+        const r = buildFurnitureSync(THREE, list, editFurn.builders, { tx, tz, quality, walls: WALLS });
+        r.root.name = 'furniture-edit:' + key;
+        editFurn.root.add(r.root);
+        editFurn.parts.set(key, r);
+      }
+      return performance.now() - t0;
+    }
+    function editRoomItems(room) {
+      return editFurn.items.filter(it => it.room === room && it.id !== editFurn.lifted);
+    }
+    function editItem(id) { return editFurn.items.find(it => it.id === id) || null; }
+    async function beginFurnitureEdit() {
+      if (editFurn) return { ms: 0 };
+      if (!furnitureStarted) { furnitureVisible = true; startFurniture(); }
+      if (furnitureAttached) await furnitureAttached;
+      if (_disposed || editFurn) return { ms: 0 };
+      const builders = await (furnitureModules || loadFurnitureModules(furnitureItems));
+      if (_disposed || editFurn) return { ms: 0 };
+      const t0 = performance.now();
+      if (furnitureResult) { stopLiveClocks(); disposeFurniture(furnitureResult); furnitureResult = null; }
+      const root = new THREE.Group();
+      root.name = 'furniture-edit';
+      scene.add(root);
+      editFurn = { root, parts: new Map(), items: furnitureItems.slice(), lifted: null, builders, highlight: null };
+      const rooms = [];
+      editFurn.items.forEach(it => { if (rooms.indexOf(it.room) < 0) rooms.push(it.room); });
+      rooms.forEach(room => editBuildPart('room:' + room, editRoomItems(room)));
+      editCompose();
+      return { ms: performance.now() - t0 };
+    }
+    function liftFurnitureItem(id) {
+      if (!editFurn) return null;
+      const t0 = performance.now();
+      const prev = editFurn.lifted;
+      if (prev === (id || null)) return { ms: 0 };
+      editFurn.lifted = null;
+      if (prev) {
+        const p = editItem(prev);
+        editDisposePart('item:' + prev);
+        if (p) editBuildPart('room:' + p.room, editRoomItems(p.room));
+      }
+      const it = id ? editItem(id) : null;
+      if (it) {
+        editFurn.lifted = id;
+        editBuildPart('room:' + it.room, editRoomItems(it.room));
+        editBuildPart('item:' + id, [it]);
+      }
+      editCompose();
+      return { ms: performance.now() - t0 };
+    }
+    // Replace (or, with no match, append) one compiled item and rebuild what
+    // shows it: only its own part when it is lifted, else its room.
+    function updateFurnitureItem(item) {
+      if (!editFurn || !item) return null;
+      const t0 = performance.now();
+      const k = editFurn.items.findIndex(it => it.id === item.id);
+      const old = k >= 0 ? editFurn.items[k] : null;
+      if (k >= 0) editFurn.items[k] = item; else editFurn.items.push(item);
+      let buildMs;
+      if (editFurn.lifted === item.id) buildMs = editBuildPart('item:' + item.id, [item]);
+      else {
+        buildMs = editBuildPart('room:' + item.room, editRoomItems(item.room));
+        if (old && old.room !== item.room) buildMs += editBuildPart('room:' + old.room, editRoomItems(old.room));
+      }
+      editCompose();
+      return { ms: performance.now() - t0, buildMs };
+    }
+    function removeFurnitureItem(id) {
+      if (!editFurn) return null;
+      const t0 = performance.now();
+      const it = editItem(id);
+      if (!it) return { ms: 0 };
+      editFurn.items = editFurn.items.filter(x => x.id !== id);
+      if (editFurn.lifted === id) { editFurn.lifted = null; editDisposePart('item:' + id); }
+      else editBuildPart('room:' + it.room, editRoomItems(it.room));
+      if (editFurn.highlight === id) editFurn.highlight = null;
+      editCompose();
+      return { ms: performance.now() - t0 };
+    }
+    // Leave edit mode: back to ONE house-scope build of `items` (the edited
+    // furniture; default the current edit items), compiled before it shows,
+    // exactly as at boot. Resolves once it is attached.
+    function endFurnitureEdit(items) {
+      if (!editFurn) return Promise.resolve(null);
+      const next = (items || editFurn.items).filter(editKeep);
+      const builders = editFurn.builders;
+      editFurn.highlight = null;
+      editHighlight(null);
+      stopLiveClocks();
+      Array.from(editFurn.parts.keys()).forEach(editDisposePart);
+      scene.remove(editFurn.root);
+      editFurn = null;
+      furnitureResult = null;
+      furnitureItems = next;
+      applyFurnitureExtras({ byId: {}, dynamicByItemId: {}, beauty: [] }, false);
+      invalidateShadows();
+      requestRender();
+      if (!next.length) return Promise.resolve(null);
+      furnitureAttached = scheduleFurnitureAttach({
+        precompileDone: Promise.resolve(),
+        modulesLoaded: loadFurnitureModules(next.filter(it => !builders.has(it.type)))
+          .then(m => { builders.forEach((b, t) => { if (!m.has(t)) m.set(t, b); }); return m; }),
+        isDisposed: () => _disposed || !!editFurn,
+        build: b => buildFurnitureSliced(THREE, next, b, { tx, tz, quality, walls: WALLS, isCancelled: () => _disposed || !!editFurn }),
+        renderer: ren, camera: cam, scene, wantShadows,
+        makeRenderTarget: () => new THREE.WebGLRenderTarget(1, 1),
+        attach: attachFurniture
+      });
+      return furnitureAttached;
+    }
+    // The selection outline: the item's world box as amber lines, drawn over
+    // everything. Never pickable (a LineSegments raycast catches every tap
+    // near it).
+    let editBox = null;
+    function editHighlight(id) {
+      if (editBox) { scene.remove(editBox); editBox.geometry.dispose(); editBox.material.dispose(); editBox = null; }
+      if (editFurn) editFurn.highlight = id || null;
+      const e = id && furnitureResult && furnitureResult.byId ? furnitureResult.byId[id] : null;
+      if (e && e.worldBox) {
+        const b = new THREE.Box3(new THREE.Vector3().fromArray(e.worldBox.min), new THREE.Vector3().fromArray(e.worldBox.max));
+        b.expandByScalar(0.015);
+        editBox = new THREE.Box3Helper(b, 0xf59e0b);
+        editBox.material.depthTest = false;
+        editBox.material.transparent = true;
+        editBox.renderOrder = 999;
+        editBox.raycast = () => {};
+        editBox.name = 'furniture-edit-highlight';
+        editBox.userData.editHelper = true;
+        scene.add(editBox);
+      }
+      requestRender();
+    }
+    // The furniture item under a client-pixel point, edit mode only: the
+    // first SOLID drawn surface along the ray decides (a wall in front hides
+    // what is behind it; see-through surfaces pass), and a furniture hit
+    // names its item by the smallest world box holding the hit point.
+    const _editRc = new THREE.Raycaster();
+    const _editNdc = new THREE.Vector2();
+    function editRay(clientX, clientY) {
+      const r = container.getBoundingClientRect();
+      _editNdc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+      _editRc.setFromCamera(_editNdc, cam);
+      return _editRc;
+    }
+    function furnitureEditPick(clientX, clientY) {
+      if (!editFurn || !furnitureResult || !furnitureVisible) return null;
+      const hits = editRay(clientX, clientY).intersectObjects(scene.children, true);
+      for (let i = 0; i < hits.length; i++) {
+        const h = hits[i], o = h.object;
+        if (!o || !o.isMesh || !isDrawn(o)) continue;
+        if (o.userData && (o.userData.clickable || o.userData.furniture === 'proxy')) continue;
+        if (materialOpacity(o.material, h.face ? h.face.materialIndex : 0) < OPACITY_SOLID) continue;
+        if (!isFurniture(o)) return null;
+        const it = furnitureItemAt(furnitureResult.byId, h.point);
+        return it ? { id: it.id, point: [h.point.x, h.point.y, h.point.z] } : null;
+      }
+      return null;
+    }
+    // Where a client-pixel ray meets the horizontal plane at height y
+    // (metres), in house cm [x, y]; null when it never does (looking up).
+    function screenToPlan(clientX, clientY, y) {
+      const ray = editRay(clientX, clientY).ray;
+      const o = ray.origin, d = ray.direction;
+      if (Math.abs(d.y) < 1e-6) return null;
+      const t = ((y || 0) - o.y) / d.y;
+      if (!(t > 0)) return null;
+      return [(o.x + d.x * t) / S + OX, (o.z + d.z * t) / S + OY];
+    }
 
     // Light state — one entry per room, one sub-entry per channel the profile
     // declares for it. A room with no 'main' channel still gets a main entry so
@@ -5926,6 +6169,25 @@ export const Home3DScene = (() => {
         if (!furnitureResult || !furnitureVisible) return null;
         return furnitureItemAt(furnitureResult.byId, point, onlyIds);
       },
+      // ---- Edit mode (src/edit-mode.js; see "Edit-mode furniture" above) ----
+      // Never called in view mode. begin swaps the house-scope build for one
+      // build per room; lift/update/remove rebuild one item or one room and
+      // resolve { ms }; end restores the house-scope build from the edits.
+      beginFurnitureEdit() { return beginFurnitureEdit(); },
+      liftFurnitureItem(id) { return liftFurnitureItem(id); },
+      updateFurnitureItem(item) { return updateFurnitureItem(item); },
+      removeFurnitureItem(id) { return removeFurnitureItem(id); },
+      endFurnitureEdit(items) { return endFurnitureEdit(items); },
+      furnitureEditing() { return !!editFurn; },
+      // { parts, lifted, items } while editing, else null (checks and diagnostics).
+      furnitureEditInfo() {
+        return editFurn ? { parts: Array.from(editFurn.parts.keys()), lifted: editFurn.lifted, items: editFurn.items.length } : null;
+      },
+      highlightFurniture(id) { editHighlight(id); },
+      furnitureEditPick(clientX, clientY) { return furnitureEditPick(clientX, clientY); },
+      screenToPlan(clientX, clientY, y) { return screenToPlan(clientX, clientY, y); },
+      // The loaded builders (type -> { DEFAULTS, CONTROLS?, defaultsFor? }): the param panel's source.
+      furnitureBuilders() { return furnitureModules || (furnitureModules = loadFurnitureModules(furnitureItems)); },
       // Diagnostics for the perf measurement and the visual review: what was
       // built (draws, triangles, which rooms' proxies dropped to low detail)
       // and when it attached, on the performance.now() clock.

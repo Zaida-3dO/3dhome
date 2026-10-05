@@ -1051,7 +1051,7 @@
     import { createFocusController, deviceKey } from './src/camera-focus.js?v=__VERSION__';
     // Edit-mode drafts (src/profile-draft.js): the boot-time read only. The
     // edit UI itself (src/edit-mode.js) is a dynamic import -- loadEditMode().
-    import { bootDraft, draftAllowed } from './src/profile-draft.js?v=__VERSION__';
+    import { bootDraft, draftAllowed, mountDraftEscape } from './src/profile-draft.js?v=__VERSION__';
     import { createThemeController } from './src/theme.js?v=__VERSION__';
     import { colorFromAttributes, supportsColor, lightServiceCall } from './src/light-color.js?v=__VERSION__';
     import { ICONS, svgIcon }  from './src/ui-icons.js?v=__VERSION__';
@@ -1387,6 +1387,10 @@
       // compile never strands the page: the served profile renders (both
       // files) and the banner says the draft is broken.
       const draftBoot = bootDraft(pageStorage, cfg.house, editFlags);
+      // Discard stays reachable even if this draft then crashes the boot:
+      // mounted NOW, before anything below can throw, above the loading and
+      // error cards; the draft banner replaces it once it mounts.
+      if (draftBoot) mountDraftEscape(document, pageStorage, cfg.house);
       let draftHouse = null, draftBroken = false;
       if (draftBoot && HouseLoader.isValidHouseId(cfg.house)) {
         try { draftHouse = HouseLoader.compile(draftBoot.geometry, 'houses/' + cfg.house + '/'); }
@@ -1630,6 +1634,8 @@
         // already, switches it to that room): see src/sidebar-pin.js.
         onRoomClick: isPreview ? undefined : (roomId => {
           roomTapPending = true;   // this tap is a room, not the empty background
+          // Edit mode: a tapped room is framed, even the one already open.
+          if (editApi && editApi.isActive()) editApi.selectRoom(roomId, true);
           selectedRoom = roomId; sidebarEvent('roomTap'); renderPanel(); focusRoom('explicit');
         })
       });
@@ -2453,8 +2459,10 @@
       function loadEditMode() {
         if (!editLoading) {
           editLoading = import('./src/edit-mode.js?v=__VERSION__').then(m => ({ m, ctx: {
-            home, houseId: cfg.house, houseDir: 'houses/' + cfg.house + '/', storage: pageStorage,
+            home, container, houseId: cfg.house, houseDir: 'houses/' + cfg.house + '/', storage: pageStorage,
             draftApplied, draftBroken,
+            compile: doc => HouseLoader.compile(doc, 'houses/' + cfg.house + '/'),
+            currentRoom: () => selectedRoom || null,
             resolveOwner: editOwnerFor,
             roomLabel: id => (Home3DScene.ROOMS[id] && Home3DScene.ROOMS[id].name) || id,
             viewFor: editViewFor,
@@ -2669,6 +2677,9 @@
         getHa: () => ha, HAClient,
         sendLight: (roomId, channel, state, debounceMs, withColor, power) => sendToHA(roomId, channel, state, debounceMs, withColor, power),
         // Close an UNPINNED sidebar on an object tap; the popover still opens.
+        // Edit mode: a tap that selected or dragged a piece of furniture is
+        // edit mode's, not a popover's.
+        tapClaimed: () => !!(editApi && editApi.isActive() && editApi.tapClaimed()),
         onObjectTap: (target, point) => {
           sidebarEvent('objectTap');
           // Edit mode: a tapped device becomes the thing being framed.

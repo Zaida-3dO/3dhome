@@ -184,6 +184,45 @@ console.log('7. baseHash');
   check('a missing rooms.json hashes too', typeof D.baseHashOf(geoText, null) === 'string');
 }
 
+console.log('8. the boot-time escape: Discard reachable before the banner exists');
+{
+  // A minimal DOM: enough for mountDraftEscape (createElement, getElementById,
+  // body.appendChild, click listeners).
+  function fakeDoc() {
+    const byId = new Map();
+    const mk = tag => {
+      const e = { tagName: tag.toUpperCase(), children: [], style: {}, attrs: {}, listeners: {}, parentNode: null, textContent: '' };
+      e.setAttribute = (k, v) => { e.attrs[k] = v; };
+      e.addEventListener = (t, f) => { (e.listeners[t] || (e.listeners[t] = [])).push(f); };
+      e.appendChild = c => { c.parentNode = e; e.children.push(c); if (c.id) byId.set(c.id, c); return c; };
+      e.removeChild = c => { e.children.splice(e.children.indexOf(c), 1); c.parentNode = null; if (c.id) byId.delete(c.id); return c; };
+      e.click = () => (e.listeners.click || []).forEach(f => f({}));
+      return e;
+    };
+    const doc = { createElement: mk, getElementById: id => byId.get(id) || null };
+    doc.body = mk('body');
+    return doc;
+  }
+  const mem = () => { const m = new Map(); return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k), m }; };
+  const store = mem();
+  D.writeDraft(store, D.makeDraft({ houseId: 'demo', geometry: { a: 1 } }));
+  const doc = fakeDoc();
+  let reloads = 0, asked = null, answer = false;
+  const box = D.mountDraftEscape(doc, store, 'demo', { confirm: t => { asked = t; return answer; }, reload: () => { reloads++; } });
+  check('mounted on the body, above the boot cards (z-index 10001 > 10000)', box && doc.getElementById(D.DRAFT_ESCAPE_ID) === box && /z-index:10001/.test(box.style.cssText));
+  const btn = box.children.find(c => c.tagName === 'BUTTON');
+  check('it carries a Discard button', btn && /Discard/.test(btn.textContent));
+  check('mounting twice keeps one', D.mountDraftEscape(doc, store, 'demo') === box && doc.body.children.length === 1);
+  btn.click();
+  check('Discard asks first; "no" keeps the draft', /Discard the draft/.test(asked || '') && D.readDraft(store, 'demo') && reloads === 0);
+  answer = true;
+  btn.click();
+  check('"yes" clears the stored draft and reloads', D.readDraft(store, 'demo') === null && reloads === 1);
+  D.removeDraftEscape(doc);
+  check('removeDraftEscape takes it away (the banner has mounted)', doc.getElementById(D.DRAFT_ESCAPE_ID) === null && doc.body.children.length === 0);
+  check('no document: nothing, no throw', D.mountDraftEscape(null, store, 'demo') === null);
+}
+
 void os;
 console.log('\n' + passes + ' passed, ' + failures + ' failed');
 process.exit(failures ? 1 : 0);

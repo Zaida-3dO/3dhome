@@ -1331,6 +1331,9 @@ export const clockTick = {
  *                          target, BEFORE its card opens (the page closes an
  *                          unpinned sidebar here; the card still opens). point:
  *                          the world hit point (edit mode frames the item there)
+ * @param o.tapClaimed      optional () => boolean: true when the embedder has
+ *                          already taken this tap (edit mode selecting furniture);
+ *                          no card opens
  * @param o.state           accessors onto the sidebar's own maps:
  *   doorStatus(id) 'on'|'off'|'unavailable'|null, curtainAvailable(id) bool|null,
  *   curtainPct(id), curtainLocal(id, pct), climate(roomId) parseClimate reading|null,
@@ -2384,6 +2387,8 @@ export function attachTapPopovers(o) {
   const onClick = e => {
     if (!inCanvas(e)) return;
     if (multi) return;
+    // The embedder took this tap (edit mode selecting furniture).
+    if (typeof o.tapClaimed === 'function' && o.tapClaimed()) return;
     if (Math.abs(e.clientX - downX) > TAP_SLOP_PX || Math.abs(e.clientY - downY) > TAP_SLOP_PX) return;
     const res = pickAt(e.clientX, e.clientY);
     if (res && res.target) {

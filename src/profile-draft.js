@@ -25,7 +25,9 @@
  * one entry point the page uses at boot, and it checks that first.
  *
  * Pure apart from the `storage` argument (a localStorage-like object): no
- * DOM, no fetch. Safe to import at boot -- it is small and draws nothing.
+ * fetch, and no DOM except the boot-time escape hatch at the bottom, which
+ * is handed its document. Safe to import at boot -- it is small and draws
+ * nothing unless a draft is being rendered.
  * Unit-tested in scripts/test-profile-draft.mjs.
  */
 
@@ -213,4 +215,63 @@ export function clearOwnerView(geometry, owner) {
   const e = findOwner(g, owner);
   if (e) delete e.view;
   return g;
+}
+
+// ---- The boot-time escape hatch --------------------------------------------
+//
+// A draft that compiles but then crashes the scene build would otherwise
+// strand the page: the boot error card comes up before the draft banner (and
+// its Discard) ever mounts, and clearing localStorage needs devtools -- not
+// something to ask of a phone or the wall tablet. So the page mounts this
+// small "Discard the draft" control the moment it decides to render a draft,
+// BEFORE anything that can throw, above the loading and error cards. The
+// real banner removes it once it mounts (src/edit-mode.js renderBanner).
+//
+// The one helper here that touches a DOM: the document is passed in, so it
+// stays testable without a browser (scripts/test-profile-draft.mjs).
+
+export const DRAFT_ESCAPE_ID = 'home3d-draft-escape';
+
+/**
+ * Mount the escape control. `o.confirm(text)` and `o.reload()` default to the
+ * window's. Returns the element (or the existing one).
+ */
+export function mountDraftEscape(doc, storage, houseId, o) {
+  if (!doc || !doc.body) return null;
+  const have = doc.getElementById(DRAFT_ESCAPE_ID);
+  if (have) return have;
+  const opt = o || {};
+  const w = typeof window !== 'undefined' ? window : {};
+  const confirmFn = opt.confirm || (t => (w.confirm ? w.confirm(t) : true));
+  const reload = opt.reload || (() => w.location && w.location.reload());
+  const box = doc.createElement('div');
+  box.id = DRAFT_ESCAPE_ID;
+  box.setAttribute('role', 'region');
+  box.setAttribute('aria-label', 'Draft on this device');
+  box.style.cssText = 'position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:10001;' +
+    'display:flex;align-items:center;gap:8px;padding:6px 8px 6px 12px;border-radius:10px;' +
+    'background:rgba(120,53,15,0.94);color:#fff7ed;border:1px solid rgba(251,191,36,0.55);' +
+    'font:500 12px/1.3 system-ui,-apple-system,Segoe UI,sans-serif;';
+  const text = doc.createElement('span');
+  text.textContent = 'Showing a DRAFT on this device';
+  const btn = doc.createElement('button');
+  btn.type = 'button';
+  btn.textContent = 'Discard draft';
+  btn.style.cssText = 'font:600 12px/1 system-ui,-apple-system,Segoe UI,sans-serif;padding:7px 10px;border-radius:7px;' +
+    'border:1px solid rgba(255,255,255,0.28);background:rgba(255,255,255,0.10);color:inherit;cursor:pointer;';
+  btn.addEventListener('click', () => {
+    if (!confirmFn('Discard the draft on this device? The served profile will be shown again.')) return;
+    clearDraft(storage, houseId);
+    reload();
+  });
+  box.appendChild(text);
+  box.appendChild(btn);
+  doc.body.appendChild(box);
+  return box;
+}
+
+/** Remove the escape control (the full banner has taken over). */
+export function removeDraftEscape(doc) {
+  const e = doc && doc.getElementById ? doc.getElementById(DRAFT_ESCAPE_ID) : null;
+  if (e && e.parentNode) e.parentNode.removeChild(e);
 }

@@ -139,6 +139,13 @@ console.log('4. odds and ends');
   const big = { a: 1, b: 2, c: { long: 'x'.repeat(60), longer: 'y'.repeat(60) } };
   const out = serializePreserving(crlf, big);
   check('CRLF base: kept, and a new multi-line member uses CRLF', !/[^\r]\n/.test(out) && deepEqual(JSON.parse(out), big), out);
+  // A container with ONE multi-line member takes its new member's separator
+  // from the open bracket's own newline: CRLF there too (A2 review finding 2).
+  const one = '{\r\n  "only": 1\r\n}\r\n';
+  const oneOut = serializePreserving(one, { only: 1, added: 2 });
+  check('CRLF, single-member container: the added member keeps CRLF', oneOut === '{\r\n  "only": 1,\r\n  "added": 2\r\n}\r\n', oneOut);
+  const oneLf = serializePreserving('{\n  "only": 1\n}\n', { only: 1, added: 2 });
+  check('LF, single-member container: unchanged behaviour', oneLf === '{\n  "only": 1,\n  "added": 2\n}\n', oneLf);
   let threw = false;
   try { parseWithSpans('{"a": 1,}'); } catch (e) { threw = true; }
   check('parser rejects invalid JSON', threw);

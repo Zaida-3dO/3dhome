@@ -187,8 +187,11 @@ function splice(text, node, parts, kept) {
   const open = text.slice(node.s, parts[0].s);
   const close = text.slice(parts[parts.length - 1].e, node.e);
   const sepBefore = k => text.slice(parts[k - 1].e, parts[k].s);
+  // One member: copy the newline-and-indent before it -- from its '\r' when
+  // the file is CRLF, or the new member's line would end in a bare LF.
+  const nl = open.lastIndexOf('\n');
   const addSep = parts.length >= 2 ? sepBefore(parts.length - 1)
-    : (/\n/.test(open) ? ',' + open.slice(open.lastIndexOf('\n')) : ', ');
+    : (nl >= 0 ? ',' + open.slice(nl > 0 && open[nl - 1] === '\r' ? nl - 1 : nl) : ', ');
   if (!kept.length) return text.slice(node.s, node.s + 1) + text.slice(node.e - 1, node.e);
   let out = open;
   kept.forEach((x, idx) => {

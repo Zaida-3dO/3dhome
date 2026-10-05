@@ -98,7 +98,27 @@ check('the draft geometry is compiled only when bootDraft returned one', /if \(d
 console.log('5. edit-mode.js is a leaf');
 const em = read('src/edit-mode.js');
 const imports = [...em.matchAll(/\bfrom\s*'([^']+)'/g)].map(m => m[1]);
-check('imports only the pure draft/export modules', JSON.stringify(imports.sort()) === JSON.stringify(['./profile-draft.js', './profile-export.js']), imports);
+check('imports only the pure draft / export / edit-ops / control-descriptor modules', JSON.stringify(imports.sort()) ===
+  JSON.stringify(['./edit-ops.js', './furniture/controls.js', './profile-draft.js', './profile-export.js']), imports);
+const ops = read('src/edit-ops.js');
+const opsImports = [...ops.matchAll(/\bfrom\s*'([^']+)'/g)].map(m => m[1]);
+check('edit-ops.js imports only the pure polygon helper', JSON.stringify(opsImports) === JSON.stringify(['./footstep-walk.js']), opsImports);
+
+console.log('6. Discard is reachable even when a draft crashes the boot');
+const escapeLine = 'if (draftBoot) mountDraftEscape(document, pageStorage, cfg.house);';
+const escAt = html.indexOf(escapeLine);
+check('the escape is mounted exactly once, for any draft bootDraft returned', count(html, /mountDraftEscape\(/g) === 1 && escAt > 0);
+check('... right after bootDraft, before the draft is compiled', escAt > html.indexOf('const draftBoot = bootDraft(') &&
+  escAt < html.indexOf('HouseLoader.compile(draftBoot.geometry'));
+check('... before the scene is created (where a bad draft crashes)', escAt < html.indexOf('const home = Home3DScene.create('));
+check('... imported statically with bootDraft (no lazy import to fail first)', /import \{ bootDraft, draftAllowed, mountDraftEscape \} from '\.\/src\/profile-draft\.js\?v=__VERSION__';/.test(html));
+check('the draft banner takes it away when it mounts', /function renderBanner\(\) \{\s*(\/\/[^\n]*\n\s*)*removeDraftEscape\(document\);/.test(em));
+
+console.log('7. a furniture tap in edit mode is edit mode\'s');
+const tp = read('src/tap-popovers.js');
+const onClick = (tp.match(/const onClick = e => \{[\s\S]*?const res = pickAt/) || [''])[0];
+check('tap-popovers asks tapClaimed() before it picks', /o\.tapClaimed\(\)\) return;/.test(onClick), onClick.slice(0, 200));
+check('the page answers it from edit mode only', /tapClaimed: \(\) => !!\(editApi && editApi\.isActive\(\) && editApi\.tapClaimed\(\)\)/.test(html));
 
 console.log('\n' + passes + ' passed, ' + failures + ' failed');
 process.exit(failures ? 1 : 0);
