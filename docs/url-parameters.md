@@ -24,6 +24,7 @@ except where noted. Unknown parameters are ignored.
 | [`house`](#house) | house profile id | `demo` | Which house profile to render |
 | [`rotateSpeed`](#rotatespeed) | float, rad/s | `2π/120` | Preview rotation speed |
 | [`camera`](#camera) | preset name | unset | Initial camera pose |
+| [`focus`](#focus) | `0` | on | `0` turns camera focus off (no flight to a tapped room or device) |
 | [`shadows`](#shadows) | `auto` \| `low` \| `off` | mode-dependent | Shadow quality |
 | [`tier`](#tier) | `ultra` \| `mid` \| `low` | detected | Force the GPU quality tier (A/B testing) |
 | [`fps`](#fps) | integer | `15` preview / `60` else | Frame-rate cap |
@@ -235,6 +236,32 @@ Two semantics that are easy to get wrong:
 
 An unknown or absent value leaves the default view unchanged. Applied *after*
 scene creation.
+
+### `focus`
+
+`?focus=0` — turns **camera focus** off for this load.
+
+With focus on (the default), tapping a room flies the camera (~0.7 s) to that
+room's showcase view, and tapping a device flies in on the device before its
+card opens. Clicking away with nothing left selected — a background tap, the
+sidebar's X or Back, Escape, or tapping away from a card — flies back to where
+the camera was before the first selection. Dragging, wheeling or pinching
+cancels a flight where it is, and a deselect *caused* by a drag (the unpinned
+sidebar closing as you orbit) never flies: you are driving the camera.
+
+`?focus=0`, or Settings > **Camera follows selection** switched off (stored per
+browser), restores the behaviour from before the feature exactly: no flights,
+no stored home pose, and a background tap on a wide screen does not deselect the
+room. `?preview=true` never focuses. `?camera=` still sets the initial pose
+either way.
+
+While a room is focused, a tap that would reach a neighbouring room only
+through the faded shell of the house counts as a click-away, and a tap whose
+ray lands inside the focused room's floor stays on that room.
+
+Under `prefers-reduced-motion` a flight is a jump. A house can author the view
+each room, item or curtain flies to — see `view` in
+[house-profile.md](house-profile.md#camera-focus-views).
 
 ### `shadows`
 

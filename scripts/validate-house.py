@@ -255,6 +255,7 @@ def check_geometry(geo, report, schema=None):
     check_wall_fittings(geo, wall_ids, room_ids, report, rooms_by_id)
     check_furniture(geo, wall_ids, rooms_by_id, report, schema)
     check_wall_finishes(geo, room_ids, report)
+    check_focus_views(geo, report)
 
     seen_channels = set()
     for entry in geo.get("lights", []):
@@ -299,6 +300,34 @@ def check_geometry(geo, report, schema=None):
             )
 
     return room_ids, seen_channels
+
+
+def check_focus_views(geo, report):
+    """Camera-focus `view` on rooms, furniture and curtains (schemaVersion 1.4).
+
+    The schema checks the shape ($defs/focusView); this ties the key to the
+    declared version, which nothing else does. A warning, not an error: an
+    engine older than 1.4 ignores the key and derives the view, so the house
+    still works -- the authored framing is just not used.
+    """
+    owners = []
+    for kind in ("rooms", "furniture", "curtains"):
+        for entry in geo.get(kind) or []:
+            if isinstance(entry, dict) and entry.get("view") is not None:
+                owners.append(f"{kind}/{entry.get('id')}")
+    if not owners:
+        return
+    version = str(geo.get("schemaVersion") or "")
+    try:
+        major, minor = (int(part) for part in version.split(".", 1))
+    except ValueError:
+        major = minor = -1
+    if (major, minor) < (1, 4):
+        report.warn(
+            "geometry.json/schemaVersion",
+            f"a camera-focus `view` ({owners[0]}) needs schemaVersion 1.4 or newer, but this profile "
+            f"declares '{version}' -- bump it",
+        )
 
 
 def check_wall_finishes(geo, room_ids, report):

@@ -704,6 +704,8 @@ jobs:
         run: node scripts/test-sidebar-pin.mjs
       - name: Camera zoom (dolly-through, never inverts) and two-finger pan/pinch classification
         run: node scripts/test-camera-gestures.mjs
+      - name: Camera focus -- room/device views, home pose, gesture vs click-away, one flight per action, stale taps
+        run: node scripts/test-camera-focus.mjs
       - name: Sliders and popover -- every range part styled, diamond matches the card, color-scheme dark
         run: node scripts/test-range-styles.mjs
       - name: Theme -- Auto/Dark/Light resolution, persistence, system listener, pre-paint script

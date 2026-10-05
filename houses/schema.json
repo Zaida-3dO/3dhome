@@ -444,6 +444,9 @@
         "id": {
           "$ref": "#/$defs/roomId"
         },
+        "view": {
+          "$ref": "#/$defs/focusView"
+        },
         "label": {
           "type": "string",
           "description": "Human-readable name shown in tooltips and the controls panel, e.g. \"Living Room\". Free to change at any time; it is never a join key.",
@@ -1058,6 +1061,9 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$"
         },
+        "view": {
+          "$ref": "#/$defs/focusView"
+        },
         "label": {
           "type": "string"
         },
@@ -1177,6 +1183,9 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "Stable identifier, unique among furniture."
+        },
+        "view": {
+          "$ref": "#/$defs/focusView"
         },
         "room": {
           "$ref": "#/$defs/roomId",
@@ -4425,6 +4434,48 @@
       "required": [
         "room",
         "fixtures"
+      ],
+      "additionalProperties": false
+    },
+    "focusView": {
+      "type": "object",
+      "title": "A camera-focus view",
+      "description": "The camera pose the view flies to when this room, furniture item or curtain is tapped. Orbit terms, the same as a `cameraPreset`, plus a target height and a lens. Optional everywhere: without one the engine DERIVES a view (a room: the whole floor polygon in frame from the house's home angle; an item: a close-up facing its front). Added in schemaVersion 1.4.",
+      "properties": {
+        "azimuth": {
+          "type": "number",
+          "description": "Orbit angle in radians around the vertical axis, as in `cameraPreset`. 0 puts the camera on the +X (east) side of the target; π/2 on the +Z (south) side."
+        },
+        "polar": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 3.15,
+          "description": "Angle from straight-up, in radians. Near 0 is top-down; π/2 is eye level."
+        },
+        "distance": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Camera distance from the target, in METRES."
+        },
+        "target": {
+          "$ref": "#/$defs/point2d",
+          "description": "Plan-space point (cm) the camera looks at. Optional: omitted, the derived target is used (a point inside the room; the item's centre)."
+        },
+        "targetHeight": {
+          "type": "number",
+          "description": "Height of the target above the floor, in cm. Default 0, the floor. Ignored when `target` is omitted for an item (its own centre height is used)."
+        },
+        "fov": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 120,
+          "description": "Vertical field of view in degrees. Default 50, the engine's lens."
+        }
+      },
+      "required": [
+        "azimuth",
+        "polar",
+        "distance"
       ],
       "additionalProperties": false
     },

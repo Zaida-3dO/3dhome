@@ -39,7 +39,9 @@ import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { createTvScreens } from './furniture/tv-screen.js';
 import { rugPatternForBox } from './rug-pattern.js';
-import { pickRoom, roomPolygons, sceneToHouse } from './room-pick.js';
+import { pickRoom, roomPolygons, sceneToHouse, isFurniture } from './room-pick.js';
+import { lerpPose, easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox } from './camera-focus.js';
+import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
   solarPosition, sunDirection, NIGHT,
@@ -4667,12 +4669,275 @@ export const Home3DScene = (() => {
       if (!name) return false;
       const p = CAMERA_PRESETS[String(name).toLowerCase()];
       if (!p) return false;
+      cancelFlight();
       orb.th = p.th;
       orb.ph = p.ph;
       orb.r = p.r;
       orb.tgt.copy(p.tgt || _homeTgt());
       updCam();
       return true;
+    }
+
+    // ---- Camera flights (camera focus, src/camera-focus.js) -------------
+    //
+    // flyTo(pose) eases the orbit camera from where it is to `pose` over ~0.7 s
+    // (ease-in-out, azimuth by the shortest arc, distance in log space). It is
+    // BOUNDED like the door swings: tickCameraFlight() feeds `animating` in the
+    // loop, so the scene renders exactly until the flight lands and then goes
+    // back to zero frames. Any pointer / wheel / touch / camera key, a resize,
+    // or an API jump (setView / setOrbit) cancels it where it is -- no jump.
+    // A newer flyTo supersedes an older one. Each resolves its promise once:
+    // 'landed', 'cancelled' or 'superseded'. Under prefers-reduced-motion the
+    // flight is a jump.
+    let flight = null;   // { from, to, t0, ms, resolve }
+    let pickFocusRoom = null;   // () => the focused room id, or null (setPickFocus)
+    function getPose() {
+      return { th: orb.th, ph: orb.ph, r: orb.r, tgt: [orb.tgt.x, orb.tgt.y, orb.tgt.z], fov: cam.fov };
+    }
+    function applyPose(p) {
+      orb.th = p.th; orb.ph = p.ph; orb.r = p.r;
+      orb.tgt.set(p.tgt[0], p.tgt[1], p.tgt[2]);
+      const fov = p.fov != null ? p.fov : cam.fov;
+      if (Math.abs(fov - cam.fov) > 1e-9) { cam.fov = fov; cam.updateProjectionMatrix(); }
+      updCam();
+    }
+    function endFlight(status) {
+      if (!flight) return;
+      const f = flight;
+      flight = null;
+      try { f.resolve(status); } catch (e) { /* a resolver never throws */ }
+    }
+    function reducedMotion() {
+      try { return typeof window !== 'undefined' && typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
+    }
+    function flyTo(pose, opts) {
+      endFlight('superseded');
+      const ms = opts && opts.ms != null ? opts.ms : 700;
+      if (!(ms > 0) || reducedMotion()) { applyPose(pose); wake(250); return Promise.resolve('landed'); }
+      return new Promise(resolve => {
+        flight = { from: getPose(), to: clonePose(pose), t0: performance.now(), ms, resolve };
+        wake(ms + 50);
+      });
+    }
+    function cancelFlight() {
+      if (!flight) return false;
+      endFlight('cancelled');
+      wake(250);
+      return true;
+    }
+    function tickCameraFlight(now) {
+      if (!flight) return false;
+      const t = (now - flight.t0) / flight.ms;
+      if (t >= 1) { applyPose(flight.to); endFlight('landed'); return false; }
+      applyPose(lerpPose(flight.from, flight.to, easeInOut(Math.max(0, t))));
+      return true;
+    }
+
+    // ---- Focus views ------------------------------------------------------
+    // The pose the camera flies to for a selection. A profile `view` (geometry
+    // schemaVersion 1.4, compiled by house-loader) wins; otherwise the view is
+    // DERIVED, so any house works with nothing authored. A room's derived view
+    // uses the house's own home angle (the `iso` preset, which a profile may
+    // override) -- a fixed showcase view per room, not the current azimuth.
+    function roomShape(id) {
+      const rm = ROOMS[id];
+      if (!rm) return null;
+      return rm.poly || [[rm.x1, rm.y1], [rm.x2, rm.y1], [rm.x2, rm.y2], [rm.x1, rm.y2]];
+    }
+    function roomView(id, opts) {
+      const poly = roomShape(id);
+      if (!poly) return null;
+      const home = CAMERA_PRESETS.iso;
+      const derived = () => deriveRoomView({
+        poly, toWorld: (x, y) => [tx(x), tz(y)], th: home.th, ph: home.ph, fov: cam.fov,
+        aspect: cam.aspect, inset: opts && opts.inset, maxR: _defaultDistance * 3,
+        height: HOUSE.ceilingHeight || WH,
+      });
+      const v = ROOMS[id].view;
+      if (v) {
+        const d = v.tgt ? null : derived();
+        return { th: v.th, ph: v.ph, r: v.r, tgt: v.tgt ? v.tgt.slice() : [d.tgt[0], v.targetHeight || 0, d.tgt[2]], fov: v.fov };
+      }
+      return derived();
+    }
+    function authoredView(v, fallbackTgt) {
+      return { th: v.th, ph: v.ph, r: v.r, tgt: v.tgt ? v.tgt.slice() : fallbackTgt, fov: v.fov };
+    }
+    // ---- Occlusion-aware device framing (src/camera-focus.js chooseItemView)
+    //
+    // A device view shows the WHOLE item as close as that allows, from the
+    // angle nearest its front where nothing stands in the way: a plant behind
+    // a shelf is framed from the side or from above instead. The chooser is
+    // pure; this supplies its two scene questions:
+    //   occluded(eye, samples)  how many rays from the camera to points on the
+    //                           item hit something solid first. "Solid" is
+    //                           judged as the frame AT THAT CAMERA will draw it:
+    //                           an exterior wall that fades from that side, the
+    //                           ceiling seen from above, glass and the floor
+    //                           click-catchers do not block; anything inside
+    //                           the item's own box is the item itself.
+    //   allowed(eye)            below wall height the camera must be inside the
+    //                           item's room -- never behind a wall.
+    // Computed once per tap (never per frame); lastFocusStats() reports the
+    // cost so it can be measured on the wall tablet.
+    let lastFocusStats = null;
+    const _occRc = new THREE.Raycaster();
+    const _occO = new THREE.Vector3(), _occD = new THREE.Vector3(), _occS = new THREE.Sphere();
+    // Occluders, gathered once per tap. Two kinds, because raycasting a merged
+    // furniture mesh walks every triangle of every item in it (measured: up to
+    // 1.9 s a tap on the real house on a desktop) while a box test is free:
+    //   meshes  the building -- walls, doors, fittings, curtains, fixtures --
+    //           raycast, within `reach` of the item;
+    //   boxes   every OTHER furniture item, as its world box. Conservative
+    //           (a table's box blocks under its top too). Skipped: an item
+    //           whose box holds the target's centre (the cabinet a thing
+    //           stands in), and per camera, one that fades with its wall.
+    function occluderList(centre, reach) {
+      const c = new THREE.Vector3(centre[0], centre[1], centre[2]);
+      const out = [];
+      scene.traverse(o => {
+        if (!o.isMesh || !o.geometry || !isDrawn(o)) return;
+        if (o.userData && o.userData.clickable) return;   // floor click-catchers
+        if (isFurniture(o)) return;                       // tested as boxes below
+        if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+        _occS.copy(o.geometry.boundingSphere).applyMatrix4(o.matrixWorld);
+        if (_occS.center.distanceTo(c) - _occS.radius > reach) return;
+        out.push(o);
+      });
+      return out;
+    }
+    function furnitureBoxes(centre, reach, targetId) {
+      const byId = furnitureResult && furnitureVisible && furnitureResult.byId ? furnitureResult.byId : null;
+      if (!byId) return [];
+      const out = [];
+      Object.keys(byId).forEach(id => {
+        if (id === targetId) return;
+        const e = byId[id], b = e.worldBox;
+        if (!b) return;
+        if (centre[0] >= b.min[0] && centre[0] <= b.max[0] && centre[1] >= b.min[1] && centre[1] <= b.max[1] &&
+          centre[2] >= b.min[2] && centre[2] <= b.max[2]) return;
+        const dx = Math.max(b.min[0] - centre[0], 0, centre[0] - b.max[0]);
+        const dy = Math.max(b.min[1] - centre[1], 0, centre[1] - b.max[1]);
+        const dz = Math.max(b.min[2] - centre[2], 0, centre[2] - b.max[2]);
+        if (Math.hypot(dx, dy, dz) > reach) return;
+        const host = e.fadeWallId != null ? wallEntryById[e.fadeWallId] : null;
+        out.push({ box: b, host: host && host.outer ? host : null });
+      });
+      return out;
+    }
+    function makeOcclusionTest(box, reach, targetId) {
+      const centre = [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2];
+      const list = occluderList(centre, reach);
+      const boxes = furnitureBoxes(centre, reach, targetId);
+      const fadeOf = new Map();
+      wallMeshes.forEach(w => fadeOf.set(w.mesh, w));
+      const PAD = 0.03;
+      const inBox = p => p.x > box.min[0] - PAD && p.x < box.max[0] + PAD && p.y > box.min[1] - PAD && p.y < box.max[1] + PAD &&
+        p.z > box.min[2] - PAD && p.z < box.max[2] + PAD;
+      let rays = 0;
+      const test = (eye, samples, limit) => {
+        // The camera's view direction, as the render loop's wall fade reads it.
+        let dx = centre[0] - eye[0], dy = centre[1] - eye[1], dz = centre[2] - eye[2];
+        const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
+        const fades = w => wallFadeTarget(w.nx * dx + w.nz * dz, w.base) < OPACITY_SOLID;
+        const blocks = h => {
+          if (inBox(h.point)) return false;                         // the item itself
+          const o = h.object;
+          if (o === ceilingMesh) return eye[1] <= WH;                 // hidden from above
+          const f = fadeOf.get(o);
+          if (f && f.outer) return !fades(f);
+          return materialOpacity(o.material, h.face ? h.face.materialIndex : 0) >= OPACITY_SOLID;
+        };
+        // Furniture that stays solid from THIS camera.
+        const solidBoxes = boxes.filter(b => !(b.host && fades(b.host)));
+        _occO.set(eye[0], eye[1], eye[2]);
+        let n = 0;
+        for (let i = 0; i < samples.length; i++) {
+          const s = samples[i];
+          rays++;
+          let hit = false;
+          for (let k = 0; k < solidBoxes.length && !hit; k++) if (segmentHitsBox(eye, s, solidBoxes[k].box)) hit = true;
+          if (!hit) {
+            _occD.set(s[0] - eye[0], s[1] - eye[1], s[2] - eye[2]);
+            const dist = _occD.length();
+            if (!(dist > 1e-6)) continue;
+            _occD.divideScalar(dist);
+            _occRc.set(_occO, _occD);
+            _occRc.near = 0; _occRc.far = Math.max(0, dist - 0.01);
+            const hits = _occRc.intersectObjects(list, false);
+            for (let k = 0; k < hits.length; k++) if (blocks(hits[k])) { hit = true; break; }
+          }
+          if (hit) { n++; if (n >= limit) return n; }
+        }
+        return n;
+      };
+      test.stats = () => ({ occluders: list.length, boxes: boxes.length, rays });
+      return test;
+    }
+    function makeAllowed(roomId) {
+      const toHouse = sceneToHouse(S, OX, OY);
+      const polys = roomId && roomShape(roomId) ? [roomShape(roomId)] : Object.keys(ROOMS).map(roomShape);
+      return eye => {
+        if (eye[1] < 0.15) return false;                 // under the floor
+        if (eye[1] >= WH + 0.05) return true;            // above the walls: the dollhouse view
+        const p = toHouse(eye[0], eye[2]);
+        return polys.some(poly => poly && insidePoly(poly, p[0], p[1]));
+      };
+    }
+    function framedView(box, baseTh, roomId, opts, targetId) {
+      const t0 = performance.now();
+      const occluded = makeOcclusionTest(box, OCCLUSION_REACH, targetId);
+      const res = chooseItemView({ box, baseTh, basePh: ITEM_VIEW.ph, fov: cam.fov, aspect: cam.aspect,
+        inset: opts && opts.inset, occluded, allowed: makeAllowed(roomId) });
+      const st = occluded.stats();
+      lastFocusStats = { ms: +(performance.now() - t0).toFixed(2), tried: res.tried, occludedRays: res.occluded,
+        penalty: +res.penalty.toFixed(3), occluders: st.occluders, boxes: st.boxes, rays: st.rays,
+        dTh: +(res.pose.th - baseTh).toFixed(3), ph: +res.pose.ph.toFixed(3), r: +res.pose.r.toFixed(2) };
+      return res.pose;
+    }
+    // How far from the item an occluder can matter: the farthest a candidate
+    // camera goes (chooseItemView's maxR) plus a margin.
+    const OCCLUSION_REACH = 15;
+    const vec3 = p => [p.x != null ? p.x : p[0], p.y != null ? p.y : p[1], p.z != null ? p.z : p[2]];
+    const pointBox = (p, h) => ({ min: [p[0] - h, p[1] - h, p[2] - h], max: [p[0] + h, p[1] + h, p[2] + h] });
+
+    function itemView(id, point, opts) {
+      const entry = furnitureResult && furnitureResult.byId ? furnitureResult.byId[id] : null;
+      const placed = (HOUSE.furniture || []).find(f => f.id === id);
+      const pt = point ? vec3(point) : [orb.tgt.x, orb.tgt.y, orb.tgt.z];
+      const box = entry && entry.worldBox ? entry.worldBox : pointBox(pt, 0.2);
+      const rot = entry && entry.placement ? entry.placement.rotationDeg : (placed ? placed.rotationDeg : 0);
+      const f = frontFromRotation(rot);
+      if (placed && placed.view) {
+        const c = [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2];
+        return authoredView(placed.view, c);
+      }
+      const room = (entry && entry.room) || (placed && placed.room) || null;
+      return framedView(box, Math.atan2(f[1], f[0]), room, opts, id);
+    }
+    function curtainView(id, opts) {
+      const c = (HOUSE.curtains || []).find(k => k.id === id);
+      if (!c) return null;
+      const off = (c.offset || 0) * c.inDir;
+      const lo = Math.max(0, (c.top - c.drop)) / 100, hi = c.top / 100;
+      let box, front;
+      if (c.axis === 'x') {
+        const y = c.at + off;
+        box = { min: [tx(c.c - c.w / 2), lo, tz(y) - 0.05], max: [tx(c.c + c.w / 2), hi, tz(y) + 0.05] };
+        front = [0, c.inDir];
+      } else {
+        const x = c.at + off;
+        box = { min: [tx(x) - 0.05, lo, tz(c.c - c.w / 2)], max: [tx(x) + 0.05, hi, tz(c.c + c.w / 2)] };
+        front = [c.inDir, 0];
+      }
+      if (c.view) return authoredView(c.view, [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2]);
+      return framedView(box, Math.atan2(front[1], front[0]), c.room, opts);
+    }
+    // A light fixture (or any target with no box): a small box round the
+    // tapped fixture, preferred from the current azimuth.
+    function pointView(point, opts) {
+      return framedView(pointBox(vec3(point), 0.15), orb.th, opts && opts.room, opts);
     }
 
     // Pan — translates orb.tgt (the look-at point) along the camera's actual
@@ -4959,6 +5224,9 @@ export const Home3DScene = (() => {
       needsRender = false;
 
 
+      // A camera flight moves the camera BEFORE this frame's wall fade reads
+      // its direction, and reports "still moving" into `animating` below.
+      const flightMoving = tickCameraFlight(frameNow);
       if (autoRotate && !orb.drag && !orb.pan) {
         autoAngle += rotateSpeed * dt;
         orb.th = Math.PI * 0.22 + autoAngle;
@@ -5037,6 +5305,7 @@ export const Home3DScene = (() => {
       if (tickFootstepFades()) animating = true;
       if (tickDoorSwings()) animating = true;
       if (tickCurtainMotions()) animating = true;
+      if (flightMoving) animating = true;
 
       transitionsActive = animating;
       // Time the render itself rather than the gap between frames. The gap is
@@ -5112,6 +5381,7 @@ export const Home3DScene = (() => {
       }
 
       on(container, "pointerdown", e => {
+        cancelFlight();   // the user takes the camera: stop where it is
         container.setPointerCapture(e.pointerId);
         if (e.pointerType === "touch") touchIds.add(e.pointerId);
         // button: 0=left (rotate, existing), 1=middle, 2=right (pan, new) —
@@ -5166,12 +5436,24 @@ export const Home3DScene = (() => {
         // Walls block and resolve to the side tapped; furniture and
         // see-through surfaces pass the tap on (src/room-pick.js).
         // ROOMS and the transform are per house, so both are read per tap.
+        // Camera focus: while a room is focused the embedder names it, and
+        // the tap prefers it (room-pick.js preferFocused). floorPoint is
+        // where the ray meets the floor plane, in house cm.
+        const toHouse = sceneToHouse(S, OX, OY);
+        let focus = null;
+        const fr = pickFocusRoom ? pickFocusRoom() : null;
+        if (fr) {
+          const o = rc.ray.origin, d = rc.ray.direction;
+          const t = d.y < -1e-6 ? -o.y / d.y : -1;
+          focus = { roomId: fr, floorPoint: t > 0 ? toHouse(o.x + d.x * t, o.z + d.z * t) : null };
+        }
         const picked = pickRoom(rc.intersectObjects(scene.children, true), rc.ray.direction,
-          roomPolygons(ROOMS), sceneToHouse(S, OX, OY));
+          roomPolygons(ROOMS), toHouse, focus);
         if (picked.roomId && onRoomClick) onRoomClick(picked.roomId);
       });
       on(container, "wheel", e => {
         e.preventDefault();
+        cancelFlight();
         // See zoomBy above. The old additive step with a -30 floor let r
         // cross zero, which flipped the camera to the far side of the target
         // and turned further zoom-in into zoom-out.
@@ -5184,6 +5466,7 @@ export const Home3DScene = (() => {
       // One finger still rotates through the pointer handlers above.
       const pt = t => ({ x: t.clientX, y: t.clientY });
       on(container, "touchstart", e => {
+        cancelFlight();
         if (e.touches.length === 2) twoFinger.start(pt(e.touches[0]), pt(e.touches[1]));
       }, { passive: true });
       on(container, "touchmove", e => {
@@ -5200,11 +5483,19 @@ export const Home3DScene = (() => {
         }
       }, { passive: false });
       const endTouches = e => { if (e.touches.length < 2) twoFinger.end(); };
+      // Keyboard camera input cancels a flight too. The orbit camera has no
+      // keyboard controls of its own today; these are the keys one would use,
+      // so a future binding (or a browser's own arrow-key handling) never
+      // fights a flight in progress.
+      const CAMERA_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', '+', '-', '=']);
+      on(window, "keydown", e => { if (flight && CAMERA_KEYS.has(e.key)) cancelFlight(); });
       on(container, "touchend", endTouches);
       on(container, "touchcancel", endTouches);
     }
 
     on(window, "resize", () => {
+      // The view a flight is heading to was framed for the old size.
+      cancelFlight();
       const w = container.clientWidth, h = container.clientHeight;
       if (w === 0 || h === 0) return;
       cam.aspect = w / h;
@@ -5811,12 +6102,37 @@ export const Home3DScene = (() => {
       // Free camera pose for visual checks: orbit angles plus a world-space
       // look-at point (metres), since the presets can only aim at the floor.
       setOrbit(th, ph, r, target) {
+        cancelFlight();
         orb.th = th; orb.ph = ph; orb.r = r;
         if (target) orb.tgt.set(target[0], target[1], target[2]);
         updCam();
       },
       // Preset names, for callers that want to validate/enumerate.
       viewPresets: Object.keys(CAMERA_PRESETS),
+      // Camera focus (src/camera-focus.js). getPose/flyTo/cancelFlight drive
+      // the flight; isFlying for checks. The *View helpers return the pose a
+      // selection frames: a profile `view` when the house authors one, else
+      // the derived view. All return null for an unknown id.
+      getPose,
+      flyTo(pose, opts) { return flyTo(pose, opts); },
+      cancelFlight() { return cancelFlight(); },
+      isFlying() { return !!flight; },
+      // fn() => the room camera focus has framed, or null. A room tap then
+      // prefers it over a neighbour reached through a faded wall.
+      setPickFocus(fn) { pickFocusRoom = typeof fn === 'function' ? fn : null; },
+      roomView(id, opts) { return roomView(id, opts); },
+      // opts: { inset } (a covering sidebar), and for pointView { room }.
+      // Device views are occlusion-aware (framedView above); lastFocusStats()
+      // is what the last one cost and chose.
+      itemView(id, point, opts) { return itemView(id, point, opts); },
+      curtainView(id, opts) { return curtainView(id, opts); },
+      pointView(point, opts) { return pointView(point, opts); },
+      lastFocusStats() { return lastFocusStats; },
+      // A built furniture item's world box { min, max } (metres), or null.
+      furnitureBox(id) {
+        const e = furnitureResult && furnitureResult.byId ? furnitureResult.byId[id] : null;
+        return e && e.worldBox ? { min: e.worldBox.min.slice(), max: e.worldBox.max.slice() } : null;
+      },
       // Subscribe an overlay to post-render frames. fn(cam) runs after every
       // rendered frame (see onRenderSubs above). Returns an unsubscribe fn.
       // The scene renders on demand, so also nudge one frame now in case the
@@ -5867,6 +6183,7 @@ export const Home3DScene = (() => {
       dispose() {
         if (_disposed) return;
         _disposed = true;
+        endFlight('cancelled');   // an awaited flight never hangs past teardown
         // Before the traverse below: the furniture owns materials the scene
         // graph cannot reach (a proxy's customDepthMaterial, the depth
         // precompile material). A still-pending attach sees _disposed and
