@@ -706,6 +706,12 @@ jobs:
         run: node scripts/test-camera-gestures.mjs
       - name: Camera focus -- room/device views, home pose, gesture vs click-away, one flight per action, stale taps
         run: node scripts/test-camera-focus.mjs
+      - name: Edit mode -- never imported at boot, offered and drafts applied only outside preview / HA popup / iframes
+        run: node scripts/test-edit-mode-boot.mjs
+      - name: Profile drafts -- where a draft applies, no token in a draft or export, pose->view round trip, export
+        run: node scripts/test-profile-draft.mjs
+      - name: Layout-preserving JSON -- a no-op export is byte-identical, an edit changes only its own lines
+        run: node scripts/test-json-layout.mjs
       - name: Sliders and popover -- every range part styled, diamond matches the card, color-scheme dark
         run: node scripts/test-range-styles.mjs
       - name: Theme -- Auto/Dark/Light resolution, persistence, system listener, pre-paint script
@@ -745,6 +751,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -786,6 +795,15 @@ jobs:
             dirs+=("$(dirname "$p")")
           done
           python scripts/validate-house.py "${dirs[@]}"
+      - name: An edit-mode export (views on a room, an item, a curtain) passes validate-house.py --strict
+        run: |
+          set -euo pipefail
+          # A temp COPY of the demo house (textures and models resolve), its
+          # two JSON files overwritten with an edited export. Outside the repo.
+          tmp="$(mktemp -d)"
+          cp -r houses/demo/. "$tmp/"
+          node scripts/test-profile-draft.mjs --write "$tmp"
+          python scripts/validate-house.py --strict "$tmp"
       - name: Furniture schema and validator checks
         run: python scripts/test-validate-furniture.py
       - name: footstepPath validator checks (outside waypoint, segment leaving the room, door gap empties the trail)

@@ -970,6 +970,26 @@ prefers it over the derived view. It is shape data — a camera pose — so it l
 in `geometry.json`, which is safe to share. The validator warns when a `view`
 appears in a profile below `"1.4"`; an older engine ignores the key and derives.
 
+#### Framing a view in edit mode
+
+You rarely need to type a `view`. **Settings → Edit mode → Enter** opens the
+*Frame the view* panel: pick a room (tap it, or choose it in the sidebar) or tap
+a device, orbit and zoom as normal, fine-tune **Distance**, **Aim height** and
+**Lens**, then **Use this view**. **Reset to derived** removes it again. Either
+applies at once, with no reload.
+
+Edits are a **draft on this device** (localStorage), never the live profile: the
+banner says *DRAFT on this device, not live* while one is rendered, and warns if
+the served profile has changed since the draft began. **Export** downloads
+`geometry.json` and `rooms.json` written in the served files' own layout (an
+unedited export is byte-identical, so a diff shows only what you changed);
+apply them on the server yourself after `validate-house.py --strict`.
+**Discard** deletes the draft. A draft is never applied in the preview tile
+(`?preview=true`), the Home Assistant popup (`?embed=1`) or any other iframe,
+and edit mode is not offered there. The edit UI is loaded only when used, so a
+plain view-mode load pays nothing for it. A draft never holds the Home
+Assistant token: only the two profile documents go in.
+
 ### Camera presets — why they are optional
 
 `cameraPresets` is optional and usually you should leave it out. The reasoning:

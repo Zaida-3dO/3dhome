@@ -40,7 +40,7 @@ import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { createTvScreens } from './furniture/tv-screen.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse, isFurniture } from './room-pick.js';
-import { lerpPose, easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox } from './camera-focus.js';
+import { lerpPose, easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView } from './camera-focus.js';
 import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
@@ -4761,6 +4761,12 @@ export const Home3DScene = (() => {
       }
       return derived();
     }
+    function authoredOwner(kind, id) {
+      if (kind === 'room') return ROOMS[id] || null;
+      if (kind === 'furniture') return (HOUSE.furniture || []).find(f => f.id === id) || null;
+      if (kind === 'curtain') return (HOUSE.curtains || []).find(c => c.id === id) || null;
+      return null;
+    }
     function authoredView(v, fallbackTgt) {
       return { th: v.th, ph: v.ph, r: v.r, tgt: v.tgt ? v.tgt.slice() : fallbackTgt, fov: v.fov };
     }
@@ -6127,6 +6133,21 @@ export const Home3DScene = (() => {
       itemView(id, point, opts) { return itemView(id, point, opts); },
       curtainView(id, opts) { return curtainView(id, opts); },
       pointView(point, opts) { return pointView(point, opts); },
+      // Edit mode ("Frame the view", src/edit-mode.js): replace the authored
+      // `view` of a room / furniture item / curtain in the RUNNING house, so a
+      // view saved to the draft applies at once, without a reload. `view` is
+      // the profile shape ($defs/focusView, plan cm), compiled here exactly as
+      // house-loader compiles it; null removes it (back to the derived view).
+      // Returns false for an unknown owner or a malformed view.
+      setAuthoredView(kind, id, view) {
+        const v = view == null ? null : compileFocusView(view, tx, tz);
+        if (view != null && !v) return false;
+        const e = authoredOwner(kind, id);
+        if (!e) return false;
+        e.view = v;
+        return true;
+      },
+      hasAuthoredView(kind, id) { const e = authoredOwner(kind, id); return !!(e && e.view); },
       lastFocusStats() { return lastFocusStats; },
       // A built furniture item's world box { min, max } (metres), or null.
       furnitureBox(id) {

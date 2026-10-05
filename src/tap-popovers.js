@@ -1327,9 +1327,10 @@ export const clockTick = {
  * @param o.sensors         rooms.json `sensors`
  * @param o.getHa           () => HAClient instance or null
  * @param o.sendLight       (roomId, channel, state, debounceMs, withColor) -- index.html's sendToHA
- * @param o.onObjectTap     (target) => void -- called when a tap lands on a
+ * @param o.onObjectTap     (target, point) => void -- called when a tap lands on a
  *                          target, BEFORE its card opens (the page closes an
- *                          unpinned sidebar here; the card still opens)
+ *                          unpinned sidebar here; the card still opens). point:
+ *                          the world hit point (edit mode frames the item there)
  * @param o.state           accessors onto the sidebar's own maps:
  *   doorStatus(id) 'on'|'off'|'unavailable'|null, curtainAvailable(id) bool|null,
  *   curtainPct(id), curtainLocal(id, pct), climate(roomId) parseClimate reading|null,
@@ -2392,7 +2393,7 @@ export function attachTapPopovers(o) {
       // sidebar closes the card") must not kill the card this same tap is
       // opening, so the class flip the hook just made is absorbed here.
       if (typeof o.onObjectTap === 'function') {
-        try { o.onObjectTap(res.target); } catch (err) { /* the page's hook must not cost the tap */ }
+        try { o.onObjectTap(res.target, res.point); } catch (err) { /* the page's hook must not cost the tap */ }
         syncSidebarOpen();
       }
       // Fly first, then open where the tapped point now is on screen. A
