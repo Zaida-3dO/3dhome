@@ -734,6 +734,8 @@ jobs:
         run: node scripts/test-camera-gestures.mjs
       - name: Camera focus -- room/device views, home pose, gesture vs click-away, one flight per action, stale taps
         run: node scripts/test-camera-focus.mjs
+      - name: Room views from inside the room -- in the polygon, under the ceiling, L rooms, corner shots, flights over the walls
+        run: node scripts/test-room-view.mjs
       - name: Edit mode -- never imported at boot, offered and drafts applied only outside preview / HA popup / iframes
         run: node scripts/test-edit-mode-boot.mjs
       - name: Profile drafts -- where a draft applies, no token in a draft or export, pose->view round trip, export

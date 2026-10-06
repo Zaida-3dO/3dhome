@@ -703,7 +703,8 @@ function lightScene() {
   check('scene registers each fade with its base opacity and depthWrite',
     /const entry = \{ mesh, nx: host\.nx, nz: host\.nz, outer: true, base: baseOpacity, baseDepthWrite, furniture: true \};\s*wallMeshes\.push\(entry\);/.test(sceneSrc));
   check('scene fade loop drives opacity and depthWrite through wallFadeTarget / wallFadeDepthWrite',
-    /const targetOpacity = wallFadeTarget\(dot, b\)/.test(sceneSrc) &&
+    // (From inside a room every wall is solid at its base: camInside ? b : ...)
+    /const targetOpacity = (camInside \? b : )?wallFadeTarget\(dot, b\)/.test(sceneSrc) &&
     /mesh\.material\.depthWrite = wallFadeDepthWrite\(mesh\.material\.opacity, b, baseDepthWrite\)/.test(sceneSrc));
   // Item 14320d17: `b` must be the REGISTRATION's base (glass 0.25), falling
   // back to 1 only when none was recorded. `const b = 1` is exactly the A3

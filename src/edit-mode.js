@@ -1225,7 +1225,8 @@ function createController(ctx) {
       const p = home.getPose(); p.fov = DEFAULT_FOV; home.flyTo(p, { ms: 0 });
       renderFrame();
       const pose = ctx.viewFor ? ctx.viewFor(target) : null;
-      if (pose) pose.fov = DEFAULT_FOV;
+      // An in-room derived view carries its own wide lens; keep it.
+      if (pose && pose.fov == null) pose.fov = DEFAULT_FOV;
       if (pose && ctx.flyTo) ctx.flyTo(pose);
       message('Back to the derived view (saved to the draft).');
     } catch (e) { message('Could not reset: ' + e.message); }

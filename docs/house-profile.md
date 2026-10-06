@@ -941,11 +941,19 @@ Tapping a room flies the camera to a fixed showcase view of that room; tapping a
 device flies in on the device (see [`?focus`](url-parameters.md#focus)). With
 nothing authored, every view is **derived**, so any house works unchanged:
 
-- **A room** is framed from the house's own home angle (the `iso` preset's
-  azimuth and polar, which `cameraPresets.iso` overrides), aimed at a point
-  inside its polygon (the centroid, or for an L-shaped room whose centroid falls
-  outside it, the middle of its widest part), at the smallest distance that
-  keeps the whole room on screen, floor to ceiling (so its ceiling lights are in frame too).
+- **A room** is framed from **inside** it, like an estate agent's corner photo:
+  the camera stands in a corner (or along a wall) about 40 cm off the walls,
+  2–2.25 m up and at least 22 cm under the ceiling, tilted down about 15–30°
+  with a wide (70°) lens. Of the candidate spots and angles it takes the one that
+  shows the most of the room — its floor, its furniture and its ceiling lights,
+  each counted only where it is in frame and nothing solid is in the way — with
+  small preferences for a corner, a long view across the room and the doorway
+  side. The choice is made once per room and cached until the furniture
+  changes. A room too small to stand a camera in (a cupboard) is framed from
+  above instead: from the house's home angle (the `iso` preset, which
+  `cameraPresets.iso` overrides), at the smallest distance that keeps the whole
+  room on screen, floor to ceiling. Flying into or out of a room, the camera
+  rises over the walls and drops in rather than passing through them.
 - **A furniture item** is framed whole and close: the distance fits its world box
   to the screen. The angle is its front if nothing stands in the way; otherwise
   the nearest of a few dozen candidate angles (up to 90° round, and up to nearly
