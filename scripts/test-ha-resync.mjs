@@ -361,10 +361,10 @@ await quiet(async () => {
   // `sidebar`): x-toggle, x-bri, x-cover-cmd, x-cover-pos (input), x-script.
   check('every light / ambience / curtain / climate / room-script / extra-row write handler is gated (17)', writes.length === 17, writes.length);
   check('no ungated click/input handler left', !/el\.addEventListener\('(click|input)'/.test(wire));
-  // Eight: the six drag-lock releases (curtain + climate x pointerup /
-  // pointercancel / blur) and the room script's and an extra script row's
-  // key-intent reset on blur.
-  check('lock-release handlers stay ungated', (wire.match(/el\.addEventListener\('(pointerup|pointercancel|blur)'/g) || []).length === 8);
+  // Six: the drag-lock releases (curtain + climate x pointerup /
+  // pointercancel / blur). The script rows no longer track key intent (a
+  // press only opens the dialog).
+  check('lock-release handlers stay ungated', (wire.match(/el\.addEventListener\('(pointerup|pointercancel|blur)'/g) || []).length === 6);
   check('sendToHA refuses while offline', /function sendToHA\([^)]*\) \{\s*if \(!ha \|\| !haConfig \|\| haOffline\(ha\)\) return;/.test(html));
   check('both senders are writable-gated', (html.match(/writable: \(\) => !haOffline\(ha\),/g) || []).length === 2);
   const statusAt = html.indexOf('ha.onStatusChange(status => {');

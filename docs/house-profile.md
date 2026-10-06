@@ -1102,7 +1102,7 @@ looks show at once.
 A selected room also has a **Sidebar rows** section: tick off the rows it
 derives that you do not want, opt furniture rows in, and add extra rows (a
 light group, a cover, a switch or a script button, labelled, reorderable, a
-script optionally two-step). See `sidebar` below. A furniture item's Home
+script optionally behind an "Are you sure?" dialog). See `sidebar` below. A furniture item's Home
 Assistant section has the same opt-in as a tick box, **Show in the room
 sidebar**.
 
@@ -1214,7 +1214,7 @@ renders exactly as it did before — both features simply stay dark.
 | `climate` | **room id** | ONE `climate.*` entity (a string, not a list) for the room panel's temperature row |
 | `vacuums` | **furniture item id**, from the geometry's `furniture[].id` | A robot vacuum: click the item for its control card; the sidebar shows the same block in the panel of the room the item is in (the root Controls view only when the item has no room) |
 | `plants` | **furniture item id** | A plant: tap the item for its read-only moisture card; the sidebar's Controls view lists every plant |
-| `roomScripts` | **room id** | ONE `script.*` the room panel offers as a two-step "Kill room" button |
+| `roomScripts` | **room id** | ONE `script.*` the room panel offers as a "Shut down room" button that asks "Are you sure?" first |
 
 Several entities on one target are OR-ed: any one of them reading `on` means
 occupied, or open. `unavailable` and `unknown` count as `off`, so a sensor that
@@ -1251,7 +1251,7 @@ lacks is simply not shown:
   `min_temp`, `max_temp` and `target_temp_step` (step defaults to `0.5`). A
   thermostat that is `off`, or reports no target, shows "off" with the slider
   disabled.
-- **Kill room** — last, under a divider: the room's `roomScripts` button (see
+- **Shut down room** — last, under a divider: the room's `roomScripts` button (see
   below).
 
 Every control that sends a command is disabled while its entity is unavailable.
@@ -1680,7 +1680,7 @@ an item id the geometry does not have and on a region whose `from` is not below
 its `to`, and warns on a region past the item's `params.width` and on two
 overlapping regions.
 
-#### Room scripts ("Kill room")
+#### Room scripts ("Shut down room")
 
 ```json
 "sensors": {
@@ -1694,36 +1694,34 @@ overlapping regions.
 ```
 
 Keyed by **room id**. Each bound room's panel ends with one red, full-width
-button — **Kill room** unless `label` says otherwise — that runs `entity` with
+button — **Shut down room** unless `label` says otherwise — that runs `entity` with
 that room's `variables`. It is meant for a script that switches the room off
-(lights, curtains, TVs), so a mis-tap must not fire it:
+(lights, curtains, TVs), so a mis-tap must not fire it. Pressing the button
+sends nothing: it opens an **"Are you sure?"** dialog.
 
-1. The first tap **arms** it: the button turns solid red and reads "Tap again
-   to kill room". Left alone for about 4 seconds, it goes back to idle. A
-   second tap within 0.4 s of the first is ignored, so a double-tap is not a
-   confirm.
-2. The second tap sends **one** `script.turn_on`, targeting `entity`, with
-   `variables` as its `variables`, and the button reads **Sent** (or **Not
-   sent — try again** when the call could not go out) for a moment.
+- **Title:** "Shut down *Room name*?" (with a custom `label`, "*label* in
+  *Room name*?").
+- **Body:** "Switches off this room's lights and devices" for the default
+  label; for a custom `label`, "Runs "*label*" for *Room name*." — the standard
+  switch-off text is never shown for a script that is not the default room
+  button.
+- **Buttons:** **Cancel**, and a red confirm button carrying the button's own
+  label (**Shut down room** by default).
 
-Nothing is sent on render, on a reconnect or on a resync — only from that
-second tap. The button is disabled while Home Assistant is not connected
-(losing the connection also disarms it), and in a house with no Home Assistant
-(the demo), where there is nothing to run it on. Leaving the room or closing
-the sidebar disarms it.
+Cancel, **Escape** and a tap on the dimmed backdrop all close it and send
+nothing. Focus starts on **Cancel** (the safe choice), Tab moves between the
+two buttons, and focus returns to the row's button afterwards. The dialog is
+sized for touch (44 px buttons) and fits a 390-wide phone. Only the confirm
+button sends **one** `script.turn_on`, targeting `entity`, with `variables` as
+its `variables`; a double tap, or a held Enter, sends once. The row then reads
+**Sent** (or **Not sent — try again** when the call could not go out) for a
+moment, and a press while it still says Sent is ignored.
 
-From the keyboard, Enter or Space arms it and a second, separate press
-confirms. The button keeps focus between the two, and a status region
-announces "Armed" and then "Sent" to a screen reader. Holding Enter down never
-confirms: after a keyboard arm, the key has to be released before a keyboard
-press can count. A screen reader's or switch device's activation (no key
-events reach the page) works like a tap: the first arms, a second one
-confirms, sending after half a second with no further activation. Holding a
-switch that repeats its activation does not confirm. Three or more evenly
-spaced activations within 1.5 s, or any activation inside that half-second
-wait, cancel the arm, and nothing counts until activations pause for a full
-second. This guard is inferred from the timing of the clicks. It has **not**
-been verified with real NVDA, VoiceOver or switch-access hardware.
+Nothing is sent on render, on a reconnect or on a resync — only from the
+dialog's confirm button. The button is disabled while Home Assistant is not
+connected (losing the connection also closes an open dialog), and in a house
+with no Home Assistant (the demo), where there is nothing to run it on.
+Leaving the room or closing the sidebar closes the dialog too.
 
 `script.turn_on` rather than the script's own service (`script.<name>`):
 `turn_on` is Home Assistant's way to start a script **by entity id** with
@@ -1797,7 +1795,7 @@ with no reading yet shows the default until Home Assistant reports.
     "hide":  ["main", "ambient"],
     "show":  ["item:lounge_lamp"],
     "extra": [
-      { "kind": "script", "entity": "script.demo_lounge_off", "label": "Kill room", "confirm": true },
+      { "kind": "script", "entity": "script.demo_lounge_off", "label": "Shut down room", "confirm": true },
       { "kind": "light",  "entity": "light.demo_lounge_ambience", "label": "Ambient" }
     ]
   }
@@ -1822,8 +1820,10 @@ the room), and the room script last. `sidebar` reshapes one room's list:
   (on / off and brightness — an ambience **group** that no single fixture
   owns, say), a `cover` (open / close and position), a `switch` (a
   `switch.*` or `input_boolean.*`) or a `script` button. A script with
-  `"confirm": true` is the Kill room button exactly — tap, then tap again
-  within about 4 seconds; without it one tap runs it. `variables` (script
+  `"confirm": true` is the Shut down room button exactly — a press opens the
+  same "Are you sure?" dialog, titled and worded from the row's own `label`;
+  without it one tap runs it (and a press while it still says Sent is ignored).
+  A script row added in edit mode starts with `confirm` on. `variables` (script
   only) are passed to `script.turn_on`.
 
 A room with no entry, and a profile with no `sidebar` at all, shows exactly

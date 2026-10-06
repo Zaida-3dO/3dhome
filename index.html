@@ -371,10 +371,11 @@
     }
     .ha-offline-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #ef4444; }
 
-    /* Room script ("Kill room", rooms.json sensors.roomScripts): one
+    /* Room script ("Shut down room", rooms.json sensors.roomScripts): one
        destructive button at the foot of a bound room's view. Outlined red at
-       rest, solid red once armed (the second tap sends), green / amber for
-       the brief Sent / Not-sent result. 44px tall: a full-width touch target. */
+       rest (a press opens the "Are you sure?" dialog below), green / amber
+       for the brief Sent / Not-sent result. 44px tall: a full-width touch
+       target. */
     .room-script-row { margin-top: 4px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08); }
     .room-script-btn {
       width: 100%; min-height: 44px; padding: 10px 14px; border-radius: 9px; cursor: pointer;
@@ -383,22 +384,43 @@
       transition: background 0.15s, border-color 0.15s, color 0.15s;
     }
     .room-script-btn:focus-visible { outline: 2px solid #fca5a5; outline-offset: 2px; }
-    .room-script-btn.armed { background: #dc2626; border-color: #dc2626; color: #fff; }
     .room-script-btn.sent { background: rgba(34,197,94,0.14); border-color: rgba(34,197,94,0.5); color: #bbf7d0; }
     .room-script-btn.failed { background: rgba(245,158,11,0.16); border-color: rgba(245,158,11,0.5); color: #fde68a; }
     .room-script-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     /* Hover only where hover is real (a touch screen's :hover sticks after
-       the tap), and only on the idle and armed states: right after the
-       confirming tap the pointer is still over the button, and Sent /
-       Not sent must show their own colours, not a hover tint. */
+       the tap), and only on the idle state: right after the confirming tap
+       the pointer is still near the button, and Sent / Not sent must show
+       their own colours, not a hover tint. */
     @media (hover: hover) {
       .room-script-btn.idle:hover:not(:disabled) { background: rgba(239,68,68,0.20); }
-      .room-script-btn.armed:hover:not(:disabled) { background: #b91c1c; }
       :root[data-theme="light"] .room-script-btn.idle:hover:not(:disabled) { background: rgba(220,38,38,0.12); }
-      :root[data-theme="light"] .room-script-btn.armed:hover:not(:disabled) { background: #b91c1c; }
     }
     .room-script-note { margin-top: 6px; font-size: 11px; opacity: 0.6; text-align: center; }
     .room-script-note[hidden] { display: none; }
+    /* The "Are you sure?" dialog for a room script / confirm-flagged script
+       row. Above the sidebar (z 50), centred, buttons 44px+ for touch. */
+    .confirm-backdrop {
+      position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center;
+      padding: 16px; background: rgba(0,0,0,0.6);
+    }
+    .confirm-backdrop[hidden] { display: none; }
+    .confirm-dialog {
+      width: 100%; max-width: 340px; padding: 20px; border-radius: 14px; color: #fff;
+      background: rgba(18,18,30,0.98); border: 1px solid rgba(255,255,255,0.12);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    }
+    .confirm-title { margin: 0 0 8px; font-size: 16px; font-weight: 700; }
+    .confirm-body { margin: 0 0 18px; font-size: 13px; line-height: 1.45; opacity: 0.75; }
+    .confirm-actions { display: flex; gap: 10px; }
+    .confirm-actions button {
+      flex: 1 1 0; min-height: 44px; padding: 10px 12px; border-radius: 9px; cursor: pointer;
+      font-size: 13px; font-weight: 700; color: #fff;
+    }
+    .confirm-cancel { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2); }
+    .confirm-ok { background: #dc2626; border: 1px solid #dc2626; }
+    .confirm-actions button:focus-visible { outline: 2px solid #fca5a5; outline-offset: 2px; }
+    :root[data-theme="light"] .confirm-dialog { background: #fff; color: #111; border-color: rgba(0,0,0,0.15); }
+    :root[data-theme="light"] .confirm-cancel { background: rgba(0,0,0,0.05); border-color: rgba(0,0,0,0.25); color: #111; }
     /* Visually hidden, still read: the row's role="status" announcement. */
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
       clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
@@ -626,7 +648,6 @@
     :root[data-theme="light"] .room-script-row { border-top-color: rgba(0,0,0,0.08); }
     :root[data-theme="light"] .room-script-btn { background: rgba(220,38,38,0.06); border-color: rgba(185,28,28,0.55); color: #b91c1c; }
     :root[data-theme="light"] .room-script-btn:focus-visible { outline-color: #b91c1c; }
-    :root[data-theme="light"] .room-script-btn.armed { background: #dc2626; border-color: #dc2626; color: #fff; }
     :root[data-theme="light"] .room-script-btn.sent { background: rgba(34,197,94,0.14); border-color: rgba(21,128,61,0.45); color: #166534; }
     :root[data-theme="light"] .room-script-btn.failed { background: rgba(245,158,11,0.16); border-color: rgba(180,83,9,0.45); color: #92400e; }
     :root[data-theme="light"] .room-script-note { opacity: 0.72; }
@@ -980,6 +1001,16 @@
   </div>
 
   <!-- Light Control Panel -->
+  <div class="confirm-backdrop" id="confirm-backdrop" hidden>
+    <div class="confirm-dialog" id="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+      <h2 class="confirm-title" id="confirm-title"></h2>
+      <p class="confirm-body" id="confirm-body"></p>
+      <div class="confirm-actions">
+        <button type="button" class="confirm-cancel" id="confirm-cancel"></button>
+        <button type="button" class="confirm-ok" id="confirm-ok"></button>
+      </div>
+    </div>
+  </div>
   <div class="panel" id="panel">
     <div class="panel-header">
       <div class="panel-header-left">
@@ -1095,7 +1126,7 @@
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
     import { tvBindings, tvScreenOn, tvScreenMode } from './src/furniture/tv-screen.js?v=__VERSION__';
-    import { sendScript }     from './src/script-call.js?v=__VERSION__';
+    import { sendScript, createActionButton } from './src/script-call.js?v=__VERSION__';
     import { parseSunTime }   from './src/sun-position.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
              haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml,
@@ -1131,8 +1162,8 @@
     import { normaliseVacuumBindings, vacuumActions, vacuumCommand, vacuumSegmentCommand, vacuumStatusText,
              MOCK_VACUUM_READINGS, mockVacuumAfter } from './src/vacuum-control.js?v=__VERSION__';
     import { normalisePlantBindings, plantStatusText, agoText, mockPlantReading } from './src/plant-status.js?v=__VERSION__';
-    import { normaliseRoomScripts, roomScriptCommand, createTwoStepConfirm, roomScriptRowHtml,
-             roomScriptView, applyRoomScriptView, createKeyIntent }
+    import { normaliseRoomScripts, roomScriptCommand, createConfirmDialog, confirmDialogCopy, roomScriptRowHtml,
+             roomScriptView, applyRoomScriptView }
                               from './src/room-script.js?v=__VERSION__';
 
     // Theme (Settings > Theme). The inline <head> script already painted the
@@ -2346,8 +2377,8 @@
       function openPanel() { panel.classList.add('open'); topRightBtns.style.display = 'none'; }
       function closePanel() {
         // Every hide path (X, a background tap, a scroll, an orbit, an
-        // object tap) comes through here: an armed Kill room must not still
-        // be armed when the panel is reopened inside its 4 s window.
+        // object tap) comes through here: an open shut-down confirmation
+        // must not outlive the room it was asked in.
         disarmRoomScripts(null);
         if (isWideScreen()) { selectedRoom = null; renderPanel(); focusAfterClose(); return; }
         panel.classList.remove('open'); topRightBtns.style.display = ''; selectedRoom = null;
@@ -2808,10 +2839,9 @@
         // Plants block (read-only), likewise only on a real change.
         ha.onPlantChange(() => refreshPlantBlock());
         ha.onStatusChange(() => refreshPlantBlock());
-        // Losing Home Assistant disarms every room script: a second tap after
-        // a reconnect must not be the confirm of a tap made before it.
+        // Losing Home Assistant closes an open shut-down confirmation: a
+        // confirm after a reconnect must not answer a question asked before it.
         ha.onStatusChange(status => { if (status !== 'connected') disarmRoomScripts(null); });
-        ha.onStatusChange(status => { if (status !== 'connected') extraConfirms.forEach(c => c.reset()); });
         // Sidebar extra / item rows follow their entity.
         ha.onWatchedChange(entityId => refreshEntityRows(entityId));
         ha.onItemEntityChange(entityId => refreshEntityRows(entityId));
@@ -2990,8 +3020,8 @@
         updateRoomNav();
         panelReady = true; // reached here => all panel deps are declared; safe
                            // for an overlay onChange to re-render now.
-        // A room script armed in a room that is no longer open disarms: its
-        // second tap must be in the view where the first one was.
+        // A confirmation asked in a room that is no longer open closes: its
+        // answer must be given in the view where it was asked.
         disarmRoomScripts(selectedRoom);
         // Edit mode: a room chosen (sidebar or tap) becomes the thing being
         // framed. Clearing the room does not clear the frame target -- an
@@ -3562,37 +3592,20 @@
         return sidebarMock.get(b.entity);
       }
       const sidebarLastBri = new Map();
-      // An extra script row: a two-step confirm (confirm: true, exactly the
-      // room script's) or a one-tap send, keyed by room + row.
-      const extraConfirms = new Map(), extraScriptState = new Map();
-      function extraScriptConfirm(rid, key, b) {
-        const id = rid + '|' + key;
-        let c = extraConfirms.get(id);
-        if (c) return c;
-        c = createTwoStepConfirm({
-          writable: () => roomScriptHaState() === 'ok',
-          send: () => sendScript(ha, { entity: b.entity, variables: b.variables }, () => roomScriptHaState() === 'ok'),
-          onChange: () => paintExtraScriptRow(rid, key)
-        });
-        extraConfirms.set(id, c);
-        return c;
-      }
+      // Script rows (the room script and sidebar extras): see scriptButton()
+      // in the room-script section below.
       function paintExtraScriptRow(rid, key) {
         if (selectedRoom !== rid || !panelReady) return;
         const row = panelBody.querySelector('[data-row="' + esc(key) + '"]');
         const b = sidebarRowBinding(rid, key);
         if (!row || !b) return;
-        const c = extraConfirms.get(rid + '|' + key);
-        const st = b.confirm ? (c ? c.state : 'idle') : (extraScriptState.get(rid + '|' + key) || 'idle');
-        if (!applyRoomScriptView(row, roomScriptView({ label: b.label }, st, roomScriptHaState()))) refreshRoomRow(key);
+        if (!applyRoomScriptView(row, roomScriptView({ label: b.label }, scriptState(rid, b), roomScriptHaState()))) refreshRoomRow(key);
       }
       function sidebarRowHtml(key, rid, offline) {
         const b = sidebarRowBinding(rid, key);
         if (!b) return '';
         if (b.kind === 'script') {
-          const id = rid + '|' + key, c = extraConfirms.get(id);
-          const st = b.confirm ? (c ? c.state : 'idle') : (extraScriptState.get(id) || 'idle');
-          return roomScriptRowHtml({ label: b.label }, st, roomScriptHaState(), { rowKey: key, action: 'x-script' });
+          return roomScriptRowHtml({ label: b.label }, scriptState(rid, b), roomScriptHaState(), { rowKey: key, action: 'x-script' });
         }
         const raw = sidebarRaw(b);
         if (b.kind === 'light') return extraLightRowHtml(key, b.label, lightRowModel(raw, false, null, sidebarLastBri.get(b.entity)), offline);
@@ -3656,21 +3669,21 @@
         if (climateEntityForRoom(rid)) keys.push('climate');
         // A robot vacuum whose furniture item is in this room (its block).
         roomVacuumIds(rid).forEach(id => keys.push('vacuum:' + id));
-        // Last, below every live control: the room script ("Kill room").
+        // Last, below every live control: the room script ("Shut down room").
         if (roomScriptBindings().has(rid)) keys.push('room-script');
         return keys;
       }
 
       // ---- Room script button (rooms.json sensors.roomScripts) ----
       //
-      // One two-step confirm per bound room (src/room-script.js): the first
-      // tap arms it, a second tap within ARM_TIMEOUT_MS sends ONE
-      // script.turn_on with the binding's variables. Sent ONLY from the
-      // click handler in wireRoomControls -- a render or a Home Assistant
-      // resync only paints the current state. `var` + lazy: renderPanel() is
-      // hoisted and may run before this point.
+      // A press never sends. It opens the "Are you sure?" dialog
+      // (src/room-script.js createConfirmDialog); only that dialog's confirm
+      // button sends ONE script.turn_on with the binding's variables, through
+      // a createActionButton whose 'sent' state refuses a second press. Sent
+      // ONLY from the dialog's confirm handler -- a render or a Home
+      // Assistant resync only paints the current state. `var` + lazy:
+      // renderPanel() is hoisted and may run before this point.
       var roomScriptMap = null;
-      var roomScriptConfirms = new Map();
       function roomScriptBindings() {
         if (!roomScriptMap) roomScriptMap = normaliseRoomScripts(sensors && sensors.roomScripts);
         return roomScriptMap;
@@ -3679,18 +3692,34 @@
         if (!ha) return 'none';
         return haOffline(ha) ? 'offline' : 'ok';
       }
-      function roomScriptConfirm(rid) {
-        let c = roomScriptConfirms.get(rid);
-        if (c) return c;
-        c = createTwoStepConfirm({
-          writable: () => roomScriptHaState() === 'ok',
-          // The shared guarded sender (src/script-call.js), as a furniture
-          // card's action buttons use.
-          send: () => sendScript(ha, roomScriptBindings().get(rid), () => roomScriptHaState() === 'ok'),
-          onChange: () => paintRoomScriptRow(rid)
-        });
-        roomScriptConfirms.set(rid, c);
-        return c;
+      // One result tracker per room + script entity + variables. Keyed by
+      // the script itself (not by row position), so a row whose script was
+      // changed in edit mode never inherits the old script's Sent / Not sent.
+      var scriptButtons = new Map();
+      const scriptButtonId = (rid, b) => rid + '|' + b.entity + '|' + JSON.stringify(b.variables || {});
+      function scriptButton(rid, key, b) {
+        const id = scriptButtonId(rid, b);
+        let e = scriptButtons.get(id);
+        if (!e) {
+          e = { key };
+          e.c = createActionButton({
+            writable: () => roomScriptHaState() === 'ok',
+            // The shared guarded sender (src/script-call.js), as a furniture
+            // card's action buttons use.
+            send: () => sendScript(ha, { entity: b.entity, variables: b.variables }, () => roomScriptHaState() === 'ok'),
+            onChange: () => paintScriptRow(rid, e.key)
+          });
+          scriptButtons.set(id, e);
+        }
+        e.key = key;
+        return e.c;
+      }
+      function scriptState(rid, b) {
+        const e = scriptButtons.get(scriptButtonId(rid, b));
+        return e ? e.c.state : 'idle';
+      }
+      function paintScriptRow(rid, key) {
+        if (key === 'room-script') paintRoomScriptRow(rid); else paintExtraScriptRow(rid, key);
       }
       // A state change updates the painted row IN PLACE (applyRoomScriptView):
       // the button keeps its keyboard focus, and the row's persistent
@@ -3701,14 +3730,64 @@
         const row = panelBody.querySelector('[data-row="room-script"]');
         if (!row) return;
         const b = roomScriptBindings().get(rid);
-        const c = roomScriptConfirms.get(rid);
-        if (!b || !applyRoomScriptView(row, roomScriptView(b, c ? c.state : 'idle', roomScriptHaState()))) {
+        if (!b || !applyRoomScriptView(row, roomScriptView(b, scriptState(rid, b), roomScriptHaState()))) {
           refreshRoomRow('room-script');
         }
       }
+      // The confirmation dialog: ONE element, reused. Escape and a backdrop
+      // tap cancel; focus lands on Cancel (the safe default), Tab is trapped
+      // between the two buttons, and focus returns to the row's button.
+      const confirmBackdrop = document.getElementById('confirm-backdrop');
+      const confirmCancelBtn = document.getElementById('confirm-cancel');
+      const confirmOkBtn = document.getElementById('confirm-ok');
+      var confirmOpener = null;
+      const currentScriptBinding = ctx => ctx.key === 'room-script' ? roomScriptBindings().get(ctx.rid) : sidebarRowBinding(ctx.rid, ctx.key);
+      const confirmDialog = createConfirmDialog({
+        writable: () => roomScriptHaState() === 'ok',
+        onConfirm: ctx => {
+          // Resolve the binding NOW: an edit made while the dialog was open
+          // that retargeted the row must not send the old script.
+          const b = currentScriptBinding(ctx);
+          if (!b || b.entity !== ctx.entity) return;
+          scriptButton(ctx.rid, ctx.key, b).press();
+        },
+        onChange: ctx => {
+          if (ctx) {
+            const rm = Home3DScene.ROOMS[ctx.rid];
+            const copy = confirmDialogCopy(ctx.binding, (rm && rm.name) || ctx.rid, ctx.key === 'room-script');
+            document.getElementById('confirm-title').textContent = copy.title;
+            document.getElementById('confirm-body').textContent = copy.body;
+            confirmOkBtn.textContent = copy.confirmText;
+            confirmCancelBtn.textContent = copy.cancelText;
+            confirmBackdrop.hidden = false;
+            confirmCancelBtn.focus();
+          } else {
+            confirmBackdrop.hidden = true;
+            if (confirmOpener && document.contains(confirmOpener) && !confirmOpener.disabled) confirmOpener.focus();
+            confirmOpener = null;
+          }
+        }
+      });
+      confirmCancelBtn.addEventListener('click', () => confirmDialog.cancel());
+      confirmOkBtn.addEventListener('click', () => confirmDialog.confirm());
+      confirmBackdrop.addEventListener('click', e => { if (e.target === confirmBackdrop) confirmDialog.cancel(); });
+      confirmBackdrop.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); confirmDialog.cancel(); return; }
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          (document.activeElement === confirmCancelBtn ? confirmOkBtn : confirmCancelBtn).focus();
+        }
+      });
+      function openScriptConfirm(rid, key, b, opener) {
+        if (!b) return;
+        confirmOpener = opener || null;
+        if (!confirmDialog.request({ rid, key, entity: b.entity, binding: b })) confirmOpener = null;
+      }
+      // Leaving / closing a room, or losing Home Assistant, closes a dialog
+      // that belongs to a room no longer open (nothing is sent).
       function disarmRoomScripts(exceptRid) {
-        if (!roomScriptConfirms) return;
-        roomScriptConfirms.forEach((c, id) => { if (id !== exceptRid) c.reset(); });
+        const p = confirmDialog.pending;
+        if (p && p.rid !== exceptRid) confirmDialog.cancel();
       }
 
       function roomRowHtml(key, rid) {
@@ -3747,8 +3826,7 @@
         if (key === 'room-script') {
           const b = roomScriptBindings().get(rid);
           if (!b) return '';
-          const c = roomScriptConfirms.get(rid);
-          return roomScriptRowHtml(b, c ? c.state : 'idle', roomScriptHaState());
+          return roomScriptRowHtml(b, scriptState(rid, b), roomScriptHaState());
         }
         return '';
       }
@@ -3845,29 +3923,10 @@
             el.addEventListener('pointercancel', endDrag);
             el.addEventListener('blur', endDrag);
           }
-          // Room script: the first tap arms, the second sends (press() in
-          // src/room-script.js), and press() itself refuses unless HA is
-          // connected -- behind onWrite and the disabled button. A click an
-          // Enter / Space keydown on this button drove (createKeyIntent) is a
-          // keyboard press: a keyboard arm then needs the key RELEASED before
-          // a keyboard confirm counts, so a held Enter's auto-repeat can
-          // never confirm. Any other click -- pointer, a screen reader's or
-          // switch device's synthetic activation, el.click() -- is a plain
-          // press and confirms on a second one -- behind the repeat guard
-          // (a held, auto-repeating switch cancels the arm), and a synthetic
-          // (detail 0) confirm waits a moment for quiet before it sends.
-          // keydown / keyup / blur only track intent and send nothing, so
-          // they are not onWrite handlers.
+          // Room script: a press opens the "Are you sure?" dialog and sends
+          // nothing; the dialog's confirm button sends (onConfirm above).
           if (action === 'room-script') {
-            const intent = createKeyIntent();
-            onWrite(el, 'click', e => {
-              const keyboard = intent.click(e.detail);
-              const synthetic = !keyboard && e.detail === 0;
-              if (!el.disabled) roomScriptConfirm(rid).press({ keyboard, synthetic });
-            });
-            el.addEventListener('keydown', e => intent.keyDown(e.key));
-            el.addEventListener('keyup', e => { if (intent.keyUp(e.key)) roomScriptConfirm(rid).keyUp(); });
-            el.addEventListener('blur', () => intent.blur());
+            onWrite(el, 'click', () => { if (!el.disabled) openScriptConfirm(rid, 'room-script', roomScriptBindings().get(rid), el); });
           }
           // Sidebar extra / item rows (rooms.json `sidebar`). Same offline gate.
           if (action === 'x-toggle' || action === 'x-bri' || action === 'x-cover-cmd' || action === 'x-cover-pos' || action === 'x-script') {
@@ -3900,25 +3959,13 @@
               onWrite(el, 'change', e => sidebarSend(b, HAClient.coverPositionCommand(+e.target.value, [b.entity]), key));
             }
             if (action === 'x-script') {
-              // confirm: the room script's two-step (and its key-intent and
-              // repeat guards, src/room-script.js); otherwise one tap sends.
-              const intent = createKeyIntent();
-              const id = rid + '|' + key;
-              onWrite(el, 'click', e => {
+              // confirm: the room script's dialog; otherwise one tap sends
+              // (a press while it still says Sent is ignored).
+              onWrite(el, 'click', () => {
                 if (el.disabled) return;
-                if (b.confirm) {
-                  const keyboard = intent.click(e.detail);
-                  extraScriptConfirm(rid, key, b).press({ keyboard, synthetic: !keyboard && e.detail === 0 });
-                  return;
-                }
-                const ok = sendScript(ha, { entity: b.entity, variables: b.variables }, () => roomScriptHaState() === 'ok');
-                extraScriptState.set(id, ok ? 'sent' : 'failed');
-                paintExtraScriptRow(rid, key);
-                setTimeout(() => { extraScriptState.delete(id); paintExtraScriptRow(rid, key); }, 2500);
+                if (b.confirm) openScriptConfirm(rid, key, b, el);
+                else scriptButton(rid, key, b).press();
               });
-              el.addEventListener('keydown', e => intent.keyDown(e.key));
-              el.addEventListener('keyup', e => { if (intent.keyUp(e.key) && b.confirm) extraScriptConfirm(rid, key, b).keyUp(); });
-              el.addEventListener('blur', () => intent.blur());
             }
           }
           // Curtain Open / Close buttons: one press, one command, to every

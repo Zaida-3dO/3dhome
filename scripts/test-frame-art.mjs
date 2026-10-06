@@ -412,8 +412,8 @@ const ART = { entity: 'remote.demo_stick', attribute: 'current_activity', value:
   check('wiring: the TV row gets its art entity\'s raw state', tp.includes("constar=row.art?itemRaw(row.art.entity,'art',row,base+i):null;") &&
     tp.includes('mediaRowModel(r,row.art,ar)'));
   const idx = read('index.html').replace(/\s+/g, '');
-  check('index: the kill room sends through the same sendScript',
-    idx.includes("send:()=>sendScript(ha,roomScriptBindings().get(rid),()=>roomScriptHaState()==='ok'),"));
+  check('index: the shut-down room sends through the same sendScript',
+    idx.includes("send:()=>sendScript(ha,{entity:b.entity,variables:b.variables},()=>roomScriptHaState()==='ok'),"));
 }
 
 console.log((failures ? 'FAIL' : 'ok') + ' -- ' + passes + ' passed, ' + failures + ' failed');

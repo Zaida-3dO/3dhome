@@ -467,10 +467,10 @@ const onReading = (over = {}) => HAClient.parseClimate({
     /if \(ha\) \{ if \(!haOffline\(ha\)\) ha\.callService\(/.test(sbSend), sbSend.slice(0, 200));
   check('index: the extra light brightness send is inside an onWrite handler',
     /onWrite\(el, 'input', e => \{[\s\S]{0,500}ha\.callServiceDebounced\('light', 'turn_on'/.test(html));
-  // The room script, and an extra script row (its two-step confirm, or a
-  // one-tap send), all through sendScript.
+  // The room script, and an extra script row (behind its confirm dialog, or
+  // a one-tap send), all through the ONE scriptButton -> sendScript.
   check('index: the only other sends are the room script and extra script rows, through sendScript',
-    (html.match(/sendScript\(/g) || []).length === 3);
+    (html.match(/sendScript\(/g) || []).length === 1);
   // Vacuum blocks sit in their furniture item's room, root only as the fallback.
   check('index: the root Controls view renders only the unplaced vacuums', /html \+= vacuumBlocksHtml\(rootVacuumIds\(\)\);/.test(html));
   check('index: a room derives a vacuum:<id> row for each vacuum in it', /roomVacuumIds\(rid\)\.forEach\(id => keys\.push\('vacuum:' \+ id\)\)/.test(html));

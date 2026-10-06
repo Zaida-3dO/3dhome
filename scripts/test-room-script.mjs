@@ -1,52 +1,30 @@
 #!/usr/bin/env node
 /**
- * The room script ("Kill room") button: rooms.json `sensors.roomScripts`.
+ * The room script ("Shut down room") button: rooms.json `sensors.roomScripts`.
  * No framework, no install -- `node scripts/test-room-script.mjs`.
  *
  * WHAT THIS GUARDS
  *
  *   1. normaliseRoomScripts: a binding keeps its entity, variables and label
- *      (default 'Kill room'); a non-script entity, an array or non-object
- *      `variables` and a non-object entry are dropped (no button).
+ *      (default 'Shut down room'); a non-script entity, an array or
+ *      non-object `variables` and a non-object entry are dropped.
  *   2. roomScriptCommand: ONE script.turn_on, target = the script entity,
- *      data = { variables } -- a copy, so a caller cannot mutate the binding.
- *      The same script with different variables per room; identical
- *      variables on two rooms are two identical calls.
- *   3. createTwoStepConfirm: the first press ARMS and sends nothing; a second
- *      press sends exactly once; the arm times out back to idle after
- *      timeoutMs and a press after that only re-arms; a second press inside
- *      minArmMs (a double-tap) is ignored; the result state (sent / failed)
- *      returns to idle after resultMs; writable() false disarms and sends
- *      nothing; reset() disarms; a throwing send reads as failed. KEYBOARD:
- *      a keyboard arm needs a key release before a keyboard confirm counts,
- *      so a held Enter's auto-repeat never confirms; a deliberate second
- *      press (Enter or Space) does; pointer taps are unaffected.
- *   3b. The three input paths, as index.html wires createKeyIntent into the
- *      confirm: a REAL key (Enter / Space keydown on the button) is keyboard
- *      and a held Enter never confirms; an assistive-tech or scripted click
- *      (detail 0, no key events) arms and confirms like a tap; pointer taps
- *      as before. Only Enter / Space keyups release; blur drops a stale key.
- *      REPEAT GUARD: a held assistive-tech switch that auto-repeats its click
- *      (several initial-delay / interval models) never sends, cancels the
- *      arm, and stays refused until a 1 s pause; a deliberate pair 0.4-4 s
- *      apart (even with an accidental double in between) still confirms,
- *      after 0.5 s of quiet for a synthetic click; pointer and Enter confirms
- *      stay immediate. QUIET WAIT: reset() (panel close / room change) or HA
- *      going offline during the 0.5 s wait never sends.
- *   4. End to end over the fake HA WebSocket, through the REAL
- *      HAClient.callService: two presses put exactly one call_service
- *      script/turn_on with the right target and variables on the socket; one
- *      press puts none; a disconnected client sends none (and the confirm
- *      reports failed).
- *   5. Row markup: the label, the armed text, disabled unless HA is 'ok',
- *      escaping of a profile-supplied label, and a persistent role="status"
- *      region outside the button; roomScriptView / applyRoomScriptView update
- *      the SAME button in place (so it keeps focus) and fill the region.
- *   6. index.html wiring (source-level): the row is only added for a bound
- *      room; the click handler is the only caller of press() and flags a
- *      keyboard click; keyup releases the guard; the render path only reads
- *      .state; losing HA, rendering another view and CLOSING THE PANEL all
- *      disarm; hover styles never outrank Sent / Not sent.
+ *      data = { variables } -- a copy. Same script, different variables per
+ *      room.
+ *   3. createConfirmDialog: request opens and sends nothing; Cancel sends
+ *      nothing; confirm sends exactly once even when repeated or re-entered;
+ *      HA offline refuses to open / sends nothing on confirm.
+ *   3b. confirmDialogCopy: "Shut down <Room>?" for the room script, an
+ *      extra's OWN label and text (never the shut-down note).
+ *   4. End to end over the fake HA WebSocket (never a real HA): open and
+ *      Cancel put nothing on the socket, confirm puts exactly one
+ *      script/turn_on with the right target and variables.
+ *   5. Row markup: no armed state, label, disabled unless HA is ok, escaping,
+ *      a persistent role="status" region; in-place update.
+ *   6. index.html / edit-bindings.js wiring (source-level): the row only
+ *      opens the dialog, the confirm handler is the only sender, results are
+ *      keyed by script entity, Escape / backdrop cancel, editor-added script
+ *      rows default to confirm, the old arm-then-tap flow is gone.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -78,7 +56,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     bad: 'script.demo_off',
   });
   check('normalise: bound rooms kept', [...m.keys()].join() === 'lounge,kitchen,study', [...m.keys()]);
-  check('normalise: default label is Kill room', m.get('lounge').label === 'Kill room', m.get('lounge'));
+  check('normalise: default label is Shut down room', m.get('lounge').label === 'Shut down room', m.get('lounge'));
   check('normalise: label override trimmed', m.get('kitchen').label === 'Room off', m.get('kitchen'));
   check('normalise: no variables -> {}', JSON.stringify(m.get('study').variables) === '{}', m.get('study'));
   check('normalise: nothing -> empty map', RS.normaliseRoomScripts(undefined).size === 0 && RS.normaliseRoomScripts([]).size === 0);
@@ -99,345 +77,77 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check('command: same script, different variables per room', other.data.variables.area === 'demo_study' && other.target.entity_id === 'script.demo_off');
 }
 
-// ---- 3. createTwoStepConfirm (fake clock + timers) --------------------------
-function harness(opts = {}) {
-  let t = 1000;
-  const timers = [];
-  const sends = [];
-  const states = [];
+// ---- 3. createConfirmDialog -------------------------------------------------
+function dialog(opts = {}) {
+  const sends = [], changes = [];
   let writable = true;
-  const c = RS.createTwoStepConfirm({
-    send: opts.send || (() => { sends.push(t); return true; }),
+  const d = RS.createConfirmDialog({
+    onConfirm: ctx => { sends.push(ctx); if (opts.onConfirm) opts.onConfirm(ctx, d); },
     writable: () => writable,
-    onChange: s => states.push(s),
-    timeoutMs: 4000, resultMs: 2500, minArmMs: 400,
-    now: () => t,
-    setTimer: (fn, ms) => { const h = { fn, at: t + ms, live: true }; timers.push(h); return h; },
-    clearTimer: h => { if (h) h.live = false; },
+    onChange: p => changes.push(p === null ? 'closed' : p.id),
   });
-  return {
-    c, sends, states,
-    advance(ms) {
-      t += ms;
-      timers.filter(h => h.live && h.at <= t).forEach(h => { h.live = false; h.fn(); });
-    },
-    setWritable(v) { writable = v; },
-    liveTimers() { return timers.filter(t => t.live).length; },
-  };
+  return { d, sends, changes, setWritable(v) { writable = v; } };
 }
 {
-  const h = harness();
-  check('confirm: starts idle', h.c.state === 'idle');
-  const r1 = h.c.press();
-  check('confirm: first press arms', h.c.state === 'armed' && r1 === false);
-  check('confirm: first press sends NOTHING', h.sends.length === 0, h.sends);
-  h.advance(1000);
-  const r2 = h.c.press();
-  check('confirm: second press sends exactly once', h.sends.length === 1 && r2 === true, h.sends);
-  check('confirm: then reads sent', h.c.state === 'sent');
-  h.advance(2500);
-  check('confirm: sent returns to idle after resultMs', h.c.state === 'idle', h.c.state);
-  check('confirm: state sequence', h.states.join() === 'armed,sent,idle', h.states);
-  check('confirm: still exactly one send after it settles', h.sends.length === 1);
+  const h = dialog();
+  check('dialog: starts closed', h.d.isOpen === false && h.d.pending === null);
+  check('dialog: request opens it and sends NOTHING', h.d.request({ id: 'a' }) === true && h.d.isOpen && h.sends.length === 0, h.sends);
+  check('dialog: a second request while open is refused (ctx unchanged)', h.d.request({ id: 'b' }) === false && h.d.pending.id === 'a');
+  check('dialog: cancel closes and sends NOTHING', h.d.cancel() === true && !h.d.isOpen && h.sends.length === 0, h.sends);
+  check('dialog: cancel when closed is a no-op', h.d.cancel() === false);
+  check('dialog: confirm when closed sends nothing', h.d.confirm() === false && h.sends.length === 0);
+  check('dialog: onChange saw open, close', h.changes.join() === 'a,closed', h.changes);
 }
 {
-  const h = harness();
-  h.c.press();
-  h.advance(3999);
-  check('confirm: still armed just before the timeout', h.c.state === 'armed');
-  h.advance(1);
-  check('confirm: arm times out to idle', h.c.state === 'idle');
-  h.c.press();
-  check('confirm: a press after the timeout only re-arms', h.c.state === 'armed' && h.sends.length === 0, h.sends);
-  h.advance(500);
-  h.c.press();
-  check('confirm: ...and the next one sends', h.sends.length === 1);
+  const h = dialog();
+  h.d.request({ id: 'a' });
+  check('confirm: sends exactly once, with the ctx it was opened with', h.d.confirm() === true && h.sends.length === 1 && h.sends[0].id === 'a', h.sends);
+  check('confirm: closes the dialog', !h.d.isOpen);
+  check('confirm: a DOUBLE confirm still sends once', h.d.confirm() === false && h.sends.length === 1, h.sends);
+  for (let i = 0; i < 50; i++) h.d.confirm();   // a held Enter's auto-repeat
+  check('confirm: 50 more repeats still one send', h.sends.length === 1, h.sends.length);
 }
 {
-  const h = harness();
-  h.c.press();
-  h.advance(399);
-  h.c.press();
-  check('confirm: a double-tap inside minArmMs does not send', h.sends.length === 0 && h.c.state === 'armed', h.sends);
-  h.advance(1);
-  h.c.press();
-  check('confirm: a press at minArmMs sends', h.sends.length === 1);
+  // Re-entrancy: onConfirm itself asks for another confirm -- it must not
+  // recurse into a second send.
+  const h = dialog({ onConfirm: (ctx, d) => { d.confirm(); } });
+  h.d.request({ id: 'a' });
+  h.d.confirm();
+  check('confirm: a re-entrant confirm from inside onConfirm sends once', h.sends.length === 1, h.sends);
 }
 {
-  const h = harness();
-  h.c.press();
+  const h = dialog();
   h.setWritable(false);
-  h.advance(1000);
-  const r = h.c.press();
-  check('confirm: offline press disarms and sends nothing', h.sends.length === 0 && r === false && h.c.state === 'idle', h.c.state);
-  h.c.press();
-  check('confirm: offline first press does not arm', h.c.state === 'idle');
+  check('offline: request does not even open', h.d.request({ id: 'a' }) === false && !h.d.isOpen);
   h.setWritable(true);
-  h.c.press();
-  h.c.reset();
-  check('confirm: reset disarms', h.c.state === 'idle');
-  h.advance(1000);
-  h.c.press();
-  check('confirm: after reset the next press only arms', h.sends.length === 0 && h.c.state === 'armed');
-}
-{
-  const h = harness({ send: () => false });
-  h.c.press(); h.advance(500); h.c.press();
-  check('confirm: a dropped send reads failed', h.c.state === 'failed');
-  h.advance(2500);
-  check('confirm: failed returns to idle', h.c.state === 'idle');
-  const h2 = harness({ send: () => { throw new Error('boom'); } });
-  h2.c.press(); h2.advance(500); h2.c.press();
-  check('confirm: a throwing send reads failed', h2.c.state === 'failed');
-}
-// Keyboard: a HELD Enter auto-repeats a click every ~30 ms after the repeat
-// delay. Model it: keydown -> click (arms), then repeats long past minArmMs
-// with no keyup. None may confirm.
-{
-  const h = harness();
-  h.c.press({ keyboard: true });
-  check('keyboard: Enter arms', h.c.state === 'armed' && h.sends.length === 0);
-  for (let i = 0; i < 100; i++) { h.advance(30); h.c.press({ keyboard: true }); }
-  check('keyboard: a held Enter (100 repeats over 3 s, no keyup) never confirms', h.sends.length === 0 && h.c.state === 'armed', h.sends);
-  h.c.keyUp();
-  h.advance(100);
-  h.c.press({ keyboard: true });
-  check('keyboard: release then a deliberate second press confirms', h.sends.length === 1 && h.c.state === 'sent', h.sends);
-}
-{
-  // Space clicks on release: keyup, then click. Arm = [keyup, click];
-  // confirm = the next [keyup, click]. The first keyup lands before the arm,
-  // so it cannot count; the second one does.
-  const h = harness();
-  h.c.keyUp(); h.c.press({ keyboard: true });
-  h.advance(600);
-  h.c.keyUp(); h.c.press({ keyboard: true });
-  check('keyboard: Space press, Space press confirms', h.sends.length === 1, h.sends);
-}
-{
-  const h = harness();
-  h.c.keyUp();                   // a stray keyup BEFORE arming
-  h.c.press({ keyboard: true }); // Enter arms
-  h.advance(600);
-  h.c.press({ keyboard: true }); // repeat of the same held key
-  check('keyboard: a keyup before the arm does not license a repeat', h.sends.length === 0, h.sends);
-}
-{
-  const h = harness();
-  h.c.press({ keyboard: true });
-  h.advance(4000);
-  check('keyboard: arm still times out', h.c.state === 'idle');
-  h.c.press({ keyboard: true });
-  h.advance(600);
-  h.c.press({ keyboard: true });
-  check('keyboard: a re-arm after the timeout also needs a release', h.sends.length === 0, h.sends);
-  const p = harness();
-  p.c.press(); p.advance(600); p.c.press();
-  check('pointer: two taps still confirm with no keyup at all', p.sends.length === 1, p.sends);
+  h.d.request({ id: 'a' });
+  h.setWritable(false);
+  check('offline: HA lost while open -> confirm closes and sends nothing', h.d.confirm() === false && !h.d.isOpen && h.sends.length === 0, h.sends);
 }
 
-// ---- 3b. The button as index.html wires it: key intent + confirm ------------
-// Replays the DOM event sequences each input path produces, through the same
-// two objects the page uses (createKeyIntent per button, the confirm per room),
-// wired exactly as index.html wires them.
-function button() {
-  const h = harness();
-  const intent = RS.createKeyIntent();
-  const ev = {
-    keydown: key => intent.keyDown(key),
-    keyup: key => { if (intent.keyUp(key)) h.c.keyUp(); },
-    click: detail => { const keyboard = intent.click(detail); return h.c.press({ keyboard, synthetic: !keyboard && detail === 0 }); },
-    blur: () => intent.blur(),
-  };
-  return { h, ev };
-}
+// ---- 3b. The dialog's copy ----------------------------------------------------
 {
-  // Path 1: a real key. Enter clicks on keydown.
-  const { h, ev } = button();
-  ev.keydown('Enter'); ev.click(0); ev.keyup('Enter');
-  check('key: Enter arms', h.c.state === 'armed' && h.sends.length === 0);
-  h.advance(600);
-  ev.keydown('Enter'); ev.click(0); ev.keyup('Enter');
-  check('key: a second, separate Enter confirms', h.sends.length === 1, h.sends);
-}
-{
-  // Path 1, held: auto-repeat keydowns, each driving a click, no keyup.
-  const { h, ev } = button();
-  ev.keydown('Enter'); ev.click(0);
-  for (let i = 0; i < 100; i++) { h.advance(30); ev.keydown('Enter'); ev.click(0); }
-  check('key: a held Enter (100 auto-repeats over 3 s) never confirms', h.sends.length === 0 && h.c.state === 'armed', h.sends);
-  ev.keyup('Shift');
-  h.advance(30); ev.keydown('Enter'); ev.click(0);
-  check('key: another key\'s keyup does not release the guard', h.sends.length === 0, h.sends);
-  ev.keyup('Enter');
-  h.advance(100); ev.keydown('Enter'); ev.click(0);
-  check('key: after the release, the next Enter confirms', h.sends.length === 1, h.sends);
-}
-{
-  // Space clicks on RELEASE: keydown, keyup, then click.
-  const { h, ev } = button();
-  ev.keydown(' '); ev.keyup(' '); ev.click(0);
-  check('key: Space arms', h.c.state === 'armed' && h.sends.length === 0);
-  h.advance(600);
-  ev.keydown(' '); ev.keyup(' '); ev.click(0);
-  // Space's click follows its keyup, so it reads as a plain detail-0 press
-  // and its confirm waits out the quiet window like any synthetic one.
-  h.advance(500);
-  check('key: a second Space confirms', h.sends.length === 1, h.sends);
-}
-{
-  // Path 2: assistive tech / scripted el.click(): detail 0, NO key events.
-  const { h, ev } = button();
-  ev.click(0);
-  check('synthetic: a detail-0 click with no key arms', h.c.state === 'armed' && h.sends.length === 0);
-  h.advance(100); ev.click(0);
-  check('synthetic: a second one inside 400 ms does not confirm', h.sends.length === 0);
-  h.advance(400); ev.click(0);
-  check('synthetic: the confirm waits for quiet (nothing sent yet)', h.sends.length === 0 && h.c.state === 'armed', h.sends);
-  h.advance(499);
-  check('synthetic: still nothing just inside the quiet window', h.sends.length === 0);
-  h.advance(1);
-  check('synthetic: a second one past 400 ms confirms after 500 ms of quiet (no keyup ever needed)', h.sends.length === 1 && h.c.state === 'sent', h.sends);
-}
-{
-  // A keydown whose click never came (focus moved on), then a synthetic click.
-  const { h, ev } = button();
-  ev.keydown('Enter'); ev.blur();
-  ev.click(0); h.advance(600); ev.click(0); h.advance(500);
-  check('synthetic: a stale keydown dropped on blur does not strand the confirm', h.sends.length === 1, h.sends);
-}
-{
-  // Path 3: pointer.
-  const { h, ev } = button();
-  ev.click(1); h.advance(600); ev.click(1);
-  check('pointer: two taps confirm', h.sends.length === 1, h.sends);
-  const b = button();
-  b.ev.click(1); b.h.advance(200); b.ev.click(1);
-  check('pointer: a double-tap does not', b.h.sends.length === 0);
-}
-// The 0.5 s quiet wait of a synthetic confirm: something that disarms the
-// button while the send is still pending must stop it. reset() is what the
-// page calls on panel close, on leaving the room and on HA going offline;
-// fire() re-checks writable() for the case where HA drops and nothing has
-// called reset() yet.
-{
-  const pendingConfirm = () => {
-    const b = button();
-    b.ev.click(0); b.h.advance(600); b.ev.click(0);   // arm, then a synthetic confirm
-    return b;
-  };
-  const ctl = pendingConfirm();
-  check('quiet wait: (control) a pending synthetic confirm is waiting, nothing sent yet',
-    ctl.h.sends.length === 0 && ctl.h.c.state === 'armed', ctl.h.sends);
-  ctl.h.advance(500);
-  check('quiet wait: (control) left alone it sends once', ctl.h.sends.length === 1, ctl.h.sends);
-
-  const r = pendingConfirm();
-  r.h.advance(200);
-  r.h.c.reset();                                        // panel closed / room changed
-  check('quiet wait: reset() mid-wait goes idle', r.h.c.state === 'idle', r.h.c.state);
-  r.h.advance(5000);
-  check('quiet wait: reset() mid-wait never sends', r.h.sends.length === 0, r.h.sends);
-
-  const o = pendingConfirm();
-  o.h.advance(200);
-  o.h.setWritable(false);                               // HA dropped; no reset() yet
-  o.h.advance(5000);
-  check('quiet wait: HA offline when the wait ends never sends', o.h.sends.length === 0, o.h.sends);
-  check('quiet wait: ...and the button goes idle', o.h.c.state === 'idle', o.h.c.state);
-  o.h.setWritable(true);
-  o.h.advance(5000);
-  check('quiet wait: HA back later does not resurrect the send', o.h.sends.length === 0, o.h.sends);
-
-  // dispose() mid-wait: the pending send's timer must not fire, and no stale
-  // `pending` may survive to swallow the next press.
-  const d = pendingConfirm();
-  const changesBefore = d.h.states.length;
-  d.h.advance(200);
-  check('quiet wait: (control) the pending confirm holds a live timer', d.h.liveTimers() === 1, d.h.liveTimers());
-  d.h.c.dispose();
-  check('quiet wait: dispose() cancels the pending timer (none left scheduled)', d.h.liveTimers() === 0, d.h.liveTimers());
-  check('quiet wait: dispose() mid-wait reads idle', d.h.c.state === 'idle', d.h.c.state);
-  check('quiet wait: dispose() is silent (no onChange)', d.h.states.length === changesBefore, d.h.states);
-  d.h.advance(5000);
-  check('quiet wait: dispose() mid-wait never sends', d.h.sends.length === 0, d.h.sends);
-  d.ev.click(0); d.h.advance(600); d.ev.click(0); d.h.advance(500);
-  check('quiet wait: after dispose() a fresh deliberate pair sends exactly once (no stale pending/lock)',
-    d.h.sends.length === 1, { sends: d.h.sends, state: d.h.c.state });
-}
-
-// Repeat guard: a HELD assistive-tech switch that auto-repeats its click with
-// no key events. Each model: (initial delay before repeats, repeat interval).
-for (const [delay, every] of [[0, 30], [0, 100], [500, 30], [600, 100], [450, 300]]) {
-  const { h, ev } = button();
-  const label = `burst (first repeat after ${delay} ms, then every ${every} ms)`;
-  ev.click(0);
-  h.advance(delay || every); ev.click(0);
-  for (let i = 0; i < 60; i++) { h.advance(every); ev.click(0); }   // held for a while
-  check('repeat: ' + label + ' sends nothing', h.sends.length === 0, h.sends);
-  check('repeat: ' + label + ' cancels the arm', h.c.state === 'idle', h.c.state);
-  h.advance(5000);
-  check('repeat: ' + label + ' never sends after release either', h.sends.length === 0, h.sends);
-  // After the release, a deliberate pair works again.
-  ev.click(0); h.advance(800); ev.click(0); h.advance(500);
-  check('repeat: after a ' + label + ' and a pause, a deliberate pair confirms', h.sends.length === 1, h.sends);
-}
-{
-  // Locked: clicks keep being refused until a full 1 s pause.
-  const { h, ev } = button();
-  ev.click(0); h.advance(30); ev.click(0); h.advance(30); ev.click(0);
-  check('repeat: three regular clicks are a burst -> idle', h.c.state === 'idle');
-  h.advance(900); ev.click(0);
-  check('repeat: a click 0.9 s later is still refused (no arm)', h.c.state === 'idle');
-  h.advance(900); ev.click(0);
-  check('repeat: ...and it restarts the pause', h.c.state === 'idle');
-  h.advance(1000); ev.click(0);
-  check('repeat: after a 1 s pause a click arms again', h.c.state === 'armed');
-}
-{
-  // Deliberate presses that are NOT bursts.
-  const { h, ev } = button();
-  ev.click(0); h.advance(1500); ev.click(0); h.advance(500);
-  check('deliberate: two presses 1.5 s apart confirm', h.sends.length === 1, h.sends);
-  const a = button();
-  a.ev.click(0); a.h.advance(200); a.ev.click(0); a.h.advance(800); a.ev.click(0); a.h.advance(500);
-  check('deliberate: arm, an accidental double (200 ms), then a press 0.8 s later confirms (irregular, not a burst)', a.h.sends.length === 1, a.h.sends);
-  const w = button();
-  w.ev.click(0); w.h.advance(800); w.ev.click(0); w.h.advance(800); w.ev.click(0);
-  check('deliberate: evenly spaced presses spread past the 1.5 s window are not a burst (the third re-arms)',
-    w.h.sends.length === 1 && w.h.c.state === 'armed', { sends: w.h.sends, state: w.h.c.state });
-  const b = button();
-  b.ev.click(0); b.h.advance(3900); b.ev.click(0); b.h.advance(500);
-  check('deliberate: a second press at 3.9 s still confirms', b.h.sends.length === 1, b.h.sends);
-  const c = button();
-  c.ev.click(0); c.h.advance(700); c.ev.click(0); c.h.advance(200); c.ev.click(0); c.h.advance(2000);
-  check('deliberate: a click inside the quiet window cancels the confirm (fail safe)', c.h.sends.length === 0 && c.h.c.state === 'idle', { sends: c.h.sends, state: c.h.c.state });
-}
-{
-  // Pointer taps: unchanged -- immediate confirm, double-tap refused.
-  const { h, ev } = button();
-  ev.click(1); h.advance(450); ev.click(1);
-  check('pointer: two taps 450 ms apart confirm immediately (no quiet wait)', h.sends.length === 1 && h.c.state === 'sent', h.sends);
-  const p = button();
-  p.ev.click(1); p.h.advance(30); p.ev.click(1); p.h.advance(30); p.ev.click(1);
-  p.h.advance(500); p.ev.click(1);
-  check('pointer: a rapid burst of taps is refused like any other', p.h.sends.length === 0, p.h.sends);
-  const k = button();
-  k.ev.keydown('Enter'); k.ev.click(0); k.ev.keyup('Enter'); k.h.advance(600);
-  k.ev.keydown('Enter'); k.ev.click(0); k.ev.keyup('Enter');
-  check('key: a deliberate Enter pair still confirms immediately', k.h.sends.length === 1, k.h.sends);
-}
-{
-  const ki = RS.createKeyIntent();
-  check('intent: a pointer click after a keydown is not keyboard',(ki.keyDown('Enter'), ki.click(1)) === false);
-  check('intent: a click consumes the key', (ki.keyDown('Enter'), ki.click(0), ki.click(0)) === false);
-  check('intent: other keys do not key a click', (ki.keyDown('a'), ki.click(0)) === false);
-  check('intent: blur drops a keydown whose click never came', (ki.keyDown('Enter'), ki.blur(), ki.click(0)) === false);
-  check('intent: a real Enter click is keyboard', (ki.keyDown('Enter'), ki.click(0)) === true);
+  const roomB = { entity: 'script.demo_off', label: RS.DEFAULT_ROOM_SCRIPT_LABEL };
+  const c = RS.confirmDialogCopy(roomB, 'Lounge', true);
+  check('copy: room script title', c.title === 'Shut down Lounge?', c);
+  check('copy: room script body is the standard text', c.body === 'Switches off this room’s lights and devices', c);
+  check('copy: buttons', c.confirmText === 'Shut down room' && c.cancelText === 'Cancel', c);
+  const x = RS.confirmDialogCopy({ entity: 'script.demo_movie', label: 'Movie mode' }, 'Lounge', false);
+  check('copy: an extra uses its OWN label, never the shut-down text',
+    x.confirmText === 'Movie mode' && x.title === 'Movie mode in Lounge?' && !/Switches off|Shut down/.test(x.title + x.body), x);
+  const xd = RS.confirmDialogCopy({ entity: 'script.demo_movie', label: 'Shut down room' }, 'Lounge', false);
+  check('copy: an EXTRA labelled like the default does not claim to switch things off', !/Switches off/.test(xd.body), xd);
+  const o = RS.confirmDialogCopy({ entity: 'script.x', label: 'Room off', description: ' Turns it all off ' }, 'Study', true);
+  check('copy: a row description overrides the body', o.body === 'Turns it all off', o);
+  check('copy: no room name still reads', /this room/.test(RS.confirmDialogCopy(roomB, '', true).title));
+  check('copy: the default label is Shut down room', RS.DEFAULT_ROOM_SCRIPT_LABEL === 'Shut down room');
 }
 
 // ---- 4. End to end over the fake HA WebSocket --------------------------------
+// The dialog + createActionButton, wired as index.html wires them, through
+// the REAL HAClient.callService.
 {
+  const { createActionButton, sendScript } = await imp('src/script-call.js');
   const fake = installFakeHA({ states: [] });
   const realWarn = console.warn, realLog = console.log;
   console.warn = () => {}; console.log = () => {};
@@ -446,39 +156,40 @@ for (const [delay, every] of [[0, 30], [0, 100], [500, 30], [600, 100], [450, 30
     ha.connect();
     await fake.whenConnected(ha);
     const binding = RS.normaliseRoomScripts({ hall: { entity: 'script.demo_off', variables: { area: 'demo_hall_store' } } }).get('hall');
-    const c = RS.createTwoStepConfirm({
+    const btn = createActionButton({
       writable: () => ha.status === 'connected',
-      send: () => { const cmd = RS.roomScriptCommand(binding); return ha.callService(cmd.domain, cmd.service, cmd.data, cmd.target); },
-      minArmMs: 0, timeoutMs: 4000, resultMs: 50,
+      send: () => sendScript(ha, binding, () => ha.status === 'connected'),
+      resultMs: 50,
     });
-    c.press();
+    const d = RS.createConfirmDialog({ writable: () => ha.status === 'connected', onConfirm: () => btn.press() });
+    d.request({ id: 'hall' });
     await sleep(20);
-    check('e2e: one press puts nothing on the socket', fake.calls.length === 0, fake.calls);
-    c.press();
+    check('e2e: opening the dialog puts nothing on the socket', fake.calls.length === 0, fake.calls);
+    d.cancel();
+    d.confirm();
     await sleep(20);
-    check('e2e: two presses put exactly ONE call_service on the socket', fake.calls.length === 1, fake.calls);
+    check('e2e: Cancel puts nothing on the socket', fake.calls.length === 0, fake.calls);
+    d.request({ id: 'hall' });
+    d.confirm(); d.confirm(); d.confirm();
+    await sleep(20);
+    check('e2e: confirm (and two more) puts exactly ONE call_service on the socket', fake.calls.length === 1, fake.calls);
     const m = fake.calls[0] && fake.calls[0].msg;
     check('e2e: it is script/turn_on', fake.calls[0] && fake.calls[0].service === 'script/turn_on', fake.calls[0]);
     check('e2e: targeting the bound script', m && m.target && m.target.entity_id === 'script.demo_off', m);
     check('e2e: with the room\'s variables', m && JSON.stringify(m.service_data) === JSON.stringify({ variables: { area: 'demo_hall_store' } }), m);
     check('e2e: no REST', fake.fetches.length === 0);
-    check('e2e: reads sent', c.state === 'sent');
+    check('e2e: the row reads sent', btn.state === 'sent');
+    // Reopen and confirm while it still reads Sent: ignored (one launch).
+    d.request({ id: 'hall' }); d.confirm();
+    await sleep(10);
+    check('e2e: a confirm while the row still says Sent sends nothing more', fake.calls.length === 1, fake.calls.length);
+    await sleep(80);
 
-    // A client that has dropped: the confirm's own gate refuses.
     ha.disconnect();
-    c.reset();
-    c.press(); c.press();
+    d.request({ id: 'hall' });
+    d.confirm();
     await sleep(20);
-    check('e2e: disconnected -> nothing sent', fake.calls.length === 1, fake.calls);
-    // And a send path that bypasses writable() still cannot reach the socket.
-    const c2 = RS.createTwoStepConfirm({
-      send: () => { const cmd = RS.roomScriptCommand(binding); return ha.callService(cmd.domain, cmd.service, cmd.data, cmd.target); },
-      minArmMs: 0, resultMs: 50,
-    });
-    c2.press(); c2.press();
-    await sleep(20);
-    check('e2e: dropped by the client -> failed, nothing sent', c2.state === 'failed' && fake.calls.length === 1, { s: c2.state, n: fake.calls.length });
-    c.dispose(); c2.dispose();
+    check('e2e: disconnected -> the dialog does not open, nothing sent', fake.calls.length === 1, fake.calls.length);
   } finally {
     console.warn = realWarn; console.log = realLog;
     fake.restore();
@@ -487,79 +198,83 @@ for (const [delay, every] of [[0, 30], [0, 100], [500, 30], [600, 100], [450, 30
 
 // ---- 5. Row markup --------------------------------------------------------
 {
-  const b = { entity: 'script.demo_off', variables: {}, label: 'Kill room' };
+  const b = { entity: 'script.demo_off', variables: {}, label: 'Shut down room' };
   const idle = RS.roomScriptRowHtml(b, 'idle', 'ok');
-  check('row: idle shows the label', />Kill room<\/button>/.test(idle), idle);
+  check('row: idle shows the label', />Shut down room<\/button>/.test(idle), idle);
   check('row: enabled when HA ok', !/disabled/.test(idle), idle);
   check('row: carries its data-row and action', /data-row="room-script"/.test(idle) && /data-action="room-script"/.test(idle));
-  const armed = RS.roomScriptRowHtml(b, 'armed', 'ok');
-  check('row: armed text', />Tap again to kill room<\/button>/.test(armed) && /room-script-btn armed/.test(armed), armed);
+  const stale = RS.roomScriptRowHtml(b, 'armed', 'ok');
+  check('row: there is no armed state any more (reads idle)', />Shut down room<\/button>/.test(stale) && !/armed|Tap again/.test(stale), stale);
   check('row: sent text', />Sent<\/button>/.test(RS.roomScriptRowHtml(b, 'sent', 'ok')));
-  const off = RS.roomScriptRowHtml(b, 'armed', 'offline');
-  check('row: offline disabled, shown idle', /disabled>/.test(off) && />Kill room<\/button>/.test(off) && /offline/.test(off), off);
+  const off = RS.roomScriptRowHtml(b, 'sent', 'offline');
+  check('row: offline disabled, shown idle', /disabled>/.test(off) && />Shut down room<\/button>/.test(off) && /offline/.test(off), off);
   check('row: no HA disabled', /disabled>/.test(RS.roomScriptRowHtml(b, 'idle', 'none')));
   const evil = RS.roomScriptRowHtml({ ...b, label: '<img src=x>' }, 'idle', 'ok');
   check('row: label escaped', !/<img/.test(evil) && /&lt;img/.test(evil), evil);
   check('row: a persistent role=status region, OUTSIDE the button',
     /<\/button>[\s\S]*role="status" aria-live="polite" data-room-script-live/.test(idle) && !/<button[^>]*aria-live/.test(idle), idle);
 
-  // roomScriptView + applyRoomScriptView: the in-place update keeps the SAME
-  // button element (so its focus) and puts the announcement in the region.
-  const v = RS.roomScriptView(b, 'armed', 'ok');
-  check('view: armed', v.state === 'armed' && v.text === 'Tap again to kill room' && v.disabled === false &&
-    /Armed/.test(v.live) && /Switches off/.test(v.note), v);
-  check('view: sent announces Sent', RS.roomScriptView(b, 'sent', 'ok').live === 'Sent.');
+  const v = RS.roomScriptView(b, 'sent', 'ok');
+  check('view: sent', v.state === 'sent' && v.text === 'Sent' && v.disabled === false && v.live === 'Sent.' && v.note === '', v);
   check('view: failed announces', /Not sent/.test(RS.roomScriptView(b, 'failed', 'ok').live));
-  check('view: offline is idle + disabled, nothing announced', (() => { const o = RS.roomScriptView(b, 'armed', 'offline'); return o.state === 'idle' && o.disabled && o.live === ''; })());
+  check('view: offline is idle + disabled, nothing announced', (() => { const o = RS.roomScriptView(b, 'sent', 'offline'); return o.state === 'idle' && o.disabled && o.live === ''; })());
   const el = (attrs = {}) => ({ attrs, className: '', textContent: '', disabled: false, hidden: false,
     setAttribute(k, val) { this.attrs[k] = val; } });
   const btn = el(), note = el(), live = el();
   const row = { querySelector: sel => sel === '[data-action="room-script"]' ? btn : sel === '.room-script-note' ? note : sel === '[data-room-script-live]' ? live : null };
   check('apply: updates a complete row', RS.applyRoomScriptView(row, v) === true);
-  check('apply: same button, new class/state/text', btn.className === 'room-script-btn armed' && btn.attrs['data-state'] === 'armed' && btn.textContent === 'Tap again to kill room', btn);
-  check('apply: live region carries the announcement', /Armed/.test(live.textContent), live);
+  check('apply: same button, new class/state/text', btn.className === 'room-script-btn sent' && btn.attrs['data-state'] === 'sent' && btn.textContent === 'Sent', btn);
+  check('apply: live region carries the announcement', /Sent/.test(live.textContent), live);
   RS.applyRoomScriptView(row, RS.roomScriptView(b, 'idle', 'ok'));
   check('apply: idle hides the note and clears the region', note.hidden === true && live.textContent === '', { note, live });
   check('apply: a row missing its parts reports false', RS.applyRoomScriptView({ querySelector: () => null }, v) === false);
 }
 
-// ---- 6. index.html wiring --------------------------------------------------
+// ---- 6. index.html / edit-bindings wiring (source-level) ----------------------
 {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const eb = fs.readFileSync(path.join(root, 'src/edit-bindings.js'), 'utf8');
   check('index: row key only for a bound room',
     /if \(roomScriptBindings\(\)\.has\(rid\)\) keys\.push\('room-script'\);/.test(html));
-  const presses = html.match(/roomScriptConfirm\(rid\)\.press\(/g) || [];
-  const inClick = /const intent = createKeyIntent\(\);\s*onWrite\(el, 'click', e => \{\s*const keyboard = intent\.click\(e\.detail\);\s*const synthetic = !keyboard && e\.detail === 0;\s*if \(!el\.disabled\) roomScriptConfirm\(rid\)\.press\(\{ keyboard, synthetic \}\);\s*\}\);/.test(html);
-  check('index: press() called only from the click handler, keyboard decided by the key-intent tracker', presses.length === 1 && inClick, presses.length);
-  check('index: keydown on the button feeds the tracker',
-    /el\.addEventListener\('keydown', e => intent\.keyDown\(e\.key\)\);/.test(html));
-  check('index: only an Enter / Space keyup releases the keyboard guard',
-    /el\.addEventListener\('keyup', e => \{ if \(intent\.keyUp\(e\.key\)\) roomScriptConfirm\(rid\)\.keyUp\(\); \}\);/.test(html));
-  check('index: blur drops a keydown whose click never came',
-    /el\.addEventListener\('blur', \(\) => intent\.blur\(\)\);/.test(html));
-  check('index: keyboard is no longer inferred from detail alone', !/keyboard: e\.detail === 0/.test(html));
+  check('index: the room script click only OPENS the dialog',
+    /if \(action === 'room-script'\) \{\s*onWrite\(el, 'click', \(\) => \{ if \(!el\.disabled\) openScriptConfirm\(rid, 'room-script'/.test(html));
+  const presses = html.match(/\)\.press\(/g) || [];
+  check('index: a script is only ever pressed from the dialog confirm and the one-tap extra (2 call sites)', presses.length === 2, presses.length);
+  check('index: the dialog confirm presses the action button',
+    /onConfirm: ctx => \{[\s\S]*?scriptButton\(ctx\.rid, ctx\.key, b\)\.press\(\);/.test(html));
+  check('index: the dialog re-resolves the binding and refuses a retargeted row',
+    /const b = currentScriptBinding\(ctx\);\s*if \(!b \|\| b\.entity !== ctx\.entity\) return;/.test(html));
+  check('index: confirm-flagged extras open the dialog, others press directly',
+    /if \(b\.confirm\) openScriptConfirm\(rid, key, b, el\);\s*else scriptButton\(rid, key, b\)\.press\(\);/.test(html));
+  check('index: result state is keyed by script entity + variables, not by row position',
+    /scriptButtonId = \(rid, b\) => rid \+ '\|' \+ b\.entity \+ '\|' \+ JSON\.stringify\(b\.variables \|\| \{\}\)/.test(html));
+  check('index: Escape and a backdrop tap cancel',
+    /e\.target === confirmBackdrop\) confirmDialog\.cancel\(\)/.test(html) && /e\.key === 'Escape'\) \{[^}]*confirmDialog\.cancel\(\)/.test(html));
+  check('index: focus lands on Cancel', /confirmBackdrop\.hidden = false;\s*confirmCancelBtn\.focus\(\);/.test(html));
+  check('index: the dialog is an aria-modal alertdialog', /role="alertdialog" aria-modal="true"/.test(html));
+  check('index: the old arm-then-tap flow is gone',
+    !/createTwoStepConfirm|roomScriptConfirms|extraConfirms|Tap again|createKeyIntent/.test(html) && !/Kill room/.test(html));
   const closeFn = (html.match(/function closePanel\(\) \{[\s\S]*?\n      \}/) || [''])[0];
-  check('index: closing the panel disarms every room script (both branches)',
+  check('index: closing the panel closes the dialog (both branches)',
     /^function closePanel\(\) \{[\s\S]*?disarmRoomScripts\(null\);\s*if \(isWideScreen\(\)\)/.test(closeFn), closeFn);
   check('index: a state change updates the row in place (focus kept), repainting only as a fallback',
-    /onChange: \(\) => paintRoomScriptRow\(rid\)/.test(html) &&
-    /if \(!b \|\| !applyRoomScriptView\(row, roomScriptView\(b, c \? c\.state : 'idle', roomScriptHaState\(\)\)\)\) \{\s*refreshRoomRow\('room-script'\);/.test(html));
-  // Visual review d79a126d: right after the confirming tap the pointer is
-  // still over the button, so a hover rule must not outrank Sent / Not sent.
+    /onChange: \(\) => paintScriptRow\(rid, e\.key\)/.test(html) &&
+    /applyRoomScriptView\(row, roomScriptView\(b, scriptState\(rid, b\), roomScriptHaState\(\)\)\)\) \{\s*refreshRoomRow\('room-script'\);/.test(html));
   const hoverRules = html.match(/[^\n{}]*\.room-script-btn[^\n{]*:hover[^\n{]*\{/g) || [];
-  check('css: every room-script hover rule is scoped to idle or armed',
-    hoverRules.length === 4 && hoverRules.every(r => /\.room-script-btn\.(idle|armed):hover/.test(r)), hoverRules);
+  check('css: every room-script hover rule is scoped to idle',
+    hoverRules.length === 2 && hoverRules.every(r => /\.room-script-btn\.idle:hover/.test(r)), hoverRules);
   check('css: hover rules only where hover is real (not sticky touch hover)',
     /@media \(hover: hover\) \{\s*\.room-script-btn\.idle:hover/.test(html));
-  check('index: render reads state only', /roomScriptRowHtml\(b, c \? c\.state : 'idle', roomScriptHaState\(\)\)/.test(html));
-  check('index: losing HA disarms every room script',
+  check('index: render reads state only', /roomScriptRowHtml\(b, scriptState\(rid, b\), roomScriptHaState\(\)\)/.test(html));
+  check('index: losing HA closes the dialog',
     /ha\.onStatusChange\(status => \{ if \(status !== 'connected'\) disarmRoomScripts\(null\); \}\);/.test(html));
-  check('index: rendering another view disarms rooms not on screen', /disarmRoomScripts\(selectedRoom\);/.test(html));
-  // The guarded sender itself (script-call.js sendScript) is tested by
-  // running it in scripts/test-frame-art.mjs; here, that the room script
-  // goes through it, gated on HA being ok.
+  check('index: rendering another view closes a dialog for a room not on screen', /disarmRoomScripts\(selectedRoom\);/.test(html));
   check('index: send goes through the shared sendScript, gated on HA being ok',
-    /send: \(\) => sendScript\(ha, roomScriptBindings\(\)\.get\(rid\), \(\) => roomScriptHaState\(\) === 'ok'\),/.test(html));
+    /send: \(\) => sendScript\(ha, \{ entity: b\.entity, variables: b\.variables \}, \(\) => roomScriptHaState\(\) === 'ok'\),/.test(html));
+  // The editor: a script row added in edit mode asks first by default.
+  check('editor: switching a row to script defaults confirm on (unless set)',
+    /if \(v !== 'script'\) delete x\.confirm;[\s\S]{0,200}else if \(x\.confirm === undefined\) x\.confirm = true;/.test(eb));
+  check('editor: no Kill room / tap-twice wording left', !/Kill room|Tap twice/.test(eb));
 }
 
 console.log(`${failures ? 'FAILED' : 'ok'} -- ${passes} passed, ${failures} failed`);

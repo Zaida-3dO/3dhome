@@ -285,15 +285,11 @@ console.log('6. sidebar rows');
   check('an extra script row: the room-script button under data-row="extra:0", action x-script', /data-row="extra:0"/.test(html) && /data-action="x-script"/.test(html) && /room-script-btn idle/.test(html));
   check('the room script row itself is unchanged', /data-row="room-script"/.test(RS.roomScriptRowHtml({ label: 'Kill room' }, 'idle', 'ok')) &&
     /data-action="room-script"/.test(RS.roomScriptRowHtml({ label: 'Kill room' }, 'idle', 'ok')));
-  // ...and its confirm is the same two-step state machine.
-  let t = 0; let sent = 0;
-  const c = RS.createTwoStepConfirm({ send: () => { sent++; return true; }, writable: () => true, now: () => t, setTimer: () => 1, clearTimer: () => {} });
-  c.press({}); t = 600; c.press({});
-  check('two-step: the first tap arms, the second sends ONE call', sent === 1);
+  // ...and a confirm extra opens the SAME dialog the room script does.
   const page = read('index.html');
   const wire = page.slice(page.indexOf("if (action === 'x-script') {"), page.indexOf("// Curtain Open / Close buttons"));
-  check('index: a confirm extra goes through extraScriptConfirm(...).press (the two-step), others one tap', /if \(b\.confirm\) \{[\s\S]*extraScriptConfirm\(rid, key, b\)\.press\(/.test(wire));
-  check('index: extraScriptConfirm is createTwoStepConfirm over sendScript', /function extraScriptConfirm[\s\S]{0,300}createTwoStepConfirm\(\{[\s\S]{0,200}sendScript\(ha, \{ entity: b\.entity, variables: b\.variables \}/.test(page));
+  check('index: a confirm extra opens the dialog (openScriptConfirm), others press one tap', /if \(b\.confirm\) openScriptConfirm\(rid, key, b, el\);\s*else scriptButton\(rid, key, b\)\.press\(\);/.test(wire));
+  check('index: scriptButton is createActionButton over sendScript', /function scriptButton[\s\S]{0,400}createActionButton\(\{[\s\S]{0,400}sendScript\(ha, \{ entity: b\.entity, variables: b\.variables \}/.test(page));
   check('index: roomRowKeys is sidebarRows over the derived rows', /function roomRowKeys\(rid\) \{\s*return sidebarRows\(derivedRowKeys\(rid\), sidebarConfig\(rid\)\);/.test(page));
   check('index: the client gets the raw slots + bindings + the watched extras', /rooms: haConfig\.rawRooms,\s*sensors: haConfig\.rawSensors,\s*bindings: haConfig\.bindings,/.test(page) && /watch: sidebarWatchEntities\(\)/.test(page));
   // Row markup: disabled offline, an unavailable light says so.

@@ -1201,7 +1201,7 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
 
 def check_room_script_binding(rooms_doc, sensors, geo_room_ids, version, report):
     """`sensors.roomScripts`: room id -> the ONE script the room's sidebar
-    offers as its (two-step) "Kill room" button (src/room-script.js). A
+    offers as its "Shut down room" button (behind an "Are you sure?" dialog) (src/room-script.js). A
     binding to a room that does not exist can never be shown -- an error, like
     presence and climate. The schema already enforces the shape and the
     `script.` domain. Several rooms sharing one script, even with identical
