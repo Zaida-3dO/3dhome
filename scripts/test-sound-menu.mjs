@@ -177,7 +177,7 @@ console.log('5. commands');
   // place, spotifyPlayCommands (and read by the demo's sample reducer), and
   // section 7 asserts no sound tap ever sends it.
   const code = read('src/sound-model.js').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-  check('play_media is built only by spotifyPlayCommands', (code.match(/'play_media'/g) || []).length === 2 &&
+  check('play_media is built only by spotifyPlayCommands', (code.match(/service: 'play_media'/g) || []).length === 1 &&
     /export function spotifyPlayCommands[\s\S]{0,400}service: 'play_media'/.test(code) && !/play_media/.test(read('src/sound-menu.js')));
 }
 
@@ -750,6 +750,123 @@ const LOCAL = { media_type: 'track', uri: 'library://track/9', name: 'Local', im
     /if \(force \|\| sheet\.dataset\.mode !== 'picker'\)/.test(sm));
   check('picker UI: artwork never sends a referrer', /referrerpolicy="no-referrer"/.test(sm));
   check('Phase 1 nit: the body scrolls instead of squeezing its sections', /\.sm-body \{[^}]*min-height: 0;/.test(sm) && /\.sm-body > \* \{ flex-shrink: 0; \}/.test(sm));
+}
+
+// ---- 14. code review round 2: who a play reaches, cancelling, late answers ------------------------
+console.log('14. Spotify play: configured speakers only, cancel / detach, an unconfirmed play');
+{
+  const UNRELATED = 'media_player.demo_unrelated';
+  const holds = {};   // service -> { release } while held
+  const fake = installFakeHA({ states: haStates(), respond: msg => {
+    if (msg.type !== 'call_service') return undefined;
+    if (msg.return_response) return { result: { context: {}, response: { items: [SPOT(1, 'Recent one')] } } };
+    if (holds[msg.service] && holds[msg.service].hold) {
+      return holds[msg.service].mode === 'never' ? { hold: true } : new Promise(res => { holds[msg.service].release = () => res(undefined); });
+    }
+    return undefined;
+  } });
+  const realLog = console.log; console.log = (...a) => { if (/^\s+(ok|FAIL)/.test(String(a[0]))) realLog(...a); };
+  try {
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: {}, sensors: { soundMenu: SP } });
+    ha.connect();
+    await fake.whenConnected(ha);
+    const ws = fake.sockets[0];
+    let t = 90000;
+    const ctl = M.createSoundController({ cfg: spCfg, getHa: () => ha, sendScript, now: () => t, playTimeoutMs: 800 });
+    const uri = 'spotify--demo://track/1';
+    const settle = async () => { await sleep(150); };
+    // Start from no sound selected and idle speakers.
+    ws.emitStateChanged({ entity_id: SOUND, state: 'None', attributes: {} });
+    ws.emitStateChanged({ entity_id: BED, state: 'idle', attributes: {} });
+    ws.emitStateChanged({ entity_id: STUDY, state: 'idle', attributes: {} });
+    await settle();
+
+    // BLOCKING: the helper lists a speaker the menu does not know.
+    ws.emitStateChanged({ entity_id: SEL, state: J([BED, UNRELATED]), attributes: {} });
+    await settle();
+    ctl.openPicker(); await settle();
+    let at = fake.calls.length;
+    check('a play with an unconfigured speaker in the helper -> true', ctl.playTrack(uri) === true);
+    await settle();
+    let made = fake.calls.slice(at);
+    check('... the play went out (repeat_set, play_media, repeat_set)', made.map(c => c.service).join() ===
+      'media_player/repeat_set,music_assistant/play_media,media_player/repeat_set', made.map(c => c.service));
+    check('... and NO call targets the unconfigured speaker', made.every(c => J(c.msg.target.entity_id) === J([BED])) &&
+      !fake.calls.some(c => J(c.msg.target || {}).includes(UNRELATED)), made.map(c => c.msg.target));
+    check('... the notice counts only the configured one', J(ctl.model().notice) === J({ text: 'Playing on 1 speaker', kind: 'ok' }));
+    ws.emitStateChanged({ entity_id: SEL, state: J([UNRELATED]), attributes: {} });
+    await settle();
+    ctl.openPicker(); await settle();
+    at = fake.calls.length;
+    check('only an unconfigured speaker selected: "Select a speaker first.", nothing sent', ctl.playTrack(uri) === false &&
+      ctl.model().picker.error === 'Select a speaker first.' && fake.calls.length === at);
+    ws.emitStateChanged({ entity_id: SEL, state: J([BED]), attributes: {} });
+    await settle();
+
+    // Cancel while waiting on the 'None': nothing after it goes out.
+    ws.emitStateChanged({ entity_id: SOUND, state: 'Rain', attributes: {} });
+    await settle();
+    ctl.openPicker(); await settle();
+    at = fake.calls.length;
+    ctl.playTrack(uri);
+    ctl.closePicker();
+    check('Back while stopping the ambience: the play is cancelled', ctl.playing() === null);
+    ws.emitStateChanged({ entity_id: SOUND, state: 'None', attributes: {} });
+    await settle();
+    t += M.RETRIGGER_MAX_MS; ctl.tick(); await settle();
+    check('... only the None went out, never repeat_set / play_media', fake.calls.slice(at).map(c => c.service).join() === 'input_select/select_option',
+      fake.calls.slice(at).map(c => c.service));
+
+    // Cancel while the first repeat_set is unanswered: play_media never goes.
+    t += M.BUSY_MAX_MS;
+    holds.repeat_set = { hold: true };
+    ctl.openPicker(); await settle();
+    at = fake.calls.length;
+    ctl.playTrack(uri); await settle();
+    ctl.closePicker();
+    holds.repeat_set.release(); holds.repeat_set = null; await settle();
+    check('Back before play_media went out: cancelled, play_media never sent', fake.calls.slice(at).map(c => c.service).join() === 'media_player/repeat_set',
+      fake.calls.slice(at).map(c => c.service));
+
+    // Detach once play_media has gone out: it finishes, the re-opened picker is left alone.
+    holds.play_media = { hold: true };
+    ctl.openPicker(); await settle();
+    at = fake.calls.length;
+    ctl.playTrack(uri); await settle();
+    check('play_media in flight', fake.calls.slice(at).map(c => c.service).pop() === 'music_assistant/play_media');
+    ctl.closePicker();
+    ctl.openPicker(); await settle();
+    check('re-opened picker while the old play finishes', ctl.model().picker !== null && ctl.playing() === null);
+    holds.play_media.release(); holds.play_media = null; await settle();
+    const p2 = ctl.model();
+    check('... the old play finished (its last repeat_set went out)', fake.calls.slice(at).filter(c => !c.msg.return_response).map(c => c.service).join() ===
+      'media_player/repeat_set,music_assistant/play_media,media_player/repeat_set', fake.calls.slice(at).map(c => c.service));
+    check('... and did NOT close or post into the re-opened picker', p2.picker !== null && p2.picker.error === null && p2.notice === null, [p2.picker && p2.picker.error, p2.notice]);
+
+    // HA never confirms play_media: a warning, not a failure.
+    holds.play_media = { hold: true, mode: 'never' };
+    at = fake.calls.length;
+    ctl.playTrack(uri); await sleep(1100);
+    const p3 = ctl.model();
+    check('an unconfirmed play_media: a warning notice, back to the menu', J(p3.notice) === J({ text: M.PLAY_UNCONFIRMED, kind: 'warn' }) && p3.picker === null, [p3.notice, !!p3.picker]);
+    check('... no error shown, and the job is over', ctl.playing() === null);
+    holds.play_media = null;
+
+    // A timeout BEFORE play_media went out is still an error.
+    holds.repeat_set = { hold: true, mode: 'never' };
+    ctl.openPicker(); await settle();
+    ctl.playTrack(uri); await sleep(1100);
+    check('a timeout before play_media: an error, picker kept', ctl.model().picker !== null && ctl.model().picker.error === 'Music Assistant did not answer.');
+    holds.repeat_set = null;
+    ha.disconnect();
+  } finally { console.log = realLog; fake.restore(); }
+}
+{
+  const hint = m => /sign-in may need redoing/.test(M.spotifyErrorText(new Error(m)));
+  check('the re-pair hint: MA\'s playback-auth shapes', hint('No playable item found to start playback') && hint('MediaNotFoundError: x') &&
+    hint('login5 rejected the credential') && hint('Spotify credentials are unauthorized'));
+  check('... NOT anything merely mentioning auth or login', !hint('Authentication failed') && !hint('auth required') && !hint('Unauthorized') &&
+    !hint('login page unreachable') && !hint('Validation error: Entry not found'));
 }
 
 console.log('\n' + passes + ' passed, ' + failures + ' failed');

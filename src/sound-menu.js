@@ -146,6 +146,8 @@ export const STYLE = `
 .sm-note { box-sizing: border-box; border-radius: 10px; padding: 8px 12px; font-size: 11.5px; font-weight: 500; }
 .sm-note.ok { color: var(--sm-teal); background: var(--sm-np-bg); border: 1px solid var(--sm-np-bd); }
 .sm-note.error, .sm-err { color: var(--sm-red); background: var(--sm-red-bg); border: 1px solid var(--sm-red-bd); }
+.sm-note.warn { color: #b45309; background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.40); }
+:root:not([data-theme="light"]) .sm-note.warn { color: #fbbf24; }
 .sm-err { display: flex; align-items: flex-start; gap: 8px; border-radius: 10px; padding: 9px 12px; font-size: 11.5px; line-height: 1.35; }
 .sm-err .sm-ico { width: 15px; height: 15px; fill: var(--sm-red); flex: none; margin-top: 1px; }
 .sm-qw { display: flex; align-items: center; gap: 8px; height: 40px; box-sizing: border-box; padding: 0 12px; border-radius: 12px;

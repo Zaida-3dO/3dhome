@@ -495,6 +495,8 @@ export const SEARCH_MIN_CHARS = 2;
 export const SPOTIFY_TIMEOUT_MS = 15000;
 export const PLAY_TIMEOUT_MS = 20000;
 export const NOTICE_MS = 4000;
+/** What a play_media that HA never confirmed says: a warning, not a failure. */
+export const PLAY_UNCONFIRMED = 'No confirmation from Music Assistant; it may still start.';
 
 const SPOTIFY_URI = /^spotify[a-z0-9_-]*:\/\//i;
 const imageHost = url => { try { return new URL(String(url)).hostname; } catch (e) { return ''; } };
@@ -564,7 +566,10 @@ export function spotifyErrorText(err) {
   if (/did not answer/i.test(m)) return 'Music Assistant did not answer.';
   if (/not connected|disconnected/i.test(m)) return 'Home Assistant is not connected.';
   if (/not set up|entry not found/i.test(m)) return 'Music Assistant is not set up in Home Assistant (' + m + ').';
-  if (/no playable item|mediano?tfound|login|credential|unauthori[sz]ed|auth/i.test(m)) {
+  // Only Music Assistant's own shapes for a dead Spotify sign-in (lesson: the
+  // librespot credential is refused at login5 while search still works) --
+  // not any message that merely contains "auth" or "login".
+  if (/no playable item|MediaNotFoundError|login5|librespot|LoginFailed|invalid_grant|spotify[^.]*(credential|unauthori[sz]ed)/i.test(m)) {
     return 'Spotify could not play this. Music Assistant\'s Spotify sign-in may need redoing (Music Assistant: Settings, Providers, Spotify). (' + m + ')';
   }
   return 'Music Assistant: ' + m;
@@ -614,7 +619,8 @@ export function soundStatusKey(conn) {
  *
  * @param d  { cfg (normaliseSoundMenu), getHa: () => client|null,
  *           sendScript (src/script-call.js), now: () => ms,
- *           onChange: () => void (an async result landed: repaint) }
+ *           onChange: () => void (an async result landed: repaint),
+ *           playTimeoutMs (tests; default PLAY_TIMEOUT_MS) }
  */
 export function createSoundController(d) {
   const cfg = d.cfg;
@@ -769,6 +775,20 @@ export function createSoundController(d) {
     picker.queryAt = now();
   }
 
+  /**
+   * The play's calls, each after the previous one answered.
+   *
+   * CANCELLING (closePicker -- Back, Esc, or the menu closing): a play whose
+   * play_media has NOT gone out yet is cancelled, and nothing more is sent
+   * (a 'None' already sent stays sent). One whose play_media HAS gone out is
+   * left to finish, but DETACHED: its outcome touches no UI -- it must not
+   * close, or post into, a picker the user has since re-opened.
+   *
+   * A play_media (or the repeat_set after it) that HA does not confirm in
+   * PLAY_TIMEOUT_MS is a warning, not a failure: Music Assistant may well
+   * have started the track.
+   */
+  const playTimeout = d.playTimeoutMs || PLAY_TIMEOUT_MS;
   function startPlay() {
     const j = job;
     j.phase = 'starting';
@@ -776,22 +796,36 @@ export function createSoundController(d) {
     // wait for the speakers to stop, and they are about to play Spotify.
     busy = null;
     const cmds = spotifyPlayCommands(j.selection, j.uri);
-    const done = () => {
-      if (job !== j) return;
-      job = null;
-      picker = null;
-      say('Playing on ' + j.selection.length + ' speaker' + (j.selection.length === 1 ? '' : 's'), 'ok');
-    };
-    if (mockMode()) { cmds.forEach(send); done(); return; }
+    const plays = 'Playing on ' + j.selection.length + ' speaker' + (j.selection.length === 1 ? '' : 's');
+    if (mockMode()) { cmds.forEach(send); job = null; picker = null; say(plays, 'ok'); return; }
+    const CANCELLED = {};
     cmds.reduce((prev, c) => prev.then(() => {
+      if (j.cancelled) throw CANCELLED;
       if (!writable()) throw new Error('Home Assistant is not connected');
       sent.push(c);
-      return ha().request({ type: 'call_service', domain: c.domain, service: c.service, service_data: c.data, target: c.target }, PLAY_TIMEOUT_MS);
-    }), Promise.resolve()).then(done, err => {
-      if (job !== j) return;
+      if (c.service === 'play_media') j.mediaSent = true;
+      return ha().request({ type: 'call_service', domain: c.domain, service: c.service, service_data: c.data, target: c.target }, playTimeout);
+    }), Promise.resolve()).then(() => {
+      if (j.detached || j.cancelled) return;
       job = null;
+      picker = null;
+      say(plays, 'ok');
+    }, err => {
+      if (err === CANCELLED || j.detached || j.cancelled) return;
+      job = null;
+      if (j.mediaSent && /did not answer/i.test(String(err && err.message))) { picker = null; say(PLAY_UNCONFIRMED, 'warn'); return; }
       say(spotifyErrorText(err), 'error');
     });
+  }
+
+  /** Back / Esc / the menu closing: cancel or detach a play in progress (see startPlay). */
+  function closePicker() {
+    if (job) {
+      if (job.mediaSent) job.detached = true;
+      else job.cancelled = true;
+      job = null;
+    }
+    picker = null;
   }
 
   /**
@@ -801,7 +835,9 @@ export function createSoundController(d) {
   function playTrack(uri) {
     const m = model();
     if (!m.live || !cfg.spotify || job || pending) return false;
-    const sel = realSelection();
+    // Only CONFIGURED speakers: the shared helper may list one this menu does
+    // not show, which must never play Spotify unseen.
+    const sel = realSelection().filter(e => cfg.speakers.some(s => s.entity === e));
     if (!sel.length) { say('Select a speaker first.', 'error'); return false; }
     const item = picker && picker.items.find(x => x.uri === uri);
     job = { uri, title: item ? item.title : uri, selection: sel, since: now(), phase: 'stopping' };
@@ -857,7 +893,7 @@ export function createSoundController(d) {
   return {
     cfg, model, tap, tick, rawOf,
     openPicker, setQuery, playTrack,
-    closePicker() { picker = null; },
+    closePicker,
     pickerOpen: () => !!picker,
     setTapped(e) { tapped = e || null; },
     pendingRetrigger: () => !!pending,
