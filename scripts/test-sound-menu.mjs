@@ -173,8 +173,12 @@ console.log('5. commands');
   check('Stop all, no sound selected: media_stop on every playing speaker, no select', none.length === 2 && none.every(c => c.service === 'media_stop'));
   check('toggledSelection: add; remove; never the last (the script\'s min-1)', J(M.toggledSelection([BED], LOUNGE)) === J([BED, LOUNGE]) &&
     J(M.toggledSelection([BED, LOUNGE], BED)) === J([LOUNGE]) && J(M.toggledSelection([BED], BED)) === J([BED]));
-  const src = read('src/sound-model.js') + read('src/sound-menu.js');
-  check('the app never plays a local sound itself (no play_media anywhere in the menu)', !/play_media/.test(src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')));
+  // A LOCAL sound is never played by the app: play_media is built in ONE
+  // place, spotifyPlayCommands (and read by the demo's sample reducer), and
+  // section 7 asserts no sound tap ever sends it.
+  const code = read('src/sound-model.js').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  check('play_media is built only by spotifyPlayCommands', (code.match(/service: 'play_media'/g) || []).length === 1 &&
+    /export function spotifyPlayCommands[\s\S]{0,400}service: 'play_media'/.test(code) && !/play_media/.test(read('src/sound-menu.js')));
 }
 
 // ---- 6. the races ---------------------------------------------------------------------------
@@ -190,7 +194,11 @@ console.log('6. re-tap and the busy window');
   check('re-trigger waits: not until the sound reads None', !M.retriggerReady(0, G, 'Rain', [BED], idle));
   check('re-trigger waits: not while a selected speaker still plays', !M.retriggerReady(0, G, 'None', [BED], playing));
   check('re-trigger goes: None landed, speakers stopped, gap passed', M.retriggerReady(0, G, 'None', [BED], idle));
-  check('re-trigger goes anyway at the timeout', M.retriggerReady(0, X, 'Rain', [BED], playing));
+  check('re-trigger goes at the timeout when None landed but a speaker never reports stopped', M.retriggerReady(0, X, 'None', [BED], playing) &&
+    M.stopLanded(0, X, 'None', [BED], playing) === 'ready');
+  check('re-trigger ABORTS at the timeout when the helper reads another sound (a53a59ba)', !M.retriggerReady(0, X, 'Ocean', [BED], idle) &&
+    M.stopLanded(0, X, 'Ocean', [BED], idle) === 'abort' && M.stopLanded(0, X, 'Rain', [BED], playing) === 'abort' && M.stopLanded(0, X, null, [], idle) === 'abort');
+  check('stopLanded waits until then', M.stopLanded(0, X - 1, 'Rain', [BED], idle) === 'wait' && M.stopLanded(0, G, 'None', [BED], idle) === 'ready');
   check('settled: the sound reads the target and every selected speaker plays', M.soundSettled('Rain', 'Rain', [BED], playing) &&
     !M.soundSettled('Rain', 'Rain', [BED, STUDY], playing) && !M.soundSettled('Rain', 'Fan', [BED], playing));
   check('settled for None: nothing selected plays', M.soundSettled('None', 'None', [STUDY], playing) && !M.soundSettled('None', 'None', [BED], playing));
@@ -290,7 +298,7 @@ const haStates = () => [
     await sleep(5);
     check('... so the calls are exactly [None, Fan]', fake.calls.map(c => c.msg.service_data.option).join() === 'None,Fan', fake.calls);
 
-    // A re-trigger whose None never echoes still sends the label at the timeout.
+    // None lands but a speaker never reports stopped: the label goes at the timeout.
     ws.emitStateChanged({ entity_id: SOUND, state: 'Fan', attributes: {} });
     ws.emitStateChanged({ entity_id: BED, state: 'playing', attributes: { media_title: 'Fan' } });
     ws.emitStateChanged({ entity_id: LOUNGE, state: 'playing', attributes: { media_title: 'Fan' } });
@@ -299,12 +307,31 @@ const haStates = () => [
     ctl.model();
     fake.calls.length = 0;
     ctl.tap('snd', 'Fan');
+    ws.emitStateChanged({ entity_id: SOUND, state: 'None', attributes: {} });
+    await sleep(5);
     t += M.RETRIGGER_MAX_MS - 1;
     check('timeout re-trigger: held until RETRIGGER_MAX_MS', ctl.tick() === false);
     t += 1;
-    check('... then sent anyway', ctl.tick() === true);
+    check('... then sent, the helper reading None', ctl.tick() === true);
     await sleep(5);
     check('... [None, Fan]', fake.calls.map(c => c.msg.service_data.option).join() === 'None,Fan', fake.calls);
+
+    // The tablet picks another sound before our None lands: the re-trigger
+    // ABORTS rather than overriding it (a53a59ba).
+    ws.emitStateChanged({ entity_id: SOUND, state: 'Fan', attributes: {} });
+    await sleep(5);
+    t += M.BUSY_MAX_MS;
+    ctl.model();
+    fake.calls.length = 0;
+    ctl.tap('snd', 'Fan');
+    ws.emitStateChanged({ entity_id: SOUND, state: 'Ocean', attributes: {} });
+    await sleep(5);
+    t += M.RETRIGGER_MAX_MS;
+    check('re-trigger overridden elsewhere: nothing more is sent', ctl.tick() === false && !ctl.pendingRetrigger());
+    await sleep(5);
+    check('... only the None went out, and the tiles are free again', fake.calls.map(c => c.msg.service_data.option).join() === 'None' && ctl.model().busy === null, fake.calls);
+    ws.emitStateChanged({ entity_id: SOUND, state: 'Fan', attributes: {} });
+    await sleep(5);
     t += M.BUSY_MAX_MS;
 
     // NOW PLAYING
@@ -330,6 +357,7 @@ const haStates = () => [
     check('offline: every tap is refused and nothing is sent', ['spk', 'snd', 'stopAll', 'stop', 'volUp', 'playPause'].every(a => ctl.tap(a, a === 'snd' ? 'Ocean' : BED) === false) &&
       fake.calls.length === 0);
     check('no fetch, ever', fake.fetches.length === 0);
+    check('no sound / speaker / transport tap ever sent play_media', !fake.sent.some(x => x.service === 'play_media'));
   } finally {
     console.log = realLog;
     fake.restore();
@@ -440,9 +468,405 @@ console.log('10. an openFrom item opens the menu');
   check('modal: swallows the wheel (and blocks it outside the scrolling body)', /root\.addEventListener\('wheel', onWheel, \{ passive: false \}\)/.test(sm) &&
     /e\.stopPropagation\(\);\s*\/\/[^\n]*\n[^\n]*\n\s*if \(!\(body && body\.contains\(e\.target\)\)\) e\.preventDefault\(\);/.test(sm));
   check('modal: Esc closes, and no key reaches the page beneath', /win\.addEventListener\('keydown', onKeyDown, true\)/.test(sm) &&
-    /e\.stopPropagation\(\);[^\n]*\n\s*if \(e\.key === 'Escape'\) \{ e\.preventDefault\(\); close\(true\); return; \}/.test(sm));
+    /e\.stopPropagation\(\);[^\n]*\n\s*if \(e\.key === 'Escape'\) \{\s*e\.preventDefault\(\);\s*if \(ctl\.pickerOpen\(\)\) \{ ctl\.closePicker\(\); render\(true\); \} else close\(true\);/.test(sm));
   check('modal: opening calls onOpen (closes any card) first', /function open\(t\) \{\s*if \(o\.onOpen\)/.test(sm));
   check('modal: aria-modal dialog (room nav stands down for it)', /setAttribute\('aria-modal', 'true'\)/.test(sm) && /\[aria-modal="true"\]/.test(page));
+}
+
+// ---- 11. Spotify: the pure half -------------------------------------------------------------------
+console.log('11. Spotify: binding, results, calls, the play');
+const ENTRY = 'DEMOENTRY0000000000000000A';   // a made-up config entry id
+const SP = Object.assign({}, RAW, { spotify: { configEntryId: ENTRY } });
+const spCfg = M.normaliseSoundMenu(SP);
+{
+  check('spotify: absent -> null (no tile)', cfg.spotify === null);
+  check('spotify: {} -> on, entry looked up', J(M.normaliseSoundMenu(Object.assign({}, RAW, { spotify: {} })).spotify) === J({ configEntryId: null }));
+  check('spotify: a configEntryId is kept; a malformed one dropped', spCfg.spotify.configEntryId === ENTRY &&
+    M.normaliseSoundMenu(Object.assign({}, RAW, { spotify: { configEntryId: 'a b' } })).spotify.configEntryId === null);
+  const item = (uri, image, name, artists) => ({ media_type: 'track', uri, name, image, artists: (artists || []).map(a => ({ name: a })) });
+  const items = [
+    item('library://track/1', 'http://192.0.2.5:8095/imageproxy?x', 'Local rain', ['Relaxing sounds']),   // a local file: dropped
+    item('library://track/2', 'https://i.scdn.co/image/abc', 'Song A', ['Artist 1', 'Artist 2']),          // Spotify, in MA's library
+    item('spotify--demo://track/3', null, 'Song B', ['Artist 3']),                                          // Spotify uri, no art
+    item('library://track/2', 'https://i.scdn.co/image/abc', 'Song A again', []),                          // duplicate uri
+    item('spotify--demo://track/4', 'http://i.scdn.co/insecure', 'Song C', []),                             // http art: no image
+  ];
+  const rows = M.spotifyTracks(items, 25);
+  check('results: Spotify only (scdn artwork or a spotify uri), each uri once', rows.map(r => r.uri).join() === 'library://track/2,spotify--demo://track/3,spotify--demo://track/4', rows);
+  check('results: title, artists joined, https artwork only', rows[0].title === 'Song A' && rows[0].artists === 'Artist 1, Artist 2' &&
+    rows[0].image === 'https://i.scdn.co/image/abc' && rows[1].image === null && rows[2].image === null);
+  const many = Array.from({ length: 40 }, (_, i) => item('spotify--demo://track/' + i, null, 'T' + i));
+  check('results: at most 25', M.spotifyTracks(many, M.SPOTIFY_LIMIT).length === 25);
+  check('results: garbage -> []', M.spotifyTracks(null).length === 0 && M.spotifyTracks([null, 'x', {}]).length === 0);
+  check('recents call: get_library, tracks, last played first, 50', J(M.recentsCall(ENTRY)) === J({ domain: 'music_assistant', service: 'get_library',
+    data: { config_entry_id: ENTRY, media_type: 'track', order_by: 'last_played_desc', limit: 50 } }));
+  check('search call: search, tracks, 25', J(M.searchCall(ENTRY, 'moon')) === J({ domain: 'music_assistant', service: 'search',
+    data: { config_entry_id: ENTRY, name: 'moon', media_type: ['track'], limit: 25 } }));
+  check('query: under 2 characters -> recents; else a trimmed search', J(M.pickerWant(' a ')) === J({ kind: 'recents', query: '' }) &&
+    J(M.pickerWant(' mo ')) === J({ kind: 'search', query: 'mo' }));
+  check('config entry: a loaded one first, else the first, else null', M.pickConfigEntry([{ entry_id: 'X', domain: 'music_assistant', state: 'not_loaded' },
+    { entry_id: 'Y', domain: 'music_assistant', state: 'loaded' }]) === 'Y' && M.pickConfigEntry([{ entry_id: 'X' }]) === 'X' && M.pickConfigEntry([]) === null);
+  const play = M.spotifyPlayCommands([BED, LOUNGE], 'spotify--demo://track/3');
+  check('play: repeat_set off, play_media, repeat_set off -- in that order', play.map(c => c.service).join() === 'repeat_set,play_media,repeat_set');
+  check('play: every call targets exactly the selection', play.every(c => J(c.target.entity_id) === J([BED, LOUNGE])));
+  check('play: play_media replaces the queue with the track', J(play[1].data) === J({ media_id: 'spotify--demo://track/3', media_type: 'track', enqueue: 'replace' }) &&
+    J(play[0].data) === J({ repeat: 'off' }));
+  check('errors: a timeout, a lost pairing, an unknown one', M.spotifyErrorText(new Error('Home Assistant did not answer')) === 'Music Assistant did not answer.' &&
+    /sign-in may need redoing/.test(M.spotifyErrorText(new Error('No playable item found to start playback'))) &&
+    M.spotifyErrorText(new Error('boom')) === 'Music Assistant: boom');
+  check('the demo fixtures: generic names, spotify--demo uris, no artwork', M.SAMPLE_SPOTIFY_TRACKS.every(t => /^spotify--demo:\/\/track\/demo_\d+$/.test(t.uri) && t.image === null));
+}
+
+// ---- 12. the HA client's request path ---------------------------------------------------------------
+console.log('12. HA client: request / callServiceForResponse');
+{
+  const fake = installFakeHA({ states: [], respond: msg => {
+    if (msg.type === 'ping_ok') return { result: { pong: 1 } };
+    if (msg.type === 'ping_err') return { error: { code: 'x', message: 'HA said no' } };
+    if (msg.type === 'ping_hold') return { hold: true };
+    if (msg.type === 'call_service' && msg.return_response) return { result: { context: {}, response: { tracks: [1, 2] } } };
+    return undefined;
+  } });
+  const realLog = console.log; console.log = () => {};
+  try {
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: {}, sensors: {} });
+    check('request before connecting rejects at once', await ha.request({ type: 'ping_ok' }).then(() => false, e => /not connected/.test(e.message)));
+    ha.connect();
+    await fake.whenConnected(ha);
+    console.log = realLog;
+    check('request resolves HA\'s result', J(await ha.request({ type: 'ping_ok' })) === J({ pong: 1 }));
+    check('request rejects with HA\'s own error message', await ha.request({ type: 'ping_err' }).then(() => false, e => e.message === 'HA said no'));
+    check('request times out: "did not answer"', await ha.request({ type: 'ping_hold' }, 30).then(() => false, e => /did not answer/.test(e.message)));
+    const resp = await ha.callServiceForResponse('music_assistant', 'search', { name: 'x' });
+    const sentMsg = fake.sent.filter(m => m.type === 'call_service').pop();
+    check('callServiceForResponse: return_response true, resolves the response', J(resp) === J({ tracks: [1, 2] }) && sentMsg.return_response === true &&
+      sentMsg.domain === 'music_assistant' && !('target' in sentMsg));
+    const held = ha.request({ type: 'ping_hold' }, 5000);
+    ha.disconnect();
+    check('a request in flight rejects when the socket drops', await held.then(() => false, e => /disconnected/.test(e.message)));
+    check('listEntities is built on request (one get_states)', /function listEntities\(domains, timeoutMs\) \{\s*return request\(\{ type: 'get_states' \}, timeoutMs\)/.test(read('src/ha-client.js')));
+  } finally { console.log = realLog; fake.restore(); }
+}
+
+// ---- 13. the Spotify picker and play, against the fake Home Assistant ---------------------------
+console.log('13. Spotify picker and play (fake HA)');
+const SPOT = (n, name) => ({ media_type: 'track', uri: 'spotify--demo://track/' + n, name, image: 'https://i.scdn.co/image/demo' + n, artists: [{ name: 'Sample Artist' }] });
+const LOCAL = { media_type: 'track', uri: 'library://track/9', name: 'Local', image: 'http://192.0.2.5/x', artists: [] };
+{
+  const searches = [];           // the held search answers, by query
+  let playError = null, playHold = null;
+  const fake = installFakeHA({ states: haStates(), respond: msg => {
+    if (msg.type === 'config_entries/get') return { result: [{ entry_id: ENTRY, domain: 'music_assistant', state: 'loaded' }] };
+    if (msg.type !== 'call_service') return undefined;
+    if (msg.service === 'get_library') return { result: { context: {}, response: { items: [LOCAL, SPOT(1, 'Recent one'), SPOT(2, 'Recent two')] } } };
+    if (msg.service === 'search') {
+      return new Promise(res => searches.push({ q: msg.service_data.name, answer: () => res({ result: { context: {}, response: { tracks: [SPOT(10, 'Hit for ' + msg.service_data.name)] } } }),
+        fail: m => res({ error: { code: 'home_assistant_error', message: m } }) }));
+    }
+    if (msg.service === 'play_media' && playError) return { error: { code: 'home_assistant_error', message: playError } };
+    if (msg.service === 'play_media' && playHold) return new Promise(res => { playHold.release = () => res(undefined); });
+    return undefined;
+  } });
+  const realLog = console.log; console.log = (...a) => { if (/^\s+(ok|FAIL)/.test(String(a[0]))) realLog(...a); };
+  try {
+    // No configEntryId: looked up once.
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: {}, sensors: { soundMenu: Object.assign({}, RAW, { spotify: {} }) } });
+    ha.connect();
+    await fake.whenConnected(ha);
+    const ws = fake.sockets[0];
+    let t = 50000, changes = 0;
+    const lookupCfg = M.normaliseSoundMenu(Object.assign({}, RAW, { spotify: {} }));
+    const ctl = M.createSoundController({ cfg: lookupCfg, getHa: () => ha, sendScript, now: () => t, onChange: () => changes++ });
+    const m0 = ctl.model();
+    check('the Spotify tile is first on page 1', m0.pages[0][0].spotify === true && m0.pages[0][0].label === 'Spotify' && m0.pages[0].length === 4);
+    check('... and only when configured', !M.createSoundController({ cfg, getHa: () => ha, sendScript, now: () => t }).model().pages[0].some(x => x.spotify));
+    check('no picker without spotify configured', M.createSoundController({ cfg, getHa: () => ha, sendScript, now: () => t }).openPicker() === false);
+    const before = fake.calls.length;
+    check('openPicker -> true, loading recents', ctl.openPicker() === true && ctl.model().picker.status === 'loading');
+    await sleep(20);
+    const lookups = fake.sent.filter(m => m.type === 'config_entries/get');
+    check('the config entry is looked up (config_entries/get, music_assistant)', lookups.length === 1 && lookups[0].domain === 'music_assistant');
+    const lib = fake.calls.slice(before).filter(c => c.service === 'music_assistant/get_library');
+    check('recents: get_library with the looked-up entry, return_response', lib.length === 1 && lib[0].msg.return_response === true &&
+      J(lib[0].msg.service_data) === J(M.recentsCall(ENTRY).data), lib.map(c => c.msg));
+    const p1 = ctl.model().picker;
+    check('recents: Spotify rows only (the local file dropped)', p1.status === 'ok' && p1.kind === 'recents' && p1.items.map(i => i.title).join() === 'Recent one,Recent two', p1);
+    check('the result repainted the menu (onChange)', changes > 0);
+    check('opening the picker sent NO command (only reads)', fake.calls.slice(before).every(c => c.msg.return_response === true));
+
+    // Search: debounce, minimum length, stale answers dropped.
+    ctl.setQuery('m'); ctl.tick(); await sleep(5);
+    check('1 character: no search', searches.length === 0);
+    ctl.setQuery('mo'); t += M.SEARCH_DEBOUNCE_MS - 1; ctl.tick(); await sleep(5);
+    check('2 characters: not before 400 ms', searches.length === 0);
+    t += 1; ctl.tick(); await sleep(5);
+    check('... then one search for "mo", reusing the entry (no second lookup)', searches.length === 1 && searches[0].q === 'mo' &&
+      fake.sent.filter(m => m.type === 'config_entries/get').length === 1);
+    ctl.setQuery('moo'); t += M.SEARCH_DEBOUNCE_MS; ctl.tick(); await sleep(5);
+    check('a newer query searches again', searches.length === 2 && searches[1].q === 'moo');
+    searches[1].answer(); await sleep(10);
+    check('the newer answer shows', ctl.model().picker.items.map(i => i.title).join() === 'Hit for moo');
+    searches[0].answer(); await sleep(10);
+    check('the STALE older answer, arriving last, is dropped', ctl.model().picker.items.map(i => i.title).join() === 'Hit for moo');
+    ctl.setQuery('moon'); t += M.SEARCH_DEBOUNCE_MS; ctl.tick(); await sleep(5);
+    searches[2].fail('Spotify provider is not available');
+    await sleep(10);
+    const pe = ctl.model().picker;
+    check('a failed search shows inline, the list emptied', pe.status === 'error' && pe.error === 'Music Assistant: Spotify provider is not available' && pe.items.length === 0, pe);
+    ctl.setQuery(''); ctl.tick(); await sleep(150);
+    check('clearing the query goes back to recents', ctl.model().picker.kind === 'recents' && ctl.model().picker.items.length === 2);
+
+    // The play, with an ambience sound selected (plan review #1, #3).
+    // Selected: the bedroom (from the snapshot); make the lounge selected too.
+    ws.emitStateChanged({ entity_id: SEL, state: J([BED, LOUNGE]), attributes: {} });
+    ws.emitStateChanged({ entity_id: LOUNGE, state: 'playing', attributes: { media_title: 'Rain' } });
+    await sleep(5);
+    const at = fake.calls.length;
+    const uri = 'spotify--demo://track/1';
+    check('a row tap -> true', ctl.playTrack(uri) === true);
+    await sleep(10);
+    let made = fake.calls.slice(at);
+    check('#1: a selected sound is deselected FIRST, and nothing else goes yet', made.length === 1 && made[0].service === 'input_select/select_option' &&
+      made[0].msg.service_data.option === 'None', made.map(c => c.service));
+    check('... the row says it is stopping the ambience', J(ctl.model().picker.playing) === J({ uri, phase: 'stopping' }));
+    check('a sound tile is refused while the play is pending', ctl.tap('snd', 'Ocean') === false);
+    check('a second row tap is refused while the play is pending', ctl.playTrack('spotify--demo://track/2') === false);
+    t += M.RETRIGGER_GAP_MS; ctl.tick(); await sleep(10);
+    check('... still waiting: the helper has not read None yet', fake.calls.length === at + 1);
+    ws.emitStateChanged({ entity_id: SOUND, state: 'None', attributes: {} });
+    await sleep(5); ctl.tick(); await sleep(10);
+    check('... still waiting: the automation has not stopped the speakers', fake.calls.length === at + 1);
+    ws.emitStateChanged({ entity_id: BED, state: 'idle', attributes: {} });
+    ws.emitStateChanged({ entity_id: LOUNGE, state: 'idle', attributes: {} });
+    await sleep(5); ctl.tick(); await sleep(150);
+    made = fake.calls.slice(at);
+    check('#3: then repeat_set off, play_media, repeat_set off -- in that order', made.map(c => c.service).join() ===
+      'input_select/select_option,media_player/repeat_set,music_assistant/play_media,media_player/repeat_set', made.map(c => c.service));
+    check('#3: every call targets EXACTLY the selected speakers', made.slice(1).every(c => J(c.msg.target.entity_id) === J([BED, LOUNGE])), made.map(c => c.msg.target));
+    check('... play_media: the track, replacing the queue', J(made[2].msg.service_data) === J({ media_id: uri, media_type: 'track', enqueue: 'replace' }));
+    check('... each one waited for the previous answer (a request, not fire-and-forget)', made.slice(1).every(c => typeof c.msg.id === 'number'));
+    const after = ctl.model();
+    check('done: the sound tiles are not left busy (the speakers now play Spotify)', ctl.model().busy === null);
+    check('done: back to the menu, "Playing on 2 speakers"', after.picker === null && J(after.notice) === J({ text: 'Playing on 2 speakers', kind: 'ok' }), [after.picker, after.notice]);
+    t += M.NOTICE_MS;
+    check('... and the notice clears', ctl.model().notice === null);
+
+    // The tablet picks a sound while the play waits: abandoned, not fought.
+    ws.emitStateChanged({ entity_id: SOUND, state: 'Rain', attributes: {} });
+    await sleep(5);
+    ctl.openPicker(); await sleep(20);
+    const at2 = fake.calls.length;
+    ctl.playTrack(uri);
+    ws.emitStateChanged({ entity_id: SOUND, state: 'Ocean', attributes: {} });
+    await sleep(5);
+    t += M.RETRIGGER_MAX_MS; ctl.tick(); await sleep(150);
+    check('helper changed elsewhere: only the None went out, no play', fake.calls.slice(at2).map(c => c.service).join() === 'input_select/select_option');
+    check('... and the picker says why', /did not stop/.test(ctl.model().picker.error) && ctl.model().notice.kind === 'error' && ctl.playing() === null);
+
+    // No sound selected: the play goes at once. A failed play_media stops the chain.
+    ws.emitStateChanged({ entity_id: SOUND, state: 'None', attributes: {} });
+    await sleep(5);
+    t += M.BUSY_MAX_MS;
+    playError = 'No playable item found to start playback';
+    const at3 = fake.calls.length;
+    ctl.playTrack(uri); await sleep(150);
+    check('no sound selected: no select, straight to repeat_set + play_media', fake.calls.slice(at3).map(c => c.service).join() === 'media_player/repeat_set,music_assistant/play_media');
+    check('a failed play shows inline (the pairing hint), and the chain stopped', /sign-in may need redoing/.test(ctl.model().picker.error) && ctl.model().picker !== null);
+    playError = null;
+
+    // While play_media is still being answered (no busy window any more), a
+    // sound tile and another row are refused.
+    playHold = {};
+    const at6 = fake.calls.length;
+    ctl.playTrack(uri); await sleep(150);
+    check('play in flight: play_media sent, not yet answered', fake.calls.slice(at6).map(c => c.service).join() === 'media_player/repeat_set,music_assistant/play_media' &&
+      ctl.playing().phase === 'starting' && ctl.model().busy === null);
+    check('... a sound tile is refused (it would race the play)', ctl.tap('snd', 'Ocean') === false);
+    check('... and so is another row', ctl.playTrack('spotify--demo://track/2') === false);
+    playHold.release(); playHold = null; await sleep(150);
+    check('... then the last repeat_set, and done', fake.calls.slice(at6).map(c => c.service).pop() === 'media_player/repeat_set' && ctl.playing() === null);
+    ctl.openPicker(); await sleep(150);
+
+    // Nothing selected.
+    ws.emitStateChanged({ entity_id: SEL, state: '[]', attributes: {} });
+    await sleep(5);
+    const at4 = fake.calls.length;
+    check('no speaker selected: refused, "Select a speaker first."', ctl.playTrack(uri) === false && ctl.model().picker.error === 'Select a speaker first.' && fake.calls.length === at4);
+    ws.emitStateChanged({ entity_id: SEL, state: J([BED]), attributes: {} });
+    await sleep(5);
+
+    // Code review: only ever a configured speaker.
+    const at5 = fake.calls.length;
+    check('stop / transport on an UNCONFIGURED speaker are refused', ['stop', 'volUp', 'next', 'playPause'].every(a => ctl.tap(a, 'media_player.demo_unrelated') === false) && fake.calls.length === at5);
+
+    // Offline: the picker cannot open, and a read fails inline.
+    ctl.closePicker();
+    ha.disconnect();
+    check('offline: the picker does not open', ctl.openPicker() === false);
+    check('no fetch, ever', fake.fetches.length === 0);
+  } finally { console.log = realLog; fake.restore(); }
+}
+{
+  // A configured entry is used as is: no lookup.
+  const fake = installFakeHA({ states: haStates(), respond: msg => (msg.type === 'call_service' && msg.return_response ? { result: { context: {}, response: { items: [] } } } : undefined) });
+  const realLog = console.log; console.log = () => {};
+  try {
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: {}, sensors: { soundMenu: SP } });
+    ha.connect();
+    await fake.whenConnected(ha);
+    const ctl = M.createSoundController({ cfg: spCfg, getHa: () => ha, sendScript, now: () => 0 });
+    ctl.openPicker(); await sleep(20);
+    console.log = realLog;
+    check('a configured configEntryId: used directly, no config_entries/get', !fake.sent.some(m => m.type === 'config_entries/get') &&
+      fake.calls.some(c => c.msg.service_data.config_entry_id === ENTRY));
+    check('... an empty recents list says so', ctl.model().picker.status === 'ok' && ctl.model().picker.items.length === 0);
+    ha.disconnect();
+  } finally { console.log = realLog; fake.restore(); }
+}
+{
+  // Mock mode: fixtures, the sample moves, nothing is sent.
+  const fake = installFakeHA();
+  try {
+    let t = 0;
+    const ctl = M.createSoundController({ cfg: M.normaliseSoundMenu(Object.assign({}, RAW, { spotify: {} })), getHa: () => null, sendScript, now: () => t });
+    ctl.openPicker(); await sleep(5);
+    const p = ctl.model().picker;
+    check('mock: recents from the fixtures, the local file filtered out', p.items.length === M.SAMPLE_SPOTIFY_TRACKS.length && !p.items.some(i => i.uri.startsWith('library://')));
+    ctl.setQuery('harbour'); t += M.SEARCH_DEBOUNCE_MS; ctl.tick(); await sleep(5);
+    check('mock: a search filters the fixtures', ctl.model().picker.items.map(i => i.title).join() === 'Harbour Lights');
+    const uri = ctl.model().picker.items[0].uri;
+    ctl.playTrack(uri);
+    check('mock: Rain was selected, so None first', ctl.model().sound === 'None' && ctl.playing().phase === 'stopping');
+    t += M.RETRIGGER_GAP_MS; ctl.tick();
+    const m = ctl.model();
+    check('mock: then the track plays on the selected speaker', m.picker === null && m.slides.length === 1 && m.slides[0].title === 'Harbour Lights');
+    check('mock: nothing reached Home Assistant', fake.sockets.length === 0 && fake.calls.length === 0);
+  } finally { fake.restore(); }
+}
+{
+  const sm = read('src/sound-menu.js');
+  check('picker UI: Esc closes the picker before the menu', /if \(ctl\.pickerOpen\(\)\) \{ ctl\.closePicker\(\); render\(true\); \} else close\(true\);/.test(sm));
+  check('picker UI: the search box survives repaints (only the list is rebuilt)', /querySelector\('\[data-plist\]'\)\.innerHTML = pickerList\(m\)/.test(sm) &&
+    /if \(force \|\| sheet\.dataset\.mode !== 'picker'\)/.test(sm));
+  check('picker UI: artwork never sends a referrer', /referrerpolicy="no-referrer"/.test(sm));
+  check('Phase 1 nit: the body scrolls instead of squeezing its sections', /\.sm-body \{[^}]*min-height: 0;/.test(sm) && /\.sm-body > \* \{ flex-shrink: 0; \}/.test(sm));
+}
+
+// ---- 14. code review round 2: who a play reaches, cancelling, late answers ------------------------
+console.log('14. Spotify play: configured speakers only, cancel / detach, an unconfirmed play');
+{
+  const UNRELATED = 'media_player.demo_unrelated';
+  const holds = {};   // service -> { release } while held
+  const fake = installFakeHA({ states: haStates(), respond: msg => {
+    if (msg.type !== 'call_service') return undefined;
+    if (msg.return_response) return { result: { context: {}, response: { items: [SPOT(1, 'Recent one')] } } };
+    if (holds[msg.service] && holds[msg.service].hold) {
+      return holds[msg.service].mode === 'never' ? { hold: true } : new Promise(res => { holds[msg.service].release = () => res(undefined); });
+    }
+    return undefined;
+  } });
+  const realLog = console.log; console.log = (...a) => { if (/^\s+(ok|FAIL)/.test(String(a[0]))) realLog(...a); };
+  try {
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: {}, sensors: { soundMenu: SP } });
+    ha.connect();
+    await fake.whenConnected(ha);
+    const ws = fake.sockets[0];
+    let t = 90000;
+    const ctl = M.createSoundController({ cfg: spCfg, getHa: () => ha, sendScript, now: () => t, playTimeoutMs: 800 });
+    const uri = 'spotify--demo://track/1';
+    const settle = async () => { await sleep(150); };
+    // Start from no sound selected and idle speakers.
+    ws.emitStateChanged({ entity_id: SOUND, state: 'None', attributes: {} });
+    ws.emitStateChanged({ entity_id: BED, state: 'idle', attributes: {} });
+    ws.emitStateChanged({ entity_id: STUDY, state: 'idle', attributes: {} });
+    await settle();
+
+    // BLOCKING: the helper lists a speaker the menu does not know.
+    ws.emitStateChanged({ entity_id: SEL, state: J([BED, UNRELATED]), attributes: {} });
+    await settle();
+    ctl.openPicker(); await settle();
+    let at = fake.calls.length;
+    check('a play with an unconfigured speaker in the helper -> true', ctl.playTrack(uri) === true);
+    await settle();
+    let made = fake.calls.slice(at);
+    check('... the play went out (repeat_set, play_media, repeat_set)', made.map(c => c.service).join() ===
+      'media_player/repeat_set,music_assistant/play_media,media_player/repeat_set', made.map(c => c.service));
+    check('... and NO call targets the unconfigured speaker', made.every(c => J(c.msg.target.entity_id) === J([BED])) &&
+      !fake.calls.some(c => J(c.msg.target || {}).includes(UNRELATED)), made.map(c => c.msg.target));
+    check('... the notice counts only the configured one', J(ctl.model().notice) === J({ text: 'Playing on 1 speaker', kind: 'ok' }));
+    ws.emitStateChanged({ entity_id: SEL, state: J([UNRELATED]), attributes: {} });
+    await settle();
+    ctl.openPicker(); await settle();
+    at = fake.calls.length;
+    check('only an unconfigured speaker selected: "Select a speaker first.", nothing sent', ctl.playTrack(uri) === false &&
+      ctl.model().picker.error === 'Select a speaker first.' && fake.calls.length === at);
+    ws.emitStateChanged({ entity_id: SEL, state: J([BED]), attributes: {} });
+    await settle();
+
+    // Cancel while waiting on the 'None': nothing after it goes out.
+    ws.emitStateChanged({ entity_id: SOUND, state: 'Rain', attributes: {} });
+    await settle();
+    ctl.openPicker(); await settle();
+    at = fake.calls.length;
+    ctl.playTrack(uri);
+    ctl.closePicker();
+    check('Back while stopping the ambience: the play is cancelled', ctl.playing() === null);
+    ws.emitStateChanged({ entity_id: SOUND, state: 'None', attributes: {} });
+    await settle();
+    t += M.RETRIGGER_MAX_MS; ctl.tick(); await settle();
+    check('... only the None went out, never repeat_set / play_media', fake.calls.slice(at).map(c => c.service).join() === 'input_select/select_option',
+      fake.calls.slice(at).map(c => c.service));
+
+    // Cancel while the first repeat_set is unanswered: play_media never goes.
+    t += M.BUSY_MAX_MS;
+    holds.repeat_set = { hold: true };
+    ctl.openPicker(); await settle();
+    at = fake.calls.length;
+    ctl.playTrack(uri); await settle();
+    ctl.closePicker();
+    holds.repeat_set.release(); holds.repeat_set = null; await settle();
+    check('Back before play_media went out: cancelled, play_media never sent', fake.calls.slice(at).map(c => c.service).join() === 'media_player/repeat_set',
+      fake.calls.slice(at).map(c => c.service));
+
+    // Detach once play_media has gone out: it finishes, the re-opened picker is left alone.
+    holds.play_media = { hold: true };
+    ctl.openPicker(); await settle();
+    at = fake.calls.length;
+    ctl.playTrack(uri); await settle();
+    check('play_media in flight', fake.calls.slice(at).map(c => c.service).pop() === 'music_assistant/play_media');
+    ctl.closePicker();
+    ctl.openPicker(); await settle();
+    check('re-opened picker while the old play finishes', ctl.model().picker !== null && ctl.playing() === null);
+    holds.play_media.release(); holds.play_media = null; await settle();
+    const p2 = ctl.model();
+    check('... the old play finished (its last repeat_set went out)', fake.calls.slice(at).filter(c => !c.msg.return_response).map(c => c.service).join() ===
+      'media_player/repeat_set,music_assistant/play_media,media_player/repeat_set', fake.calls.slice(at).map(c => c.service));
+    check('... and did NOT close or post into the re-opened picker', p2.picker !== null && p2.picker.error === null && p2.notice === null, [p2.picker && p2.picker.error, p2.notice]);
+
+    // HA never confirms play_media: a warning, not a failure.
+    holds.play_media = { hold: true, mode: 'never' };
+    at = fake.calls.length;
+    ctl.playTrack(uri); await sleep(1100);
+    const p3 = ctl.model();
+    check('an unconfirmed play_media: a warning notice, back to the menu', J(p3.notice) === J({ text: M.PLAY_UNCONFIRMED, kind: 'warn' }) && p3.picker === null, [p3.notice, !!p3.picker]);
+    check('... no error shown, and the job is over', ctl.playing() === null);
+    holds.play_media = null;
+
+    // A timeout BEFORE play_media went out is still an error.
+    holds.repeat_set = { hold: true, mode: 'never' };
+    ctl.openPicker(); await settle();
+    ctl.playTrack(uri); await sleep(1100);
+    check('a timeout before play_media: an error, picker kept', ctl.model().picker !== null && ctl.model().picker.error === 'Music Assistant did not answer.');
+    holds.repeat_set = null;
+    ha.disconnect();
+  } finally { console.log = realLog; fake.restore(); }
+}
+{
+  const hint = m => /sign-in may need redoing/.test(M.spotifyErrorText(new Error(m)));
+  check('the re-pair hint: MA\'s playback-auth shapes', hint('No playable item found to start playback') && hint('MediaNotFoundError: x') &&
+    hint('login5 rejected the credential') && hint('Spotify credentials are unauthorized'));
+  check('... NOT anything merely mentioning auth or login', !hint('Authentication failed') && !hint('auth required') && !hint('Unauthorized') &&
+    !hint('login page unreachable') && !hint('Validation error: Entry not found'));
 }
 
 console.log('\n' + passes + ' passed, ' + failures + ' failed');

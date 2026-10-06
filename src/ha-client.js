@@ -937,13 +937,15 @@ export const HAClient = (() => {
       });
     }
 
-    // ---- The entity picker (edit mode) ----
-    // Edit mode asks for the entity list on demand: its OWN get_states, whose
-    // result is mapped straight to { entity_id, friendly_name, domain } in
-    // the supported domains (src/bindings.js pickerEntities) and never
-    // stored here. Nothing else the client does needs the full list.
-    const pendingResults = new Map();   // request id -> { resolve, reject, timer, domains }
-    function listEntities(domains, timeoutMs) {
+    // ---- Request / response ----
+    // The one path for a command whose RESULT matters: request() sends
+    // { ...msg, id } and resolves HA's `result`, or rejects with HA's own
+    // error message (success: false), 'Home Assistant did not answer' at the
+    // timeout, or 'Home Assistant disconnected' if the socket drops first.
+    // Like callService, it is never queued: with no authenticated socket it
+    // rejects at once.
+    const pendingResults = new Map();   // request id -> { resolve, reject, timer }
+    function request(msg, timeoutMs) {
       if (!authed || !ws || ws.readyState !== WebSocket.OPEN) {
         return Promise.reject(new Error('Home Assistant is not connected'));
       }
@@ -953,12 +955,36 @@ export const HAClient = (() => {
           pendingResults.delete(id);
           reject(new Error('Home Assistant did not answer'));
         }, timeoutMs || 15000);
-        pendingResults.set(id, { resolve, reject, timer, domains });
-        wsSend({ id, type: 'get_states' });
+        pendingResults.set(id, { resolve, reject, timer });
+        wsSend(Object.assign({}, msg, { id }));
       });
     }
 
-    // ---- WebSocket ----
+    /**
+     * A service call whose RESPONSE is wanted (HA's return_response): resolves
+     * the service's `response` object. For read-only services only (a
+     * search, a library listing) -- everything that changes something goes
+     * through fire-and-forget callService.
+     */
+    function callServiceForResponse(domain, service, data, target, timeoutMs) {
+      const msg = { type: 'call_service', domain, service, service_data: data || {}, return_response: true };
+      if (target) msg.target = target;
+      return request(msg, timeoutMs).then(r => (r && r.response !== undefined ? r.response : null));
+    }
+
+    // ---- The entity picker (edit mode) ----
+    // Edit mode asks for the entity list on demand: its OWN get_states, whose
+    // result is mapped straight to { entity_id, friendly_name, domain } in
+    // the supported domains (src/bindings.js pickerEntities) and never
+    // stored here. Nothing else the client does needs the full list.
+    function listEntities(domains, timeoutMs) {
+      return request({ type: 'get_states' }, timeoutMs).then(result => {
+        if (!Array.isArray(result)) throw new Error('Home Assistant refused the entity list');
+        return pickerEntities(result, domains);
+      }, e => {
+        throw (e && /^Home Assistant (is not connected|did not answer|disconnected)/.test(e.message)) ? e : new Error('Home Assistant refused the entity list');
+      });
+    }
 
     let getStatesId = null;
 
@@ -1038,8 +1064,8 @@ export const HAClient = (() => {
           const req = pendingResults.get(msg.id);
           pendingResults.delete(msg.id);
           clearTimeout(req.timer);
-          if (msg.success && Array.isArray(msg.result)) req.resolve(pickerEntities(msg.result, req.domains));
-          else req.reject(new Error('Home Assistant refused the entity list'));
+          if (msg.success) req.resolve(msg.result);
+          else req.reject(new Error((msg.error && msg.error.message) || 'Home Assistant refused the request'));
         } else if (msg.type === 'result' && msg.id === getStatesId) {
           if (msg.success && Array.isArray(msg.result)) {
             const fired = snapshotFired = new Set();
@@ -1124,6 +1150,9 @@ export const HAClient = (() => {
       clearTimeout(reconnectTimer);
       if (ws) { ws.onclose = null; ws.close(); ws = null; }
       authed = false;
+      // onclose (which rejects these) is detached above: reject them here.
+      pendingResults.forEach(r => { clearTimeout(r.timer); r.reject(new Error('Home Assistant disconnected')); });
+      pendingResults.clear();
       cancelAllDebounced();
       setStatus('disconnected');
     }
@@ -1269,6 +1298,10 @@ export const HAClient = (() => {
       // Edit mode's entity picker: a fresh get_states, mapped to
       // [{ entity_id, friendly_name, domain }] in `domains` (src/bindings.js).
       listEntities,
+      // request(msg, timeoutMs) -> HA's result; callServiceForResponse(domain,
+      // service, data, target?, timeoutMs?) -> the service's response. See above.
+      request,
+      callServiceForResponse,
       onStatusChange(cb) { statusCallbacks.push(cb); },
       // Test/diagnostic seam: drive a sensor without a live HA socket. Returns
       // true if the resolved boolean changed (and callbacks fired).

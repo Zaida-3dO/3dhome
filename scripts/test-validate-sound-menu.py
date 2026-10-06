@@ -16,7 +16,10 @@ WHAT THIS GUARDS
      an openFrom key with no furniture item behind it is an ERROR; an
      openFrom value that is not one of the speakers is an ERROR; a speaker
      listed twice is an ERROR; an openFrom item that also has a
-     `sensors.items` card is WARNED; a clean block trips none of them.
+     `sensors.items` card, or a vacuum / plant binding, is WARNED; a clean
+     block trips none of them. The optional `spotify` block: {} and a
+     configEntryId validate at 1.12; an unknown key or a malformed id is
+     rejected.
   3. The demo house carries a block that passes, at 1.12.
 """
 
@@ -101,6 +104,10 @@ def with_(**kw):
 # ---- 1. schema ---------------------------------------------------------------
 check("schema: a full block validates", schema_errors(rooms_doc(GOOD)) == [], schema_errors(rooms_doc(GOOD)))
 check("schema: without recent and openFrom validates", schema_errors(rooms_doc(with_(recent=None, openFrom=None))) == [])
+check("schema: spotify {} validates (entry looked up)", schema_errors(rooms_doc(dict(GOOD, spotify={}))) == [])
+check("schema: spotify with a configEntryId validates", schema_errors(rooms_doc(dict(GOOD, spotify={"configEntryId": "DEMOENTRY0000000000000000A"}))) == [])
+check("schema: spotify stays within 1.12 (no bump)", schema_errors(rooms_doc(dict(GOOD, spotify={}), version="1.12")) == [] and
+      run(rooms_doc(dict(GOOD, spotify={}), version="1.12"))[0] == [])
 for label, sm in [
     ("a missing selection", with_(selection=None)),
     ("a missing toggleScript", with_(toggleScript=None)),
@@ -115,7 +122,10 @@ for label, sm in [
     ("a speaker that is not a media_player", with_(speakers=[{"entity": 'light.demo_x'}])),
     ("an openFrom value that is not a media_player", with_(openFrom={"shelf": 'light.demo_x'})),
     ("a bad openFrom item id", with_(openFrom={"Bad Id": BED})),
-    ("an unknown key", dict(GOOD, spotify={})),
+    ("an unknown key", dict(GOOD, bogus={})),
+    ("spotify with an unknown key", dict(GOOD, spotify={"entry": "x"})),
+    ("spotify with a malformed configEntryId", dict(GOOD, spotify={"configEntryId": "has space"})),
+    ("spotify that is not an object", dict(GOOD, spotify=True)),
 ]:
     check(f"schema: rejects {label}", schema_errors(rooms_doc(sm)) != [])
 
@@ -136,11 +146,17 @@ check("validator: a speaker listed twice is an error", any("twice" in e for e in
 errs, warns = run(rooms_doc(GOOD, items={"bed_speaker": {"media": [{"entity": BED}]}}))
 check("validator: an openFrom item with a sensors.items card is warned", any("bed_speaker" in w and "card" in w for w in warns), warns)
 check("validator: ... and not an error", not any("bed_speaker" in e for e in errs), errs)
+for kind, binding in (("vacuums", {"entity": 'vacuum.demo_x'}), ("plants", {"moisture": 'sensor.demo_x'})):
+    doc = rooms_doc(GOOD)
+    doc["sensors"][kind] = {"bed_speaker": binding}
+    errs, warns = run(doc)
+    check(f"validator: an openFrom item also bound in sensors.{kind} is warned", any("bed_speaker" in w and kind in w for w in warns), warns)
 
 # ---- 3. the demo -----------------------------------------------------------------
 demo = json.loads((ROOT / "houses" / "demo" / "rooms.json").read_text(encoding="utf-8"))
 demo_geo = json.loads((ROOT / "houses" / "demo" / "geometry.json").read_text(encoding="utf-8"))
 check("demo: carries a soundMenu block at 1.12", "soundMenu" in (demo.get("sensors") or {}) and demo.get("schemaVersion") == "1.12")
+check("demo: turns the Spotify tile on with NO entry id (nothing real committed)", demo["sensors"]["soundMenu"].get("spotify") == {})
 check("demo: the block passes the schema", schema_errors(demo) == [], schema_errors(demo))
 r = vh.Report("demo")
 vh.check_sensor_binding(demo, demo_geo, {x.get("id") for x in demo_geo.get("rooms", [])}, r)
