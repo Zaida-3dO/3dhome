@@ -1183,7 +1183,7 @@
     // Settings sidebar "Door numbers" switch).
     import { DoorDebugOverlay } from './src/overlays/door-debug-overlay.js?v=__VERSION__';
     // Tap a 3D object -> popover for its bound HA entity (spike).
-    import { attachTapPopovers, climateActivity } from './src/tap-popovers.js?v=__VERSION__';
+    import { attachTapPopovers, climateActivity, curtainButtonAction } from './src/tap-popovers.js?v=__VERSION__';
     import { createSoundMenu } from './src/sound-menu.js?v=__VERSION__';
     // The sidebar's open / pinned state machine (collapsible widths only).
     import { sidebarReduce, SIDEBAR_INITIAL } from './src/sidebar-pin.js?v=__VERSION__';
@@ -3018,6 +3018,7 @@
           plantMock: id => plantMockFor(id),
         },
         curtainSender, climateSender,
+        curtainInverted: id => curtainInverted.has(id),
         onChange: () => renderPanel(),
         // Read-only: placement keeps the card out of the open sidebar's rect,
         // and opening/closing the sidebar closes the card.
@@ -4077,7 +4078,7 @@
             const curtainId = el.dataset.curtain;
             onWrite(el, 'click', () => {
               if (!curtainIsAvailable(curtainId)) return; // belt-and-braces with `disabled`
-              const cmd = curtainInverted.has(curtainId) ? (el.dataset.cmd === 'open' ? 'close' : 'open') : el.dataset.cmd;
+              const cmd = curtainButtonAction(el.dataset.cmd, curtainInverted.has(curtainId));
               curtainSender.press(curtainId, HAClient.coverOpenCloseCommand(cmd, curtainEntities.get(curtainId)));
             });
           }

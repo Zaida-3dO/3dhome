@@ -463,5 +463,34 @@ await quiet(async () => {
   check("index.html: no dead 'polling' status label or dot", !/polling:\s+'HA Polling'/.test(html) && !/\.ha-status-dot\.polling/.test(html));
 }
 
+// ---------------------------------------------------------------------------
+// 9. A light that is ALSO listed as a presence sensor (no `bindings` block)
+// ---------------------------------------------------------------------------
+// The light path wins and the sensor path is skipped (the original
+// else-if precedence), in the snapshot AND on a live state_changed. The
+// light still updates. Mutation: let processSensorUpdate fire regardless
+// (drop the `!isLight &&` guard) -> the presence callbacks below fire.
+await quiet(async () => {
+  const states = haStates();
+  const fake = installFakeHA({ states });
+  try {
+    const sensors = Object.assign({}, SENSORS, { presence: { lounge: [E.light] } });
+    const ha = HAClient.create({ url: 'http://ha.invalid', token: 't', rooms: ROOMS, sensors, wsReconnectMs: 10000 });
+    const p = wirePanel(ha);
+    ha.connect();
+    await fake.whenConnected(ha);
+    const n = kind => p.log.filter(l => l.kind === kind).length;
+    check('light+sensor entity, snapshot: light updated', p.model.light.get('lounge/main') === true);
+    check('light+sensor entity, snapshot: no duplicate sensor update', n('presence') === 0, n('presence'));
+    fake.sockets[fake.sockets.length - 1].emitStateChanged({ entity_id: E.light, state: 'off', attributes: {} });
+    await sleep(50);
+    check('light+sensor entity, live change: light updated', p.model.light.get('lounge/main') === false);
+    check('light+sensor entity, live change: no duplicate sensor update', n('presence') === 0, n('presence'));
+    ha.disconnect();
+  } finally {
+    fake.restore();
+  }
+})();
+
 console.log('\n' + passes + ' passed, ' + failures + ' failed');
 process.exit(failures ? 1 : 0);
