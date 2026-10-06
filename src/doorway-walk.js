@@ -170,7 +170,35 @@ export function buildNavGraph(o) {
   const adj = {};
   ids.forEach(id => { adj[id] = []; });
   portals.forEach((p, k) => { adj[p.rooms[0]].push(k); adj[p.rooms[1]].push(k); });
-  return { rooms, portals, adj, ceiling };
+  // Wall stubs standing INSIDE a room's polygon (a chimney breast, a pier, a
+  // half-height return): the polygon says floor, the wall says solid. Each
+  // is a solid the walk must go round, never through.
+  const solids = [];
+  walls.forEach(w => {
+    const L = hyp(w.b[0] - w.a[0], w.b[1] - w.a[1]);
+    if (!(L > 0)) return;
+    const inside = [0.1, 0.3, 0.5, 0.7, 0.9].some(f => {
+      const x = w.a[0] + (w.b[0] - w.a[0]) * f, z = w.a[1] + (w.b[1] - w.a[1]) * f;
+      const r = roomAt(rooms, x, z);
+      return r && distToPolyEdge(rooms[r], x, z) > 0.02;
+    });
+    if (!inside) return;
+    // Its own length (a stub is not corner-extended: nothing meets its ends
+    // inside the room), its full thickness across.
+    const u = [(w.b[0] - w.a[0]) / L, (w.b[1] - w.a[1]) / L], h = w.t / 2;
+    const xs = [w.a[0], w.b[0]], zs = [w.a[1], w.b[1]];
+    solids.push({ a: w.a, u, len: L, t: w.t,
+      box: { min: [Math.min(...xs) - Math.abs(u[1]) * h, 0, Math.min(...zs) - Math.abs(u[0]) * h], max: [Math.max(...xs) + Math.abs(u[1]) * h, ceiling, Math.max(...zs) + Math.abs(u[0]) * h] } });
+  });
+  return { rooms, portals, adj, ceiling, solids };
+}
+
+/** Is (x, z) inside one of the graph's solid wall stubs? */
+export function inSolid(graph, x, z) {
+  return (graph.solids || []).some(s => {
+    const dx = x - s.a[0], dz = z - s.a[1], along = dx * s.u[0] + dz * s.u[1], across = -dx * s.u[1] + dz * s.u[0];
+    return along >= -0.01 && along <= s.len + 0.01 && Math.abs(across) <= s.t / 2;
+  });
 }
 
 /** Is (x, z) inside the opening of portal p (its width, through the wall)? */
@@ -189,6 +217,7 @@ export function inPortal(p, x, z, slack) {
 export function whyNotFree(graph, x, y, z, opts) {
   const opt = Object.assign({}, WALK, opts || {});
   if (y < opt.minY - 1e-9) return 'floor';
+  if (inSolid(graph, x, z)) return 'wall';
   if (roomAt(graph.rooms, x, z)) return y <= graph.ceiling - opt.ceilingGap + 1e-9 ? '' : 'ceiling';
   for (const p of graph.portals) if (inPortal(p, x, z)) return y <= p.top - 0.1 + 1e-9 ? '' : 'head';
   return 'wall';
@@ -238,6 +267,77 @@ function legOK(poly, p, q, obs, clear) {
     for (const b of obs) if (inBox2(b, x, z, 0)) return false;
   }
   return true;
+}
+
+/**
+ * The way out to a point inside `poly` at least `clear` off every wall and
+ * outside every (padded) obstacle, as near to `p` as possible: a list of
+ * points to walk from `p` (the last is the clear point), [] when `p` already
+ * is one, null when none is found within 1.5 m.
+ *
+ * A camera parked against a wall (an orbited or zoomed-out view is clamped
+ * 12 cm off it) steps out first, so the walk's clearance never rules out a
+ * start or an end. Usually one straight stride away from the wall; a camera
+ * wedged in a slot (between a wall and a chimney breast) slides along it
+ * first. A breadth-first search on a 5 cm grid round `p`: cells inside the
+ * room and out of every obstacle proper (`pad` shrinks a padded box back to
+ * the thing itself), simplified to its turns.
+ */
+export function clearSteps(poly, p, clear, obstacles, pad) {
+  const c = clear != null ? clear : WALK.clear;
+  const obs = obstacles || [];
+  const ok = q => insidePoly(poly, q[0], q[1]) && distToPolyEdge(poly, q[0], q[1]) >= c - 1e-6 && !obs.some(b => inBox2(b, q[0], q[1], 0));
+  if (!insidePoly(poly, p[0], p[1])) return null;
+  if (ok(p)) return [];
+  // (1 cm clear of the thing itself, so a stride never grazes its corner.)
+  const solid = q => obs.some(b => inBox2(b, q[0], q[1], -(pad || 0) + 0.01));
+  const free = q => insidePoly(poly, q[0], q[1]) && !solid(q);
+  const h = 0.05, R = 30, W2 = 2 * R + 1;
+  const at = (i, j) => [p[0] + (i - R) * h, p[1] + (j - R) * h];
+  const prev = new Int32Array(W2 * W2).fill(-2);
+  const start = R * W2 + R;
+  prev[start] = -1;
+  const queue = [start];
+  let goal = -1;
+  for (let qi = 0; qi < queue.length && goal < 0; qi++) {
+    const k = queue[qi], i = Math.floor(k / W2), j = k % W2;
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const ni = i + di, nj = j + dj;
+      if (ni < 0 || nj < 0 || ni >= W2 || nj >= W2) continue;
+      const nk = ni * W2 + nj;
+      if (prev[nk] !== -2) continue;
+      const q = at(ni, nj);
+      if (!free(q)) continue;
+      // A diagonal step never cuts a corner: both cells beside it are free too.
+      if (di && dj && (!free(at(i + di, j)) || !free(at(i, j + dj)))) continue;
+      prev[nk] = k;
+      if (ok(q)) { goal = nk; break; }
+      queue.push(nk);
+    }
+  }
+  if (goal < 0) return null;
+  const cells = [];
+  for (let k = goal; k !== start; k = prev[k]) cells.unshift(k);
+  // Keep only where the direction changes, and the end.
+  const out = [];
+  let lastDir = null, prevK = start;
+  cells.forEach((k, n) => {
+    const d = k - prevK;
+    if (lastDir !== null && d !== lastDir) out.push(at(Math.floor(prevK / W2), prevK % W2));
+    lastDir = d; prevK = k;
+    if (n === cells.length - 1) out.push(at(Math.floor(k / W2), k % W2));
+  });
+  // A few cm further into the clear, along the last stride.
+  const e = out[out.length - 1], f = out.length > 1 ? out[out.length - 2] : p;
+  const l = hyp(e[0] - f[0], e[1] - f[1]);
+  if (l > 1e-9) { const q = [e[0] + (e[0] - f[0]) / l * 0.05, e[1] + (e[1] - f[1]) / l * 0.05]; if (ok(q)) out[out.length - 1] = q; }
+  return out;
+}
+
+/** The clear point clearSteps leads to, or null (already clear, or none). */
+export function clearPoint(poly, p, clear, obstacles, pad) {
+  const st = clearSteps(poly, p, clear, obstacles, pad);
+  return st && st.length ? st[st.length - 1] : null;
 }
 
 /**
@@ -373,6 +473,45 @@ export function lookOf(pose) {
 // ---- The plan ---------------------------------------------------------------
 
 /**
+ * The camera's path through `way` ([x, y, z] waypoints): a centripetal
+ * Catmull-Rom spline, heights clamped to [minY, ceiling - ceilingGap], every
+ * sample checked with whyNotFree (and `blocked`, if given). A spline that
+ * strays -- out through a wall beside a tight bend, or over the clamp -- is
+ * refitted through densified waypoints (pulling it onto the polyline), and
+ * as a last resort the polyline itself is used. Null when even that is not
+ * free. Exported so the guards can be tested on waypoints built to stray.
+ */
+export function fitPath(graph, way, opts, blocked) {
+  const opt = Object.assign({}, WALK, opts || {});
+  const yMax = graph.ceiling - opt.ceilingGap;
+  const clampY = p => [p[0], Math.max(opt.minY, Math.min(yMax, p[1])), p[2]];
+  const valid = path => {
+    for (const p of path) {
+      if (whyNotFree(graph, p[0], p[1], p[2], opt)) return false;
+      if (blocked && blocked(p)) return false;
+    }
+    return true;
+  };
+  let pts = way, path = null;
+  for (let k = 0; k < 4 && !path; k++) {
+    const c = catmullRom(pts, opt.sample).map(clampY);
+    if (valid(c)) path = c;
+    else {
+      const d = [pts[0]];
+      for (let i = 1; i < pts.length; i++) { const a = pts[i - 1], b = pts[i]; d.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], b); }
+      pts = d;
+    }
+  }
+  if (path) return path;
+  const lin = [clampY(way[0])];
+  for (let i = 1; i < way.length; i++) {
+    const a = way[i - 1], b = way[i], m = Math.max(1, Math.ceil(hyp(b[0] - a[0], b[2] - a[2]) / opt.sample));
+    for (let q = 1; q <= m; q++) lin.push(clampY([a[0] + (b[0] - a[0]) * q / m, a[1] + (b[1] - a[1]) * q / m, a[2] + (b[2] - a[2]) * q / m]));
+  }
+  return valid(lin) ? lin : null;
+}
+
+/**
  * Plan a walk from pose `from` (eye in room fromRoom) to pose `to` (eye in
  * room toRoom).
  * @param graph   buildNavGraph()
@@ -383,11 +522,13 @@ export function lookOf(pose) {
  */
 export function planWalk(graph, from, fromRoom, to, toRoom, o) {
   const opt = Object.assign({}, WALK, (o && o.options) || {});
-  const obstacles = (o && o.obstacles) || [];
-  const res = planWith(graph, from, fromRoom, to, toRoom, obstacles, opt);
-  if (res || !obstacles.length) return res;
+  // Wall stubs inside a room are always walked round; furniture when it can be.
+  const solids = (graph.solids || []).map(sd => sd.box);
+  const furniture = (o && o.obstacles) || [];
+  const res = planWith(graph, from, fromRoom, to, toRoom, furniture.concat(solids), opt);
+  if (res || !furniture.length) return res;
   // Furniture made it impossible: walking through a wardrobe beats the roof.
-  return planWith(graph, from, fromRoom, to, toRoom, [], opt);
+  return planWith(graph, from, fromRoom, to, toRoom, solids, opt);
 }
 
 function planWith(graph, from, fromRoom, to, toRoom, obstacles, opt) {
@@ -435,6 +576,10 @@ function planWith(graph, from, fromRoom, to, toRoom, obstacles, opt) {
     const pts = [{ p: pa, kind: 'start' }];
     const before = [], after = [];
     let cur = pa, room = fromRoom;
+    // A start against a wall: step clear of it first.
+    const sa = clearSteps(graph.rooms[fromRoom], pa, opt.clear, obsIn(fromRoom), opt.obstaclePad) || [];
+    sa.forEach(q => pts.push({ p: q, kind: 'stepStart' }));
+    if (sa.length) cur = sa[sa.length - 1];
     for (let i = 0; i < route.length; i++) {
       const p = graph.portals[route[i].portal];
       const s = route[i].into === p.rooms[1] ? 1 : -1, n = [p.n[0] * s, p.n[1] * s];
@@ -460,9 +605,12 @@ function planWith(graph, from, fromRoom, to, toRoom, obstacles, opt) {
       cur = post; room = route[i].into;
       after.push(null);
     }
-    const leg = roomRoute(graph.rooms[room], cur, pb, obsIn(room), opt);
+    // An end against a wall: arrive at a clear point, then step to it.
+    const sb = (clearSteps(graph.rooms[room], pb, opt.clear, obsIn(room), opt.obstaclePad) || []).slice().reverse();
+    const leg = roomRoute(graph.rooms[room], cur, sb.length ? sb[0] : pb, obsIn(room), opt);
     if (!leg) return null;
     leg.forEach(q => pts.push({ p: q, kind: 'corner', room }));
+    sb.forEach(q => pts.push({ p: q, kind: 'stepEnd' }));
     pts.push({ p: pb, kind: 'end' });
     // The point after each crossing's straight run (for the wide-opening line).
     let k = 0;
@@ -480,48 +628,25 @@ function planWith(graph, from, fromRoom, to, toRoom, obstacles, opt) {
   const tot2 = L2[L2.length - 1] || 1;
   const way = W.map((w, i) => {
     let y;
-    if (w.kind === 'start') y = A[1];
-    else if (w.kind === 'end') y = B[1];
+    if (w.kind === 'start' || w.kind === 'stepStart') y = A[1];
+    else if (w.kind === 'end' || w.kind === 'stepEnd') y = B[1];
     else if (route.length) y = walkY;
     else y = A[1] + (B[1] - A[1]) * L2[i] / tot2;   // same room, round a corner
     return [w.p[0], y, w.p[1]];
   });
 
-  // The spline, checked; densified towards the polyline if it strays.
-  const yMax = graph.ceiling - opt.ceilingGap;
-  const clampY = p => [p[0], Math.max(opt.minY, Math.min(yMax, p[1])), p[2]];
-  const valid = path => {
-    for (const p of path) {
-      if (whyNotFree(graph, p[0], p[1], p[2], opt)) return false;
-      for (const r of Object.keys(graph.rooms)) {
-        if (!insidePoly(graph.rooms[r], p[0], p[2])) continue;
-        // Furniture in the way: only the tall pieces we walk round.
-        for (const b of obsIn(r)) if (inBox2({ min: [b.min[0] + opt.obstaclePad, 0, b.min[2] + opt.obstaclePad], max: [b.max[0] - opt.obstaclePad, 0, b.max[2] - opt.obstaclePad] }, p[0], p[2], 0) &&
-          p[1] >= b.min[1] && p[1] <= b.max[1] && !inBox2(b, A[0], A[2], 0) && !inBox2(b, B[0], B[2], 0)) return false;
-      }
+  // The spline, checked (fitPath); furniture in the way: only the tall
+  // pieces we walk round.
+  const blocked = p => {
+    for (const r of Object.keys(graph.rooms)) {
+      if (!insidePoly(graph.rooms[r], p[0], p[2])) continue;
+      for (const b of obsIn(r)) if (inBox2({ min: [b.min[0] + opt.obstaclePad, 0, b.min[2] + opt.obstaclePad], max: [b.max[0] - opt.obstaclePad, 0, b.max[2] - opt.obstaclePad] }, p[0], p[2], 0) &&
+        p[1] >= b.min[1] && p[1] <= b.max[1] && !inBox2(b, A[0], A[2], 0) && !inBox2(b, B[0], B[2], 0)) return true;
     }
-    return true;
+    return false;
   };
-  let pts = way, path = null;
-  for (let k = 0; k < 4 && !path; k++) {
-    const c = catmullRom(pts, opt.sample).map(clampY);
-    if (valid(c)) path = c;
-    else {
-      const d = [pts[0]];
-      for (let i = 1; i < pts.length; i++) { const a = pts[i - 1], b = pts[i]; d.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], b); }
-      pts = d;
-    }
-  }
-  if (!path) {
-    // The polyline itself, finely sampled: every leg was checked to be clear.
-    const lin = [way[0]];
-    for (let i = 1; i < way.length; i++) {
-      const a = way[i - 1], b = way[i], m = Math.max(1, Math.ceil(hyp(b[0] - a[0], b[2] - a[2]) / opt.sample));
-      for (let s = 1; s <= m; s++) lin.push(clampY([a[0] + (b[0] - a[0]) * s / m, a[1] + (b[1] - a[1]) * s / m, a[2] + (b[2] - a[2]) * s / m]));
-    }
-    if (!valid(lin)) return null;
-    path = lin;
-  }
+  const path = fitPath(graph, way, opt, blocked);
+  if (!path) return null;
   // Land exactly on the ends (the clamp may have nudged an end that sat high).
   path[0] = A.slice(); path[path.length - 1] = B.slice();
 

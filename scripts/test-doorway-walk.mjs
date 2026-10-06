@@ -19,6 +19,12 @@
  *   5. The view turns smoothly, lands and starts exactly, looks along the
  *      walk through a doorway, and the duration scales with length (capped).
  *   6. A cupboard is seen from the room it opens onto, below the ceiling.
+ *   6b. A start or end parked against a wall (5-15 cm off it) still walks:
+ *      hand-picked rect / L-room spots, and a property run over random
+ *      near-wall starts and ends on the flat and the demo house.
+ *   6c. The path's own guards (fitPath) on waypoints built to stray: a
+ *      hairpin the raw spline swings out through the walls, a plateau it
+ *      bulges over the ceiling gap.
  *   7. Tall furniture is walked round; furniture that blocks every way does
  *      not send the camera over the roof.
  *   8. The tour order: authored order first, the rest appended; the loader,
@@ -317,6 +323,105 @@ section('the walk itself');
   for (let i = 1; i <= 1000; i++) { const d = W.walkEase(i / 1000) - W.walkEase((i - 1) / 1000); if (d < -1e-12) mono = false; peak = Math.max(peak, d * 1000); }
   check('speed profile: 0 -> 1, monotone, peak 1.33x the average (not an ease-in-out cubic\'s 3x)',
     W.walkEase(0) === 0 && Math.abs(W.walkEase(1) - 1) < 1e-12 && mono && peak < 1.34 && peak > 1.3, peak);
+}
+
+// ---- 5b: a camera parked against a wall ------------------------------------------
+// An orbited or zoomed-out in-room camera is clamped 12 cm off the walls. A
+// walk from (or to) there must still walk -- never fall back to the roof
+// while a door route exists. Before the fix, ~99% of these fell back.
+section('starting and ending against a wall');
+let seed = 20261006;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+function nearWallEye(poly, lo, hi, graph) {
+  for (;;) {
+    const i = Math.floor(rnd() * poly.length), a = poly[i], b = poly[(i + 1) % poly.length];
+    const t = 0.05 + rnd() * 0.9, L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    let nx = -(b[1] - a[1]) / L, nz = (b[0] - a[0]) / L;
+    const m = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    if (!insidePoly(poly, m[0] + nx * 0.02, m[1] + nz * 0.02)) { nx = -nx; nz = -nz; }
+    const d = lo + rnd() * (hi - lo), p = [m[0] + nx * d, m[1] + nz * d];
+    // (Not inside a wall stub standing in the room: a camera in a wall is no start.)
+    if (insidePoly(poly, p[0], p[1]) && F.distToPolyEdge(poly, p[0], p[1]) >= lo - 1e-9 && !(graph && W.inSolid(graph, p[0], p[1]))) return [p[0], 1.2 + rnd() * 1.0, p[1]];
+  }
+}
+function nearWallRun(name, spec, graph, n) {
+  const ids = Object.keys(spec.rooms);
+  let tried = 0, fell = 0, bad = [];
+  for (let k = 0; k < n; k++) {
+    const a = ids[Math.floor(rnd() * ids.length)], b = ids[Math.floor(rnd() * ids.length)];
+    const ea = nearWallEye(spec.rooms[a], 0.05, 0.15, graph), eb = nearWallEye(spec.rooms[b], 0.05, 0.15, graph);
+    if (!W.portalRoute(graph, a, [ea[0], ea[2]], b, [eb[0], eb[2]])) continue;   // no door route: the arc is right
+    tried++;
+    const A = F.poseFromLook(ea, rnd() * 6.28, 0.1 + rnd() * 0.5, 1 + rnd() * 3, 70), B = F.poseFromLook(eb, rnd() * 6.28, 0.1 + rnd() * 0.5, 1 + rnd() * 3, 70);
+    const pl = W.planWalk(graph, A, a, B, b);
+    if (!pl) { fell++; if (fell < 3) bad.push({ a, b, ea, eb }); continue; }
+    const r = audit(spec, graph, samples(pl));
+    if (r.bad.length) bad.push({ a, b, why: r.bad[0] });
+  }
+  check(`${name}: ${tried} walks from and to 5-15 cm off a wall, none falls back to the roof`, tried > n / 3 && fell === 0, { tried, fell, bad: bad.slice(0, 2) });
+  check(`${name}: ... and every one stays inside, under the ceiling, through no wall`, bad.length === 0, bad.slice(0, 2));
+}
+{
+  // Rectangular and L rooms, each end against a wall, at hand-picked spots.
+  const P = (x, y, z) => F.poseFromLook([x, y, z], 1.0, 0.3, 2, 70);
+  const cases = [
+    ['kitchen corner (6 cm off both walls) -> living', P(0.06, 2.0, 0.06), 'kitchen', P(3.9, 2.0, 6.9), 'living'],
+    ['kitchen, running along its north wall -> hall', P(3.0, 2.2, 0.08), 'kitchen', P(9.88, 1.4, 2.9), 'hall'],
+    ['L office, against the notch wall -> ensuite', P(6.9, 2.0, 3.6), 'office', P(7.2, 2.0, 3.15), 'ensuite'],
+    ['L office, 12 cm off the south wall -> hall', P(9.0, 1.8, 6.88), 'office', P(4.2, 2.1, 2.1), 'hall'],
+  ];
+  for (const [name, a, ra, b, rb] of cases) {
+    const pl = W.planWalk(g, a, ra, b, rb);
+    const r = pl ? audit(flat, g, samples(pl)) : null;
+    check(`${name}: walks, inside the house`, pl && r.bad.length === 0, pl ? r.bad.slice(0, 2) : 'fell back');
+  }
+  const cp = W.clearPoint(flat.rooms.kitchen, [0.06, 0.06], 0.25);
+  check('clearPoint: a corner start steps clear of both walls, a few cm further than needed', cp && F.distToPolyEdge(flat.rooms.kitchen, cp[0], cp[1]) >= 0.25 && Math.hypot(cp[0] - 0.06, cp[1] - 0.06) < 0.4, cp);
+  check('clearPoint: an already-clear point needs no step', W.clearPoint(flat.rooms.kitchen, [2, 1.5], 0.25) === null);
+}
+nearWallRun('flat (property)', flat, g, 400);
+nearWallRun('demo (property)', demoSpec, dg, 400);
+
+{
+  // The demo bedroom has a 40 cm wall stub standing inside its polygon.
+  check('demo: a wall stub standing inside a room is a solid', dg.solids.length === 1 && W.whyNotFree(dg, 4.1, 1.6, 0.9) === 'wall', dg.solids.map(x => x.box));
+  // Wedged in the 10 cm slot between it and the east wall: slides out, walks.
+  const A = F.poseFromLook([4.35, 1.8, 0.9], 0, 0.3, 2, 70), B = demoRun.poses.hall;
+  const eb = F.eyeOf(B);
+  const pl = W.planWalk(dg, A, 'bedroom', B, W.roomAt(dg.rooms, eb[0], eb[2]));
+  {
+    // Its way out, step by step: round the stub's corner, never across it.
+    const pads = dg.solids.map(x => ({ min: [x.box.min[0] - 0.15, 0, x.box.min[2] - 0.15], max: [x.box.max[0] + 0.15, 3, x.box.max[2] + 0.15] }));
+    const p0 = [4.3126, 1.0546], st = W.clearSteps(dg.rooms.bedroom, p0, 0.25, pads, 0.15);
+    let cut = false;
+    if (st) [p0].concat(st).forEach((a, i, arr) => { if (!i) return; const b = arr[i - 1]; for (let k = 0; k <= 100; k++) if (W.inSolid(dg, b[0] + (a[0] - b[0]) * k / 100, b[1] + (a[1] - b[1]) * k / 100)) cut = true; });
+    check('stepping out of the slot goes round the corner of the stub, not across it', st && st.length >= 1 && !cut, st);
+  }
+  check('a camera wedged beside the stub slides out along the slot and walks, never through the stub', pl && audit(demoSpec, dg, samples(pl)).bad.length === 0 &&
+    samples(pl).every(e => !W.inSolid(dg, e[0], e[2])), pl && pl.kinds);
+}
+
+// ---- 5c: the path's own guards, on waypoints built to stray ---------------------
+section('the path guards');
+{
+  const box = W.buildNavGraph({ ceiling: 2.5, walls: [], doors: [], rooms: { r: [[0, 0], [4, 0], [4, 3], [0, 3]] } });
+  // A hairpin 6 cm off a corner: the raw spline swings out through both walls.
+  const hair = [[0.3, 1.6, 2.7], [0.06, 1.6, 0.06], [3.7, 1.6, 0.3]];
+  const raw = W.catmullRom(hair, 0.01);
+  check('(control) the raw spline round a tight corner leaves the room', raw.some(p => W.whyNotFree(box, p[0], p[1], p[2]) === 'wall'));
+  const fit = W.fitPath(box, hair);
+  check('fitPath pulls it back: every sample inside the room', fit && fit.every(p => !W.whyNotFree(box, p[0], p[1], p[2])), fit && fit.find(p => W.whyNotFree(box, p[0], p[1], p[2])));
+  // A plateau right at the ceiling gap: the raw spline bulges over it.
+  const plat = [[0.5, 1.0, 1.5], [1.5, 2.3, 1.5], [2.5, 2.3, 1.5], [3.5, 1.0, 1.5]];
+  const rawY = Math.max(...W.catmullRom(plat, 0.01).map(p => p[1]));
+  check('(control) the raw spline over a plateau at ceiling - 0.2 rises above it', rawY > 2.3 + 0.01, rawY);
+  const fy = W.fitPath(box, plat);
+  const fitY = fy ? Math.max(...fy.map(p => p[1])) : Infinity;
+  check(`fitPath keeps it under: highest ${fitY.toFixed(3)} <= 2.3`, fitY <= 2.3 + 1e-9, fitY);
+  // ... by clamping the bulge, not by giving up on the curve for the polyline.
+  const yAt1 = fy ? fy.reduce((m, p) => Math.abs(p[0] - 1.0) < Math.abs(m[0] - 1.0) ? p : m)[1] : null;
+  check('... and keeps the curve (clamped, not dropped to the straight polyline)', yAt1 != null && Math.abs(yAt1 - 1.65) > 0.02, yAt1);
+  check('fitPath: waypoints that cannot be walked (through a wall) -> null', W.fitPath(box, [[1, 1.6, 1], [5, 1.6, 1]]) === null);
 }
 
 // ---- 6: cupboards -------------------------------------------------------------
