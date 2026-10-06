@@ -1073,13 +1073,15 @@ export const HAClient = (() => {
               msg.result.forEach(state => {
                 noteRaw(state);
                 if (state.entity_id === 'sun.sun') processSun(state);
-                if (entityIndex.has(state.entity_id)) processStateUpdate(state.entity_id, state, true);
+                const isLight = entityIndex.has(state.entity_id);
+                if (isLight) processStateUpdate(state.entity_id, state, true);
                 if (lightBindIndex.has(state.entity_id)) processLightBinding(state.entity_id, state, true);
                 // Sensors are folded in from the SAME get_states snapshot, so a
                 // room that is already occupied (or a door already open) is
                 // correct on first paint rather than only after the sensor
                 // happens to change.
-                else if (sensorIndex.has(state.entity_id)) processSensorUpdate(state.entity_id, state);
+                // A light is never also read as a sensor (the original precedence).
+                if (!isLight && !lightBindIndex.has(state.entity_id) && sensorIndex.has(state.entity_id)) processSensorUpdate(state.entity_id, state);
                 if (fittingIndex.has(state.entity_id)) processFittingUpdate(state.entity_id, state);
                 if (climateIndex.has(state.entity_id)) processClimateUpdate(state.entity_id, state);
                 // Vacuums: record only, and resolve once after the loop, so a
@@ -1104,9 +1106,10 @@ export const HAClient = (() => {
           if (!new_state) return;
           noteRaw(new_state);
           if (entity_id === 'sun.sun') processSun(new_state);
-          if (entityIndex.has(entity_id)) processStateUpdate(entity_id, new_state, false);
+          const isLight = entityIndex.has(entity_id);
+          if (isLight) processStateUpdate(entity_id, new_state, false);
           if (lightBindIndex.has(entity_id)) processLightBinding(entity_id, new_state, false);
-          else if (sensorIndex.has(entity_id)) processSensorUpdate(entity_id, new_state);
+          if (!isLight && !lightBindIndex.has(entity_id) && sensorIndex.has(entity_id)) processSensorUpdate(entity_id, new_state);
           if (fittingIndex.has(entity_id)) processFittingUpdate(entity_id, new_state);
           if (climateIndex.has(entity_id)) processClimateUpdate(entity_id, new_state);
           if (vacuumIndex.has(entity_id)) processVacuumUpdate(entity_id, new_state);

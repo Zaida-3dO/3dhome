@@ -367,5 +367,18 @@ console.log('light theme: state icons keep their colour');
     'the specificity helper itself counts classes, attributes and pseudo-classes, and :where as nothing');
 }
 
+console.log('inverted curtain: card and sidebar send the same command');
+{
+  // Mutation: drop the inversion in curtainButtonAction -> the first assertion fails.
+  ok(T.curtainButtonAction('open', true) === 'close' && T.curtainButtonAction('close', true) === 'open', 'inverted: Open sends close, Close sends open');
+  ok(T.curtainButtonAction('open', false) === 'open' && T.curtainButtonAction('close', false) === 'close', 'not inverted: unchanged');
+  // Both surfaces must route through it (mutation: revert either call site -> fails).
+  const tp = fs.readFileSync(path.join(root, 'src/tap-popovers.js'), 'utf8');
+  const ix = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  ok(/curtainButtonAction\(cmd, typeof o\.curtainInverted/.test(tp), 'tap popover Open/Close goes through curtainButtonAction');
+  ok(/curtainButtonAction\(el\.dataset\.cmd, curtainInverted\.has\(curtainId\)\)/.test(ix), 'sidebar Open/Close goes through curtainButtonAction');
+  ok(/curtainInverted: id => curtainInverted\.has\(id\)/.test(ix), 'index.html hands the inverted predicate to the popovers');
+}
+
 if (failed) { console.log('\n' + failed + ' FAILED'); process.exit(1); }
 console.log('\nall passed');

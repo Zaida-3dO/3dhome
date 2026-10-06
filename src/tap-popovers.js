@@ -559,6 +559,18 @@ export function curtainUnavailable(conn, available) {
 }
 
 /**
+ * The Open / Close action to SEND for a button press. A curtain bound with the
+ * 'invert' transform reads 100 - position, so its commands are mirrored: the
+ * button labelled Open sends close. The sidebar and this card both go through
+ * here, so one button can never send opposite commands on the two surfaces.
+ * (The slider is mirrored by the shared drag sender's build, not here.)
+ */
+export function curtainButtonAction(action, inverted) {
+  if (!inverted) return action;
+  return action === 'open' ? 'close' : action === 'close' ? 'open' : action;
+}
+
+/**
  * A light is unavailable when HA is live and its first bound entity's raw
  * state is missing, 'unavailable' or 'unknown'.
  */
@@ -1351,6 +1363,7 @@ export const clockTick = {
  *   curtainPct(id), curtainLocal(id, pct), climate(roomId) parseClimate reading|null,
  *   climateEntity(roomId)
  * @param o.curtainSender, o.climateSender  the sidebar's createDragSender instances
+ * @param o.curtainInverted  OPTIONAL id => bool, the curtain's binding has transform 'invert'
  * @param o.onChange        () => void -- repaint the sidebar
  * @param o.sidebar         the room panel element (read-only): its on-screen
  *                          rect is kept out of placement bounds, and toggling
@@ -1748,7 +1761,10 @@ export function attachTapPopovers(o) {
         });
         const press = (cv, cmd) => {
           if (writeBlocked()) return;
-          if (canSend() && sender) sender.press(cv.id, o.HAClient.coverOpenCloseCommand(cmd, cv.entities));
+          if (canSend() && sender) {
+            const out = curtainButtonAction(cmd, typeof o.curtainInverted === 'function' && o.curtainInverted(cv.id));
+            sender.press(cv.id, o.HAClient.coverOpenCloseCommand(out, cv.entities));
+          }
           else if (S.curtainLocal) S.curtainLocal(cv.id, cmd === 'open' ? 100 : 0);   // no HA configured (demo): preview on the model
           else home.setCurtainOpen(cv.id, cmd === 'open' ? 100 : 0, null);
           onChange(); ctl.refresh(true);
