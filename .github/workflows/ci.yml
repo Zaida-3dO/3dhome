@@ -263,12 +263,15 @@ jobs:
           # click-away home pose surviving a cycle, and index.html's wiring.
           set -euo pipefail
           node scripts/test-room-nav.mjs
-      - name: Room script ("Kill room") button -- two-step confirm, one script.turn_on
+      - name: Room script ("Shut down room") button -- "Are you sure?" dialog, one script.turn_on
         run: |
-          # Asserts the first tap only arms, a second sends exactly ONE
-          # script.turn_on with the room's variables (over the fake HA
-          # WebSocket, through the real callService), the arm times out, a
-          # double-tap is not a confirm, and offline sends nothing.
+          # Asserts opening the dialog and Cancel send nothing, Confirm sends
+          # exactly ONE script.turn_on with the room's variables (over the
+          # fake HA WebSocket, through the real callService) even when
+          # double-confirmed or re-entered, offline sends nothing, an extra's
+          # dialog uses its own label (never the shut-down text), results are
+          # keyed by script entity (a changed script is never stale), and an
+          # editor-added script row defaults to confirm.
           set -euo pipefail
           node scripts/test-room-script.mjs
       - name: Home Assistant transport is the WebSocket only (no REST, no CORS)

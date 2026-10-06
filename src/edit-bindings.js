@@ -435,11 +435,14 @@ export function createBindingPanels(api) {
         x.kind = v;
         if (x.entity && EXTRA_KINDS[v].indexOf(x.entity.split('.')[0]) === -1) x.entity = '';
         if (v !== 'script') delete x.confirm;
+        // A script is destructive until the owner says otherwise: new script
+        // rows ask "Are you sure?" by default (untick to make it one tap).
+        else if (x.confirm === undefined) x.confirm = true;
         save(); api.rerender();
       }, k => EXTRA_KIND_LABEL[k]);
       kindSel.className = 'em-wide';
       left.append(kindSel);
-      const lbl = el('input', 'em-search em-wide'); lbl.placeholder = 'Label, e.g. Kill room'; lbl.value = x.label || '';
+      const lbl = el('input', 'em-search em-wide'); lbl.placeholder = 'Label, e.g. Shut down room'; lbl.value = x.label || '';
       lbl.setAttribute('aria-label', 'Row label');
       lbl.addEventListener('change', () => { x.label = lbl.value.trim(); save(); });
       left.append(lbl);
@@ -449,7 +452,7 @@ export function createBindingPanels(api) {
         const lab = el('label', 'em-check');
         const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!x.confirm;
         cb.addEventListener('change', () => { x.confirm = cb.checked; save(); });
-        lab.append(cb, document.createTextNode('Tap twice to confirm (like Kill room)'));
+        lab.append(cb, document.createTextNode('Ask "Are you sure?" first (like Shut down room)'));
         left.append(lab);
       }
       if (!x.entity || !x.label) left.append(el('div', 'em-mini', 'Needs a label and an entity before it is saved.'));

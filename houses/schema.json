@@ -5157,7 +5157,7 @@
             },
             "roomScripts": {
               "type": "object",
-              "description": "Room id -> ONE Home Assistant script the room's sidebar view offers as a destructive button at its foot (label 'Kill room' by default), for a script that switches the room off. The button is a two-step confirm: the first tap arms it ('Tap again to ...', back to idle after about 4 s), the second sends `script.turn_on` targeting `entity` with `variables` -- and nothing else is ever sent. Disabled while Home Assistant is not connected; absent for a room with no entry. The same script may be bound to several rooms with different `variables`, and several rooms may pass identical ones (two rooms the script treats as one area). Room ids MUST exist in the paired geometry profile's `rooms`. Needs rooms schemaVersion 1.7.",
+              "description": "Room id -> ONE Home Assistant script the room's sidebar view offers as a destructive button at its foot (label 'Shut down room' by default), for a script that switches the room off. Pressing the button opens an 'Are you sure?' dialog (Cancel / Escape / backdrop tap send nothing); only its confirm button sends `script.turn_on` targeting `entity` with `variables` -- and nothing else is ever sent. Disabled while Home Assistant is not connected; absent for a room with no entry. The same script may be bound to several rooms with different `variables`, and several rooms may pass identical ones (two rooms the script treats as one area). Room ids MUST exist in the paired geometry profile's `rooms`. Needs rooms schemaVersion 1.7.",
               "propertyNames": {
                 "$ref": "#/$defs/roomId"
               },
@@ -5181,8 +5181,8 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 40,
-                    "default": "Kill room",
-                    "description": "The button's text. Armed, it reads 'Tap again to <label, first letter lower-cased>'."
+                    "default": "Shut down room",
+                    "description": "The button's text, also the confirm button's text in the 'Are you sure?' dialog."
                   }
                 }
               }
@@ -5246,7 +5246,7 @@
               },
               "extra": {
                 "type": "array",
-                "description": "Manual rows, in order, after the item rows and before the room script: a light (a group, say, that no one fixture owns), a cover, a switch, or a script button. A script with `confirm: true` is the room script's two-step button (tap, then tap again within 4 s); without it, one tap runs it.",
+                "description": "Manual rows, in order, after the item rows and before the room script: a light (a group, say, that no one fixture owns), a cover, a switch, or a script button. A script with `confirm: true` asks 'Are you sure?' in the room script's dialog first; without it, one tap runs it.",
                 "items": {
                   "type": "object",
                   "required": [
@@ -5274,7 +5274,7 @@
                     },
                     "confirm": {
                       "type": "boolean",
-                      "description": "Script rows only: tap twice to run."
+                      "description": "Script rows only: ask 'Are you sure?' in a dialog before running."
                     },
                     "variables": {
                       "type": "object",
