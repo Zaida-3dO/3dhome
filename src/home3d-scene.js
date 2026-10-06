@@ -38,6 +38,7 @@ import {
 import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { createTvScreens } from './furniture/tv-screen.js';
+import { createBootGate } from './boot-gate.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './room-pick.js';
 import { lerpPose, easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView } from './camera-focus.js';
@@ -823,6 +824,18 @@ export const Home3DScene = (() => {
     // paths retire that hack entirely: a texture lives in the house directory
     // beside the profile that references it.
     const wallTexLoader = new THREE.TextureLoader();
+    // Every image this build loads, as a promise that settles (either way)
+    // once its callback has run -- the cold-start overlay waits on them
+    // (src/boot-gate.js), so a wallpaper never pops in after it comes down.
+    const textureLoads = [];
+    function loadTracked(loader, url, onLoad, onProgress, onError) {
+      let settle;
+      textureLoads.push(new Promise(r => { settle = r; }));
+      loader.load(url,
+        t => { try { onLoad(t); } finally { settle(); } },
+        onProgress,
+        e => { try { onError(e); } finally { settle(); } });
+    }
 
     /**
      * The stretch of a north-south wall's line that a room's polygon fronts,
@@ -962,7 +975,7 @@ export const Home3DScene = (() => {
         roughness: 0.85, side: THREE.DoubleSide,
         transparent: !!isOuter, opacity: 1
       });
-      wallTexLoader.load(url, (tex) => {
+      loadTracked(wallTexLoader, url, (tex) => {
         if (!tex.image || !tex.image.width || !tex.image.height) {
           console.warn('[Home3DScene] wall texture "' + url + '" decoded to an empty image; ' +
             'leaving the wall painted.');
@@ -1397,7 +1410,7 @@ export const Home3DScene = (() => {
         // (Panels are built synchronously above, so this async callback always
         // sees the full set — same pattern as wall #25's wallpaper.)
         if (overlayPanels.length) {
-          new THREE.TextureLoader().load(
+          loadTracked(new THREE.TextureLoader(),
             overlayTexUrl,
             (loaded) => {
               const img = loaded.image;
@@ -2194,7 +2207,7 @@ export const Home3DScene = (() => {
           // A profile-supplied rug image replaces the built-in pile texture.
           // Loaded after the mesh exists, so the callback has something to
           // assign to; a failure leaves the procedural pile in place.
-          new THREE.TextureLoader().load(
+          loadTracked(new THREE.TextureLoader(),
             rug.textureUrl,
             loaded => {
               loaded.wrapS = loaded.wrapT = THREE.RepeatWrapping;
@@ -2956,7 +2969,7 @@ export const Home3DScene = (() => {
       wallMeshes.push({ mesh, nx: host.nx, nz: host.nz, outer: true });
     });
 
-    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight, disposeWallpaperPlaceholder };
+    return { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight, textureLoads, disposeWallpaperPlaceholder };
   }
 
   /**
@@ -3176,6 +3189,18 @@ export const Home3DScene = (() => {
       //   single-shot, so it is safe to hang a latch off it.
       onCompileStart = null,
       onReady = null,
+      // onFurnished(info): fired exactly once when the house is VISUALLY
+      //   COMPLETE -- onReady has fired, the furniture is built, compiled and
+      //   attached (or failed, or there is none), every boot-time image has
+      //   loaded (or failed), and a frame has been drawn with all of it. Or
+      //   BOOT_COMPLETE_FALLBACK_MS after onReady, whichever is first:
+      //   info = { timedOut, pending, ms }. This is the signal the loading
+      //   overlay dismisses on (it used to be onReady, which left the house
+      //   empty for a second or more while the furniture arrived).
+      // onFurnishProgress(done, total): the furniture build's item count, a
+      //   few times a second while it runs.
+      onFurnished = null,
+      onFurnishProgress = null,
       // sensorBoundDoorIds: the door ids rooms.json binds a contact sensor to
       //   (any iterable of ids; the page passes its own Set). Doors NOT in it
       //   render CLOSED at rest — see DOOR_SENSOR_BOUND_IDS. Omitting it means
@@ -3418,7 +3443,7 @@ export const Home3DScene = (() => {
     let furnitureModules = (furnitureItems.length && furnitureVisible)
       ? loadFurnitureModules(furnitureItems) : null;
 
-    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight, disposeWallpaperPlaceholder } = buildScene(scene, quality);
+    const { mainLights, mainMeshes, ambientLights, ambientMeshes, extraLights, extraMeshes, sun, ambLight, gndMat, wallMeshes, wallEntryById, ceilingMesh, clouds, doorByRoom, doorById, footstepsByRoom, curtainById, daylight, textureLoads, disposeWallpaperPlaceholder } = buildScene(scene, quality);
     {
       // The tier line, with what the tier actually built: light counts are
       // the per-pixel cost on a phone or tablet (every light, every fragment).
@@ -4233,9 +4258,35 @@ export const Home3DScene = (() => {
     const READY_FALLBACK_MS = 10000;
     let readyFallbackTimer = null;
     let onGlContextRestored = null;
+    // ── Boot-complete gate (src/boot-gate.js; 2026-10-06) ──────────────────
+    // onReady means "the house can draw"; onFurnished means "the house is
+    // finished". The overlay waits for the second. The waits are registered
+    // below (house here, then furniture and images after startFurniture),
+    // and the gate completes on the first frame drawn after all of them
+    // settle. The fallback runs from onReady, not from create(): the house
+    // precompile before it has its own 10 s fallback, and a cold one alone
+    // can take most of that.
+    const BOOT_COMPLETE_FALLBACK_MS = 15000;
+    let houseReadyResolve;
+    const bootGate = createBootGate({
+      requestFrame: () => requestRender(),
+      onDone: info => {
+        if (info.timedOut) {
+          console.warn('[Home3DScene] the house was not complete ' + BOOT_COMPLETE_FALLBACK_MS +
+            ' ms after onReady (still waiting on: ' + (info.pending.join(', ') || 'a drawn frame') +
+            '); dismissing the loading overlay anyway.');
+        }
+        if (typeof onFurnished === 'function') {
+          try { onFurnished(info); } catch (e) { console.warn('[Home3DScene] onFurnished threw.', e); }
+        }
+      }
+    });
+    bootGate.wait('house', new Promise(r => { houseReadyResolve = r; }));
     function fireReady() {
       if (readyFired) return;
       readyFired = true;
+      houseReadyResolve();
+      bootGate.startTimeout(BOOT_COMPLETE_FALLBACK_MS);
       if (typeof onReady === 'function') {
         // Never let a caller's callback break scene construction.
         try { onReady(); } catch (e) { console.warn('[Home3DScene] onReady threw.', e); }
@@ -4487,7 +4538,8 @@ export const Home3DScene = (() => {
         build: builders => {
           furnitureTimeline.buildStart = performance.now();
           return buildFurnitureSliced(THREE, furnitureItems, builders, {
-            tx, tz, quality, walls: WALLS, isCancelled: () => _disposed
+            tx, tz, quality, walls: WALLS, isCancelled: () => _disposed,
+            onProgress: typeof onFurnishProgress === 'function' && !bootGate.isDone() ? onFurnishProgress : null
           }).then(result => {
             furnitureTimeline.buildEnd = performance.now();
             return result;
@@ -4502,6 +4554,13 @@ export const Home3DScene = (() => {
       });
     }
     if (furnitureVisible) startFurniture();
+    // The boot gate's remaining waits: the boot furniture build (when one
+    // started -- ?furniture=0 and an unfurnished house have none) and every
+    // image buildScene loads. Sealed here, so a LATER build (edit mode,
+    // setFurnitureVisible) never holds it.
+    if (furnitureAttached) bootGate.wait('furniture', furnitureAttached);
+    if (textureLoads.length) bootGate.wait('images', Promise.all(textureLoads));
+    bootGate.seal();
 
     // ── Edit-mode furniture (src/edit-mode.js, plan B1 + plan-review #13) ──
     // View mode keeps the ONE house-scope build above. Edit mode swaps it for
@@ -5662,6 +5721,10 @@ export const Home3DScene = (() => {
       ren.render(scene, cam);
       framesRendered++;
       const renderMs = performance.now() - renderT0;
+      // The boot gate completes on the first frame drawn after everything it
+      // waits on has settled (a no-op every other time). After renderMs, so
+      // the overlay's dismiss is never billed to the frame's cost.
+      bootGate.frameRendered();
       if (adaptive) {
         // The CPU time of the call, or -- for a GPU-bound shadow pass, which the
         // call does not wait for -- the gap it left before this frame.
@@ -6578,6 +6641,7 @@ export const Home3DScene = (() => {
         // The first-frame gate's fallback timer and context-restored listener:
         // neither may fire into a disposed scene.
         if (readyFallbackTimer !== null) { clearTimeout(readyFallbackTimer); readyFallbackTimer = null; }
+        bootGate.cancel();
         if (onGlContextRestored) {
           ren.domElement.removeEventListener('webglcontextrestored', onGlContextRestored);
           onGlContextRestored = null;

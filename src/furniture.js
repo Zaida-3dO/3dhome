@@ -250,6 +250,11 @@ export function yieldToMain() {
  * build stops, frees every geometry it had made, and resolves to null: a
  * scene disposed mid-build gets nothing attached (plan amendment A2).
  *
+ * `opts.onProgress(done, total)`, if given, is called before every yield and
+ * once at the end: `done` counts the items taken so far (built or skipped),
+ * `total` is items.length. It is what the cold-start overlay shows as
+ * "Furnishing... n/N". A throwing callback is ignored.
+ *
  * Resolves to the buildFurnitureSync result, whose stats also carry
  * `slices` and `longestSliceMs`.
  */
@@ -259,11 +264,18 @@ export async function buildFurnitureSliced(THREE, items, builders, opts) {
   const yieldFn = o.yieldFn || yieldToMain;
   const cancelled = typeof o.isCancelled === 'function' ? o.isCancelled : () => false;
   const now = typeof performance !== 'undefined' && performance.now ? () => performance.now() : () => Date.now();
-  const steps = furnitureBuildSteps(THREE, items, builders, o);
+  const progress = { items: 0 };
+  const total = (items || []).length;
+  const report = () => {
+    if (typeof o.onProgress !== 'function') return;
+    try { o.onProgress(progress.items, total); } catch (e) { /* advisory only */ }
+  };
+  const steps = furnitureBuildSteps(THREE, items, builders, o, progress);
   let slices = 1, longest = 0, longestAt = null, t0 = now();
   for (;;) {
     const r = steps.next();
     if (r.done) {
+      report();
       if (now() - t0 > longest) { longest = now() - t0; longestAt = 'finish'; }
       r.value.stats.slices = slices;
       r.value.stats.longestSliceMs = Math.round(longest * 10) / 10;
@@ -275,6 +287,7 @@ export async function buildFurnitureSliced(THREE, items, builders, opts) {
     const spent = now() - t0;
     if (spent >= budget) {
       if (spent > longest) { longest = spent; longestAt = r.value || null; }
+      report();
       await yieldFn();
       if (cancelled()) { steps.return(); return null; }
       slices++;
@@ -288,7 +301,7 @@ export async function buildFurnitureSliced(THREE, items, builders, opts) {
  * RETURNS the result. Abandoning it part-way (generator.return()) frees
  * every geometry it had made so far.
  */
-function* furnitureBuildSteps(THREE, items, builders, opts) {
+function* furnitureBuildSteps(THREE, items, builders, opts, progress) {
   const o = opts || {};
   const q = o.quality || {};
   const low = q.tier === 'low';
@@ -351,6 +364,7 @@ function* furnitureBuildSteps(THREE, items, builders, opts) {
   order.sort((a, b) => (roomRank.get(a.item.room) - roomRank.get(b.item.room)) || (a.i - b.i));
   try {
   for (const { item } of order) {
+    if (progress) progress.items++;
     const builder = builders && builders.get(item.type);
     if (!builder) { skipped++; continue; }   // the registry already warned
     if (low && item.priority === 'minor') { skipped++; continue; }

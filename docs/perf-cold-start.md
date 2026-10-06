@@ -70,6 +70,74 @@ hides the entire effect — so the old ~30–45 s figure has **not** been re-mea
 and must not be treated as refuted. Closing that gap needs a fresh browser
 process per run.
 
+## When the loading overlay comes down (2026-10-06)
+
+**Design intent reversed.** The overlay used to dismiss on the scene's
+`onReady` — the moment the *house's* shader precompile settled — and the
+furniture was deliberately kept off that path ("it never delays onReady"), so
+the first picture arrived as early as possible and the furniture popped in
+afterwards. The owner overruled that: an empty house followed a moment later
+by its furniture reads as broken, so the overlay now stays up until the house
+is **visually complete**.
+
+`src/boot-gate.js` (driven by `create()`'s new `onFurnished` option) completes
+when all of these have settled — resolved *or* failed:
+
+- the house precompile (`onReady`),
+- the boot furniture build: built, its shaders compiled, attached (a per-item
+  failure is still skipped; a failed build is still a house without furniture),
+- every image `buildScene` loads (wallpapers, the wall overlay, a profile rug),
+
+and **then one frame has been drawn** with all of it. A **15 s fallback**,
+started at `onReady` (the precompile before it keeps its own 10 s fallback),
+dismisses it anyway and logs what was still pending. `.glb` models are covered
+by the furniture wait: they load in the builders' `prepare()`, before the build.
+
+What did *not* change: `onReady` still opens the render loop's first-frame gate,
+so the house still draws (behind the overlay) as early as before, and the
+furniture is still attached already-compiled. Nothing about the first-frame
+stall fixes above moved. Adaptive quality is untouched: it already treated the
+frames after `onReady` and after the furniture attach as warm-up.
+
+While it waits, the overlay names the phase: "Preparing lighting…" (house
+compile, indeterminate), "Furnishing… n/N" with a determinate fill (the
+time-sliced build's item count — the one phase with a real count), then
+"Finishing touches…" (the furniture's own compile, images, the frame).
+
+The **preview tile** has no overlay, so its canvas is held at `opacity: 0` on
+the same signal and fades in. Edit mode never re-shows the overlay: the
+overlay's dismiss is a latch, the gate is single-shot, and it is sealed at boot
+so no later build (edit mode, `setFurnitureVisible`) can hold it.
+
+Measured on localhost, same machine, `?debug=1`: overlay dismiss vs furniture
+attach (`performance.now()` in the page). The machine's shader cache was warm
+for every row, so these are **not** cold-start figures; what they show is the
+order of events, which is the point of the change.
+
+| | before: dismiss / attach | after: dismiss / attach |
+|---|---|---|
+| demo, first load of the session | 2,319 / 3,158 ms — furniture **0.84 s after** the reveal | — |
+| real house, first load of the session | 3,794 / 5,794 ms — furniture **2.0 s after** | — |
+| demo, repeats | ~850 / ~1,010 ms — 0.16 s after | ~1,650–2,700 / ~1,100–1,880 ms — dismissed **0.54–0.83 s after** the attach |
+| real house, repeats | ~650 / ~1,270 ms — 0.62 s after | ~2,180–3,650 / ~1,550–2,550 ms — dismissed **0.47–1.1 s after** the attach |
+
+So time-to-dismiss grew by roughly (attach − old dismiss) + ~0.5–1 s. The
+extra half-second-plus is the **first frame with the furniture in it**: traced
+via the gate, everything had settled at the attach, and the one `ren.render()`
+after it took 0.85–1.1 s even warm (new casters → every shadow map redrawn).
+That frame used to happen in front of the user as a freeze with an empty
+house on screen; now the overlay's compositor-driven shimmer covers it.
+
+**Easy wins spotted, not taken (out of scope):** that ~1 s attach frame is the
+largest single item left in the boot and worth profiling (is it the shadow
+pass, or a program the furniture precompile misses?); on the real house the
+furniture's own `compileAsync` was ~2.0 s of the first load's 2.0 s gap, with
+the build itself only ~0.6 s.
+
+Verified live: a wallpaper whose image never loads holds the gate until the
+fallback, which then dismisses at onReady + 15 s and logs
+`still waiting on: images`.
+
 ## What actually helps
 
 ### Shader precompile (`renderer.compileAsync`) — shipped
