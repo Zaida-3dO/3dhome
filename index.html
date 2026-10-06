@@ -1163,6 +1163,7 @@
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
     import { tvBindings, tvScreenOn, tvScreenMode } from './src/furniture/tv-screen.js?v=__VERSION__';
     import { hubDisplayBindings, hubScreenContent, DEMO_NOW_PLAYING } from './src/furniture/hub-screen.js?v=__VERSION__';
+    import { pickSpeakerPlayer } from './src/speaker-players.js?v=__VERSION__';
     import { sendScript, createActionButton } from './src/script-call.js?v=__VERSION__';
     import { parseSunTime }   from './src/sun-position.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
@@ -2952,11 +2953,16 @@
         }));
 
         // Smart display -> what its speaker is playing (src/furniture/hub-screen.js).
-        // The player is the item's sensors.soundMenu.openFrom entry; the sound
-        // menu's callback fires on its state and on the title/artist/picture.
+        // The item's sensors.soundMenu.openFrom entry names the speaker; the
+        // screen follows EVERY media_player of that speaker (Music Assistant's
+        // _ma and _2 copies, the Cast entity -- src/speaker-players.js) and
+        // shows the one playing. entityId null: the grouping changed.
         const hubBindings = hubDisplayBindings(haConfig.sensors && haConfig.sensors.soundMenu);
-        if (hubBindings.size) ha.onSoundMenuChange((entityId, raw) => hubBindings.forEach((eid, itemId) => {
-          if (eid === entityId) home.setHubScreen(itemId, hubScreenContent(raw, ha.activeUrl));
+        if (hubBindings.size) ha.onSpeakerPlayersChange(entityId => hubBindings.forEach((anchor, itemId) => {
+          const ids = ha.speakerPlayers(anchor);
+          if (entityId !== null && ids.indexOf(entityId) === -1) return;
+          const pick = pickSpeakerPlayer(ids, ha.getPlayerState);
+          home.setHubScreen(itemId, hubScreenContent(pick && pick.raw, ha.activeUrl));
         }));
 
         ha.connect();
