@@ -32,7 +32,8 @@
  *      even when the scene can
  *      derive no view by id (it falls back to the tapped point). A kind
  *      check in the page's focus function or its view resolver fails here.
- *   3d. The sound menu docks beside the speaker only after a flight.
+ *   3d. The sound menu is anchored like a card (placePopover, its arrow) at
+ *      the speaker's projected box; it prefers the side only after a flight.
  *   4. NO PER-TYPE CODE: a new route kind, a new sensors.items entry and a
  *      new soundMenu.openFrom entry all fly with nothing written for them;
  *      an undeclared opt-out throws.
@@ -330,7 +331,7 @@ console.log('dispatcher semantics');
   check('focus switched off (focus() returns null): opens at once', h3.log.join() === 'open:item:x', h3.log);
   const h4 = harness({ cover: 488 });
   h4.disp.dispatch({ kind: 'soundMenu', id: 's', itemId: 's' }, null, { x: 0, y: 0 });
-  check('the sound menu hands its docked width to the flight (frames the speaker beside it)', h4.frames[0] && h4.frames[0].coverRight === 488, h4.frames);
+  check('the sound menu hands its width to the flight (frames the speaker with room beside it)', h4.frames[0] && h4.frames[0].coverRight === 488, h4.frames);
   const h5 = harness();
   check('an unknown kind opens nothing', (await h5.disp.dispatch({ kind: 'nope', id: 'n' }, null, { x: 0, y: 0 })) === false && h5.log.length === 0);
 }
@@ -418,17 +419,31 @@ console.log('the page\'s focus flies for every routed kind');
   check('index.html imports the page focus module', /import \{ createTapFocus, deviceView \} from '\.\/src\/tap-focus\.js\?v=__VERSION__';/.test(html));
 }
 
-// ---- 3d. the sound menu docks only beside a framed speaker ----------------------
-console.log('sound menu docking');
+// ---- 3d. the sound menu is anchored like a card, beside a framed speaker ------
+console.log('sound menu anchoring');
 {
   const opened = [];
-  const routes = T.buildTapRoutes({ openCard: () => {}, project: () => null, closeCard: () => {},
-    soundMenu: { open: a => opened.push(a), coverRight: () => 488 }, onClose: () => {} });
+  const routes = T.buildTapRoutes({ openCard: () => {}, project: () => ({ x: 300, y: 200 }), closeCard: () => {},
+    bounds: (x, y) => ({ left: 0, top: 0, right: 1280, bottom: 800, at: [x, y] }),
+    itemRect: (t, x, y) => ({ left: x - 40, right: x + 40, top: y - 30, bottom: y + 30, id: t.itemId }),
+    soundMenu: { open: a => opened.push(a), coverRight: () => 448 }, onClose: () => {} });
   const t = { kind: 'soundMenu', id: 's', itemId: 's', speaker: null };
-  routes.get('soundMenu').open(t, null, { x: 0, y: 0, flew: true });
-  routes.get('soundMenu').open(t, null, { x: 0, y: 0, flew: false });
-  check('after a flight it docks beside the speaker; opened without one (focus off) it is centred', opened[0].side === true && opened[1].side === false, opened.map(a => a.side));
-  check('sound-menu.js docks only when asked AND wide enough', /root\.className = 'sm-backdrop' \+ \(t && t\.side && coverRight\(\) \? ' side' : ''\);/.test(read('src/sound-menu.js')));
+  routes.get('soundMenu').open(t, { x: 1, y: 2, z: 3 }, { x: 10, y: 20, flew: true });
+  routes.get('soundMenu').open(t, { x: 1, y: 2, z: 3 }, { x: 10, y: 20, flew: false });
+  check('after a flight it prefers the side the flight left room on; opened without one (focus off) it does not',
+    opened[0].side === true && opened[1].side === false, opened.map(a => a.side));
+  const a0 = opened[0].anchor(), a1 = opened[1].anchor();
+  check('after a flight: anchored where the speaker now projects, at its on-screen box, inside the scene bounds',
+    a0.x === 300 && a0.y === 200 && a0.rect && a0.rect.id === 's' && a0.rect.left === 260 && a0.bounds.at.join() === '300,200', a0);
+  check('without a flight: anchored at the tap, no box (the camera did not frame it)',
+    a1.x === 10 && a1.y === 20 && a1.rect === null && a1.bounds.at.join() === '10,20', a1);
+  const sm = read('src/sound-menu.js');
+  check('sound-menu.js places itself with the cards\' placePopover (one placement logic, not a copy)',
+    /^import \{ placePopover \} from '\.\/tap-popovers\.js';$/m.test(sm) &&
+    /const p = placePopover\(a\.x, a\.y, w, h, bounds, GAP, MARGIN, \{ rect: a\.rect \|\| null, prefer: side \? 'side' : null \}\);/.test(sm) &&
+    /if \(a\) p = fitSoundMenu\(a, w, natH, bounds, preferSide\);/.test(sm));
+  check('... and draws the cards\' arrow on the side placePopover says',
+    /arrow\.className = 'sm-arrow' \+ \(p\.arrow \? ' ' \+ p\.arrow\.side : ''\);/.test(sm) && /arrow\.style\.display = p\.arrow \? '' : 'none';/.test(sm));
 }
 
 // ---- 4. no per-type code ------------------------------------------------------

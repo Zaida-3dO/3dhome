@@ -61,6 +61,7 @@
  *                the race above or something else has since played on the
  *                speakers. See soundTapPlan / retriggerReady.
  */
+import { pickSpeakerPlayer } from './speaker-players.js';
 
 export const SOUND_NONE = 'None';
 export const PAGE_SIZE = 6;
@@ -229,15 +230,65 @@ export function volumeOf(raw) {
 }
 
 /**
- * NOW PLAYING: one slide per configured speaker whose state is 'playing',
- * the tapped speaker's first (so it is the initial slide).
- * Each: { entity, label, title, volume, volumeText, tapped }.
+ * An `entity_picture`(_local) -> a URL the browser can load, or null.
+ * Absolute http(s) and data:image URLs pass through; a path is joined to Home
+ * Assistant's base URL (none known -> null). HA-proxied art often cannot load
+ * cross-origin from here; the card then falls back to the player icon.
  */
-export function nowPlaying(cfg, rawOf, sound, tapped) {
-  return orderedSpeakers(cfg, tapped).filter(s => { const r = rawOf(s.entity); return !!r && r.state === 'playing'; }).map(s => {
-    const r = rawOf(s.entity);
+export function mediaArtUrl(baseUrl, picture) {
+  const p = typeof picture === 'string' ? picture.trim() : '';
+  if (!p) return null;
+  if (/^https?:\/\//i.test(p) || /^data:image\//i.test(p)) return p;
+  if (p.charAt(0) !== '/' || p.charAt(1) === '/') return null;
+  const b = (typeof baseUrl === 'string' ? baseUrl.trim() : '').replace(/\/+$/, '');
+  return /^https?:\/\//i.test(b) ? b + p : null;
+}
+
+/**
+ * Where the track is, the way Home Assistant's media-control card computes
+ * it: media_position was true at media_position_updated_at, and only a
+ * PLAYING player moves on from there. Seconds, clamped to [0, duration].
+ * null without a positive duration or a numeric position (no bar).
+ * @returns {{ position, duration, fraction } | null}
+ */
+export function mediaProgress(raw, nowMs) {
+  const a = (raw && raw.attributes) || {};
+  const dur = +a.media_duration, pos = +a.media_position;
+  if (!(a.media_duration != null && Number.isFinite(dur) && dur > 0) || a.media_position == null || !Number.isFinite(pos)) return null;
+  let p = pos;
+  const at = Date.parse(a.media_position_updated_at);
+  if (raw.state === 'playing' && Number.isFinite(at)) p += Math.max(0, (nowMs - at) / 1000);
+  p = Math.max(0, Math.min(p, dur));
+  return { position: p, duration: dur, fraction: p / dur };
+}
+
+/**
+ * NOW PLAYING: one slide per configured speaker that is 'playing', the
+ * tapped speaker's first (so it is the initial slide).
+ *
+ * A speaker is often several media_players (Music Assistant's _ma and _2
+ * copies, the Cast entity -- src/speaker-players.js): playerOf(entity) ->
+ * { entity, raw } names the one that is actually playing (the controller
+ * resolves it with pickSpeakerPlayer), and the slide shows THAT player's
+ * metadata. Without playerOf, the configured entity itself.
+ *
+ * Each: { entity (the configured speaker), player (the playing sibling),
+ * label, title, artist, art, progress, volume, volumeText, tapped }.
+ * progress: what mediaProgress() needs, frozen at the last report
+ * ({ state, position, duration, updatedAt }) or null; the menu ticks the bar.
+ */
+export function nowPlaying(cfg, rawOf, sound, tapped, baseUrl, playerOf) {
+  const pick = playerOf || (e => ({ entity: e, raw: rawOf(e) }));
+  return orderedSpeakers(cfg, tapped).map(s => ({ s, p: pick(s.entity) })).filter(x => !!x.p && !!x.p.raw && x.p.raw.state === 'playing').map(({ s, p }) => {
+    const r = p.raw;
+    const a = r.attributes || {};
     const vol = volumeOf(r);
-    return { entity: s.entity, label: s.label, title: slideTitle(r, sound), volume: vol,
+    const prog = mediaProgress(r, 0) ? { state: r.state, position: +a.media_position, duration: +a.media_duration,
+      updatedAt: a.media_position_updated_at || null } : null;
+    return { entity: s.entity, player: p.entity, label: s.label, title: slideTitle(r, sound),
+      artist: String(a.media_artist || a.media_album_artist || ''),
+      art: mediaArtUrl(baseUrl, a.entity_picture_local) || mediaArtUrl(baseUrl, a.entity_picture),
+      progress: prog, volume: vol,
       volumeText: vol == null ? '--' : Math.round(vol * 100) + '%', tapped: s.entity === tapped };
   });
 }
@@ -350,7 +401,8 @@ export function transportCommand(entity, action, raw) {
  * and the app agree that nothing is playing.
  */
 export function slideStopCommands(cfg, entity, slides, sound) {
-  const out = [cmd('media_player', 'media_stop', {}, entity)];
+  const slide = (slides || []).find(s => s.entity === entity);
+  const out = [cmd('media_player', 'media_stop', {}, (slide && slide.player) || entity)];
   const others = (slides || []).filter(s => s.entity !== entity);
   if (!others.length && soundActive(sound)) out.push(selectSoundCommand(cfg, SOUND_NONE));
   return out;
@@ -367,7 +419,12 @@ export function stopAllCommands(cfg, sound, selection, slides) {
   const active = soundActive(sound);
   if (active) out.push(selectSoundCommand(cfg, SOUND_NONE));
   const sel = new Set(active ? selection || [] : []);
-  (slides || []).forEach(s => { if (!sel.has(s.entity)) out.push(cmd('media_player', 'media_stop', {}, s.entity)); });
+  // A speaker playing through a SIBLING player (MA's _2, the Cast entity) is
+  // stopped there: the automation only stops the configured entity.
+  (slides || []).forEach(s => {
+    const player = s.player || s.entity;
+    if (!sel.has(s.entity) || player !== s.entity) out.push(cmd('media_player', 'media_stop', {}, player));
+  });
   return out;
 }
 
@@ -454,7 +511,12 @@ export function applyMockCommand(cfg, states, command) {
     else if (command.service === 'volume_set') set(eid, cur.state, { volume_level: command.data.volume_level });
   } else if (command.domain === 'music_assistant' && command.service === 'play_media') {
     const t = SAMPLE_SPOTIFY_TRACKS.find(x => x.uri === command.data.media_id);
-    [].concat(eid).forEach(e => set(e, 'playing', { media_title: t ? t.name : command.data.media_id, media_content_id: command.data.media_id }));
+    // A track, unlike an ambience loop, has an artist, a length and artwork
+    // (a generated gradient: the demo loads nothing from the network).
+    const i = t ? SAMPLE_SPOTIFY_TRACKS.indexOf(t) : 0;
+    [].concat(eid).forEach(e => set(e, 'playing', { media_title: t ? t.name : command.data.media_id, media_content_id: command.data.media_id,
+      media_artist: t ? t.artists.map(x => x.name).join(', ') : null, media_duration: 180 + 17 * i, media_position: 0,
+      media_position_updated_at: new Date().toISOString(), entity_picture: demoArt(i) }));
   }
   return m;
 }
@@ -588,6 +650,15 @@ export const SAMPLE_SPOTIFY_TRACKS = [
 ].map(([name, artists], i) => ({ media_type: 'track', uri: 'spotify--demo://track/demo_' + (i + 1), name, version: '', image: null, favorite: false,
   explicit: null, artists: artists.split(', ').map(a => ({ media_type: 'artist', name: a })) }));
 
+/** A sample track's artwork: a two-colour SVG, as a data: URL (no network). */
+export function demoArt(i) {
+  const pairs = [['#e2563b', '#7a1f4f'], ['#2a9d8f', '#1d3557'], ['#f4a261', '#6d3b8c'], ['#3a86ff', '#0b2545']];
+  const [a, b] = pairs[Math.abs(i | 0) % pairs.length];
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="' + a + '"/>' +
+    '<circle cx="46" cy="46" r="26" fill="' + b + '"/></svg>';
+  return 'data:image/svg+xml,' + encodeURIComponent(svg);
+}
+
 /** The demo's response to a recents or a search call (no Home Assistant). */
 export function mockSpotifyResponse(kind, query) {
   if (kind === 'search') {
@@ -631,6 +702,20 @@ export function createSoundController(d) {
   let mock = null;
   const mockStates = () => (mock || (mock = mockSoundStates(cfg)));
   const rawOf = eid => (mockMode() ? mockStates().get(eid) || null : (ha() && ha().getRawState ? ha().getRawState(eid) : null));
+  // The player of a configured speaker that is actually playing: any of its
+  // sibling media_players (the client's speakerPlayers), picked the way the
+  // smart display picks (pickSpeakerPlayer). No siblings known (the demo, a
+  // client without the grouping): the configured entity.
+  const playerOf = eid => {
+    const h = mockMode() ? null : ha();
+    if (h && typeof h.speakerPlayers === 'function' && typeof h.getPlayerState === 'function') {
+      const ids = h.speakerPlayers(eid);
+      const get = id => h.getPlayerState(id) || (id === eid ? rawOf(eid) : null);
+      const p = ids && ids.length ? pickSpeakerPlayer(ids, get) : null;
+      if (p && p.raw) return { entity: p.entityId, raw: p.raw };
+    }
+    return { entity: eid, raw: rawOf(eid) };
+  };
   let busy = null;      // { since, target }  the sound tiles' busy window
   let pending = null;   // { label, since }   a re-trigger waiting for its second select
   let optSel = null;    // { list, until }    PLAY ON, optimistic until the echo
@@ -664,7 +749,7 @@ export function createSoundController(d) {
     const statusKey = soundStatusKey(mockMode() ? null : ha().status);
     const live = statusKey === 'ok' || statusKey === 'mock';
     const sound = currentSound(rawOf(cfg.sound));
-    const slides = nowPlaying(cfg, rawOf, sound, tapped);
+    const slides = nowPlaying(cfg, rawOf, sound, tapped, mockMode() ? null : ha().activeUrl, playerOf);
     const tiles = orderSounds(catalogueTiles(rawOf(cfg.catalogue)), parseRecentIds(cfg.recent ? rawOf(cfg.recent) : null));
     if (busy && !pending && !isBusy(busy, t, soundSettled(busy.target, sound, realSelection(), rawOf))) busy = null;
     const rows = speakerRows(cfg, selection(), tapped);
@@ -886,12 +971,15 @@ export function createSoundController(d) {
       if (cmds.some(c => c.domain === 'input_select')) { busy = { since: now(), target: SOUND_NONE }; pending = null; }
       return any;
     }
-    const c = transportCommand(arg, action, rawOf(arg));
+    // Transport and volume go to the player that is actually playing.
+    const slide = m.slides.find(s => s.entity === arg);
+    const p = slide ? playerOf(arg) : { entity: arg, raw: rawOf(arg) };
+    const c = transportCommand(slide ? slide.player : arg, action, p.raw);
     return c ? send(c) : false;
   }
 
   return {
-    cfg, model, tap, tick, rawOf,
+    cfg, model, tap, tick, rawOf, playerOf,
     openPicker, setQuery, playTrack,
     closePicker,
     pickerOpen: () => !!picker,
