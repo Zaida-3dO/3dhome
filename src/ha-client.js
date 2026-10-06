@@ -646,7 +646,11 @@ export const HAClient = (() => {
     // entity, and cb(entityId, raw) fires when one's state string or an
     // attribute the menu shows changed -- never on a media_position tick.
     const soundMenuIds = new Set(soundMenuEntities(normaliseSoundMenu(sensors && sensors.soundMenu)));
-    const SOUND_ATTRS = ['media_title', 'media_content_id', 'volume_level', 'tiles'];
+    // media_artist / entity_picture(_local): a smart display's now-playing
+    // screen (src/furniture/hub-screen.js) shows them. HA rotates the proxy
+    // picture's token every few minutes; the screen ignores that change.
+    const SOUND_ATTRS = ['media_title', 'media_content_id', 'volume_level', 'tiles',
+      'media_artist', 'media_album_artist', 'entity_picture', 'entity_picture_local'];
     const soundMenuCallbacks = [];
     function noteRaw(st) {
       if (!st || !st.entity_id) return;

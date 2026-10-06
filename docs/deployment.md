@@ -456,6 +456,24 @@ nginx's `immutable` caching correct.
 
 ---
 
+### A smart display's artwork needs Home Assistant's CORS allow-list
+
+A `smart-display` hub mapped in `sensors.soundMenu.openFrom` shows what that
+media player is playing (`src/furniture/hub-screen.js`). The artwork is drawn
+into a WebGL texture, which needs a CORS-clean image, so it is loaded as an
+`<img crossOrigin="anonymous">`:
+
+- An absolute `entity_picture` (Music Assistant passes a Spotify cover's
+  `i.scdn.co` URL straight through) loads: that CDN sends
+  `Access-Control-Allow-Origin: *`.
+- A Home Assistant path (`/api/media_player_proxy/...?token=...`) loads only
+  when this app's origin is in HA's `http: cors_allowed_origins`. Otherwise
+  the screen shows a text-only "Now playing" card. To allow it, add the app's
+  origin to that list in HA's `configuration.yaml` and restart HA.
+
+The long-lived token is never used for artwork: a bearer `fetch` would need the
+same CORS allowance, so it adds nothing.
+
 ## 6. Verification checklist
 
 Run through this after deploying. Each item has caught a real failure.
