@@ -296,6 +296,7 @@ jobs:
           # with the casters' real side and kept alive. See the header.
           set -euo pipefail
           node scripts/test-first-frame-gate.mjs
+          node scripts/test-title-fade.mjs
       - name: Gaming chair builder
         run: |
           # Asserts src/furniture/gaming-chair.js: the furniture frame (floor at
