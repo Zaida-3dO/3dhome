@@ -1,6 +1,6 @@
 {
   "kind": "rooms",
-  "schemaVersion": "1.10",
+  "schemaVersion": "1.12",
   "house": "demo",
   "homeAssistant": {
     "enabled": false,
@@ -226,6 +226,23 @@
       "study": { "entity": "script.demo_room_off", "variables": { "area": "demo_study" } },
       "bathroom": { "entity": "script.demo_room_off", "variables": { "area": "demo_bathroom" } },
       "bedroom": { "entity": "script.demo_room_off", "variables": { "area": "demo_bedroom" }, "label": "Switch room off" }
+    },
+    "soundMenu": {
+      "selection": "input_text.demo_ambience_speakers",
+      "toggleScript": "script.demo_toggle_ambience_speaker",
+      "sound": "input_select.demo_relaxing_sound",
+      "catalogue": "sensor.demo_ambience_sounds",
+      "recent": "input_text.demo_ambience_recent",
+      "speakers": [
+        { "entity": "media_player.demo_bedroom_speaker", "label": "Bedroom" },
+        { "entity": "media_player.demo_lounge_speaker", "label": "Lounge" },
+        { "entity": "media_player.demo_study_speaker", "label": "Study" },
+        { "entity": "media_player.demo_kitchen_display", "label": "Kitchen" }
+      ],
+      "openFrom": {
+        "lounge_speaker": "media_player.demo_lounge_speaker",
+        "bedroom_speaker": "media_player.demo_bedroom_speaker"
+      }
     }
   }
 }

@@ -142,10 +142,21 @@ export function deviceTarget(id, vacuums, plants, object) {
 }
 
 /**
+ * A furniture item named in the sound menu's `openFrom` -> a 'soundMenu'
+ * target ({ itemId, speaker }), or null. The page opens the sound menu
+ * (src/sound-menu.js) for it instead of a compact card.
+ */
+export function soundMenuTarget(id, openFrom, object) {
+  if (!openFrom || !openFrom.has(id)) return null;
+  return { kind: 'soundMenu', id, itemId: id, speaker: openFrom.get(id) || null, entities: [], object };
+}
+
+/**
  * A furniture hit -> its tap target (what the runtime's deviceAt returns for
  * the item under the first solid hit), or null.
  *
- * PRECEDENCE: a vacuum or plant binding (deviceTarget) wins over an item
+ * PRECEDENCE: a vacuum or plant binding (deviceTarget) wins over the sound
+ * menu (an `openFrom` item, soundMenuTarget), which wins over an item
  * binding, a clock or a radiator on the same id (furnitureTapTarget). A
  * clock or a radiator may carry a title-only binding in `sensors.items`
  * (`{ "title": ... }`): it becomes the target's `label`. A clock also carries
@@ -156,12 +167,13 @@ export function deviceTarget(id, vacuums, plants, object) {
  * @param object  the hit mesh
  * @param ctx     { vacuums, plants (normalised Maps), items (Map from
  *                normaliseItemBindings), climate (sensors.climate), rawItems
- *                (sensors.items as authored) }
+ *                (sensors.items as authored), soundOpenFrom (the sound
+ *                menu's openFrom Map, itemId -> speaker entity | null) }
  */
 export function furnitureTarget(it, point, object, ctx) {
   if (!it) return null;
   const c = ctx || {};
-  const t = deviceTarget(it.id, c.vacuums, c.plants, object) ||
+  const t = deviceTarget(it.id, c.vacuums, c.plants, object) || soundMenuTarget(it.id, c.soundOpenFrom, object) ||
     furnitureTapTarget(it, point, { items: c.items, climate: c.climate });
   if (t && !t.object) t.object = object;
   if (t && (t.kind === 'clock' || t.kind === 'climate')) {
@@ -1375,14 +1387,17 @@ export function attachTapPopovers(o) {
   const itemBindings = normaliseItemBindings(rawItems);
   const furnitureRooms = new Map(((o.house && o.house.furniture) || []).map(f => [f.id, f.room || null]));
   const climateBinding = (o.sensors && o.sensors.climate) || {};
-  const deviceIds = new Set([...vacuums.keys(), ...plants.keys(),
+  // The sound menu (src/sound-menu.js), when the page made one: its openFrom
+  // items open it.
+  const soundOpenFrom = o.soundMenu && o.soundMenu.openFrom instanceof Map ? o.soundMenu.openFrom : null;
+  const deviceIds = new Set([...vacuums.keys(), ...plants.keys(), ...(soundOpenFrom ? soundOpenFrom.keys() : []),
     ...tappableFurnitureIds(o.house && o.house.furniture, itemBindings, climateBinding)]);
   const furnitureLabels = new Map(((o.house && o.house.furniture) || []).map(f => [f.id, f.label || null]));
   // A robot vacuum, a plant, a bound item, a clock or a radiator is found by
   // where the tap landed (see the header). A vacuum / plant binding wins over
   // an item binding on the same id; a bound item's tap that lands on a part
   // of it no card covers is not a target.
-  const deviceCtx = { vacuums, plants, items: itemBindings, climate: climateBinding, rawItems };
+  const deviceCtx = { vacuums, plants, items: itemBindings, climate: climateBinding, rawItems, soundOpenFrom };
   const deviceAt = !deviceIds.size || typeof home.furnitureItemAt !== 'function' ? null : h => {
     const it = h && h.point ? home.furnitureItemAt(h.point, deviceIds) : null;
     return it ? furnitureTarget(it, h.point, h.object, deviceCtx) : null;
@@ -2391,6 +2406,15 @@ export function attachTapPopovers(o) {
     if (typeof o.tapClaimed === 'function' && o.tapClaimed()) return;
     if (Math.abs(e.clientX - downX) > TAP_SLOP_PX || Math.abs(e.clientY - downY) > TAP_SLOP_PX) return;
     const res = pickAt(e.clientX, e.clientY);
+    if (res && res.target && res.target.kind === 'soundMenu') {
+      // The sound menu is a centred modal, not a card at the tap point: no
+      // camera flight, and the menu closes any open card itself.
+      e.stopPropagation();
+      focusGate.invalidate();
+      close(false, 'replace');
+      o.soundMenu.open({ itemId: res.target.itemId, speaker: res.target.speaker });
+      return;
+    }
     if (res && res.target) {
       e.stopPropagation();   // this tap is ours: no room selection underneath
       // Tell the page first (an unpinned sidebar closes on an object tap),

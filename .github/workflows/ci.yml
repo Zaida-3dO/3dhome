@@ -710,6 +710,8 @@ jobs:
         run: node scripts/test-light-collapse.mjs
       - name: Tap popovers -- target resolution, nearest-visible occlusion, placement
         run: node scripts/test-tap-popovers.mjs
+      - name: Sound menu -- order, commands, re-tap and busy window, fake HA only (a socket to anything else throws)
+        run: node scripts/test-sound-menu.mjs
       - name: Room click -- walls block and resolve to the side tapped, furniture passes through
         run: node scripts/test-room-pick.mjs
       - name: Spec pages don't reference a module-scope import alias out of scope
@@ -873,6 +875,8 @@ jobs:
         run: python scripts/test-validate-items.py
       - name: sensors.roomScripts schema and validator checks (script domain, unknown room, shared variables, version)
         run: python scripts/test-validate-room-script.py
+      - name: sensors.soundMenu schema and validator checks (helper domains, openFrom items and speakers, items-card overlap, 1.12)
+        run: python scripts/test-validate-sound-menu.py
       - name: sh3d-furniture / furniture-apply tests
         run: python scripts/test-sh3d-furniture.py
 

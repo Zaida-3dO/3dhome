@@ -23,9 +23,46 @@
  *
  * holdAuth: true stops after auth_required (the socket is OPEN but not yet
  * authenticated) until releaseAuth() is called.
+ *
+ * NO REAL HOME ASSISTANT, MECHANICALLY. Tests drive a client that can play
+ * audio and move curtains in a real home, so "only ever use the fake" is not
+ * left to prose:
+ *   - the fake refuses (throws) a socket to any URL that is not the fake's
+ *     own: a host under the reserved `.invalid` TLD (RFC 2606), which can
+ *     never resolve -- every test uses http://ha.invalid;
+ *   - importing this module replaces the runtime's own WebSocket with one
+ *     that refuses EVERY URL, and restore() puts that refusing one back, not
+ *     the real one. A test that imports the fake cannot open a real socket
+ *     before installing it or after restoring it.
+ * scripts/test-sound-menu.mjs pins both.
  */
+
+/** The only URLs a test may open a socket to: ws(s)://<anything>.invalid. */
+export function isFakeHaUrl(url) {
+  try {
+    const u = new URL(String(url));
+    return (u.protocol === 'ws:' || u.protocol === 'wss:') && /\.invalid$/i.test(u.hostname);
+  } catch (e) {
+    return false;
+  }
+}
+
+function refuse(url, why) {
+  throw new Error('fake HA: refused a WebSocket to ' + url + ' -- ' + why +
+    '. Tests may only talk to the fake Home Assistant (installFakeHA, url http://ha.invalid).');
+}
+
+/** What globalThis.WebSocket is whenever the fake is NOT installed. */
+export class RefusedWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+  constructor(url) { refuse(url, 'the fake is not installed'); }
+}
+globalThis.WebSocket = RefusedWebSocket;
+
 export function installFakeHA({ states = [], holdAuth = false } = {}) {
-  const realWS = globalThis.WebSocket;
   const realFetch = globalThis.fetch;
   const calls = [];        // call_service commands, in order
   const sent = [];         // every client -> server message, in order
@@ -40,6 +77,7 @@ export function installFakeHA({ states = [], holdAuth = false } = {}) {
     static CLOSING = 2;
     static CLOSED = 3;
     constructor(url) {
+      if (!isFakeHaUrl(url)) refuse(url, 'not the fake HA host (a .invalid name)');
       this.url = url;
       this.readyState = FakeWebSocket.CONNECTING;
       this.onmessage = null;
@@ -115,7 +153,7 @@ export function installFakeHA({ states = [], holdAuth = false } = {}) {
       pendingAuth.splice(0).forEach(s => s._deliver({ type: 'auth_ok', ha_version: 'fake' }));
     },
     restore() {
-      globalThis.WebSocket = realWS;
+      globalThis.WebSocket = RefusedWebSocket;
       globalThis.fetch = realFetch;
     }
   };
