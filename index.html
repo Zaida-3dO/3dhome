@@ -166,6 +166,25 @@
     .panel-pin:hover { color: #fff; }
     .panel-pin::after { content: ''; position: absolute; inset: -11px; }
 
+    /* Previous / next room strip, under the header (room view only). The
+       header has no spare width at 300px, so the strip gets its own row. */
+    .room-nav { display: none; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .room-nav.show { display: flex; align-items: stretch; }
+    .room-nav-btn {
+      flex: 1 1 0; min-width: 0; min-height: 44px; padding: 6px 12px; background: none; border: none;
+      color: #c7d0dc; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px;
+    }
+    .room-nav-btn.next { justify-content: flex-end; }
+    .room-nav-chev { font-size: 22px; line-height: 1; flex: none; }
+    .room-nav-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .room-nav-btn:hover { background: rgba(255,255,255,0.06); color: #fff; }
+    .room-nav-btn:focus-visible { outline: 2px solid #a5b4fc; outline-offset: -2px; }
+    .room-nav-count { flex: none; align-self: center; font-size: 11px; opacity: 0.5; padding: 0 4px; }
+    :root[data-theme="light"] .room-nav { border-bottom-color: rgba(0,0,0,0.08); }
+    :root[data-theme="light"] .room-nav-btn { color: #5b6070; }
+    :root[data-theme="light"] .room-nav-btn:hover { background: rgba(0,0,0,0.05); color: #1a1d29; }
+    :root[data-theme="light"] .room-nav-btn:focus-visible { outline-color: #4f46e5; }
+
     .panel-body { flex: 1; overflow-y: auto; padding: 4px 0; }
 
     /* Room list items */
@@ -973,6 +992,11 @@
         <button class="panel-close" id="panel-close" aria-label="Close sidebar">&times;</button>
       </div>
     </div>
+    <div class="room-nav" id="room-nav" role="group" aria-label="Rooms">
+      <button class="room-nav-btn prev" id="room-nav-prev" type="button"><span class="room-nav-chev" aria-hidden="true">&lsaquo;</span><span class="room-nav-name"></span></button>
+      <span class="room-nav-count" id="room-nav-count" aria-live="polite"></span>
+      <button class="room-nav-btn next" id="room-nav-next" type="button"><span class="room-nav-name"></span><span class="room-nav-chev" aria-hidden="true">&rsaquo;</span></button>
+    </div>
     <div class="panel-body" id="panel-body"></div>
     <div class="panel-footer" id="panel-footer">
       <div class="panel-footer-row">
@@ -1095,6 +1119,7 @@
     import { attachTapPopovers, climateActivity } from './src/tap-popovers.js?v=__VERSION__';
     // The sidebar's open / pinned state machine (collapsible widths only).
     import { sidebarReduce, SIDEBAR_INITIAL } from './src/sidebar-pin.js?v=__VERSION__';
+    import { nextRoom, prevRoom, roomNavKeyAction } from './src/room-nav.js?v=__VERSION__';
     // Camera focus: the camera flies to a tapped room or device, and back.
     import { createFocusController, deviceKey } from './src/camera-focus.js?v=__VERSION__';
     // Edit-mode drafts (src/profile-draft.js): the boot-time read only. The
@@ -2493,6 +2518,44 @@
         if (selectedRoom && tapPopovers && tapPopovers.isOpen()) tapPopovers.close();
         focusCtl.request({ room: selectedRoom || null }, mode);
       }
+      // ---- Previous / next room (src/room-nav.js) ----
+      // Selects exactly as a room-list tap does (selectedRoom, renderPanel,
+      // the explicit focus flight), so the click-away home pose is untouched.
+      const roomNavEl = document.getElementById('room-nav');
+      const roomNavPrev = document.getElementById('room-nav-prev');
+      const roomNavNext = document.getElementById('room-nav-next');
+      const roomNavCount = document.getElementById('room-nav-count');
+      const roomLabelOf = id => (Home3DScene.ROOMS[id] && Home3DScene.ROOMS[id].name) || id;
+      function updateRoomNav() {
+        const show = !!selectedRoom && home.roomIds.length > 1;
+        roomNavEl.classList.toggle('show', show);
+        if (!show) return;
+        const p = prevRoom(home.roomIds, selectedRoom), n = nextRoom(home.roomIds, selectedRoom);
+        roomNavPrev.querySelector('.room-nav-name').textContent = roomLabelOf(p);
+        roomNavNext.querySelector('.room-nav-name').textContent = roomLabelOf(n);
+        roomNavPrev.setAttribute('aria-label', 'Previous room: ' + roomLabelOf(p));
+        roomNavNext.setAttribute('aria-label', 'Next room: ' + roomLabelOf(n));
+        roomNavCount.textContent = (home.roomIds.indexOf(selectedRoom) + 1) + '/' + home.roomIds.length;
+      }
+      function stepRoom(dir) {
+        const id = dir === 'next' ? nextRoom(home.roomIds, selectedRoom) : prevRoom(home.roomIds, selectedRoom);
+        if (!id || id === selectedRoom) return;
+        selectedRoom = id; renderPanel(); focusRoom('explicit');
+      }
+      roomNavPrev.addEventListener('click', () => stepRoom('prev'));
+      roomNavNext.addEventListener('click', () => stepRoom('next'));
+      window.addEventListener('keydown', e => {
+        const dialogOpen = !!(tapPopovers && tapPopovers.isOpen())
+          || !!document.querySelector('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]');
+        const act = roomNavKeyAction({
+          key: e.key, target: e.target, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey,
+          selectedRoom, dialogOpen,
+          editActive: !!(editApi && editApi.isActive()), editItemSelected: !!(editApi && editApi.hasItemTarget && editApi.hasItemTarget()),
+        });
+        if (!act) return;
+        e.preventDefault();
+        stepRoom(act);
+      });
       function focusDropDevice(target, why) {
         if (!focusOn() || why === 'dispose') return;
         const cur = focusCtl.selection().device;
@@ -2924,6 +2987,7 @@
       }
 
       function renderPanel() {
+        updateRoomNav();
         panelReady = true; // reached here => all panel deps are declared; safe
                            // for an overlay onChange to re-render now.
         // A room script armed in a room that is no longer open disarms: its

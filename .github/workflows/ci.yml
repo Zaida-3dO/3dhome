@@ -256,6 +256,13 @@ jobs:
           # against the real callServiceDebounced.
           set -euo pipefail
           node scripts/test-room-panel.mjs
+      - name: Previous / next room navigation -- order, key routing, home pose
+        run: |
+          # Wraparound helpers, the arrow-key rules (selected room only; an
+          # input / slider / dialog / edit-mode nudge keeps its arrows), the
+          # click-away home pose surviving a cycle, and index.html's wiring.
+          set -euo pipefail
+          node scripts/test-room-nav.mjs
       - name: Room script ("Kill room") button -- two-step confirm, one script.turn_on
         run: |
           # Asserts the first tap only arms, a second sends exactly ONE
