@@ -242,7 +242,8 @@
       "openFrom": {
         "lounge_speaker": "media_player.demo_lounge_speaker",
         "bedroom_speaker": "media_player.demo_bedroom_speaker"
-      }
+      },
+      "spotify": {}
     }
   }
 }

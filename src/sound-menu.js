@@ -21,11 +21,18 @@
  * every control is disabled under the usual status. With no Home Assistant
  * configured (the demo house) the menu runs on a sample (mockSoundStates)
  * that the controls move, and sends nothing.
+ *
+ * SPOTIFY (soundMenu.spotify): a green tile first in SOUNDS opens the picker
+ * in place of the menu (a back arrow and Esc return to it): Music Assistant's
+ * recently played Spotify tracks, or a search as you type (400 ms after the
+ * last key, 2 characters or more). A row plays that track on every selected
+ * speaker (src/sound-model.js, "SPOTIFY"). The search box survives every
+ * repaint: in picker mode only the list is rebuilt.
  */
 
 import { mdiPath, svgIcon } from './ui-icons.js';
 import { sendScript } from './script-call.js';
-import { normaliseSoundMenu, createSoundController, SOUND_NONE } from './sound-model.js';
+import { normaliseSoundMenu, createSoundController, SOUND_NONE, SPOTIFY_GREEN } from './sound-model.js';
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ico = (name, cls) => svgIcon(mdiPath(name), 'sm-ico' + (cls ? ' ' + cls : ''));
@@ -68,7 +75,10 @@ export const STYLE = `
   display: inline-flex; align-items: center; justify-content: center; }
 .sm-x:hover { background: var(--sm-hover); }
 .sm-x .sm-ico { width: 22px; height: 22px; fill: currentColor; }
-.sm-body { overflow-y: auto; overscroll-behavior: contain; padding: 4px 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+/* min-height 0 lets the body scroll inside the 88vh sheet; flex-shrink 0 stops a
+   tall menu (two slides) squeezing the sections -- it scrolls instead. */
+.sm-body { overflow-y: auto; overscroll-behavior: contain; padding: 4px 14px 16px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.sm-body > * { flex-shrink: 0; }
 .sm-hdr { display: flex; align-items: center; justify-content: space-between; gap: 7px; height: 22px; padding: 4px 4px 0; }
 .sm-hdr.np { height: 26px; }
 .sm-hdr-l { display: inline-flex; align-items: center; gap: 7px; }
@@ -87,13 +97,13 @@ export const STYLE = `
 .sm-dot.on::before { background: var(--sm-teal); opacity: 1; }
 .sm-np { box-sizing: border-box; height: 118px; border-radius: 14px; background: var(--sm-np-bg); border: 1px solid var(--sm-np-bd);
   display: flex; flex-direction: column; justify-content: space-between; }
-.sm-np-info { display: flex; align-items: center; gap: 9px; padding: 11px 13px 5px; overflow: hidden; }
+.sm-np-info { display: flex; align-items: center; gap: 9px; padding: 10px 13px 4px; overflow: hidden; }
 .sm-np-info > .sm-ico { width: 18px; height: 18px; fill: var(--sm-teal); flex: none; }
 .sm-np-txt { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; flex: 1 1 auto; }
 .sm-np-lbl { font-size: 12.5px; font-weight: 600; color: var(--sm-np-label); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sm-np-sub { font-size: 10.5px; color: var(--sm-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sm-np-vol { font-size: 10.5px; font-weight: 500; color: var(--sm-mute); flex: none; }
-.sm-np-ctl { display: flex; align-items: center; justify-content: space-between; gap: 1px; padding: 0 7px 7px; }
+.sm-np-ctl { display: flex; align-items: center; justify-content: space-between; gap: 1px; padding: 0 7px 10px; }
 .sm-ib { width: 34px; height: 34px; border: 0; border-radius: 50%; background: none; cursor: pointer; padding: 0;
   display: inline-flex; align-items: center; justify-content: center; color: var(--sm-mute); }
 .sm-ib:hover:not(:disabled) { background: var(--sm-hover); }
@@ -131,6 +141,32 @@ export const STYLE = `
 .sm-tile:disabled:not(.pending), .sm-spk:disabled, .sm-ib:disabled, .sm-stopall:disabled { opacity: .5; }
 .sm-busy .sm-tile:not(.pending) { opacity: .5; }
 .sm-sheet button:focus-visible { outline: 2px solid var(--sm-teal); outline-offset: 2px; }
+.sm-tile.sm-spot { background: rgba(29,185,84,0.08); border-color: rgba(29,185,84,0.40); }
+.sm-tile.sm-spot .sm-ico, .sm-head .sm-ico.sm-spotify, .sm-art .sm-ico { fill: ${SPOTIFY_GREEN}; }
+.sm-note { box-sizing: border-box; border-radius: 10px; padding: 8px 12px; font-size: 11.5px; font-weight: 500; }
+.sm-note.ok { color: var(--sm-teal); background: var(--sm-np-bg); border: 1px solid var(--sm-np-bd); }
+.sm-note.error, .sm-err { color: var(--sm-red); background: var(--sm-red-bg); border: 1px solid var(--sm-red-bd); }
+.sm-err { display: flex; align-items: flex-start; gap: 8px; border-radius: 10px; padding: 9px 12px; font-size: 11.5px; line-height: 1.35; }
+.sm-err .sm-ico { width: 15px; height: 15px; fill: var(--sm-red); flex: none; margin-top: 1px; }
+.sm-qw { display: flex; align-items: center; gap: 8px; height: 40px; box-sizing: border-box; padding: 0 12px; border-radius: 12px;
+  background: var(--sm-off-bg); border: 1px solid var(--sm-off-bd); }
+.sm-qw .sm-ico { width: 18px; height: 18px; fill: var(--sm-ink2); flex: none; }
+.sm-q { flex: 1 1 auto; min-width: 0; border: 0; outline: none; background: none; color: var(--sm-ink); font: inherit; font-size: 14px; }
+.sm-q::placeholder { color: var(--sm-ink2); }
+.sm-qw:focus-within { border-color: var(--sm-sel-bd); }
+.sm-plist { display: flex; flex-direction: column; gap: 6px; }
+.sm-row { box-sizing: border-box; width: 100%; height: 56px; display: flex; align-items: center; gap: 11px; padding: 0 10px 0 8px; border-radius: 12px;
+  background: var(--sm-off-bg); border: 1px solid var(--sm-off-bd); color: var(--sm-ink); font: inherit; text-align: left; cursor: pointer; }
+.sm-row:hover:not(:disabled) { background: var(--sm-hover); }
+.sm-row:disabled { opacity: .5; } .sm-row.pending { opacity: 1; border-color: var(--sm-sel-bd); }
+.sm-art { width: 40px; height: 40px; border-radius: 6px; overflow: hidden; flex: none; display: flex; align-items: center; justify-content: center;
+  background: var(--sm-off-bg); }
+.sm-art img { width: 40px; height: 40px; object-fit: cover; display: block; }
+.sm-art .sm-ico { width: 20px; height: 20px; }
+.sm-rt { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; line-height: 1.25; }
+.sm-rtt { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sm-rta { font-size: 11px; color: var(--sm-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sm-rs { font-size: 10.5px; color: var(--sm-teal); flex: none; }
 `;
 
 /**
@@ -145,7 +181,7 @@ export function createSoundMenu(o) {
   const win = doc.defaultView || window;
   const now = (o && o.now) || (() => Date.now());
   const ha = () => (o.getHa ? o.getHa() : null);
-  const ctl = createSoundController({ cfg, getHa: ha, sendScript, now });
+  const ctl = createSoundController({ cfg, getHa: ha, sendScript, now, onChange: () => render(false) });
   const model = () => ctl.model();
 
   let root = null, sheet = null, body = null, styleEl = null;
@@ -198,6 +234,10 @@ export function createSoundMenu(o) {
     let snd = hdr('music-note', 'Sounds', busyText);
     if (m.pages.length) {
       snd += '<div class="sm-car' + (m.busy ? ' sm-busy' : '') + '" data-car="snd">' + m.pages.map(p => '<div class="sm-page">' + p.map(t => {
+        if (t.spotify) {
+          return '<button type="button" class="sm-tile sm-spot" data-a="spotify" aria-label="Spotify: recent tracks and search"' +
+            (dis || m.busy ? ' disabled' : '') + '>' + ico('spotify') + '<span class="sm-lbl">Spotify</span></button>';
+        }
         const pend = !!m.busy && m.busy.target === t.label;
         const sel = pend || (!m.busy && m.sound === t.label);
         return '<button type="button" class="sm-tile' + (sel ? ' on' : '') + (pend ? ' pending' : '') + '" data-a="snd" data-l="' + esc(t.label) +
@@ -206,7 +246,57 @@ export function createSoundMenu(o) {
     } else {
       snd += '<div class="sm-ph">' + ico('music-note') + '<span>No sounds</span></div>';
     }
-    return { head, body: np + on + snd };
+    const note = m.notice ? '<div class="sm-note ' + m.notice.kind + '" role="status" data-note>' + esc(m.notice.text) + '</div>' : '';
+    return { head, body: note + np + on + snd };
+  }
+
+  // ---- the Spotify picker ------------------------------------------------------
+  function pickerHead(m) {
+    const st = SOUND_STATUS[m.statusKey];
+    return '<div class="sm-head"><button type="button" class="sm-x" data-a="back" aria-label="Back to the sound menu">' + ico('arrow-left') + '</button>' +
+      ico('spotify', 'sm-spotify') + '<h2 class="sm-title" id="sm-title">Spotify</h2>' +
+      '<span class="sm-st ' + st[0] + '" data-st="' + m.statusKey + '" title="' + esc(st[2]) + '"><i></i>' + esc(st[1]) + '</span>' +
+      '<button type="button" class="sm-x" data-a="close" aria-label="Close">' + ico('close') + '</button></div>';
+  }
+  function pickerList(m) {
+    const pk = m.picker;
+    const dis = !m.live || !!pk.playing;
+    const on = pk.on.length ? 'Plays on ' + pk.on.join(', ') : 'No speaker selected';
+    let h = hdr(pk.kind === 'search' ? 'magnify' : 'music-note', pk.kind === 'search' ? 'Results' : 'Recently played',
+      '<span class="sm-hdr-r">' + esc(on) + '</span>');
+    if (pk.error) h += '<div class="sm-err" role="alert" data-err>' + ico('alert-circle-outline') + '<span>' + esc(pk.error) + '</span></div>';
+    if (pk.status === 'loading' || pk.status === 'idle') h += '<div class="sm-ph"><span>Loading…</span></div>';
+    else if (pk.status === 'ok' && !pk.items.length) {
+      h += '<div class="sm-ph">' + ico('spotify') + '<span>' + (pk.kind === 'search' ? 'No Spotify tracks match' : 'No Spotify tracks played recently') + '</span></div>';
+    }
+    if (pk.items.length) {
+      h += '<div class="sm-plist">' + pk.items.map(t => {
+        const pend = pk.playing && pk.playing.uri === t.uri;
+        const art = t.image ? '<img src="' + esc(t.image) + '" alt="" width="40" height="40" loading="lazy" referrerpolicy="no-referrer">' : ico('spotify');
+        return '<button type="button" class="sm-row' + (pend ? ' pending' : '') + '" data-a="play" data-u="' + esc(t.uri) + '"' + (dis ? ' disabled' : '') + '>' +
+          '<span class="sm-art">' + art + '</span><span class="sm-rt"><span class="sm-rtt">' + esc(t.title) + '</span><span class="sm-rta">' +
+          esc(t.artists) + '</span></span>' + (pend ? '<span class="sm-rs">' + (pk.playing.phase === 'stopping' ? 'Stopping ambience…' : 'Starting…') + '</span>' : '') +
+          '</button>';
+      }).join('') + '</div>';
+    }
+    return h;
+  }
+  function renderPicker(m, force) {
+    if (force || sheet.dataset.mode !== 'picker') {
+      sheet.dataset.mode = 'picker';
+      sheet.innerHTML = pickerHead(m) + '<div class="sm-body"><div class="sm-qw">' + ico('magnify') +
+        '<input class="sm-q" type="search" placeholder="Search Spotify" aria-label="Search Spotify" autocomplete="off" enterkeyhint="search" value="' +
+        esc(m.picker.query) + '"></div><div data-plist></div></div>';
+      body = sheet.querySelector('.sm-body');
+      const q = sheet.querySelector('.sm-q');
+      q.addEventListener('input', () => { ctl.setQuery(q.value); ensureTimer(); });
+      q.focus({ preventScroll: true });
+    } else {
+      const st = sheet.querySelector('.sm-st');
+      const s = SOUND_STATUS[m.statusKey];
+      if (st && st.dataset.st !== m.statusKey) st.outerHTML = '<span class="sm-st ' + s[0] + '" data-st="' + m.statusKey + '" title="' + esc(s[2]) + '"><i></i>' + esc(s[1]) + '</span>';
+    }
+    sheet.querySelector('[data-plist]').innerHTML = pickerList(m);
   }
 
   // ---- render ----------------------------------------------------------------
@@ -216,9 +306,12 @@ export function createSoundMenu(o) {
     const next = JSON.stringify(m);
     if (!force && next === sig) return;
     sig = next;
+    if (m.picker) { renderPicker(m, force); return; }
+    const wasPicker = sheet.dataset.mode === 'picker';
+    sheet.dataset.mode = 'menu';
     const scroll = {};
     root.querySelectorAll('[data-car]').forEach(c => { if (c.classList.contains('sm-car')) scroll[c.dataset.car] = c.scrollLeft; });
-    const top = body ? body.scrollTop : 0;
+    const top = body && !wasPicker ? body.scrollTop : 0;
     const ae = doc.activeElement;
     const focusKey = ae && sheet && sheet.contains(ae) && ae.dataset && ae.dataset.a
       ? '[data-a="' + ae.dataset.a + '"]' + (ae.dataset.e ? '[data-e="' + ae.dataset.e + '"]' : '') + (ae.dataset.l ? '[data-l="' + CSS.escape(ae.dataset.l) + '"]' : '') +
@@ -235,6 +328,9 @@ export function createSoundMenu(o) {
     });
     if (focusKey) {
       const f = sheet.querySelector(focusKey);
+      (f && !f.disabled ? f : sheet).focus({ preventScroll: true });
+    } else if (wasPicker) {
+      const f = sheet.querySelector('[data-a="spotify"]');
       (f && !f.disabled ? f : sheet).focus({ preventScroll: true });
     }
   }
@@ -256,7 +352,7 @@ export function createSoundMenu(o) {
   function tick() {
     ctl.tick();
     if (root) render(false);
-    else if (!ctl.pendingRetrigger()) { clearInterval(timer); timer = 0; }
+    else if (!ctl.pendingRetrigger() && !ctl.playing()) { clearInterval(timer); timer = 0; }
   }
   function ensureTimer() { if (!timer) timer = setInterval(() => { try { tick(); } catch (e) { /* never break the page */ } }, 200); }
 
@@ -269,8 +365,11 @@ export function createSoundMenu(o) {
       if (k) c.scrollTo({ left: k.offsetLeft - c.offsetLeft, behavior: 'smooth' });
       return;
     }
+    if (a === 'back') { ctl.closePicker(); render(true); return; }
     if (btn.disabled) return;
-    ctl.tap(a, a === 'snd' ? btn.dataset.l : btn.dataset.e);
+    if (a === 'spotify') { ctl.openPicker(); ensureTimer(); render(true); return; }
+    if (a === 'play') ctl.playTrack(btn.dataset.u);
+    else ctl.tap(a, a === 'snd' ? btn.dataset.l : btn.dataset.e);
     ensureTimer();
     render(false);
   }
@@ -288,9 +387,13 @@ export function createSoundMenu(o) {
   const onKeyDown = e => {
     if (!root) return;
     e.stopPropagation();   // nothing beneath the modal hears a key (room nav, camera)
-    if (e.key === 'Escape') { e.preventDefault(); close(true); return; }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if (ctl.pickerOpen()) { ctl.closePicker(); render(true); } else close(true);
+      return;
+    }
     if (e.key !== 'Tab') return;
-    const f = Array.from(sheet.querySelectorAll('button:not([disabled])'));
+    const f = Array.from(sheet.querySelectorAll('button:not([disabled]), input'));
     if (!f.length) { e.preventDefault(); return; }
     const i = f.indexOf(doc.activeElement);
     if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
@@ -341,6 +444,7 @@ export function createSoundMenu(o) {
     if (root.parentNode) root.parentNode.removeChild(root);
     root = sheet = body = null;
     ctl.setTapped(null);
+    ctl.closePicker();
     if (restoreFocus && returnTo && returnTo !== doc.body && returnTo.isConnected && returnTo.focus) returnTo.focus({ preventScroll: true });
     returnTo = null;
   }

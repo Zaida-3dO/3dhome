@@ -31,8 +31,15 @@
  *     catalogue:    'sensor.x',         // attribute `tiles`
  *     recent:       'input_text.x',     // optional: JSON [[id, codes], ...]
  *     speakers:     [{ entity: 'media_player.x', label: 'Bedroom' }, ...],
- *     openFrom:     { <furnitureItemId>: 'media_player.x' | null, ... }
+ *     openFrom:     { <furnitureItemId>: 'media_player.x' | null, ... },
+ *     spotify:      { configEntryId?: '<Music Assistant config entry>' }
  *   }
+ *
+ * `spotify` (optional) adds a Spotify tile, first in SOUNDS, opening a picker:
+ * Music Assistant's recently played Spotify tracks, or a search. A pick plays
+ * on every selected speaker through music_assistant.play_media -- after the
+ * ambience sound is deselected (see SPOTIFY below). Without `configEntryId`
+ * the Music Assistant entry is looked up once (config_entries/get).
  *
  * `openFrom` makes any number of furniture items open the one shared menu;
  * each names the speaker it IS (highlighted and listed first), or null.
@@ -108,6 +115,9 @@ export function normaliseSoundMenu(raw) {
     recent: inDomain(raw.recent, 'input_text') ? raw.recent : null,
     speakers,
     openFrom,
+    spotify: isObj(raw.spotify) ? {
+      configEntryId: typeof raw.spotify.configEntryId === 'string' && /^[A-Za-z0-9_-]+$/.test(raw.spotify.configEntryId) ? raw.spotify.configEntryId : null,
+    } : null,
   };
 }
 
@@ -270,17 +280,30 @@ export function soundTapPlan(label, current) {
 }
 
 /**
- * May the re-trigger's second select go out yet? Once the sound helper reads
- * 'None', no selected speaker is still playing, and RETRIGGER_GAP_MS has
- * passed since the 'None' went out (the automation's stop run must have
- * finished, or it drops the trigger) -- or, whatever the state, once
- * RETRIGGER_MAX_MS has.
+ * Has a 'None' we sent landed -- may the next step go out? Used by the
+ * re-trigger (its second select) and by a Spotify play (its play_media).
+ *
+ *   'ready'  the sound helper reads 'None', no selected speaker is still
+ *            playing, and RETRIGGER_GAP_MS has passed since the 'None' went
+ *            out (the automation's stop run must have finished, or it drops
+ *            the next trigger); or RETRIGGER_MAX_MS has passed and the helper
+ *            DOES read 'None' (a speaker that never reports stopped)
+ *   'abort'  RETRIGGER_MAX_MS has passed and the helper does NOT read 'None':
+ *            the 'None' never landed, or someone has since picked another
+ *            sound (the tablet, another app) -- going ahead would override
+ *            them
+ *   'wait'   otherwise
  */
-export function retriggerReady(since, now, sound, selection, rawOf) {
+export function stopLanded(since, now, sound, selection, rawOf) {
   const dt = now - since;
-  if (dt >= RETRIGGER_MAX_MS) return true;
-  if (dt < RETRIGGER_GAP_MS || sound !== SOUND_NONE) return false;
-  return !(selection || []).some(e => { const r = rawOf(e); return !!r && r.state === 'playing'; });
+  if (dt >= RETRIGGER_MAX_MS) return sound === SOUND_NONE ? 'ready' : 'abort';
+  if (dt < RETRIGGER_GAP_MS || sound !== SOUND_NONE) return 'wait';
+  return (selection || []).some(e => { const r = rawOf(e); return !!r && r.state === 'playing'; }) ? 'wait' : 'ready';
+}
+
+/** The re-trigger's second select may go out (stopLanded says 'ready'). */
+export function retriggerReady(since, now, sound, selection, rawOf) {
+  return stopLanded(since, now, sound, selection, rawOf) === 'ready';
 }
 
 /**
@@ -429,8 +452,146 @@ export function applyMockCommand(cfg, states, command) {
     if (command.service === 'media_stop') set(eid, 'idle', { media_title: null });
     else if (command.service === 'media_play_pause') set(eid, cur.state === 'playing' ? 'paused' : 'playing');
     else if (command.service === 'volume_set') set(eid, cur.state, { volume_level: command.data.volume_level });
+  } else if (command.domain === 'music_assistant' && command.service === 'play_media') {
+    const t = SAMPLE_SPOTIFY_TRACKS.find(x => x.uri === command.data.media_id);
+    [].concat(eid).forEach(e => set(e, 'playing', { media_title: t ? t.name : command.data.media_id, media_content_id: command.data.media_id }));
   }
   return m;
+}
+
+// ---------------------------------------------------------------------------
+// SPOTIFY (soundMenu.spotify): the picker's calls, results and the play
+// ---------------------------------------------------------------------------
+//
+// Spotify is a Music Assistant provider, so everything goes through MA's
+// services, which need the HA config entry of Music Assistant (config_entry_id
+// -- NOT the provider instance id in a track's uri):
+//
+//   recents  music_assistant.get_library { media_type: track,
+//            order_by: last_played_desc } -- Music Assistant's own play
+//            history, local files included; kept to Spotify by the artwork
+//            (i.scdn.co) or a spotify uri
+//   search   music_assistant.search { name, media_type: [track] }
+//   play     media_player.repeat_set off, music_assistant.play_media
+//            { media_id: uri, media_type: track, enqueue: replace },
+//            repeat_set off again -- all on exactly the selected speakers,
+//            each sent only after the previous one has answered. The
+//            ambience automation leaves its speakers on repeat ONE; off
+//            before the play and once more after it, so the track does not
+//            loop whatever order Music Assistant applies them in.
+//
+// BEFORE the play, a selected ambience sound is deselected ('None'): the
+// automation stops the selected speakers, and the tablet and this menu stop
+// showing the old sound as playing -- so a later tap on that sound starts it
+// rather than doing nothing. The play waits for that stop to land
+// (stopLanded); if the helper still reads another sound at the timeout, the
+// play is abandoned with an error rather than fighting it.
+
+export const SPOTIFY_GREEN = '#1DB954';
+export const SPOTIFY_LIMIT = 25;
+export const RECENTS_FETCH = 50;
+export const SEARCH_DEBOUNCE_MS = 400;
+export const SEARCH_MIN_CHARS = 2;
+export const SPOTIFY_TIMEOUT_MS = 15000;
+export const PLAY_TIMEOUT_MS = 20000;
+export const NOTICE_MS = 4000;
+
+const SPOTIFY_URI = /^spotify[a-z0-9_-]*:\/\//i;
+const imageHost = url => { try { return new URL(String(url)).hostname; } catch (e) { return ''; } };
+
+/** A Music Assistant item from Spotify: a spotify uri, or Spotify's artwork CDN. */
+export function isSpotifyItem(item) {
+  if (!isObj(item) || typeof item.uri !== 'string') return false;
+  return SPOTIFY_URI.test(item.uri) || /(^|\.)scdn\.co$/i.test(imageHost(item.image));
+}
+
+/**
+ * Music Assistant tracks -> picker rows { uri, title, artists, image }: Spotify
+ * only, each uri once, at most `limit`. `image` is kept only as an https URL.
+ */
+export function spotifyTracks(items, limit) {
+  const seen = new Set();
+  const out = [];
+  (Array.isArray(items) ? items : []).forEach(it => {
+    if (out.length >= (limit || SPOTIFY_LIMIT) || !isSpotifyItem(it) || seen.has(it.uri)) return;
+    seen.add(it.uri);
+    const artists = (Array.isArray(it.artists) ? it.artists : []).map(a => (isObj(a) ? a.name : a)).filter(a => typeof a === 'string' && a).join(', ');
+    const img = typeof it.image === 'string' && /^https:\/\//.test(it.image) ? it.image : null;
+    out.push({ uri: it.uri, title: String(it.name || it.uri), artists, image: img });
+  });
+  return out;
+}
+
+/** The recents call: Music Assistant's last-played tracks. */
+export function recentsCall(entryId) {
+  return { domain: 'music_assistant', service: 'get_library',
+    data: { config_entry_id: entryId, media_type: 'track', order_by: 'last_played_desc', limit: RECENTS_FETCH } };
+}
+
+/** The search call. */
+export function searchCall(entryId, query) {
+  return { domain: 'music_assistant', service: 'search',
+    data: { config_entry_id: entryId, name: query, media_type: ['track'], limit: SPOTIFY_LIMIT } };
+}
+
+/** What the picker should show for a typed query: recents under SEARCH_MIN_CHARS, else that search. */
+export function pickerWant(query) {
+  const q = String(query || '').trim();
+  return q.length >= SEARCH_MIN_CHARS ? { kind: 'search', query: q } : { kind: 'recents', query: '' };
+}
+
+/** config_entries/get's list -> Music Assistant's entry id (a loaded one first), or null. */
+export function pickConfigEntry(entries) {
+  const list = (Array.isArray(entries) ? entries : []).filter(e => isObj(e) && typeof e.entry_id === 'string' && (!e.domain || e.domain === 'music_assistant'));
+  const loaded = list.find(e => e.state === 'loaded');
+  return (loaded || list[0] || {}).entry_id || null;
+}
+
+/** The play, in order, on exactly `selection`: repeat off, play_media, repeat off. */
+export function spotifyPlayCommands(selection, uri) {
+  const target = { entity_id: (selection || []).slice() };
+  const repeatOff = () => ({ domain: 'media_player', service: 'repeat_set', data: { repeat: 'off' }, target: { entity_id: target.entity_id.slice() } });
+  return [
+    repeatOff(),
+    { domain: 'music_assistant', service: 'play_media', data: { media_id: uri, media_type: 'track', enqueue: 'replace' }, target: { entity_id: target.entity_id.slice() } },
+    repeatOff(),
+  ];
+}
+
+/** An error from a Spotify call -> the line the picker shows. */
+export function spotifyErrorText(err) {
+  const m = String((err && err.message) || err || 'unknown error');
+  if (/did not answer/i.test(m)) return 'Music Assistant did not answer.';
+  if (/not connected|disconnected/i.test(m)) return 'Home Assistant is not connected.';
+  if (/not set up|entry not found/i.test(m)) return 'Music Assistant is not set up in Home Assistant (' + m + ').';
+  if (/no playable item|mediano?tfound|login|credential|unauthori[sz]ed|auth/i.test(m)) {
+    return 'Spotify could not play this. Music Assistant\'s Spotify sign-in may need redoing (Music Assistant: Settings, Providers, Spotify). (' + m + ')';
+  }
+  return 'Music Assistant: ' + m;
+}
+
+/**
+ * The demo's Spotify fixtures, in Music Assistant's response shape. Generic
+ * names, no artwork (rows show a placeholder), spotify--demo uris -- plus one
+ * local file in the recents, which the Spotify filter must drop.
+ */
+export const SAMPLE_SPOTIFY_TRACKS = [
+  ['Morning Light', 'Sample Artist'], ['Slow Tide', 'The Placeholders'], ['Quiet Hours', 'Demo Ensemble'],
+  ['Paper Lanterns', 'Sample Artist'], ['Late Train', 'The Placeholders'], ['Glasshouse', 'Demo Ensemble'],
+  ['Northern Window', 'Example Quartet'], ['Soft Static', 'Sample Artist, Demo Ensemble'], ['Lemon Grove', 'The Placeholders'],
+  ['Harbour Lights', 'Example Quartet'], ['Kite Season', 'Demo Ensemble'], ['Sunday Rooms', 'Sample Artist'],
+].map(([name, artists], i) => ({ media_type: 'track', uri: 'spotify--demo://track/demo_' + (i + 1), name, version: '', image: null, favorite: false,
+  explicit: null, artists: artists.split(', ').map(a => ({ media_type: 'artist', name: a })) }));
+
+/** The demo's response to a recents or a search call (no Home Assistant). */
+export function mockSpotifyResponse(kind, query) {
+  if (kind === 'search') {
+    const q = String(query || '').toLowerCase();
+    return { tracks: SAMPLE_SPOTIFY_TRACKS.filter(t => (t.name + ' ' + t.artists.map(a => a.name).join(' ')).toLowerCase().includes(q)),
+      artists: [], albums: [], playlists: [], radio: [] };
+  }
+  const local = { media_type: 'track', uri: 'library://track/1', name: 'Rain', version: '', image: null, artists: [{ name: 'Relaxing sounds' }] };
+  return { items: [local].concat(SAMPLE_SPOTIFY_TRACKS), limit: RECENTS_FETCH, offset: 0, order_by: 'last_played_desc', media_type: 'track' };
 }
 
 // ---------------------------------------------------------------------------
@@ -452,7 +613,8 @@ export function soundStatusKey(conn) {
  * Home Assistant (scripts/test-sound-menu.mjs).
  *
  * @param d  { cfg (normaliseSoundMenu), getHa: () => client|null,
- *           sendScript (src/script-call.js), now: () => ms }
+ *           sendScript (src/script-call.js), now: () => ms,
+ *           onChange: () => void (an async result landed: repaint) }
  */
 export function createSoundController(d) {
   const cfg = d.cfg;
@@ -468,6 +630,13 @@ export function createSoundController(d) {
   let optSel = null;    // { list, until }    PLAY ON, optimistic until the echo
   let tapped = null;    // the speaker the menu was opened from
   const sent = [];      // what went out (or was applied to the sample), for debug and tests
+  // Spotify: the open picker, the play in progress, and the last notice.
+  let picker = null;    // { query, queryAt, seq, shown: { kind, query }, status, items, error }
+  let job = null;       // { uri, title, selection, since, phase: 'stopping' | 'starting' }
+  let notice = null;    // { text, kind: 'ok' | 'error', until }
+  let entryId = cfg.spotify ? cfg.spotify.configEntryId : null;
+  let entryLookup = null;
+  const changed = () => { if (d.onChange) { try { d.onChange(); } catch (e) { /* a repaint must not break the controller */ } } };
 
   function send(c) {
     if (mockMode()) { mock = applyMockCommand(cfg, mockStates(), c); sent.push(Object.assign({ mock: true }, c)); return true; }
@@ -492,22 +661,157 @@ export function createSoundController(d) {
     const slides = nowPlaying(cfg, rawOf, sound, tapped);
     const tiles = orderSounds(catalogueTiles(rawOf(cfg.catalogue)), parseRecentIds(cfg.recent ? rawOf(cfg.recent) : null));
     if (busy && !pending && !isBusy(busy, t, soundSettled(busy.target, sound, realSelection(), rawOf))) busy = null;
+    const rows = speakerRows(cfg, selection(), tapped);
+    if (notice && notice.until <= t) notice = null;
     return {
-      statusKey, live, sound, slides,
-      rows: speakerRows(cfg, selection(), tapped),
-      pages: pageSounds(tiles),
+      statusKey, live, sound, slides, rows,
+      pages: pageSounds(cfg.spotify ? [{ id: '__spotify', label: 'Spotify', spotify: true }].concat(tiles) : tiles),
       stopAll: stopAllVisible(sound, slides),
       busy: busy ? { target: busy.target } : null,
+      spotify: !!cfg.spotify,
+      notice: notice ? { text: notice.text, kind: notice.kind } : null,
+      picker: picker ? {
+        query: picker.query, kind: picker.shown ? picker.shown.kind : 'recents', status: picker.status, error: picker.error,
+        items: picker.items, playing: job ? { uri: job.uri, phase: job.phase } : null,
+        on: rows.filter(r => r.selected).map(r => r.label),
+      } : null,
     };
   }
 
-  /** Advance the re-trigger: its second select goes out once retriggerReady. */
+  /**
+   * Advance what waits on time: the re-trigger's second select (or its
+   * abort), a Spotify play waiting on its 'None', and a debounced search.
+   * Returns true when the re-trigger's second select went out.
+   */
   function tick() {
-    if (!pending) return false;
-    if (!retriggerReady(pending.since, now(), currentSound(rawOf(cfg.sound)), realSelection(), rawOf)) return false;
-    const label = pending.label;
-    pending = null;
-    busy = send(selectSoundCommand(cfg, label)) ? { since: now(), target: label } : null;
+    let fired = false;
+    if (pending) {
+      const r = stopLanded(pending.since, now(), currentSound(rawOf(cfg.sound)), realSelection(), rawOf);
+      if (r === 'abort') { pending = null; busy = null; }
+      else if (r === 'ready') {
+        const label = pending.label;
+        pending = null;
+        busy = send(selectSoundCommand(cfg, label)) ? { since: now(), target: label } : null;
+        fired = true;
+      }
+    }
+    if (job && job.phase === 'stopping') {
+      const r = stopLanded(job.since, now(), currentSound(rawOf(cfg.sound)), job.selection, rawOf);
+      if (r === 'abort') { job = null; say('The ambience sound did not stop, so nothing was played.', 'error'); }
+      else if (r === 'ready') startPlay();
+    }
+    if (picker) {
+      const want = pickerWant(picker.query);
+      const shown = picker.shown;
+      const same = shown && shown.kind === want.kind && shown.query === want.query;
+      if (!same && (want.kind === 'recents' || now() - picker.queryAt >= SEARCH_DEBOUNCE_MS)) fetchList(want.kind, want.query);
+    }
+    return fired;
+  }
+
+  function say(text, kind) { notice = { text, kind, until: now() + NOTICE_MS }; if (picker && kind === 'error') picker.error = text; changed(); }
+
+  // ---- Spotify -------------------------------------------------------------
+  function resolveEntry() {
+    if (entryId) return Promise.resolve(entryId);
+    if (!entryLookup) {
+      entryLookup = ha().request({ type: 'config_entries/get', domain: 'music_assistant' }, SPOTIFY_TIMEOUT_MS).then(list => {
+        const id = pickConfigEntry(list);
+        if (!id) throw new Error('Music Assistant is not set up in Home Assistant');
+        entryId = id;
+        return id;
+      });
+      entryLookup.catch(() => { entryLookup = null; });   // a failed lookup is retried next time
+    }
+    return entryLookup;
+  }
+
+  function fetchList(kind, query) {
+    if (!picker) return;
+    const seq = ++picker.seq;
+    picker.shown = { kind, query };
+    picker.status = 'loading';
+    picker.error = null;
+    const respKey = kind === 'search' ? 'tracks' : 'items';
+    const p = mockMode() ? Promise.resolve(mockSpotifyResponse(kind, query))
+      : !writable() ? Promise.reject(new Error('Home Assistant is not connected'))
+        : resolveEntry().then(id => {
+          const c = kind === 'search' ? searchCall(id, query) : recentsCall(id);
+          sent.push(Object.assign({ read: true }, c));
+          return ha().callServiceForResponse(c.domain, c.service, c.data, undefined, SPOTIFY_TIMEOUT_MS);
+        });
+    p.then(resp => {
+      if (!picker || picker.seq !== seq) return;   // a newer list was asked for: drop this one
+      picker.items = spotifyTracks(resp && resp[respKey], SPOTIFY_LIMIT);
+      picker.status = 'ok';
+      changed();
+    }, err => {
+      if (!picker || picker.seq !== seq) return;
+      picker.items = [];
+      picker.status = 'error';
+      picker.error = spotifyErrorText(err);
+      changed();
+    });
+  }
+
+  /** Open the picker: recents, at once. */
+  function openPicker() {
+    if (!cfg.spotify || !model().live) return false;
+    picker = { query: '', queryAt: now(), seq: 0, shown: null, status: 'idle', items: [], error: null };
+    fetchList('recents', '');
+    return true;
+  }
+
+  /** A keystroke in the search box: the search follows SEARCH_DEBOUNCE_MS later (tick). */
+  function setQuery(q) {
+    if (!picker) return;
+    picker.query = String(q || '');
+    picker.queryAt = now();
+  }
+
+  function startPlay() {
+    const j = job;
+    j.phase = 'starting';
+    // The 'None' has landed: end its busy window now -- it would otherwise
+    // wait for the speakers to stop, and they are about to play Spotify.
+    busy = null;
+    const cmds = spotifyPlayCommands(j.selection, j.uri);
+    const done = () => {
+      if (job !== j) return;
+      job = null;
+      picker = null;
+      say('Playing on ' + j.selection.length + ' speaker' + (j.selection.length === 1 ? '' : 's'), 'ok');
+    };
+    if (mockMode()) { cmds.forEach(send); done(); return; }
+    cmds.reduce((prev, c) => prev.then(() => {
+      if (!writable()) throw new Error('Home Assistant is not connected');
+      sent.push(c);
+      return ha().request({ type: 'call_service', domain: c.domain, service: c.service, service_data: c.data, target: c.target }, PLAY_TIMEOUT_MS);
+    }), Promise.resolve()).then(done, err => {
+      if (job !== j) return;
+      job = null;
+      say(spotifyErrorText(err), 'error');
+    });
+  }
+
+  /**
+   * A picker row: play `uri` on every selected speaker. A selected ambience
+   * sound is deselected first and the play waits for that stop (tick).
+   */
+  function playTrack(uri) {
+    const m = model();
+    if (!m.live || !cfg.spotify || job || pending) return false;
+    const sel = realSelection();
+    if (!sel.length) { say('Select a speaker first.', 'error'); return false; }
+    const item = picker && picker.items.find(x => x.uri === uri);
+    job = { uri, title: item ? item.title : uri, selection: sel, since: now(), phase: 'stopping' };
+    if (soundActive(m.sound)) {
+      if (!send(selectSoundCommand(cfg, SOUND_NONE))) { job = null; return false; }
+      busy = { since: now(), target: SOUND_NONE };
+    } else {
+      startPlay();
+    }
+    changed();
     return true;
   }
 
@@ -529,13 +833,15 @@ export function createSoundController(d) {
       return true;
     }
     if (action === 'snd') {
-      if (m.busy || pending) return false;
+      if (m.busy || pending || job) return false;
       const plan = soundTapPlan(arg, m.sound);
       if (!send(selectSoundCommand(cfg, plan.first))) return false;
       busy = { since: now(), target: plan.then || plan.first };
       if (plan.retrigger) pending = { label: plan.then, since: now() };
       return true;
     }
+    // Only ever a configured speaker: a slide's buttons carry its entity id.
+    if (action !== 'stopAll' && !cfg.speakers.some(s => s.entity === arg)) return false;
     if (action === 'stopAll' || action === 'stop') {
       const cmds = action === 'stopAll' ? stopAllCommands(cfg, m.sound, realSelection(), m.slides)
         : slideStopCommands(cfg, arg, m.slides, m.sound);
@@ -550,8 +856,12 @@ export function createSoundController(d) {
 
   return {
     cfg, model, tap, tick, rawOf,
+    openPicker, setQuery, playTrack,
+    closePicker() { picker = null; },
+    pickerOpen: () => !!picker,
     setTapped(e) { tapped = e || null; },
     pendingRetrigger: () => !!pending,
+    playing: () => (job ? { uri: job.uri, phase: job.phase } : null),
     sent: () => sent.slice(),
   };
 }

@@ -24,6 +24,16 @@
  * holdAuth: true stops after auth_required (the socket is OPEN but not yet
  * authenticated) until releaseAuth() is called.
  *
+ * respond(msg): optional, consulted for every command other than auth and
+ * get_states (call_service included, return_response or not; and
+ * config_entries/get, ...). Return undefined for the default (success,
+ * result null); { result } to answer with that result -- for a
+ * return_response call that is { context, response }; { error: { code,
+ * message } } to fail it as HA does (success: false); { hold: true } to
+ * never answer (a timeout); or a Promise of any of these to answer later
+ * (out of order, for the stale-response tests). Commands are recorded in
+ * `calls` / `sent` exactly as before whatever it returns.
+ *
  * NO REAL HOME ASSISTANT, MECHANICALLY. Tests drive a client that can play
  * audio and move curtains in a real home, so "only ever use the fake" is not
  * left to prose:
@@ -62,7 +72,7 @@ export class RefusedWebSocket {
 }
 globalThis.WebSocket = RefusedWebSocket;
 
-export function installFakeHA({ states = [], holdAuth = false } = {}) {
+export function installFakeHA({ states = [], holdAuth = false, respond = null } = {}) {
   const realFetch = globalThis.fetch;
   const calls = [];        // call_service commands, in order
   const sent = [];         // every client -> server message, in order
@@ -112,10 +122,20 @@ export function installFakeHA({ states = [], holdAuth = false } = {}) {
           body: { ...(msg.service_data || {}), ...(msg.target || {}) },
           msg
         });
-        this._deliver({ id: msg.id, type: 'result', success: true, result: null });
+        this._answer(msg);
       } else {
-        this._deliver({ id: msg.id, type: 'result', success: true, result: null });
+        this._answer(msg);
       }
+    }
+    _answer(msg) {
+      const out = respond ? respond(msg) : undefined;
+      const deliver = r => {
+        if (r && r.hold) return;
+        if (r && r.error) this._deliver({ id: msg.id, type: 'result', success: false, error: r.error });
+        else this._deliver({ id: msg.id, type: 'result', success: true, result: r && 'result' in r ? r.result : null });
+      };
+      if (out && typeof out.then === 'function') out.then(deliver);
+      else deliver(out);
     }
     close() {
       if (this.readyState === FakeWebSocket.CLOSED) return;

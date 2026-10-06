@@ -5211,7 +5211,7 @@
             },
             "soundMenu": {
               "type": "object",
-              "description": "The SOUND MENU (src/sound-menu.js): a centred modal mirroring a Home Assistant ambience pop-up, in three sections -- NOW PLAYING (a slide per listed speaker whose state is 'playing', with volume, previous, play/pause, next and stop, and a 'Stop all' pill), PLAY ON (the speaker checklist, read from `selection`; a tap runs `toggleScript` via script.turn_on with variables { entity_id }) and SOUNDS (the `catalogue` sensor's `tiles`, recents first then A-Z, six per page; a tap selects the tile's label on `sound`, and Home Assistant's own automation plays it on the selected speakers -- the app never calls play_media). Tapping the sound that is already selected re-triggers it ('None', then the label once the stop has landed). Nothing is sent on open or render. A tap on any furniture item named in `openFrom` opens it. Every key except `recent` and `openFrom` is required. Needs rooms schemaVersion 1.12.",
+              "description": "The SOUND MENU (src/sound-menu.js): a centred modal mirroring a Home Assistant ambience pop-up, in three sections -- NOW PLAYING (a slide per listed speaker whose state is 'playing', with volume, previous, play/pause, next and stop, and a 'Stop all' pill), PLAY ON (the speaker checklist, read from `selection`; a tap runs `toggleScript` via script.turn_on with variables { entity_id }) and SOUNDS (the `catalogue` sensor's `tiles`, recents first then A-Z, six per page; a tap selects the tile's label on `sound`, and Home Assistant's own automation plays it on the selected speakers -- the app never calls play_media). Tapping the sound that is already selected re-triggers it ('None', then the label once the stop has landed). Nothing is sent on open or render. A tap on any furniture item named in `openFrom` opens it. Every key except `recent`, `openFrom` and `spotify` is required. Needs rooms schemaVersion 1.12.",
               "required": [
                 "selection",
                 "toggleScript",
@@ -5327,6 +5327,18 @@
                         "type": "null"
                       }
                     ]
+                  }
+                },
+                "spotify": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "OPTIONAL. Present (even as {}), the SOUNDS section gains a Spotify tile, first, opening a picker: Music Assistant's recently played Spotify tracks, or a search. A pick plays on every selected speaker via music_assistant.play_media (repeat_set off before and after), once the selected ambience sound has been deselected ('None') and its stop has landed. Spotify must be a Music Assistant provider. Absent, there is no tile. Added within schemaVersion 1.12: an optional key, so a profile without it is unchanged.",
+                  "properties": {
+                    "configEntryId": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]+$",
+                      "description": "The Home Assistant CONFIG ENTRY id of the Music Assistant integration (Settings > Devices & services > Music Assistant; a 26-character id) -- what MA's services take as config_entry_id. NOT the provider instance id that appears in a track uri (spotify--xxxx). Omitted, the app looks it up once over the WebSocket (config_entries/get, domain music_assistant), preferring a loaded entry."
+                    }
                   }
                 }
               }

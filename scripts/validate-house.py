@@ -1209,9 +1209,11 @@ def check_sound_menu_binding(rooms_doc, geo, sensors, version, report):
     furniture item behind it can never be tapped -- an error; so is an
     `openFrom` value that is not one of `speakers` (the engine would open the
     menu with no speaker highlighted), and a speaker listed twice. An
-    `openFrom` item that ALSO has a `sensors.items` card is warned: the menu
-    wins the tap, so the card can never open. The schema already enforces the
-    shape and every entity's domain.
+    `openFrom` item that ALSO has a `sensors.items` card is warned (the menu
+    wins the tap, so the card can never open), and so is one also bound as a
+    vacuum or a plant (that card wins, so the menu never opens from it). The
+    schema already enforces the shape, every entity's domain and the optional
+    `spotify` block.
     """
     sm = sensors.get("soundMenu")
     if sm is None:
@@ -1239,6 +1241,9 @@ def check_sound_menu_binding(rooms_doc, geo, sensors, version, report):
             report.error(w, f"opens the sound menu from furniture item '{iid}', which has no matching item in geometry.json's furniture")
         if iid in items:
             report.warn(w, f"furniture item '{iid}' also has a sensors.items card -- the sound menu wins the tap, so that card never opens")
+        for kind in ("vacuums", "plants"):
+            if iid in (sensors.get(kind) or {}):
+                report.warn(w, f"furniture item '{iid}' is also bound in sensors.{kind} -- that card wins the tap, so the sound menu never opens from it")
         if eid is not None and eid not in seen:
             report.error(w, f"'{eid}' is not one of soundMenu.speakers -- name a listed speaker, or null")
 
