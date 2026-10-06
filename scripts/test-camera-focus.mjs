@@ -455,7 +455,8 @@ console.log('wiring');
     (scene.match(/cancelFlight\(\);/g) || []).length >= 6);
   check('scene: the flight feeds `animating` (zero frames after landing)', /if \(flightMoving\) animating = true;/.test(scene));
   check('scene: reduced motion jumps', /prefers-reduced-motion: reduce/.test(scene) && /reducedMotion\(\)\) \{ applyPose\(pose\)/.test(scene));
-  check('tap-popovers: the card opens through the generation gate', /focusThenOpen\(focusGate/.test(tap));
+  check('tap-popovers: every tap opens through the dispatcher and its generation gate',
+    /createTapDispatcher\(\{[\s\S]{0,900}gate: focusGate,/.test(tap) && /focusThenOpen\(o\.gate/.test(read('src/tap-dispatch.js')));
   check('tap-popovers: every close reports why', !/[^.]close\(\);/.test(tap.slice(tap.indexOf('export function attachTapPopovers'))));
 }
 

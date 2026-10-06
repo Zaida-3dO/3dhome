@@ -68,7 +68,8 @@ import { normaliseItemBindings, furnitureTapTarget, tappableFurnitureIds, mediaR
   clockTitle, radiatorTitle, roomThingTitle, switchRowModel, switchCommand, cameraRowModel, cameraSnapshotUrl, cameraStreamUrl,
   createCameraFeed } from './item-cards.js';
 import { sendScript, createActionButton, actionButtonText, createKeyIntent, isActivationKey } from './script-call.js';
-import { createFocusGate, focusThenOpen } from './camera-focus.js';
+import { createFocusGate } from './camera-focus.js';
+import { defineTapRoutes, createTapDispatcher, FOCUS_OPT_OUTS } from './tap-dispatch.js';
 
 export const OPACITY_SOLID = 0.35;   // below this a mesh is see-through for picking
 export const TAP_SLOP_PX = 5;        // same rule as the scene's own room click
@@ -1343,6 +1344,54 @@ export const clockTick = {
 };
 
 /**
+ * THE TAP ROUTE TABLE: every kind of tap target and what it opens. Validated
+ * by src/tap-dispatch.js defineTapRoutes and run ONLY through its dispatcher,
+ * which flies the camera to the target before calling `open` (see that
+ * file's header). A route never decides whether the camera flies; skipping
+ * the flight is an explicit `focus: false` with a reason, allowed only for a
+ * kind listed in FOCUS_OPT_OUTS. scripts/test-tap-focus-contract.mjs fails if
+ * a card or the sound menu is opened anywhere outside this block (or the
+ * marked ?debug=1 seam).
+ *
+ * @param d  { openCard(t, x, y), project(point) => {x, y} | null,
+ *           closeCard(why), soundMenu (src/sound-menu.js handle) | null,
+ *           onClose(target, why) }
+ */
+export function buildTapRoutes(d) {
+  // TAP-ROUTES:BEGIN -- the only place a tap opens a card or a modal.
+  // A compact card, anchored where the tapped point projects after the
+  // flight (the tap position when the camera did not move, or the point is
+  // off screen).
+  const card = (t, point, at) => {
+    const p = at.flew ? d.project(point) : null;
+    d.openCard(t, p ? p.x : at.x, p ? p.y : at.y);
+  };
+  return defineTapRoutes([
+    { kind: 'light', open: card },
+    { kind: 'curtain', open: card },
+    { kind: 'climate', open: card },
+    { kind: 'vacuum', open: card },
+    { kind: 'plant', open: card },
+    { kind: 'item', open: card },
+    { kind: 'clock', open: card },
+    { kind: 'door', focus: false, reason: FOCUS_OPT_OUTS.door, open: (t, point, at) => d.openCard(t, at.x, at.y) },
+    // The sound menu: a modal, opened over the framed speaker. On a wide
+    // screen it docks to the right (cover) so the flight frames the speaker
+    // in the part of the canvas left uncovered.
+    {
+      kind: 'soundMenu',
+      cover: () => (d.soundMenu && typeof d.soundMenu.coverRight === 'function' ? d.soundMenu.coverRight() : 0),
+      open: t => {
+        if (!d.soundMenu) return;
+        d.closeCard('replace');
+        d.soundMenu.open({ itemId: t.itemId, speaker: t.speaker, onClose: why => d.onClose(t, why) });
+      },
+    },
+  ]);
+  // TAP-ROUTES:END
+}
+
+/**
  * Attach the popover layer.
  *
  * @param {Object} o
@@ -1369,8 +1418,12 @@ export const clockTick = {
  *                          rect is kept out of placement bounds, and toggling
  *                          its 'open' class closes the card
  * @param o.debug           expose window.__home3dTap (removed again on dispose)
- * @param o.focus           OPTIONAL (target, point) => Promise -- camera focus
- *                          (src/camera-focus.js). A tap awaits it (the camera
+ * @param o.focus           OPTIONAL (target, point, frame) => Promise -- camera
+ *                          focus (src/camera-focus.js); frame: { coverRight }
+ *                          px the opened UI will cover. EVERY tap route (the
+ *                          sound menu included) goes through it via the
+ *                          dispatcher (src/tap-dispatch.js; doors are the one
+ *                          declared opt-out). A tap awaits it (the camera
  *                          flies to the target) and THEN opens the card,
  *                          anchored where the tapped point now projects: the
  *                          card closes when the camera moves, so it cannot open
@@ -2339,7 +2392,7 @@ export function attachTapPopovers(o) {
     syncMarq(p);
   }
 
-  function open(target, x, y) {
+  function openCard(target, x, y) {
     const returnTo = pop ? pop.returnTo : document.activeElement;
     close(false, 'replace');
     const el = document.createElement('div');
@@ -2396,11 +2449,28 @@ export function attachTapPopovers(o) {
   const pointers = new Set();
   let downX = 0, downY = 0, multi = false;
   const inCanvas = e => container.contains(e.target);
-  // Camera focus: one generation per tap that flies before opening.
+  // Camera focus: one generation per tap that flies before opening. Every
+  // tap goes through ONE dispatcher (src/tap-dispatch.js): it flies to the
+  // target and only then calls the route's open -- no route can open from
+  // the click itself, and no route can forget the flight.
   const focusGate = createFocusGate();
-  let focusInFlight = 0;   // taps whose flight has not resolved yet
   let abandonWhy = 'tap';  // what last superseded one ('tap' | 'wheel' | 'escape' | 'dispose')
-  const supersede = why => { if (focusInFlight) { abandonWhy = why; focusGate.invalidate(); } };
+  const tapDispatch = createTapDispatcher({
+    routes: buildTapRoutes({
+      // TAP-OPEN-ALLOWED: handed to the route table, which the dispatcher alone runs
+      openCard: (t, x, y) => { if (!disposed) openCard(t, x, y); },
+      project: pt => projectPoint(pt),
+      closeCard: why => close(false, why),
+      soundMenu: o.soundMenu || null,
+      onClose: (t, why) => { if (typeof o.onClose === 'function') { try { o.onClose(t, why); } catch (err) { /* ignore */ } } },
+    }),
+    gate: focusGate,
+    focus: typeof o.focus === 'function' ? o.focus : null,
+    onAbandon: target => {
+      if (typeof o.onFocusAbandon === 'function') { try { o.onFocusAbandon(target, abandonWhy); } catch (err) { /* ignore */ } }
+    },
+  });
+  const supersede = why => { if (tapDispatch.inFlight()) { abandonWhy = why; focusGate.invalidate(); } };
   const onPointerDown = e => {
     // A pointer down anywhere outside a card while a tap's flight is still
     // in the air supersedes that tap: its card must not open afterwards.
@@ -2422,44 +2492,19 @@ export function attachTapPopovers(o) {
     if (typeof o.tapClaimed === 'function' && o.tapClaimed()) return;
     if (Math.abs(e.clientX - downX) > TAP_SLOP_PX || Math.abs(e.clientY - downY) > TAP_SLOP_PX) return;
     const res = pickAt(e.clientX, e.clientY);
-    if (res && res.target && res.target.kind === 'soundMenu') {
-      // The sound menu is a centred modal, not a card at the tap point: no
-      // camera flight, and the menu closes any open card itself.
-      e.stopPropagation();
-      focusGate.invalidate();
-      close(false, 'replace');
-      o.soundMenu.open({ itemId: res.target.itemId, speaker: res.target.speaker });
-      return;
+    if (!res || !res.target) return;
+    e.stopPropagation();   // this tap is ours: no room selection underneath
+    // Tell the page first (an unpinned sidebar closes on an object tap),
+    // THEN dispatch. The sidebar-toggle rule below ("opening or closing the
+    // sidebar closes the card") must not kill the card this same tap is
+    // opening, so the class flip the hook just made is absorbed here.
+    if (typeof o.onObjectTap === 'function') {
+      try { o.onObjectTap(res.target, res.point); } catch (err) { /* the page's hook must not cost the tap */ }
+      syncSidebarOpen();
     }
-    if (res && res.target) {
-      e.stopPropagation();   // this tap is ours: no room selection underneath
-      // Tell the page first (an unpinned sidebar closes on an object tap),
-      // THEN open. The sidebar-toggle rule below ("opening or closing the
-      // sidebar closes the card") must not kill the card this same tap is
-      // opening, so the class flip the hook just made is absorbed here.
-      if (typeof o.onObjectTap === 'function') {
-        try { o.onObjectTap(res.target, res.point); } catch (err) { /* the page's hook must not cost the tap */ }
-        syncSidebarOpen();
-      }
-      // Fly first, then open where the tapped point now is on screen. A
-      // door's chip opens at once: framing doors is out of scope. o.focus
-      // returning null (focus switched off) opens at once, exactly as before.
-      const target = res.target, point = res.point;
-      const flight = typeof o.focus === 'function' && target.kind !== 'door' ? o.focus(target, point) : null;
-      if (flight) {
-        focusInFlight++;
-        focusThenOpen(focusGate, () => flight, () => {
-          if (disposed) return;
-          const at = projectPoint(point);
-          open(target, at ? at.x : e.clientX, at ? at.y : e.clientY);
-        }, () => {
-          if (typeof o.onFocusAbandon === 'function') { try { o.onFocusAbandon(target, abandonWhy); } catch (err) { /* ignore */ } }
-        }).finally(() => { focusInFlight--; });
-        return;
-      }
-      focusGate.invalidate();
-      open(res.target, e.clientX, e.clientY);
-    }
+    // Fly, then open (the route anchors a card where the tapped point now
+    // projects). The ONLY way a tap opens anything.
+    tapDispatch.dispatch(res.target, res.point, { x: e.clientX, y: e.clientY });
   };
   // The client-pixel position of a world point, or null when it is behind
   // the camera or off the canvas.
@@ -2551,7 +2596,8 @@ export function attachTapPopovers(o) {
           if (title) t.label = title;
         }
         if (!t) return false;
-        open(t, x, y);
+        // TAP-OPEN-ALLOWED: debug seam (?debug=1), not a tap
+        openCard(t, x, y);
         return true;
       }
       else ents = (bindings[kind + 's'] || {})[id];
@@ -2560,7 +2606,8 @@ export function attachTapPopovers(o) {
       if (kind === 'light') { t.roomId = id.split('/')[0]; t.channel = id.split('/')[1]; }
       if (kind === 'vacuum') t.binding = vacuums.get(id);
       if (kind === 'plant') t.binding = plants.get(id);
-      open(t, x, y);
+      // TAP-OPEN-ALLOWED: debug seam (?debug=1), not a tap
+      openCard(t, x, y);
       return true;
     },
     /** SIMULATE a connection status / raw entity states (debug only). */

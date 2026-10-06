@@ -45,6 +45,11 @@ export const SOUND_STATUS = {
   mock: ['bad', 'Not connected', 'No Home Assistant configured. Showing sample speakers and sounds; changes only preview.'],
 };
 
+/** The sheet's width (px), the side gap when docked, and the narrowest viewport that docks it. */
+export const SHEET_W = 440;
+export const SIDE_GAP = 24;
+export const SIDE_MIN_VW = 900;
+
 export const STYLE = `
 .sm-backdrop { position: fixed; inset: 0; z-index: 80; display: flex; align-items: center; justify-content: center;
   background: rgba(0,0,0,0.55); overscroll-behavior: contain;
@@ -62,6 +67,7 @@ export const STYLE = `
   --sm-off-bg: rgba(0,0,0,0.03); --sm-off-bd: rgba(0,0,0,0.10);
   --sm-ph-bg: rgba(0,0,0,0.02); --sm-ph-bd: rgba(0,0,0,0.16);
   --sm-red: #dc2626; --sm-red-bg: rgba(220,38,38,0.10); --sm-red-bd: rgba(220,38,38,0.35); --sm-hover: rgba(0,0,0,0.06); }
+.sm-backdrop.side { justify-content: flex-end; padding-right: 24px; background: rgba(0,0,0,0.22); }
 .sm-sheet { width: min(440px, 96vw); max-height: 88vh; display: flex; flex-direction: column; border-radius: 18px;
   background: var(--sm-bg); color: var(--sm-ink); box-shadow: 0 12px 48px rgba(0,0,0,0.45); outline: none; overflow: hidden;
   font-family: inherit; }
@@ -187,7 +193,7 @@ export function createSoundMenu(o) {
   const model = () => ctl.model();
 
   let root = null, sheet = null, body = null, styleEl = null;
-  let returnTo = null, sig = null, timer = 0, downOnBackdrop = false;
+  let returnTo = null, sig = null, timer = 0, downOnBackdrop = false, onCloseHook = null;
   const subscribed = new WeakSet();
 
   // ---- markup ----------------------------------------------------------------
@@ -360,7 +366,7 @@ export function createSoundMenu(o) {
 
   function act(btn) {
     const a = btn.dataset.a;
-    if (a === 'close') { close(true); return; }
+    if (a === 'close') { close(true, 'dismiss'); return; }
     if (a === 'dot') {
       const c = root.querySelector('.sm-car[data-car="' + btn.dataset.car + '"]');
       const k = c && c.children[+btn.dataset.i];
@@ -391,7 +397,7 @@ export function createSoundMenu(o) {
     e.stopPropagation();   // nothing beneath the modal hears a key (room nav, camera)
     if (e.key === 'Escape') {
       e.preventDefault();
-      if (ctl.pickerOpen()) { ctl.closePicker(); render(true); } else close(true);
+      if (ctl.pickerOpen()) { ctl.closePicker(); render(true); } else close(true, 'escape');
       return;
     }
     if (e.key !== 'Tab') return;
@@ -402,8 +408,20 @@ export function createSoundMenu(o) {
     else if (!e.shiftKey && (i === -1 || i === f.length - 1)) { e.preventDefault(); f[0].focus(); }
   };
 
+  // DOCKED BESIDE THE SPEAKER: on a screen wide enough to keep the speaker
+  // visible next to the sheet, it docks to the right edge and the camera
+  // flight that precedes it (src/tap-dispatch.js) frames the speaker in the
+  // canvas left of it; the backdrop is lighter so the speaker still reads.
+  // Narrower, the sheet is most of the screen wide: it stays centred.
+  function coverRight() {
+    const w = win.innerWidth || 0;
+    return w >= SIDE_MIN_VW ? SHEET_W + 2 * SIDE_GAP : 0;
+  }
   function open(t) {
     if (o.onOpen) { try { o.onOpen(); } catch (e) { /* the page's hook must not cost the menu */ } }
+    // The opener's close hook (the tap route: the camera returns when the
+    // menu closes). A re-open replaces it.
+    onCloseHook = t && typeof t.onClose === 'function' ? t.onClose : null;
     const h = ha();
     if (h && !subscribed.has(h)) {
       subscribed.add(h);
@@ -415,7 +433,7 @@ export function createSoundMenu(o) {
     if (!styleEl) { styleEl = doc.createElement('style'); styleEl.textContent = STYLE; doc.head.appendChild(styleEl); }
     returnTo = doc.activeElement;
     root = doc.createElement('div');
-    root.className = 'sm-backdrop';
+    root.className = 'sm-backdrop' + (coverRight() ? ' side' : '');
     root.dataset.soundMenu = '';
     sheet = doc.createElement('div');
     sheet.className = 'sm-sheet';
@@ -428,7 +446,7 @@ export function createSoundMenu(o) {
     root.addEventListener('wheel', onWheel, { passive: false });
     root.addEventListener('pointerdown', e => { downOnBackdrop = e.target === root; });
     root.addEventListener('click', e => {
-      if (e.target === root) { if (downOnBackdrop) close(true); return; }
+      if (e.target === root) { if (downOnBackdrop) close(true, 'dismiss'); return; }
       const b = e.target.closest && e.target.closest('button[data-a]');
       if (b && sheet.contains(b)) act(b);
     });
@@ -440,8 +458,10 @@ export function createSoundMenu(o) {
     ensureTimer();
   }
 
-  function close(restoreFocus) {
+  function close(restoreFocus, why) {
     if (!root) return;
+    const hook = onCloseHook;
+    onCloseHook = null;
     win.removeEventListener('keydown', onKeyDown, true);
     if (root.parentNode) root.parentNode.removeChild(root);
     root = sheet = body = null;
@@ -449,20 +469,22 @@ export function createSoundMenu(o) {
     ctl.closePicker();
     if (restoreFocus && returnTo && returnTo !== doc.body && returnTo.isConnected && returnTo.focus) returnTo.focus({ preventScroll: true });
     returnTo = null;
+    if (hook) { try { hook(why || 'api'); } catch (e) { /* the opener's hook must not break the close */ } }
   }
 
   const api = {
     openFrom: cfg.openFrom,
     config: cfg,
     open,
-    close: () => close(false),
+    close: () => close(false, 'api'),
+    coverRight,
     isOpen: () => !!root,
     refresh: () => render(false),
     /** Debug: what was sent (or applied to the sample), and the current model. */
     _sent: () => ctl.sent(),
     _model: () => model(),
     dispose() {
-      close(false);
+      close(false, 'dispose');
       clearInterval(timer); timer = 0;
       if (styleEl && styleEl.parentNode) styleEl.parentNode.removeChild(styleEl);
       if (o.debug && win.__home3dSound === api) delete win.__home3dSound;
