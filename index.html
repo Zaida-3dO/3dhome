@@ -2577,7 +2577,8 @@
       roomNavNext.addEventListener('click', () => stepRoom('next'));
       window.addEventListener('keydown', e => {
         const dialogOpen = !!(tapPopovers && tapPopovers.isOpen())
-          || !!document.querySelector('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]');
+          || Array.from(document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]'))
+            .some(d => !d.closest('[hidden]')); // the shut-down confirmation is always in the DOM, hidden until asked
         const act = roomNavKeyAction({
           key: e.key, target: e.target, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey,
           selectedRoom, dialogOpen,
@@ -3771,8 +3772,12 @@
       confirmCancelBtn.addEventListener('click', () => confirmDialog.cancel());
       confirmOkBtn.addEventListener('click', () => confirmDialog.confirm());
       confirmBackdrop.addEventListener('click', e => { if (e.target === confirmBackdrop) confirmDialog.cancel(); });
+      // Escape is caught at the document (capture) while the dialog is open,
+      // so it cancels wherever focus happens to be.
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && confirmDialog.isOpen) { e.preventDefault(); e.stopPropagation(); confirmDialog.cancel(); }
+      }, true);
       confirmBackdrop.addEventListener('keydown', e => {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); confirmDialog.cancel(); return; }
         if (e.key === 'Tab') {
           e.preventDefault();
           (document.activeElement === confirmCancelBtn ? confirmOkBtn : confirmCancelBtn).focus();

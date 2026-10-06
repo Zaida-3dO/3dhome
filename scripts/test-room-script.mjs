@@ -249,7 +249,9 @@ function dialog(opts = {}) {
   check('index: result state is keyed by script entity + variables, not by row position',
     /scriptButtonId = \(rid, b\) => rid \+ '\|' \+ b\.entity \+ '\|' \+ JSON\.stringify\(b\.variables \|\| \{\}\)/.test(html));
   check('index: Escape and a backdrop tap cancel',
-    /e\.target === confirmBackdrop\) confirmDialog\.cancel\(\)/.test(html) && /e\.key === 'Escape'\) \{[^}]*confirmDialog\.cancel\(\)/.test(html));
+    /e\.target === confirmBackdrop\) confirmDialog\.cancel\(\)/.test(html) && /e\.key === 'Escape' && confirmDialog\.isOpen\) \{[^}]*confirmDialog\.cancel\(\)/.test(html));
+  check('index: room-nav arrows ignore only a VISIBLE dialog (the hidden confirm must not disable them)',
+    /\.some\(d => !d\.closest\('\[hidden\]'\)\)/.test(html));
   check('index: focus lands on Cancel', /confirmBackdrop\.hidden = false;\s*confirmCancelBtn\.focus\(\);/.test(html));
   check('index: the dialog is an aria-modal alertdialog', /role="alertdialog" aria-modal="true"/.test(html));
   check('index: the old arm-then-tap flow is gone',
