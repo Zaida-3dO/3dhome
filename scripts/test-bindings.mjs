@@ -120,7 +120,11 @@ console.log('3. writers: legacy slot first');
   check('an inverted curtain cannot be said by the slot: it goes to `bindings`', r.bindings['curtain:lounge_sheer'].openPct.transform === 'invert' &&
     !('lounge_sheer' in r.sensors.curtains), r.bindings);
   check('... only non-default fields are written', JSON.stringify(r.bindings['curtain:lounge_sheer'].openPct) === J({ entity: 'cover.demo_new', transform: 'invert' }));
-  check('... schemaVersion goes to 1.11', r.schemaVersion === '1.11');
+  // (The demo is past 1.11 -- sensors.soundMenu is 1.12 -- so the raise is
+  // checked on a 1.10 copy, and the demo's own version must never be lowered.)
+  check('... schemaVersion goes to 1.11', B.setTargetBinding(Object.assign(clone(rooms), { schemaVersion: '1.10' }), 'curtain:lounge_sheer',
+    { openPct: { entity: 'cover.demo_new', transform: 'invert' } }).schemaVersion === '1.11');
+  check('... and a newer one is never lowered', r.schemaVersion === rooms.schemaVersion);
   check('... and the target is bound exactly once', B.normaliseBindings(r).errors.length === 0);
   const back = B.setTargetBinding(r, 'curtain:lounge_sheer', { openPct: { entity: 'cover.demo_new' } });
   check('back to a default binding: the slot again, the block emptied away', JSON.stringify(back.sensors.curtains.lounge_sheer) === J(['cover.demo_new']) && !back.bindings);
@@ -154,12 +158,41 @@ console.log('3. writers: legacy slot first');
   const s = B.setRoomSidebar(rooms, 'lounge', { hide: ['ambient', 'ambient'], show: [], extra: [{ kind: 'script', entity: 'script.demo_kill', label: ' Kill room ', confirm: true }] });
   check('setRoomSidebar: deduped hide, trimmed label, empty lists left out', JSON.stringify(s.sidebar.lounge) ===
     J({ hide: ['ambient'], extra: [{ kind: 'script', entity: 'script.demo_kill', label: 'Kill room', confirm: true }] }), s.sidebar);
-  check('... schemaVersion goes to 1.11', s.schemaVersion === '1.11');
+  check('... schemaVersion goes to 1.11', B.setRoomSidebar(Object.assign(clone(rooms), { schemaVersion: '1.10' }), 'lounge', { hide: ['ambient'] }).schemaVersion === '1.11');
   check('... an empty config removes the room and the block', !B.setRoomSidebar(s, 'lounge', {}).sidebar);
   threw = false;
   try { B.setRoomSidebar(rooms, 'lounge', { extra: [{ kind: 'cover', entity: 'light.demo_x', label: 'x' }] }); } catch (e) { threw = true; }
   check('an extra of the wrong domain is refused', threw);
   check('confirm is a script-only field', !('confirm' in B.setRoomSidebar(rooms, 'lounge', { extra: [{ kind: 'light', entity: 'light.demo_x', label: 'x', confirm: true }] }).sidebar.lounge.extra[0]));
+}
+
+// ---- 3b. an edit-mode save leaves sensors.soundMenu alone ----------------------------------
+// Edit mode has no sound-menu UI: every writer must carry the block through
+// untouched (plan review #5). Losing it silently would kill the menu.
+console.log('3b. every edit-mode writer leaves sensors.soundMenu untouched');
+{
+  const before = J(rooms.sensors.soundMenu);
+  check('(fixture) the demo carries a soundMenu block', !!rooms.sensors.soundMenu && rooms.sensors.soundMenu.speakers.length > 0);
+  const kept = (name, doc) => {
+    check(name + ': soundMenu is the SAME object, unchanged', doc.sensors.soundMenu === rooms.sensors.soundMenu && J(doc.sensors.soundMenu) === before,
+      doc.sensors && doc.sensors.soundMenu);
+  };
+  kept('setTargetBinding (a slot)', B.setTargetBinding(rooms, 'curtain:lounge_sheer', { openPct: { entity: 'cover.demo_new' } }));
+  kept('setTargetBinding (the bindings block)', B.setTargetBinding(rooms, 'curtain:lounge_sheer', { openPct: { entity: 'cover.demo_new', transform: 'invert' } }));
+  kept('setTargetBinding (unbind)', B.setTargetBinding(rooms, 'curtain:lounge_sheer', null));
+  kept('setTargetBinding (a light)', B.setTargetBinding(rooms, 'light:study/main', { on: { entity: 'light.demo_a' }, brightness: { entity: 'light.demo_b' }, color: { entity: 'light.demo_a' } }));
+  let it = B.addItemRow(rooms, 'kitchen_robot', 'light', 'light.demo_shelf');
+  kept('addItemRow', it);
+  it = B.setItemRowEntity(it, 'kitchen_robot', B.itemRows(it, 'kitchen_robot')[0], 'light.demo_other');
+  kept('setItemRowEntity', it);
+  kept('removeItemRow', B.removeItemRow(it, 'kitchen_robot', B.itemRows(it, 'kitchen_robot')[0]));
+  kept('setRoomSidebar', B.setRoomSidebar(rooms, 'lounge', { hide: ['ambient'] }));
+  // ...and through the draft and the export, byte for byte.
+  const r = B.setTargetBinding(rooms, 'curtain:lounge_sheer', null);
+  const out = X.exportProfile({ geometryText: geoText, roomsText }, { geometry: geo, rooms: r });
+  check('export: the soundMenu block is still in rooms.json, unchanged', J(JSON.parse(out.rooms).sensors.soundMenu) === before);
+  const block = t => t.slice(t.indexOf('"soundMenu"'), t.indexOf('}', t.indexOf('"openFrom"')));
+  check('export: ... and its lines are byte-identical', block(out.rooms) === block(roomsText) && block(roomsText).length > 100);
 }
 
 // ---- 4. the picker list ------------------------------------------------------------------

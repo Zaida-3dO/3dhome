@@ -1184,6 +1184,7 @@
     import { DoorDebugOverlay } from './src/overlays/door-debug-overlay.js?v=__VERSION__';
     // Tap a 3D object -> popover for its bound HA entity (spike).
     import { attachTapPopovers, climateActivity } from './src/tap-popovers.js?v=__VERSION__';
+    import { createSoundMenu } from './src/sound-menu.js?v=__VERSION__';
     // The sidebar's open / pinned state machine (collapsible widths only).
     import { sidebarReduce, SIDEBAR_INITIAL } from './src/sidebar-pin.js?v=__VERSION__';
     import { nextRoom, prevRoom, roomNavKeyAction } from './src/room-nav.js?v=__VERSION__';
@@ -2955,10 +2956,17 @@
       // and availability guards), then repaints the sidebar. Its handle is
       // registered with home.onDispose like the debug overlays above, so one
       // home.dispose() also drops its window listeners and debug seam.
+      // The sound menu (src/sound-menu.js): a tap on a sensors.soundMenu
+      // openFrom item opens it (routed through the tap popovers below).
+      const soundMenu = isPreview ? null : createSoundMenu({
+        soundMenu: sensors && sensors.soundMenu, getHa: () => ha, debug: params.get('debug') === '1',
+        onOpen: () => { if (tapPopovers && tapPopovers.isOpen()) tapPopovers.close(); },
+      });
+      if (soundMenu) home.onDispose(() => soundMenu.dispose());
       const tapPopovers = isPreview ? null : attachTapPopovers({
         THREE, home, container, Home3DScene, house,
         rooms: rooms || {}, sensors: sensors || {},
-        getHa: () => ha, HAClient,
+        getHa: () => ha, HAClient, soundMenu,
         sendLight: (roomId, channel, state, debounceMs, withColor, power) => sendToHA(roomId, channel, state, debounceMs, withColor, power),
         // Close an UNPINNED sidebar on an object tap; the popover still opens.
         // Edit mode: a tap that selected or dragged a piece of furniture is

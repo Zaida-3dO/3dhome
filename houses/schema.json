@@ -5208,6 +5208,128 @@
                   }
                 }
               }
+            },
+            "soundMenu": {
+              "type": "object",
+              "description": "The SOUND MENU (src/sound-menu.js): a centred modal mirroring a Home Assistant ambience pop-up, in three sections -- NOW PLAYING (a slide per listed speaker whose state is 'playing', with volume, previous, play/pause, next and stop, and a 'Stop all' pill), PLAY ON (the speaker checklist, read from `selection`; a tap runs `toggleScript` via script.turn_on with variables { entity_id }) and SOUNDS (the `catalogue` sensor's `tiles`, recents first then A-Z, six per page; a tap selects the tile's label on `sound`, and Home Assistant's own automation plays it on the selected speakers -- the app never calls play_media). Tapping the sound that is already selected re-triggers it ('None', then the label once the stop has landed). Nothing is sent on open or render. A tap on any furniture item named in `openFrom` opens it. Every key except `recent` and `openFrom` is required. Needs rooms schemaVersion 1.12.",
+              "required": [
+                "selection",
+                "toggleScript",
+                "sound",
+                "catalogue",
+                "speakers"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "selection": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/entityId"
+                    },
+                    {
+                      "pattern": "^input_text\\."
+                    }
+                  ],
+                  "description": "An input_text holding the selected speakers as a JSON list of media_player entity ids. Shared with every other surface that drives the same automation."
+                },
+                "toggleScript": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/entityId"
+                    },
+                    {
+                      "pattern": "^script\\."
+                    }
+                  ],
+                  "description": "The script that adds or removes one speaker from `selection` (variables { entity_id }), refusing to remove the last."
+                },
+                "sound": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/entityId"
+                    },
+                    {
+                      "pattern": "^input_select\\."
+                    }
+                  ],
+                  "description": "The input_select whose option is the selected sound's label; 'None' means off."
+                },
+                "catalogue": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/entityId"
+                    },
+                    {
+                      "pattern": "^sensor\\."
+                    }
+                  ],
+                  "description": "A sensor whose `tiles` attribute lists the sounds as [{ id, label, icon: 'mdi:<name>' }]."
+                },
+                "recent": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/entityId"
+                    },
+                    {
+                      "pattern": "^input_text\\."
+                    }
+                  ],
+                  "description": "Optional: an input_text holding the recently played sounds, most recent first, as a JSON list of [id, speakerCodes] pairs (a bare label is accepted as a legacy entry). Orders the SOUNDS section."
+                },
+                "speakers": {
+                  "type": "array",
+                  "minItems": 1,
+                  "description": "The speakers PLAY ON offers and NOW PLAYING watches, in display order. A speaker still playing after it was unchecked keeps its slide, so it can be stopped.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "entity"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "entity": {
+                        "allOf": [
+                          {
+                            "$ref": "#/$defs/entityId"
+                          },
+                          {
+                            "pattern": "^media_player\\."
+                          }
+                        ]
+                      },
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 40
+                      }
+                    }
+                  }
+                },
+                "openFrom": {
+                  "type": "object",
+                  "description": "Furniture item id -> the speaker that item IS (one of `speakers`), or null. A tap on any of these items opens the menu with that speaker highlighted and listed first -- never auto-selected. Item ids MUST exist in the paired geometry profile's `furniture[].id`; an item that also has a `sensors.items` card opens the menu, not the card (warned).",
+                  "propertyNames": {
+                    "pattern": "^[a-z][a-z0-9_-]*$"
+                  },
+                  "additionalProperties": {
+                    "oneOf": [
+                      {
+                        "allOf": [
+                          {
+                            "$ref": "#/$defs/entityId"
+                          },
+                          {
+                            "pattern": "^media_player\\."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
             }
           },
           "additionalProperties": false

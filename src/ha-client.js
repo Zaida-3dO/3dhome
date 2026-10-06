@@ -18,6 +18,7 @@ import { normaliseVacuumBindings, parseVacuum, vacuumCommand, vacuumSegmentComma
 import { normalisePlantBindings, plantEntities, parsePlant } from './plant-status.js';
 import { normaliseItemBindings, itemBindingEntities, itemWatchedAttributes } from './item-cards.js';
 import { normaliseBindings, readBinding, pickerEntities } from './bindings.js';
+import { normaliseSoundMenu, soundMenuEntities } from './sound-model.js';
 
 /**
  * Slider value -> a `cover.set_cover_position` call, fanned out to every
@@ -640,13 +641,27 @@ export const HAClient = (() => {
     const itemEntityCallbacks = [];
     // A watched entity's row repaints on these, besides its state string.
     const WATCHED_ATTRS = ['brightness', 'rgb_color', 'hs_color', 'current_position'];
+    // The sound menu (rooms.json sensors.soundMenu, src/sound-model.js): its
+    // helpers, catalogue and speakers are recorded here like any bound
+    // entity, and cb(entityId, raw) fires when one's state string or an
+    // attribute the menu shows changed -- never on a media_position tick.
+    const soundMenuIds = new Set(soundMenuEntities(normaliseSoundMenu(sensors && sensors.soundMenu)));
+    const SOUND_ATTRS = ['media_title', 'media_content_id', 'volume_level', 'tiles'];
+    const soundMenuCallbacks = [];
     function noteRaw(st) {
       if (!st || !st.entity_id) return;
       if (!entityIndex.has(st.entity_id) && !climateIndex.has(st.entity_id) && !itemEntityIds.has(st.entity_id) &&
-        !fittingIndex.has(st.entity_id) && !lightBindIndex.has(st.entity_id) && !watchSet.has(st.entity_id)) return;
+        !fittingIndex.has(st.entity_id) && !lightBindIndex.has(st.entity_id) && !watchSet.has(st.entity_id) &&
+        !soundMenuIds.has(st.entity_id)) return;
       const prev = rawStates.get(st.entity_id);
       const raw = { state: st.state, attributes: st.attributes || {} };
       rawStates.set(st.entity_id, raw);
+      if (soundMenuIds.has(st.entity_id) && (!prev || prev.state !== raw.state ||
+        SOUND_ATTRS.some(a => JSON.stringify(prev.attributes[a]) !== JSON.stringify(raw.attributes[a])))) {
+        soundMenuCallbacks.forEach(cb => {
+          try { cb(st.entity_id, raw); } catch (e) { console.warn('HAClient soundMenuCb:', e); }
+        });
+      }
       if (watchSet.has(st.entity_id) && (!prev || prev.state !== raw.state ||
         WATCHED_ATTRS.some(a => JSON.stringify(prev.attributes[a]) !== JSON.stringify(raw.attributes[a])))) {
         watchedCallbacks.forEach(cb => {
@@ -1249,6 +1264,8 @@ export const HAClient = (() => {
       // cb(entityId, raw) for a `watch`ed entity (a sidebar extra row): its
       // state string or a displayed attribute changed.
       onWatchedChange(cb) { watchedCallbacks.push(cb); },
+      // cb(entityId, raw) for a sound-menu entity -- see soundMenuCallbacks.
+      onSoundMenuChange(cb) { soundMenuCallbacks.push(cb); },
       // Edit mode's entity picker: a fresh get_states, mapped to
       // [{ entity_id, friendly_name, domain }] in `domains` (src/bindings.js).
       listEntities,

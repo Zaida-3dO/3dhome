@@ -1197,6 +1197,50 @@ def check_sensor_binding(rooms_doc, geo, geo_room_ids, report):
     check_plant_binding(rooms_doc, geo, sensors, (major, minor), report)
     check_item_binding(rooms_doc, geo, sensors, (major, minor), report)
     check_room_script_binding(rooms_doc, sensors, geo_room_ids, (major, minor), report)
+    check_sound_menu_binding(rooms_doc, geo, sensors, (major, minor), report)
+
+
+def check_sound_menu_binding(rooms_doc, geo, sensors, version, report):
+    """`sensors.soundMenu` (src/sound-model.js): the shared sound menu, opened
+    by a tap on any furniture item in `openFrom`.
+
+    Needs schemaVersion 1.12 -- an ERROR below it, and only when the block is
+    present, so a profile without it is untouched. An `openFrom` key with no
+    furniture item behind it can never be tapped -- an error; so is an
+    `openFrom` value that is not one of `speakers` (the engine would open the
+    menu with no speaker highlighted), and a speaker listed twice. An
+    `openFrom` item that ALSO has a `sensors.items` card is warned: the menu
+    wins the tap, so the card can never open. The schema already enforces the
+    shape and every entity's domain.
+    """
+    sm = sensors.get("soundMenu")
+    if sm is None:
+        return
+    where = "rooms.json/sensors/soundMenu"
+    if version < (1, 12):
+        report.error(
+            "rooms.json/schemaVersion",
+            "`sensors.soundMenu` needs schemaVersion 1.12 or newer, but this profile "
+            f"declares '{rooms_doc.get('schemaVersion')}' -- bump it",
+        )
+    if not isinstance(sm, dict):
+        return
+    speakers = [s.get("entity") for s in (sm.get("speakers") or []) if isinstance(s, dict)]
+    seen = set()
+    for eid in speakers:
+        if eid in seen:
+            report.error(f"{where}/speakers", f"speaker '{eid}' is listed twice -- the engine keeps the first")
+        seen.add(eid)
+    furniture_ids = {f.get("id") for f in geo.get("furniture", []) if isinstance(f, dict)}
+    items = sensors.get("items") or {}
+    for iid, eid in (sm.get("openFrom") or {}).items():
+        w = f"{where}/openFrom/{iid}"
+        if iid not in furniture_ids:
+            report.error(w, f"opens the sound menu from furniture item '{iid}', which has no matching item in geometry.json's furniture")
+        if iid in items:
+            report.warn(w, f"furniture item '{iid}' also has a sensors.items card -- the sound menu wins the tap, so that card never opens")
+        if eid is not None and eid not in seen:
+            report.error(w, f"'{eid}' is not one of soundMenu.speakers -- name a listed speaker, or null")
 
 
 def check_room_script_binding(rooms_doc, sensors, geo_room_ids, version, report):

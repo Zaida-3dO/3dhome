@@ -688,7 +688,13 @@
       "label": "Wall clock (kitchen, over the worktop)", "notes": "Any wall-clock opens a card with the local time, titled <Room> clock -- never this label, which is an authoring note. No binding needed; a title-only sensors.items entry would name it." },
     { "id": "study_radiator", "room": "study", "type": "radiator", "wall": 2, "centre": 140, "offset": 0, "elevation": 15,
       "params": {"width": 80, "height": 60},
-      "label": "Study radiator", "notes": "Any radiator opens its room's climate card (sensors.climate.study). No new binding." }
+      "label": "Study radiator", "notes": "Any radiator opens its room's climate card (sensors.climate.study). No new binding." },
+    { "id": "lounge_speaker", "room": "lounge", "type": "box", "wall": 1, "centre": 110, "offset": 15, "elevation": 75,
+      "params": {"width": 14, "depth": 14, "height": 20, "color": "#2f3238"},
+      "label": "Lounge speaker", "notes": "Stands on the sideboard. Opens the sound menu as its speaker (rooms.json sensors.soundMenu.openFrom)." },
+    { "id": "bedroom_speaker", "room": "bedroom", "type": "box", "wall": 11, "centre": 505, "offset": 20, "elevation": 55,
+      "params": {"width": 10, "depth": 10, "height": 14, "color": "#3a3d44"},
+      "label": "Bedroom speaker", "notes": "Stands on the bedside table. Opens the sound menu as its speaker (sensors.soundMenu.openFrom)." }
   ],
   "lights": [
     {
