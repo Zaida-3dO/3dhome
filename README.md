@@ -94,6 +94,15 @@ Read by `deploy/entrypoint.sh` at container start.
 
 ---
 
+## Keyboard
+
+With a room open in the sidebar, **Right arrow** / **Left arrow** (or the
+previous / next strip under the sidebar header) fly to the next / previous
+room, in the Controls-list order, wrapping at the ends. The keys are left
+alone while a text field, slider or select has focus, while a card or dialog
+is open, and in edit mode while an item is selected (there they nudge it).
+With no room open they do nothing.
+
 ## Security
 
 **Read this before exposing 3dHome to anything.**

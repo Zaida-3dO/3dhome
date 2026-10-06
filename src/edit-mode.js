@@ -1339,6 +1339,7 @@ function createController(ctx) {
   const api = {
     enter, exit, showBanner, selectRoom, selectDevice, saveGeometry,
     isActive: () => active,
+    hasItemTarget: () => !!(target && target.kind === 'furniture'),
     target: () => target,
     draft: () => draft,
     work: () => work,
