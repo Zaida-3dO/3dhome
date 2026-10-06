@@ -460,7 +460,7 @@ console.log('10. an openFrom item opens the menu');
   // Since the focus contract (scripts/test-tap-focus-contract.mjs): a soundMenu
   // tap is a ROUTE like any other -- the camera flies to the speaker first.
   check('tap-popovers: a soundMenu tap is a dispatcher route that opens the menu (after the flight)',
-    /kind: 'soundMenu',[\s\S]{0,400}d\.soundMenu\.open\(\{ itemId: t\.itemId, speaker: t\.speaker, onClose: why => d\.onClose\(t, why\) \}\);/.test(tp) &&
+    /kind: 'soundMenu',[\s\S]{0,400}d\.soundMenu\.open\(\{ itemId: t\.itemId, speaker: t\.speaker, side: !!at\.flew, onClose: why => d\.onClose\(t, why\) \}\);/.test(tp) &&
     !/kind: 'soundMenu',[^}]*focus: false/.test(tp));
   const page = read('index.html');
   check('index: imports createSoundMenu', /import \{ createSoundMenu \} from '\.\/src\/sound-menu\.js\?v=__VERSION__';/.test(page));

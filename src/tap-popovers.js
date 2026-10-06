@@ -1381,10 +1381,11 @@ export function buildTapRoutes(d) {
     {
       kind: 'soundMenu',
       cover: () => (d.soundMenu && typeof d.soundMenu.coverRight === 'function' ? d.soundMenu.coverRight() : 0),
-      open: t => {
+      open: (t, point, at) => {
         if (!d.soundMenu) return;
         d.closeCard('replace');
-        d.soundMenu.open({ itemId: t.itemId, speaker: t.speaker, onClose: why => d.onClose(t, why) });
+        // Docked beside the speaker only when the camera flew to frame it there.
+        d.soundMenu.open({ itemId: t.itemId, speaker: t.speaker, side: !!at.flew, onClose: why => d.onClose(t, why) });
       },
     },
   ]);

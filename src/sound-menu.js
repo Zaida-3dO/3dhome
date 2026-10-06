@@ -433,7 +433,9 @@ export function createSoundMenu(o) {
     if (!styleEl) { styleEl = doc.createElement('style'); styleEl.textContent = STYLE; doc.head.appendChild(styleEl); }
     returnTo = doc.activeElement;
     root = doc.createElement('div');
-    root.className = 'sm-backdrop' + (coverRight() ? ' side' : '');
+    // Docked only when the opener framed the speaker beside it (t.side: the
+    // tap route flew); opened any other way, nothing is framed: centred.
+    root.className = 'sm-backdrop' + (t && t.side && coverRight() ? ' side' : '');
     root.dataset.soundMenu = '';
     sheet = doc.createElement('div');
     sheet.className = 'sm-sheet';

@@ -19,6 +19,16 @@
  *      by the real target builders and dispatched through the real routes
  *      produces the flight, then the open -- never the open before the
  *      flight lands; a newer tap supersedes an older one in the air.
+ *   2b. No REFERENCE to an opener outside those places (an alias like
+ *      `const quick = openCard` is caught, not only a call), and the set of
+ *      tap listeners on the window / document / canvas is pinned, so a
+ *      parallel listener opening its own panel is a visible diff.
+ *   3c. THE PAGE'S FOCUS: src/tap-focus.js (which index.html wires in
+ *      verbatim, pinned) is run with the real focus controller for every
+ *      routed kind and must start a real flight -- even when the scene can
+ *      derive no view by id (it falls back to the tapped point). A kind
+ *      check in the page's focus function or its view resolver fails here.
+ *   3d. The sound menu docks beside the speaker only after a flight.
  *   4. NO PER-TYPE CODE: a new route kind, a new sensors.items entry and a
  *      new soundMenu.openFrom entry all fly with nothing written for them;
  *      an undeclared opt-out throws.
@@ -117,12 +127,16 @@ console.log('static guard');
   files.push('index.html');
   // Calls that OPEN tap UI: the popover's card opener, the sound menu's open
   // (by any receiver name ending in soundMenu / Sound), the debug seam.
+  // Any REFERENCE, not only a call: `const quick = openCard; quick(...)`
+  // and `const { open } = soundMenu` are bypasses too.
   const OPENERS = [
-    /\bopenCard\(/,
-    /\b\w*[sS]ound(Menu)?\.open\(/,
-    /\.openAt\(/,
-    /\bshowCard\(/,
-    /\bopenSoundMenu\(/,
+    /\bopenCard\b/,
+    /[sS]ound\w*\s*\.\s*open\b(?!From)/,
+    /[sS]ound\w*\s*\[/,
+    /\{[^}]*\bopen\b[^}]*\}\s*=\s*[\w.]*[sS]ound/,
+    /\.openAt\b/,
+    /\bshowCard\b/,
+    /\bopenSoundMenu\b/,
   ];
   const offenders = [];
   let allowedSeen = 0, inRoutes = 0;
@@ -143,6 +157,67 @@ console.log('static guard');
   check('no card / sound-menu opener outside the route table (or a marked debug seam)', offenders.length === 0, offenders);
   check('the route table does open things (the scan sees it)', inRoutes >= 3, inRoutes);
   check('the marked exceptions are the two ?debug=1 openAt lines and handing the opener to the route table', allowedSeen === 3, allowedSeen);
+  // A PARALLEL LISTENER: anything listening for a tap on the window, the
+  // document or the 3D canvas could open its own UI without the dispatcher.
+  // The set is pinned (file: receiver event x count); a new one is a
+  // reviewed diff here, exactly like FOCUS_OPT_OUTS.
+  const TAP_EVENTS = 'click|dblclick|contextmenu|pointerup|pointerdown|pointermove|pointercancel|touchstart|touchend|touchmove|touchcancel|mouseup|mousedown';
+  const BROAD = /^(window|self|globalThis|document|doc|win|body|container|canvas|cv|renderer|domElement|scene|stage|viewport|host)$/i;
+  const EXPECTED_LISTENERS = {
+    'index.html: container click': 1, 'index.html: container pointercancel': 1, 'index.html: container pointerdown': 1,
+    'index.html: container pointermove': 2, 'index.html: container pointerup': 1, 'index.html: container touchmove': 2,
+    'index.html: window pointercancel': 1, 'index.html: window pointerdown': 1, 'index.html: window pointermove': 1, 'index.html: window pointerup': 1,
+    'src/home3d-scene.js: container click': 1, 'src/home3d-scene.js: container contextmenu': 1, 'src/home3d-scene.js: container pointercancel': 1,
+    'src/home3d-scene.js: container pointerdown': 1, 'src/home3d-scene.js: container pointermove': 1, 'src/home3d-scene.js: container pointerup': 1,
+    'src/home3d-scene.js: container touchcancel': 1, 'src/home3d-scene.js: container touchend': 1, 'src/home3d-scene.js: container touchmove': 1,
+    'src/home3d-scene.js: container touchstart': 1,
+    'src/tap-popovers.js: window click': 1, 'src/tap-popovers.js: window pointercancel': 1, 'src/tap-popovers.js: window pointerdown': 1,
+    'src/tap-popovers.js: window pointerup': 1,
+  };
+  const Q = '[\'"`]';
+  const ID = '[A-Za-z_$][\\w$.]*';
+  const listenRe = [
+    // x.addEventListener('click' ...  /  addEventListener('click' (the window)
+    new RegExp('(?:(' + ID + ')\\s*\\.\\s*)?addEventListener\\(\\s*' + Q + '(' + TAP_EVENTS + ')' + Q, 'g'),
+    // the scene's on(container, 'click', ...) helper
+    new RegExp('\\bon\\(\\s*(' + ID + ')\\s*,\\s*' + Q + '(' + TAP_EVENTS + ')' + Q, 'g'),
+    // x.onclick = ...
+    new RegExp('(' + ID + ')\\.on(' + TAP_EVENTS + ')\\s*=(?!=)', 'g'),
+  ];
+  const seen = {};
+  const computed = [];
+  files.forEach(f => codeOnly(read(f)).split('\n').forEach(ln => {
+    listenRe.forEach(re => {
+      for (const m of ln.matchAll(re)) {
+        const recv = m[1] || '';
+        const parts = recv.split('.').filter(Boolean);
+        // A bare addEventListener(...) is the window's; otherwise any part of
+        // the receiver's path naming the window, document or canvas counts.
+        const broad = !parts.length || parts.some(p => BROAD.test(p) || /canvas|container|domElement/i.test(p));
+        if (!broad) continue;
+        const last = parts.length ? parts[parts.length - 1] : 'window';
+        const k = f + ': ' + (BROAD.test(last) ? last : recv) + ' ' + m[2];
+        seen[k] = (seen[k] || 0) + 1;
+      }
+    });
+    // An event name the scan cannot read: addEventListener(evName, ...).
+    if (/addEventListener\(\s*[A-Za-z_$]/.test(ln)) computed.push(f + ': ' + ln.trim());
+  }));
+  const diff = Object.keys(Object.assign({}, seen, EXPECTED_LISTENERS)).filter(k => (seen[k] || 0) !== (EXPECTED_LISTENERS[k] || 0))
+    .map(k => k + ' (expected ' + (EXPECTED_LISTENERS[k] || 0) + ', found ' + (seen[k] || 0) + ')');
+  check('the tap listeners on the window / document / canvas are exactly the reviewed set', diff.length === 0, diff);
+  // The reviewed ones: the scene's on() helper (its calls are scanned above),
+  // the modal swallowing input at its own root, the boot title hiding on the
+  // first pointer/wheel/key, and the sidebar's write-gated control binder.
+  const EXPECTED_COMPUTED = [
+    'src/home3d-scene.js: const on = (el, ev, fn, opts) => { el.addEventListener(ev, fn, opts); handlers.push([el, ev, fn, opts]); };',
+    'src/sound-menu.js: SWALLOW.forEach(ev => root.addEventListener(ev, swallow));',
+    'index.html: window.addEventListener(t, hide, { capture: true, passive: true });',
+    'index.html: const onWrite = (el, type, fn) => el.addEventListener(type, e => { if (!haOffline(ha)) fn(e); });',
+  ];
+  check('listeners under a computed event name (they would dodge the scan) are exactly the reviewed four',
+    computed.length === EXPECTED_COMPUTED.length && computed.every(c => EXPECTED_COMPUTED.includes(c)), computed.filter(c => !EXPECTED_COMPUTED.includes(c)));
+
   const tp = read('src/tap-popovers.js');
   const body = tp.slice(tp.indexOf('const onClick = e => {'), tp.indexOf('// The client-pixel position of a world point'));
   check('the tap handler dispatches', /tapDispatch\.dispatch\(res\.target, res\.point,/.test(body));
@@ -243,6 +318,87 @@ console.log('dispatcher semantics');
   check('the sound menu hands its docked width to the flight (frames the speaker beside it)', h4.frames[0] && h4.frames[0].coverRight === 488, h4.frames);
   const h5 = harness();
   check('an unknown kind opens nothing', (await h5.disp.dispatch({ kind: 'nope', id: 'n' }, null, { x: 0, y: 0 })) === false && h5.log.length === 0);
+}
+
+// ---- 3c. the PAGE's focus really flies -----------------------------------------
+// The dispatcher calling focus proves nothing if the page's focus returns
+// null for a kind, or its view resolver has no view for one: the card would
+// open with no flight (review 830e4af5, M2 / M5). So run the page's own code
+// -- src/tap-focus.js, which index.html wires in verbatim (pinned below) --
+// with the real focus controller, for every routed kind in the demo house.
+console.log('the page\'s focus flies for every routed kind');
+{
+  const TF = await imp('src/tap-focus.js');
+  const rooms = JSON.parse(read('houses/demo/rooms.json'));
+  const geo = JSON.parse(read('houses/demo/geometry.json'));
+  const s = rooms.sensors || {};
+  const items = normaliseItemBindings(s.items || {});
+  const sm = normaliseSoundMenu(s.soundMenu);
+  const ctx = { vacuums: normaliseVacuumBindings(s.vacuums), plants: normalisePlantBindings(s.plants), items, climate: s.climate || {},
+    rawItems: s.items || {}, soundOpenFrom: sm ? sm.openFrom : null };
+  const furniture = geo.furniture || [];
+  const ids = new Set([...ctx.vacuums.keys(), ...ctx.plants.keys(), ...(sm ? sm.openFrom.keys() : []), ...tappableFurnitureIds(furniture, items, s.climate)]);
+  const targets = furniture.filter(f => ids.has(f.id)).map(f => T.furnitureTarget(Object.assign({}, f), { x: 0, y: 0, z: 0 }, {}, ctx)).filter(Boolean);
+  const bindings = { lights: rooms.rooms || {}, curtains: s.curtains || {}, doors: s.doors || {} };
+  Object.keys(bindings.lights).forEach(r => Object.keys(bindings.lights[r]).forEach(ch => targets.push(T.resolveTarget({ userData: { lightChannel: ch, roomId: r } }, bindings))));
+  Object.keys(bindings.curtains).forEach(id => targets.push(T.resolveTarget({ name: 'curtain:' + id, userData: {} }, bindings)));
+  Object.keys(bindings.doors).forEach(id => targets.push(T.resolveTarget({ userData: { doorProfileId: id } }, bindings)));
+  const furnIds = new Set(furniture.map(f => f.id));
+  const pose = tag => ({ th: 0, ph: 1, r: 2, tgt: [0, 0, 0], fov: 50, tag });
+  // A scene stub: every view the scene can derive, keyed by what was asked.
+  const homes = {
+    full: { furnitureBox: id => (furnIds.has(id) ? { min: [0, 0, 0], max: [1, 1, 1] } : null), itemView: id => pose('item:' + id),
+      curtainView: id => pose('curtain:' + id), pointView: () => pose('point'), furnitureItemAt: () => null },
+    // Nothing found by id or geometry (an unbuilt item, a curtain with no
+    // geometry): the tapped point must still be framed, never "no view".
+    bare: { furnitureBox: () => null, itemView: () => null, curtainView: () => null, pointView: () => pose('point'), furnitureItemAt: () => null },
+  };
+  for (const [hname, home] of Object.entries(homes)) {
+    const missing = [];
+    for (const t of targets) {
+      if (D.FOCUS_OPT_OUTS[t.kind]) continue;
+      const flights = [];
+      const ctl = F.createFocusController({ getPose: () => pose('home'), fly: p => { flights.push(p); return Promise.resolve('landed'); },
+        resolveView: sel => (sel.device ? TF.deviceView(sel.device, home, { right: 0, width: 1600, height: 1000 }) : null), schedule: () => {} });
+      const focus = TF.createTapFocus({ on: () => true, ctl });
+      const log = [];
+      const routes = T.buildTapRoutes({ openCard: x => log.push('open:' + x.kind), project: () => null, closeCard: () => {},
+        soundMenu: { open: () => log.push('open:soundMenu'), coverRight: () => 0 }, onClose: () => {} });
+      const disp = D.createTapDispatcher({ routes, gate: F.createFocusGate(), focus: (a, b, c) => { const p = focus(a, b, c); log.push('fly:' + flights.length); return p; } });
+      await disp.dispatch(t, { x: 0, y: 0, z: 0 }, { x: 0, y: 0 });
+      if (!(flights.length === 1 && log[0] === 'fly:1' && log[1] && log[1].startsWith('open:'))) missing.push(t.kind + ' ' + t.id + ' ' + JSON.stringify(log));
+    }
+    check('scene ' + hname + ': the page\'s focus starts a real flight before the open, for every routed kind (' + targets.length + ' targets)', missing.length === 0, missing);
+  }
+  check('the page\'s focus returns null only when focus is off', TF.createTapFocus({ on: () => false, ctl: { request() { throw new Error('asked'); } } })({ kind: 'item', id: 'x' }, null) === null);
+  const tfSrc = codeOnly(read('src/tap-focus.js'));
+  const tapFocusBody = tfSrc.slice(tfSrc.indexOf('return function tapFocus'), tfSrc.indexOf('export function deviceView'));
+  check('the page\'s focus function never looks at the kind', !/\bkind\b/.test(tapFocusBody) && (tapFocusBody.match(/return null/g) || []).length === 1 &&
+    /if \(!o\.on\(\)\) return null;/.test(tapFocusBody));
+  const html = read('index.html');
+  const att = html.slice(html.indexOf('attachTapPopovers({'), html.indexOf('state: {', html.indexOf('attachTapPopovers({')));
+  check('index.html hands the dispatcher exactly createTapFocus (no wrapper, no kind check)',
+    (att.match(/^\s*focus:/gm) || []).length === 1 && /\n\s*focus: focusAllowed \? createTapFocus\(\{ on: focusOn, ctl: focusCtl \}\) : undefined,\n/.test(att));
+  const fvf = html.slice(html.indexOf('function focusViewFor(sel) {'), html.indexOf('const focusCtl = createFocusController({'));
+  check('index.html resolves a device view only through deviceView (first, unconditionally)',
+    /function focusViewFor\(sel\) \{\s*(\/\/[^\n]*\n\s*)*if \(sel\.device\) return deviceView\(sel\.device, home, panelInset\(\)\);/.test(fvf) &&
+    !/\bkind\b/.test(codeOnly(fvf)));
+  check('index.html\'s controller flies through the scene and resolves with focusViewFor',
+    /createFocusController\(\{\s*getPose: \(\) => home\.getPose\(\),\s*fly: pose => home\.flyTo\(pose\),\s*resolveView: focusViewFor,\s*\}\)/.test(html));
+  check('index.html imports the page focus module', /import \{ createTapFocus, deviceView \} from '\.\/src\/tap-focus\.js\?v=__VERSION__';/.test(html));
+}
+
+// ---- 3d. the sound menu docks only beside a framed speaker ----------------------
+console.log('sound menu docking');
+{
+  const opened = [];
+  const routes = T.buildTapRoutes({ openCard: () => {}, project: () => null, closeCard: () => {},
+    soundMenu: { open: a => opened.push(a), coverRight: () => 488 }, onClose: () => {} });
+  const t = { kind: 'soundMenu', id: 's', itemId: 's', speaker: null };
+  routes.get('soundMenu').open(t, null, { x: 0, y: 0, flew: true });
+  routes.get('soundMenu').open(t, null, { x: 0, y: 0, flew: false });
+  check('after a flight it docks beside the speaker; opened without one (focus off) it is centred', opened[0].side === true && opened[1].side === false, opened.map(a => a.side));
+  check('sound-menu.js docks only when asked AND wide enough', /root\.className = 'sm-backdrop' \+ \(t && t\.side && coverRight\(\) \? ' side' : ''\);/.test(read('src/sound-menu.js')));
 }
 
 // ---- 4. no per-type code ------------------------------------------------------

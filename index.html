@@ -1191,6 +1191,8 @@
     import { nextRoom, prevRoom, roomNavKeyAction } from './src/room-nav.js?v=__VERSION__';
     // Camera focus: the camera flies to a tapped room or device, and back.
     import { createFocusController, deviceKey, escapeDeselects } from './src/camera-focus.js?v=__VERSION__';
+    // The page's half of the tap focus contract (scripts/test-tap-focus-contract.mjs).
+    import { createTapFocus, deviceView } from './src/tap-focus.js?v=__VERSION__';
     // Edit-mode drafts (src/profile-draft.js): the boot-time read only. The
     // edit UI itself (src/edit-mode.js) is a dynamic import -- loadEditMode().
     import { bootDraft, draftAllowed, mountDraftEscape } from './src/profile-draft.js?v=__VERSION__';
@@ -2592,24 +2594,9 @@
         return { right: covers ? panel.offsetWidth : 0, width: w, height: h };
       }
       function focusViewFor(sel) {
-        if (sel.device) {
-          const d = sel.device, pt = d.focusPoint || null;
-          // The UI the tap opens may cover the right of the canvas too (the
-          // sound menu docked beside its speaker): frame the item in what is left.
-          let inset = panelInset();
-          if (d.coverRight > inset.right) inset = Object.assign({}, inset, { right: d.coverRight });
-          if (d.kind === 'curtain') return home.curtainView(d.id, { inset }) || (pt ? home.pointView(pt, { inset }) : null);
-          if (d.kind === 'light') return pt ? home.pointView(pt, { inset, room: d.roomId }) : null;
-          // The target's own furniture item when it names one (a vacuum, a
-          // plant or a clock by id, an item card by itemId); else the item
-          // whose box holds the tapped point. Guessing from the point alone
-          // could frame the stand a plant sits on, or nothing at all.
-          const ownId = d.itemId || (d.kind === 'plant' || d.kind === 'vacuum' || d.kind === 'clock' ? d.id : null);
-          if (ownId && typeof home.furnitureBox === 'function' && home.furnitureBox(ownId)) return home.itemView(ownId, pt, { inset });
-          const it = pt && typeof home.furnitureItemAt === 'function' ? home.furnitureItemAt(pt) : null;
-          if (it) return home.itemView(it.id, pt, { inset });
-          return pt ? home.pointView(pt, { inset }) : null;
-        }
+        // A device: src/tap-focus.js deviceView (never null for a tapped
+        // point -- the contract test runs it for every routed kind).
+        if (sel.device) return deviceView(sel.device, home, panelInset());
         if (sel.room) return home.roomView(sel.room, { inset: panelInset() });
         return null;
       }
@@ -3009,13 +2996,7 @@
         // Camera focus: fly to the device, then the card (or the sound menu)
         // opens -- every tap goes through this (src/tap-dispatch.js). null
         // when focus is off, so it opens at once exactly as before.
-        focus: focusAllowed ? ((target, point, frame) => {
-          if (!focusOn()) return null;
-          const dev = Object.assign({}, target, { focusPoint: point && point.clone ? point.clone() : point,
-            coverRight: (frame && frame.coverRight) || 0 });
-          focusCtl.request({ device: dev }, 'explicit');
-          return focusCtl.flushNow();
-        }) : undefined,
+        focus: focusAllowed ? createTapFocus({ on: focusOn, ctl: focusCtl }) : undefined,
         onClose: (target, why) => {
           if (why === 'tap') cardClosedThisPointer = true;
           focusDropDevice(target, why);
