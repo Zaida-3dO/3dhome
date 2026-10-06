@@ -4448,7 +4448,14 @@ export const Home3DScene = (() => {
     // Smart displays' now-playing screens (src/furniture/hub-screen.js): the
     // content each was last told by setHubScreen, drawn on its own small
     // canvas texture only when that content changes; one repaint per change.
-    const hubScreens = createHubScreens({ THREE, repaint: () => requestRender() });
+    // The progress bar ticks at 0.5 Hz, and a screen outside the camera's
+    // frustum (or a hidden tab) only every fifth tick.
+    const hubFrustum = new THREE.Frustum(), hubProj = new THREE.Matrix4();
+    const hubScreens = createHubScreens({ THREE, repaint: () => requestRender(), isVisible: mesh => {
+      if (typeof document !== 'undefined' && document.hidden) return false;
+      hubProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+      return hubFrustum.setFromProjectionMatrix(hubProj).intersectsObject(mesh);
+    } });
     function stopLiveClocks() {
       liveClockStops.forEach(stop => stop());
       liveClockStops.clear();
@@ -6454,7 +6461,7 @@ export const Home3DScene = (() => {
         return hubScreens.entries().map(([itemId, mesh]) => {
           const c = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
           const st = hubScreens.state(itemId);
-          return { itemId, mode: st.mode, art: st.art, version: st.version, draws: hubScreens.stats.draws,
+          return { itemId, mode: st.mode, art: st.art, version: st.version, draws: hubScreens.stats.draws, barPx: st.barPx,
             emissiveIntensity: mesh.material.emissiveIntensity, centre: c.toArray() };
         });
       },

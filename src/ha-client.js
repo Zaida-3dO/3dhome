@@ -19,6 +19,7 @@ import { normalisePlantBindings, plantEntities, parsePlant } from './plant-statu
 import { normaliseItemBindings, itemBindingEntities, itemWatchedAttributes } from './item-cards.js';
 import { normaliseBindings, readBinding, pickerEntities } from './bindings.js';
 import { normaliseSoundMenu, soundMenuEntities } from './sound-model.js';
+import { registryKeys, speakerSiblings } from './speaker-players.js';
 
 /**
  * Slider value -> a `cover.set_cover_position` call, fanned out to every
@@ -652,8 +653,41 @@ export const HAClient = (() => {
     const SOUND_ATTRS = ['media_title', 'media_content_id', 'volume_level', 'tiles',
       'media_artist', 'media_album_artist', 'entity_picture', 'entity_picture_local'];
     const soundMenuCallbacks = [];
+    // EVERY media_player's last raw state, and cb(entityId) when one's state
+    // string or a SOUND_ATTRS attribute changed -- cb(null) when the speaker
+    // grouping itself changed (the registries arrived). A speaker often has
+    // several players (src/speaker-players.js): a smart display's screen
+    // follows whichever of them is playing, so none of their updates may be
+    // dropped. Recorded only while someone listens (onSpeakerPlayersChange).
+    const mediaPlayers = new Map();
+    const speakerCallbacks = [];
+    // Identity keys from the device registry (registryKeys), or null: fetched
+    // read-only once per connection, after the snapshot, when someone listens.
+    let speakerRegKeys = null;
+    const fireSpeaker = eid => speakerCallbacks.forEach(cb => {
+      try { cb(eid); } catch (e) { console.warn('HAClient speakerCb:', e); }
+    });
+    function noteMediaPlayer(st) {
+      if (!speakerCallbacks.length || typeof st.entity_id !== 'string' || st.entity_id.indexOf('media_player.') !== 0) return;
+      const prev = mediaPlayers.get(st.entity_id);
+      const raw = { state: st.state, attributes: st.attributes || {} };
+      mediaPlayers.set(st.entity_id, raw);
+      if (!prev || prev.state !== raw.state ||
+        SOUND_ATTRS.concat(SPEAKER_ATTRS).some(a => JSON.stringify(prev.attributes[a]) !== JSON.stringify(raw.attributes[a]))) fireSpeaker(st.entity_id);
+    }
+    // Besides SOUND_ATTRS: the now-playing card's progress bar re-anchors on
+    // these (HA publishes media_position only on a seek/track change, with
+    // its updated_at -- not every second), and the grouping reads the queue.
+    const SPEAKER_ATTRS = ['media_duration', 'media_position_updated_at', 'active_queue', 'friendly_name'];
+    function loadSpeakerRegistry() {
+      if (!speakerCallbacks.length) return;
+      Promise.all([request({ type: 'config/entity_registry/list_for_display' }), request({ type: 'config/device_registry/list' })])
+        .then(([ents, devs]) => { speakerRegKeys = registryKeys(ents, devs); fireSpeaker(null); })
+        .catch(e => console.warn('HAClient: no device registry; speaker players grouped by name', e && e.message));
+    }
     function noteRaw(st) {
       if (!st || !st.entity_id) return;
+      noteMediaPlayer(st);
       if (!entityIndex.has(st.entity_id) && !climateIndex.has(st.entity_id) && !itemEntityIds.has(st.entity_id) &&
         !fittingIndex.has(st.entity_id) && !lightBindIndex.has(st.entity_id) && !watchSet.has(st.entity_id) &&
         !soundMenuIds.has(st.entity_id)) return;
@@ -1101,6 +1135,7 @@ export const HAClient = (() => {
             // already fire, BEFORE 'connected' re-enables the controls.
             reapplyAll(fired);
             setStatus('connected');
+            loadSpeakerRegistry();
           } else {
             setStatus('sync_failed');
           }
@@ -1302,6 +1337,15 @@ export const HAClient = (() => {
       onWatchedChange(cb) { watchedCallbacks.push(cb); },
       // cb(entityId, raw) for a sound-menu entity -- see soundMenuCallbacks.
       onSoundMenuChange(cb) { soundMenuCallbacks.push(cb); },
+      // cb(entityId) when any media_player's state or now-playing attributes
+      // changed; cb(null) when the speaker grouping changed. Subscribing turns
+      // on media_player tracking and the read-only registry fetch.
+      onSpeakerPlayersChange(cb) { speakerCallbacks.push(cb); },
+      // Every media_player of `entityId`'s physical speaker, it first
+      // (src/speaker-players.js). Adoptable by the sound menu's Now playing.
+      speakerPlayers(entityId) { return speakerSiblings(entityId, mediaPlayers, speakerRegKeys); },
+      // A tracked media_player's raw { state, attributes }, or null.
+      getPlayerState(entityId) { return mediaPlayers.get(entityId) || null; },
       // Edit mode's entity picker: a fresh get_states, mapped to
       // [{ entity_id, friendly_name, domain }] in `domains` (src/bindings.js).
       listEntities,
