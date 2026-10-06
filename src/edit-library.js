@@ -51,6 +51,7 @@ export const LIBRARY = Object.freeze([
   e('tv', 'TV', 'living', 'wall', 100, { keywords: 'television screen' }),
   e('speaker', 'Speaker', 'living', 'wall', 150, { keywords: 'audio sound',
     kinds: { 'floor-standing': { mount: 'floor', elevation: 0 }, centre: { mount: 'floor', elevation: 0 } } }),
+  e('smart-display', 'Smart display / Nest speaker', 'living', 'floor', 40, { keywords: 'google nest hub max mini stand screen assistant tabletop' }),
   e('subwoofer', 'Subwoofer', 'living', 'floor', 0, { keywords: 'audio bass' }),
   e('cabinet', 'Cabinet / sideboard', 'living', 'wall', 0, { keywords: 'cupboard storage tv console drawers' }),
   e('digital-piano', 'Digital piano', 'living', 'wall', 0, { keywords: 'music keyboard' }),

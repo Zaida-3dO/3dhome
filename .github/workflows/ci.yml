@@ -409,6 +409,15 @@ jobs:
           # full / 200 low, low <= 0.3 x full).
           set -euo pipefail
           node scripts/test-dog-crate.mjs
+      - name: Smart display builder envelope, screen, camera, Nest Mini stand and caps
+        run: |
+          # Asserts src/furniture/smart-display.js beyond the generic contract:
+          # the published envelope per kind at both details, the kept emissive
+          # screen (dark off, glowing on), the Max's camera dot, colourways, the
+          # Mini stand's puck/post alignment and optional tiny status dots, and
+          # the triangle caps.
+          set -euo pipefail
+          node scripts/test-smart-display.mjs
       - name: Desk strip as a room light channel; Ambient row comes from rooms.json
         run: |
           # Asserts a named light channel (a desk LED strip bound in rooms.json

@@ -91,6 +91,8 @@ export const REGISTRY = Object.freeze({
 
   'slat-panel': { path: 'wall-panels.js', key: 'slat-panel', spec: 'WallPanelSpec' },
 
+  'smart-display': { path: 'smart-display.js', key: null, spec: 'SmartDisplaySpec' },
+
   'sofa': { path: 'sofa.js', key: null, spec: 'BedSpec' },
 
   'speaker': { path: 'small-items.js', key: 'speaker', spec: 'SmallItemsSpec' },
