@@ -216,6 +216,53 @@ function makeGate(extra) {
   check('progress shows "Furnishing… n/N"', /'Furnishing… ' \+ done \+ '\/' \+ total/.test(opts));
 }
 
+// ── 4. no path leaves the preview tile blank; timers past the gate ──────────
+{
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const src = fs.readFileSync(path.join(root, 'src/home3d-scene.js'), 'utf8');
+  const create = html.indexOf('Home3DScene.create(container, {');
+  const opts = html.slice(create, html.indexOf('\n      });\n', create));
+  const onFurnished = opts.match(/onFurnished: \(\) => \{([\s\S]*?)\n        \},/);
+  const body = onFurnished ? onFurnished[1] : '';
+  const rev = body.indexOf("if (isPreview) container.style.opacity = '1';");
+  check('onFurnished reveals the preview BEFORE dismissing the overlay',
+    rev >= 0 && rev < body.indexOf('window.__home3dLoading.dismiss();'));
+  // The startup-failure handler reveals the container before ANY branch can
+  // return -- in particular the WebGL-unavailable one, whose card is drawn
+  // inside the container.
+  const fail = html.indexOf("console.error('[home3d] startup failed.', e);");
+  const reveal = html.indexOf("if (sceneBox) sceneBox.style.opacity = '1';", fail);
+  const webgl = html.indexOf("if (e && e.code === 'WEBGL_UNAVAILABLE') {", fail);
+  const firstReturn = html.indexOf('return;', fail);
+  check('startup-failure handler found', fail >= 0 && webgl > fail);
+  check('...it reveals the scene container before the WebGL branch and any return',
+    fail >= 0 && reveal > fail && reveal < webgl && reveal < firstReturn);
+  check("...and the element it reveals is the preview's container",
+    reveal > fail && /var sceneBox = document\.getElementById\('scene-container'\);/.test(html.slice(fail, reveal)));
+  // The preview backstop and the title card's upper bound both sit past the
+  // gate's own worst case (precompile fallback + boot-complete fallback), so
+  // neither fires while the gate could still legitimately be waiting, and
+  // neither can stick.
+  const num = (re, text) => { const m = re.exec(text); return m ? Number(m[1]) : NaN; };
+  const worst = num(/const READY_FALLBACK_MS = (\d+);/, src) + num(/const BOOT_COMPLETE_FALLBACK_MS = (\d+);/, src);
+  const backstop = num(/const PREVIEW_REVEAL_BACKSTOP_MS = (\d+);/, html);
+  const titleBound = num(/setTimeout\(start, (\d+)\);/, html);
+  check('gate worst case read from the scene', worst > 0, worst);
+  check('preview backstop timer is armed in the preview block',
+    /if \(isPreview\) \{\n\s*container\.style\.opacity = '0';[\s\S]{0,200}?setTimeout\(\(\) => \{ container\.style\.opacity = '1'; \}, PREVIEW_REVEAL_BACKSTOP_MS\);/.test(html));
+  check('preview backstop is past the gate worst case', backstop > worst, backstop + ' vs ' + worst);
+  check('title card upper bound is past the gate worst case', titleBound > worst, titleBound + ' vs ' + worst);
+  // "Finishing touches…": back to the shimmer, not a full static bar.
+  const prog = opts.match(/onFurnishProgress: \(done, total\) => \{([\s\S]*?)\n        \},/);
+  const pb = prog ? prog[1] : '';
+  const fin = pb.indexOf("status('Finishing touches…')");
+  check('"Finishing touches" switches the bar back to the shimmer (progress(null))',
+    fin >= 0 && /window\.__home3dLoading\.progress\(null\);/.test(pb.slice(fin)));
+  check('...and the counted phase still drives the fill', fin > 0 && /progress\(done \/ total\)/.test(pb.slice(0, fin)));
+  check('the overlay controller implements progress(null) as the shimmer',
+    /if \(fraction == null\) \{ track\.classList\.remove\('is-determinate'\); return; \}/.test(html));
+}
+
 if (failures) {
   console.error(failures + ' failed, ' + passes + ' passed');
   process.exit(1);

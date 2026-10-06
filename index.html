@@ -980,7 +980,12 @@
       }
       var L = window.__home3dLoading;
       // Upper bound: if the overlay never reports dismissal, still start.
-      setTimeout(start, 20000);
+      // 40 s, not 20: the overlay now stays up until the house is furnished,
+      // and its own worst case is the 10 s precompile fallback plus the 15 s
+      // boot-complete fallback (src/boot-gate.js) -- a 20 s bound could start
+      // (and finish) the hold behind a still-showing overlay on a slow cold
+      // load. Past that worst case, so the card still can never stick.
+      setTimeout(start, 40000);
       if (!L || typeof L.isDone !== 'function' || typeof L.dismiss !== 'function') { start(); return; }
       if (L.isDone()) { start(); return; }
       var orig = L.dismiss;
@@ -1357,10 +1362,17 @@
       // Preview tile: no loading overlay (it would be most of a 379x163
       // tile), so the canvas itself is held invisible until the scene's
       // onFurnished -- the same "visually complete" gate the overlay uses,
-      // with the same timeout -- then fades in.
+      // with the same timeout -- then fades in. EVERY path that ends without
+      // onFurnished must reveal it too, or a wall tablet shows a blank tile:
+      // the startup-failure handler (a WebGL-unavailable card is written INTO
+      // this container) sets it back to 1 on every failure, and this
+      // backstop covers anything else (it is past the gate's own worst case:
+      // the 10 s precompile fallback + the 15 s boot-complete fallback).
+      const PREVIEW_REVEAL_BACKSTOP_MS = 40000;
       if (isPreview) {
         container.style.opacity = '0';
         container.style.transition = 'opacity 300ms ease';
+        setTimeout(() => { container.style.opacity = '1'; }, PREVIEW_REVEAL_BACKSTOP_MS);
       }
       const panel = document.getElementById('panel');
       const panelBody = document.getElementById('panel-body');
@@ -1806,15 +1818,24 @@
         },
         onFurnishProgress: (done, total) => {
           if (!total) return;
-          window.__home3dLoading.status(done < total ? 'Furnishing… ' + done + '/' + total : 'Finishing touches…');
-          window.__home3dLoading.progress(done / total);
+          if (done < total) {
+            window.__home3dLoading.status('Furnishing… ' + done + '/' + total);
+            window.__home3dLoading.progress(done / total);
+          } else {
+            // Every item is built; what is left (the furniture's shaders,
+            // images, the frame) has no count, so back to the shimmer rather
+            // than a full bar that looks stuck.
+            window.__home3dLoading.status('Finishing touches…');
+            window.__home3dLoading.progress(null);
+          }
         },
         onFurnished: () => {
-          window.__home3dLoading.dismiss();
           // The preview tile has no overlay; its canvas is held transparent
           // until now instead (see the isPreview block above), so the tile
-          // never shows the house without its furniture either.
+          // never shows the house without its furniture either. First, so the
+          // overlay's dismiss throwing can never leave the tile blank.
           if (isPreview) container.style.opacity = '1';
+          window.__home3dLoading.dismiss();
         },
         // A room tapped in the 3D view opens the sidebar UNPINNED (or, open
         // already, switches it to that room): see src/sidebar-pin.js.
@@ -4066,6 +4087,14 @@
       // prevent — and it would be actively misleading, since nothing is
       // loading any more. Tell the truth and stop the animation.
       console.error('[home3d] startup failed.', e);
+      // The preview tile's canvas is held at opacity 0 until onFurnished,
+      // which a failed boot never reaches. Reveal it on EVERY failure path,
+      // before anything below can return or throw: a WebGL-unavailable card
+      // lives inside this container, and a blank tile explains nothing.
+      try {
+        var sceneBox = document.getElementById('scene-container');
+        if (sceneBox) sceneBox.style.opacity = '1';
+      } catch (revealErr) { /* never let the reveal mask the real failure */ }
       try {
         // A house that could not be loaded is the one startup failure with a
         // specific, actionable cause, so it gets a specific message naming the
