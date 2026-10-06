@@ -943,12 +943,16 @@ nothing authored, every view is **derived**, so any house works unchanged:
 
 - **A room** is framed from **inside** it, like an estate agent's corner photo:
   the camera stands in a corner (or along a wall) about 40 cm off the walls,
-  2–2.25 m up and at least 22 cm under the ceiling, tilted down about 15–30°
-  with a wide (70°) lens. Of the candidate spots and angles it takes the one that
-  shows the most of the room — its floor, its furniture and its ceiling lights,
-  each counted only where it is in frame and nothing solid is in the way — with
-  small preferences for a corner, a long view across the room and the doorway
-  side. The choice is made once per room and cached until the furniture
+  2–2.25 m up and at least 22 cm under the ceiling, tilted down about 15–26°
+  (up to 30° in a room under 2.5 m across) with a wide (70°) lens. Of the
+  candidate spots and angles it takes the one that shows the most of the room —
+  its floor, its furniture (each item weighted by its size, so a bed or a
+  curtained window counts for far more than a wall planter) and its ceiling
+  lights, each counted only where it is in frame and nothing solid is in the
+  way — with small preferences for a corner, a long view across the room and the
+  doorway side, and against cutting a nearby item in half at the bottom of the
+  frame. From inside a room, a tap on its own walls, ceiling or floor (or Escape,
+  with no card open) is the click-away and flies back out. The choice is made once per room and cached until the furniture
   changes. A room too small to stand a camera in (a cupboard) is framed from
   above instead: from the house's home angle (the `iso` preset, which
   `cameraPresets.iso` overrides), at the smallest distance that keeps the whole

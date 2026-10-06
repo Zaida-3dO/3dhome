@@ -423,7 +423,11 @@ export const IN_ROOM_VIEW = Object.freeze({
   // fixtures stay in the top of the frame -- a steeper tilt shows more floor
   // but loses the downlights, which are what the room's controls drive.
   pitchesDeg: [14, 18, 22, 26, 30],
-  pitchPref: 22,            // degrees down: the photographer's tilt
+  maxPitch: 26,             // ... and no steeper, unless the room is small:
+  smallRoom: 2.5,           // a room whose plan is narrower than this (m) in either
+                            // direction may tilt to the steepest -- its floor is
+                            // right under the camera
+  pitchPref: 24,            // degrees down: the photographer's tilt
   pitchPenalty: 0.1,        // per 20 degrees away from pitchPref
   yawOffsetsDeg: [-24, -16, -8, 0, 8, 16, 24],
   floorSamples: 32,
@@ -439,8 +443,13 @@ export const IN_ROOM_VIEW = Object.freeze({
   doorBonus: 0.025,
   doorReach: 2,             // m
   wallPenalty: 0.15,        // x the weighted fraction a wall hides
+  clipPenalty: 2,           // x the weighted share of a NEAR item cut off by the frame's bottom edge
+  clipReach: 2.5,           // m: beyond this a clipped item costs nothing
   nearPenalty: 0.04,        // per item within `near` of the lens, in frame
   near: 0.8,
+  floorWeight: 1,           // x the floor area (m2)
+  itemCap: 6,
+  curtainFactor: 1,
   lightWeight: 0.25,        // each ceiling fixture: they are what the room's controls drive
   minR: 1.2, maxR: 8,
 });
@@ -564,9 +573,9 @@ function inBox(b, p, pad) {
 }
 
 /** How big an item reads: its footprint plus half its largest side, clamped. */
-export function itemWeight(box) {
+export function itemWeight(box, cap) {
   const w = box.max[0] - box.min[0], h = box.max[1] - box.min[1], d = box.max[2] - box.min[2];
-  return Math.max(0.05, Math.min(3, w * d + 0.5 * Math.max(w, d) * h));
+  return Math.max(0.05, Math.min(cap || 6, w * d + Math.max(w, d) * h));
 }
 
 /** Distance along (dx, dz) from (x, z) to the polygon's boundary (Infinity if none). */
@@ -611,8 +620,10 @@ export function poseFromLook(eye, yaw, pitch, r, fov) {
  * @param o.doors     [[x, z]] door centres on this room's walls
  * @param o.aspect    canvas width / height
  * @param o.inset     { right, width, height } a covering sidebar, or null
- * @param o.occluded  (eye, point) => bool -- a solid mesh between them (the
- *                    walls, doors, fittings); called for the best few eyes
+ * @param o.occluded  (eye, point, box) => bool -- a solid mesh between them
+ *                    (the walls, doors, fittings); `box` is the item the
+ *                    point is on (a hit inside it is the item itself), null
+ *                    for the floor and lights. Called for the best few eyes.
  * @param o.options   overrides of IN_ROOM_VIEW
  * @returns { pose, eye, coverage, score, fallback, kind, tried, rays }
  *          pose null and fallback true when no vantage reaches minCoverage
@@ -627,8 +638,8 @@ export function chooseInRoomView(o) {
   // ---- Samples, grouped by what they belong to (each group a weight).
   const groups = [];
   const floor = floorGrid(poly, opt.floorSamples, opt.floorMargin).map(p => [p[0], opt.floorY, p[1]]);
-  if (floor.length) groups.push({ kind: 'floor', weight: area, pts: floor });
-  items.forEach((it, idx) => groups.push({ kind: 'item', id: it.id, idx, weight: itemWeight(it.box), pts: boxSamples(it.box) }));
+  if (floor.length) groups.push({ kind: 'floor', weight: area * opt.floorWeight, pts: floor });
+  items.forEach((it, idx) => groups.push({ kind: 'item', id: it.id, idx, weight: itemWeight(it.box, opt.itemCap) * (it.kind === 'curtain' ? opt.curtainFactor : 1), pts: boxSamples(it.box) }));
   (o.lights || []).forEach(p => groups.push({ kind: 'light', weight: opt.lightWeight, pts: [p] }));
   const totalW = groups.reduce((s, g) => s + g.weight, 0) || 1;
   const flat = [];   // { p, g }
@@ -654,6 +665,13 @@ export function chooseInRoomView(o) {
   ax /= totalW; az /= totalW;
   const ip = interiorPoint(poly);
   const aims = [[ax, az], ip];
+  const span = (k) => Math.max(...poly.map(p => p[k])) - Math.min(...poly.map(p => p[k]));
+  const small = Math.min(span(0), span(1)) < opt.smallRoom;
+  const maxPitch = small ? Infinity : opt.maxPitch;
+  // In a small room everything is near the lens: cutting the nearest thing
+  // off is the price of seeing the room at all, so it is not penalised.
+  const clipPenalty = small ? 0 : opt.clipPenalty;
+  const pitches = opt.pitchesDeg.filter(pd => pd <= maxPitch);
   const diag = (() => { let m = 0; poly.forEach(a => poly.forEach(b => { m = Math.max(m, Math.hypot(a[0] - b[0], a[1] - b[1])); })); return m || 1; })();
 
   // ---- Eyes.
@@ -701,13 +719,26 @@ export function chooseInRoomView(o) {
     // Everything orientation-free, once per eye: the eye-relative vector of
     // each sample that counts either way (seen, or hidden by a wall), and
     // what it is worth; the near items; the visible floor corners.
-    const qs = [], ws = [];
+    const qs = [], ws = [], gi = [];
     for (let k = 0; k < flat.length; k++) {
       if (!V.vis[k] && !V.wall[k]) continue;
       const p = flat[k].p, g = groups[flat[k].g];
       qs.push(p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]);
+      // Visible item samples remember their item: one cut off by the
+      // bottom of the frame is a foreground item clipped in half.
+      gi.push(V.vis[k] && g.kind === 'item' ? flat[k].g : -1);
       // Positive: coverage when in frame. Negative: a wall hides it.
       ws.push(V.vis[k] ? g.weight / g.pts.length / totalW : -opt.wallPenalty * g.weight / g.pts.length / totalW);
+    }
+    // How much a clipped item costs: in full when it is right in front of
+    // the lens (a table cut in half in the foreground), fading out by
+    // clipReach metres away (an item merely at the bottom of a long view).
+    const clipW = new Float64Array(groups.length);
+    for (let g = 0; g < groups.length; g++) {
+      if (groups[g].kind !== 'item') continue;
+      const b = items[groups[g].idx].box;
+      const d = Math.hypot(Math.max(b.min[0] - eye[0], 0, eye[0] - b.max[0]), Math.max(b.min[2] - eye[2], 0, eye[2] - b.max[2]));
+      clipW[g] = groups[g].weight / totalW * Math.max(0, 1 - d / opt.clipReach);
     }
     const nearQ = [];
     items.forEach(it => {
@@ -717,9 +748,10 @@ export function chooseInRoomView(o) {
     });
     const cornerQ = [];
     corners.forEach((c, i) => { if (V.cornerVis[i]) cornerQ.push(c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]); });
+    const gIn = new Int16Array(groups.length), gLow = new Int16Array(groups.length);
     let best = null;
     const fixed = (ev.kind === 'corner' ? opt.cornerBonus : 0) + doorBonus(eye);
-    for (const yaw of yaws) for (const pd of opt.pitchesDeg) {
+    for (const yaw of yaws) for (const pd of pitches) {
       const pitch = pd * D2R, B = lookBasis(yaw, pitch);
       const f0 = B.f[0], f1 = B.f[1], f2 = B.f[2], r0 = B.r[0], r2 = B.r[2], u0 = B.u[0], u1 = B.u[1], u2 = B.u[2];
       const inFrame = (Q, i) => {
@@ -729,16 +761,31 @@ export function chooseInRoomView(o) {
         const x = (qx * r0 + qz * r2) / z, y = (qx * u0 + qy * u1 + qz * u2) / z;
         return x >= xMin && x <= xMax && y >= -yLim && y <= yLim;
       };
+      // Under the bottom edge of the frame (in front of the camera).
+      const below = (Q, i) => {
+        const qx = Q[i], qy = Q[i + 1], qz = Q[i + 2];
+        const z = qx * f0 + qy * f1 + qz * f2;
+        return z > 0.15 && (qx * u0 + qy * u1 + qz * u2) / z < -yLim;
+      };
       let cov = 0, hid = 0;
+      gIn.fill(0); gLow.fill(0);
       for (let i = 0, k = 0; i < qs.length; i += 3, k++) {
-        if (!inFrame(qs, i)) continue;
+        if (!inFrame(qs, i)) {
+          if (gi[k] >= 0 && below(qs, i)) gLow[gi[k]]++;
+          continue;
+        }
+        if (gi[k] >= 0) gIn[gi[k]]++;
         if (ws[k] > 0) cov += ws[k]; else hid -= ws[k];
+      }
+      let clip = 0;
+      for (let g = 0; g < groups.length; g++) {
+        if (gIn[g] && gLow[g]) clip += clipW[g] * gLow[g] / (gIn[g] + gLow[g]);
       }
       let nearN = 0, cs = 0;
       for (let i = 0; i < nearQ.length; i += 3) if (inFrame(nearQ, i)) nearN++;
       for (let i = 0; i < cornerQ.length; i += 3) if (inFrame(cornerQ, i)) cs++;
       const depth = Math.min(1, rayToBoundary(poly, eye[0], eye[2], Math.cos(yaw - yawShift), Math.sin(yaw - yawShift)) / diag);
-      const score = cov + fixed + opt.cornersSeenBonus * cs / corners.length + opt.depthBonus * depth - hid - opt.nearPenalty * nearN -
+      const score = cov + fixed + opt.cornersSeenBonus * cs / corners.length + opt.depthBonus * depth - hid - opt.nearPenalty * nearN - clipPenalty * clip -
         opt.pitchPenalty * Math.abs(pd - opt.pitchPref) / 20;
       if (!best || score > best.score) best = { score, coverage: cov, yaw, pitch };
     }
@@ -753,7 +800,8 @@ export function chooseInRoomView(o) {
     flat.forEach((s, k) => {
       if (!ev.V.vis[k]) return;
       rays++;
-      if (o.occluded(ev.e, s.p)) { ev.V.vis[k] = 0; ev.V.wall[k] = 1; }
+      const g = groups[s.g];
+      if (o.occluded(ev.e, s.p, g.kind === 'item' ? items[g.idx].box : null)) { ev.V.vis[k] = 0; ev.V.wall[k] = 1; }
     });
     ev.best = scoreEye(ev);
   });
@@ -770,7 +818,10 @@ export function chooseInRoomView(o) {
   r = Math.min(r, (eye[1] - 0.25) / Math.max(0.05, Math.sin(pitch)));
   r = Math.max(opt.minR, Math.min(opt.maxR, r));
   return { pose: poseFromLook(eye, yaw, pitch, r, fov), eye, coverage: win.best.coverage, score: win.best.score,
-    fallback: false, kind: win.kind, tried: eyes.length, rays };
+    fallback: false, kind: win.kind, tried: eyes.length, rays,
+    // The runners-up, best first (eye, kind, score, coverage, yaw/pitch in degrees): for tuning.
+    ranked: ranked.slice(0, 8).map(ev => ({ eye: ev.e.map(v => +v.toFixed(2)), kind: ev.kind, score: +ev.best.score.toFixed(3),
+      coverage: +ev.best.coverage.toFixed(3), yaw: Math.round((ev.best.yaw - yawShift) / D2R), pitch: Math.round(ev.best.pitch / D2R) })) };
 }
 
 /**
@@ -858,6 +909,40 @@ export function compileFocusView(view, tx, tz) {
   const t = Array.isArray(view.target) && view.target.length === 2 && num(view.target[0]) && num(view.target[1])
     ? [tx(view.target[0]), h, tz(view.target[1])] : null;
   return { th: view.azimuth, ph: view.polar, r: view.distance, tgt: t, targetHeight: h, fov: num(view.fov) ? view.fov : 50 };
+}
+
+/**
+ * CLICK-AWAY FROM INSIDE A ROOM. From an outside view, a tap that misses
+ * the house is the click-away; from an in-room view there is nothing to
+ * miss -- every tap lands on the room's own walls, ceiling or floor, and
+ * picked that same room again, so the camera never went home. So: while the
+ * camera stands in the room that is focused, a tap that resolves to that
+ * room is the click-away -- unless it landed on furniture (that stays a
+ * tap on the room, as before). A tap through a doorway into another room
+ * still selects that room.
+ * @param o.cameraRoom  the room the camera stands in (below the walls), or null
+ * @param o.focusedRoom the room camera focus has framed, or null
+ * @param o.pickedRoom  the room the tap resolved to, or null
+ * @param o.hitFurniture the first thing the tap hit is furniture
+ */
+export function inRoomTapIsClickAway(o) {
+  return !!(o && o.cameraRoom && o.cameraRoom === o.focusedRoom && o.pickedRoom === o.cameraRoom && !o.hitFurniture);
+}
+
+/**
+ * Does this keydown deselect the room (the keyboard click-away)? Escape,
+ * with a room selected and nothing else for Escape to close first: no card,
+ * no dialog, not typing in a field, not in edit mode (which owns Escape).
+ */
+export function escapeDeselects(o) {
+  if (!o || o.key !== 'Escape' || !o.selectedRoom) return false;
+  if (o.cardOpen || o.dialogOpen || o.editActive || o.defaultPrevented) return false;
+  const t = o.target;
+  if (t) {
+    const tag = String(t.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || t.isContentEditable) return false;
+  }
+  return true;
 }
 
 /** A stable key for a device target. */

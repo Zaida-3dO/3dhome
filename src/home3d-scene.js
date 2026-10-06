@@ -42,7 +42,7 @@ import { createBootGate } from './boot-gate.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './room-pick.js';
 import { easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView,
-  ROOM_VIEW, chooseInRoomView, distToPolyEdge, eyeOf, planFlight } from './camera-focus.js';
+  ROOM_VIEW, chooseInRoomView, distToPolyEdge, eyeOf, planFlight, inRoomTapIsClickAway } from './camera-focus.js';
 import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
@@ -5188,6 +5188,7 @@ export const Home3DScene = (() => {
     const roomViewCache = new Map();
     let roomViewCacheFurn = null;
     let lastRoomViewStats = null;
+    let lastRoomViewInputs = null;   // what the last computed room view was chosen from (checks / tuning)
     function roomItems(id, poly) {
       const byId = furnitureResult && furnitureVisible && furnitureResult.byId ? furnitureResult.byId : null;
       if (!byId) return [];
@@ -5201,6 +5202,14 @@ export const Home3DScene = (() => {
         const cx = (b.min[0] + b.max[0]) / 2, cz = (b.min[2] + b.max[2]) / 2;
         const inRoom = insidePoly(poly, cx, cz) || distToPolyEdge(poly, cx, cz) < 0.2;
         if ((e.room == null || e.room === id) && inRoom) out.push({ id: k, box: b });
+      });
+      // Its curtains too: a window wall is half of what a room looks like.
+      CURTAINS.forEach(cu => {
+        const e = curtainById[cu.id];
+        if (cu.room !== id || !e || !e.built || !e.built.group) return;
+        const bb = new THREE.Box3().setFromObject(e.built.group);
+        if (bb.isEmpty()) return;
+        out.push({ id: cu.id, kind: 'curtain', box: { min: bb.min.toArray(), max: bb.max.toArray() } });
       });
       return out;
     }
@@ -5262,7 +5271,8 @@ export const Home3DScene = (() => {
         if (f) return (f.base == null ? 1 : f.base) >= OPACITY_SOLID;
         return materialOpacity(o.material, h.face ? h.face.materialIndex : 0) >= OPACITY_SOLID;
       };
-      const occluded = (eye, s) => {
+      const PAD = 0.03;
+      const occluded = (eye, s, own) => {
         _occO.set(eye[0], eye[1], eye[2]);
         _occD.set(s[0] - eye[0], s[1] - eye[1], s[2] - eye[2]);
         const dist = _occD.length();
@@ -5271,9 +5281,16 @@ export const Home3DScene = (() => {
         _occRc.set(_occO, _occD);
         _occRc.near = 0; _occRc.far = dist - 0.03;
         const hits = _occRc.intersectObjects(list, false);
-        for (let k = 0; k < hits.length; k++) if (blocks(hits[k])) return true;
+        for (let k = 0; k < hits.length; k++) {
+          const p = hits[k].point;
+          // A hit on the item itself (a curtain is a building mesh) is not in the way.
+          if (own && p.x > own.min[0] - PAD && p.x < own.max[0] + PAD && p.y > own.min[1] - PAD && p.y < own.max[1] + PAD &&
+            p.z > own.min[2] - PAD && p.z < own.max[2] + PAD) continue;
+          if (blocks(hits[k])) return true;
+        }
         return false;
       };
+      lastRoomViewInputs = { room: id, poly, ceiling, items, lights, doors, aspect: cam.aspect, inset };
       const res = chooseInRoomView({ poly, ceiling, items, lights, doors, aspect: cam.aspect, inset, occluded });
       const eyePlan = res.eye ? sceneToHouse(S, OX, OY)(res.eye[0], res.eye[2]) : null;
       return { pose: res.pose, stats: {
@@ -6004,8 +6021,14 @@ export const Home3DScene = (() => {
           const t = d.y < -1e-6 ? -o.y / d.y : -1;
           focus = { roomId: fr, floorPoint: t > 0 ? toHouse(o.x + d.x * t, o.z + d.z * t) : null };
         }
-        const picked = pickRoom(rc.intersectObjects(scene.children, true), rc.ray.direction,
-          roomPolygons(ROOMS), toHouse, focus);
+        const hits = rc.intersectObjects(scene.children, true);
+        const picked = pickRoom(hits, rc.ray.direction, roomPolygons(ROOMS), toHouse, focus);
+        // From inside the focused room, a tap on its own walls, ceiling or
+        // floor is the click-away: no room click, so the page's background
+        // handler sees an empty tap and the camera flies home.
+        const first = hits.find(h => isDrawn(h.object));
+        if (inRoomTapIsClickAway({ cameraRoom: eyeInRoom([cam.position.x, cam.position.y, cam.position.z]), focusedRoom: fr,
+          pickedRoom: picked.roomId, hitFurniture: !!(first && isFurniture(first.object)) })) return;
         if (picked.roomId && onRoomClick) onRoomClick(picked.roomId);
       });
       on(container, "wheel", e => {
@@ -6727,6 +6750,8 @@ export const Home3DScene = (() => {
       // What the last room view (in-room chooser) cost and chose: ms, coverage,
       // fallback (true = no in-room vantage was good enough), eye, pitch, fov.
       lastRoomViewStats() { return lastRoomViewStats; },
+      // The inputs that view was chosen from (world metres), for offline tuning.
+      lastRoomViewInputs() { return lastRoomViewInputs; },
       // A built furniture item's world box { min, max } (metres), or null.
       furnitureBox(id) {
         const e = furnitureResult && furnitureResult.byId ? furnitureResult.byId[id] : null;

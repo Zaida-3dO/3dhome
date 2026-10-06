@@ -235,6 +235,89 @@ section('flights');
   check('outside: the orbit lerp, as before', near(orb.th, ref.th) && near(orb.r, ref.r) && near(orb.tgt[0], ref.tgt[0]));
 }
 
+// ---- 10: what counts -- big things over many small ones; the tilt -----------
+section('weights, tilt, foreground');
+{
+  const { itemWeight } = M;
+  const bed = box(0, 0, 1.6, 2.1, 1.1), planter = box(0, 1.5, 0.1, 0.25, 0.4, 1.4);
+  check('a bed outweighs a wall planter twenty times over', itemWeight(bed) > 20 * itemWeight(planter), [itemWeight(bed), itemWeight(planter)]);
+  check('... a full-height curtain counts like a wardrobe, not a sign', itemWeight(box(0, 0, 2, 0.18, 2.5)) > 4);
+  // A 4 x 4.5 m bedroom: the bed, wardrobe and curtains along the south
+  // half, six small wall planters and a sign on the north wall. The view
+  // must face the big things, wherever it stands.
+  const poly = [[0, 0], [4, 0], [4, 4.5], [0, 4.5]];
+  const items = [
+    { id: 'bed', box: box(1.2, 2.6, 1.6, 1.9, 1.1) },
+    { id: 'wardrobe', box: box(0, 3.9, 1.2, 0.6, 2.3) },
+    { id: 'curtain', kind: 'curtain', box: box(2.6, 4.3, 1.3, 0.2, 2.5) },
+  ];
+  for (let i = 0; i < 6; i++) items.push({ id: 'planter' + i, box: box(0.4 + i * 0.55, 0, 0.25, 0.1, 0.35, 1.5) });
+  items.push({ id: 'sign', box: box(1.5, 0, 1, 0.03, 0.4, 1.6) });
+  const r = chooseInRoomView({ poly, ceiling: 2.5, items, aspect: 1.6 });
+  const e = r.eye, p = r.pose;
+  const f = [p.tgt[0] - e[0], p.tgt[1] - e[1], p.tgt[2] - e[2]];
+  const B = lookBasis(Math.atan2(f[2], f[0]), Math.asin(-f[1] / Math.hypot(...f)));
+  const tv = Math.tan(p.fov * Math.PI / 360), th = tv * 1.6;
+  const inFrame = b => {
+    const c = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
+    const q = [c[0] - e[0], c[1] - e[1], c[2] - e[2]];
+    const z = q[0] * B.f[0] + q[1] * B.f[1] + q[2] * B.f[2];
+    return z > 0 && Math.abs((q[0] * B.r[0] + q[2] * B.r[2]) / z) <= th && Math.abs((q[0] * B.u[0] + q[1] * B.u[1] + q[2] * B.u[2]) / z) <= tv;
+  };
+  check('the bed, wardrobe and curtains are all in frame', ['bed', 'wardrobe', 'curtain'].every(id => inFrame(items.find(i => i.id === id).box)),
+    { eye: e, ranked: r.ranked && r.ranked.slice(0, 3) });
+  // The tilt: never steeper than maxPitch in a normal room, so the ceiling
+  // and its lights stay in the top of the frame; a small room may tilt more.
+  for (const [w, d] of [[3.4, 2.9], [4.5, 3.4], [6, 4]]) {
+    const rr = chooseInRoomView({ poly: [[0, 0], [w, 0], [w, d], [0, d]], ceiling: 2.5, aspect: 1.6,
+      items: [{ id: 't', box: box(w / 2 - 0.5, d / 2 - 0.5, 1, 1, 0.75) }] });
+    const pitch = 90 - rr.pose.ph * 180 / Math.PI;
+    check(`${w}x${d}: tilt <= ${IN_ROOM_VIEW.maxPitch} deg`, pitch <= IN_ROOM_VIEW.maxPitch + 1e-6, pitch);
+  }
+  check('maxPitch is below the steepest tilt tried (the cap really caps)', IN_ROOM_VIEW.maxPitch < Math.max(...IN_ROOM_VIEW.pitchesDeg));
+  // Foreground clipping: a dining table in the middle of a 3.4 x 2.9 m
+  // kitchen, a run of units and a sofa. Without the penalty the best view
+  // cuts the table with the bottom of the frame; with it, it does not.
+  const kpoly = [[0, 0], [3.4, 0], [3.4, 2.9], [0, 2.9]];
+  const kitems = [
+    { id: 'table', box: box(1.2, 0.95, 1, 1, 0.75) }, { id: 'runA', box: box(0, 0, 2.8, 0.6, 0.9) },
+    { id: 'sofa', box: box(2.4, 2.0, 0.9, 0.9, 0.8) },
+  ];
+  // Table samples visible past the other boxes but under the frame's bottom edge.
+  const clippedVisible = res => {
+    const ee = res.eye, pp = res.pose, ff = [pp.tgt[0] - ee[0], pp.tgt[1] - ee[1], pp.tgt[2] - ee[2]];
+    const BB = lookBasis(Math.atan2(ff[2], ff[0]), Math.asin(-ff[1] / Math.hypot(...ff)));
+    const t2 = Math.tan(pp.fov * Math.PI / 360);
+    return M.boxSamples(kitems[0].box).filter(c => {
+      if (kitems.some((o, i) => i > 0 && M.segmentHitsBox(ee, c, o.box))) return false;
+      const q = [c[0] - ee[0], c[1] - ee[1], c[2] - ee[2]];
+      const z = q[0] * BB.f[0] + q[1] * BB.f[1] + q[2] * BB.f[2];
+      return (q[0] * BB.u[0] + q[1] * BB.u[1] + q[2] * BB.u[2]) / z / t2 < -IN_ROOM_VIEW.frustumMargin;
+    }).length;
+  };
+  const withP = chooseInRoomView({ poly: kpoly, ceiling: 2.5, items: kitems, aspect: 1.6 });
+  const noP = chooseInRoomView({ poly: kpoly, ceiling: 2.5, items: kitems, aspect: 1.6, options: { clipPenalty: 0 } });
+  check('(control) without the clip penalty the table is cut by the bottom of the frame', clippedVisible(noP) > 0, clippedVisible(noP));
+  check('foreground: with it, the table is whole', clippedVisible(withP) === 0, { eye: withP.eye, n: clippedVisible(withP) });
+}
+
+// ---- 11: click-away from inside a room -------------------------------------
+section('click-away from inside');
+{
+  const { inRoomTapIsClickAway: away, escapeDeselects: esc } = M;
+  check('in the focused room, a tap on its own walls/ceiling/floor goes home', away({ cameraRoom: 'k', focusedRoom: 'k', pickedRoom: 'k', hitFurniture: false }));
+  check('... a tap on its furniture does not', !away({ cameraRoom: 'k', focusedRoom: 'k', pickedRoom: 'k', hitFurniture: true }));
+  check('... a tap through a doorway selects the neighbour', !away({ cameraRoom: 'k', focusedRoom: 'k', pickedRoom: 'hall', hitFurniture: false }));
+  check('from outside the house nothing changes', !away({ cameraRoom: null, focusedRoom: 'k', pickedRoom: 'k', hitFurniture: false }));
+  check('inside a room that is not the focused one (a device view), a tap selects it as before',
+    !away({ cameraRoom: 'k', focusedRoom: null, pickedRoom: 'k', hitFurniture: false }));
+  check('Escape with a room selected and nothing open deselects', esc({ key: 'Escape', selectedRoom: 'k', target: { tagName: 'BODY' } }));
+  check('... not when a card is open (Escape closes the card first)', !esc({ key: 'Escape', selectedRoom: 'k', cardOpen: true }));
+  check('... not from a dialog, edit mode, or a text field', !esc({ key: 'Escape', selectedRoom: 'k', dialogOpen: true }) &&
+    !esc({ key: 'Escape', selectedRoom: 'k', editActive: true }) && !esc({ key: 'Escape', selectedRoom: 'k', target: { tagName: 'INPUT' } }));
+  check('... and nothing to deselect, or another key, does nothing', !esc({ key: 'Escape', selectedRoom: null }) && !esc({ key: 'Enter', selectedRoom: 'k' }));
+}
+
 // ---- 9: wiring -------------------------------------------------------------
 section('wiring');
 {
@@ -252,6 +335,15 @@ section('wiring');
   const em = read('src/edit-mode.js');
   check('Reset to derived keeps the derived view\'s own lens', em.includes('if (pose && pose.fov == null) pose.fov = DEFAULT_FOV;') &&
     !em.includes('      if (pose) pose.fov = DEFAULT_FOV;'));
+  {
+    const i = scene.indexOf('if (inRoomTapIsClickAway({ cameraRoom: eyeInRoom([cam.position.x, cam.position.y, cam.position.z]), focusedRoom: fr,');
+    const j = scene.indexOf('if (picked.roomId && onRoomClick) onRoomClick(picked.roomId);');
+    check('a tap from inside the focused room is the click-away, decided (and returned) before the room click',
+      i > 0 && j > i && j - i < 300 && /\}\)\) return;/.test(scene.slice(i, j)));
+  }
+  check("a room's curtains count as its items", /CURTAINS\.forEach\(cu => \{\s*const e = curtainById\[cu\.id\];\s*if \(cu\.room !== id/.test(scene));
+  const html = read('index.html');
+  check('Escape deselects through escapeDeselects, in the capture phase', /if \(!escapeDeselects\(\{[\s\S]*?\}\)\) return;\s*selectedRoom = null; renderPanel\(\); focusRoom\('explicit'\);\s*\}, true\);/.test(html));
   const ci = read('.github/workflows/ci.yml');
   check('CI runs this file', ci.includes('node scripts/test-room-view.mjs'));
 }
