@@ -185,9 +185,12 @@ function pickRoomRaw(hits, direction, rooms, toHouse) {
     const u = o.userData || {};
     if (u.clickable && u.roomId) return { roomId: u.roomId, via: 'floor', hit: h, throughFadedWall };
     if (materialOpacity(o.material, h.face ? h.face.materialIndex : 0) < OPACITY_SOLID) {
-      // A see-through VERTICAL surface (a faded wall, glass): noted for
-      // preferFocused. The ceiling seen from above is horizontal: not noted.
-      if (h.face && Math.abs(stepBack(h, direction).y) < 0.5) throughFadedWall = true;
+      // A see-through VERTICAL building surface (a faded wall, window
+      // glass): noted for preferFocused. The ceiling seen from above is
+      // horizontal: not noted. Neither is see-through FURNITURE (a glass
+      // cabinet front): looking through it at a neighbour is not looking
+      // through the focused room's shell.
+      if (h.face && !isFurniture(o) && Math.abs(stepBack(h, direction).y) < 0.5) throughFadedWall = true;
       continue;
     }
     if (isFurniture(o)) continue;

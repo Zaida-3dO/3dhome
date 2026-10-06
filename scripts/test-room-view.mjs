@@ -318,6 +318,41 @@ section('click-away from inside');
   check('... and nothing to deselect, or another key, does nothing', !esc({ key: 'Escape', selectedRoom: null }) && !esc({ key: 'Enter', selectedRoom: 'k' }));
 }
 
+// ---- 12: follow-ups from the PR #143 review (item 71d7f4e4) -----------------
+section('furniture hides furniture; the in-room clamp; the same-room line');
+{
+  // A tall wardrobe stands between the west of the room and the prize; only
+  // the east corners see the prize. With the floor nearly weightless, the
+  // prize decides -- so the chosen eye must really see it. (Without the
+  // furniture-on-furniture test, a west corner "sees" it through the wardrobe.)
+  const poly = [[0, 0], [6, 0], [6, 3], [0, 3]];
+  const wardrobe = box(3.8, 0, 0.4, 2.6, 2.3), prize = box(4.8, 0.6, 0.9, 0.9, 0.8);
+  const r = chooseInRoomView({ poly, ceiling: 2.5, items: [{ id: 'wardrobe', box: wardrobe }, { id: 'prize', box: prize }], aspect: 1.6, options: { floorWeight: 0.05 } });
+  const pc = [(prize.min[0] + prize.max[0]) / 2, 0.4, (prize.min[2] + prize.max[2]) / 2];
+  check('a tall item hiding another from a corner: the chosen eye has a clear line to the hidden one', r.eye && !M.segmentHitsBox(r.eye, pc, wardrobe), r.eye);
+
+  // clampRadiusInside: a zoom-out / orbit stops at the region's edge.
+  const inside = e => e[0] > 0 && e[0] < 4 && e[2] > 0 && e[2] < 3 && e[1] < 2.4;
+  const tgt = [2, 0.8, 1.5], th = 0, ph = Math.PI * 0.4;   // looking toward -x: the eye backs toward +x
+  const r0 = M.clampRadiusInside(tgt, th, ph, 1, inside);
+  check('clamp: an eye already inside is untouched', r0 === 1);
+  const r1 = M.clampRadiusInside(tgt, th, ph, 6, inside);
+  const e1 = M.backVector(th, ph).map((b, i) => tgt[i] + b * r1);
+  check('clamp: a zoom-out past the wall stops just inside it', inside(e1) && r1 > 1.5 && e1[0] > 3.9, { r1, e1 });
+  const r2 = M.clampRadiusInside([9, 0.8, 1.5], th, ph, 6, inside);
+  check('clamp: a target outside the region is left alone (nothing to keep)', r2 === 6);
+
+  // The same-room straight line: exact edge test. A U room whose notch tip
+  // pokes between two sample points along the line.
+  const U = [[0, 0], [10, 0], [10, 4], [5.45, 4], [5.45, 1.0], [5.35, 1.0], [5.35, 4], [0, 4]];
+  const a = [1, 1.5, 2], b = [9, 1.5, 2];
+  let sampled = true;
+  for (let i = 1; i < 10; i++) { const x = a[0] + (b[0] - a[0]) * i / 10; sampled = sampled && insidePoly(U, x, 2); }
+  check('(fixture) 9 samples miss the thin notch', sampled === true);
+  check('the exact test sees the line leave the room through the notch', leavesRoom(U, a, b, 0) === true);
+  check('...and a line that stays inside is not flagged', leavesRoom(U, [1, 1.5, 0.5], [9, 1.5, 0.5], 0) === false);
+}
+
 // ---- 9: wiring -------------------------------------------------------------
 section('wiring');
 {
@@ -326,7 +361,14 @@ section('wiring');
   check('roomView: an authored view returns before anything is derived', rv.indexOf('const v = ROOMS[id].view;') < rv.indexOf('return inRoomView(id, opts) || above();') &&
     /if \(v\) \{[\s\S]*?return \{ th: v\.th/.test(rv));
   check('roomView: in-room first, the view from above only as the fallback', rv.includes('return inRoomView(id, opts) || above();'));
-  check('the room-view cache is dropped when the furniture is rebuilt', /if \(roomViewCacheFurn !== furnitureResult\) \{ roomViewCache\.clear\(\);/.test(scene));
+  check('the room-view cache is dropped when the furniture is rebuilt, shown/hidden, or the aspect changes (latest aspect only)',
+    /if \(roomViewCacheFurn !== furnitureResult \|\| roomViewCacheVis !== furnitureVisible \|\| roomViewCacheAspect !== aspectKey\) \{\s*roomViewCache\.clear\(\);/.test(scene));
+  check('a zoom-out or an orbit in the focused room keeps the eye in it',
+    /function zoomBy\(factor\) \{\s*const held = factor > 1 \? heldRoom\(\) : null;[\s\S]{0,800}keepEyeInRoom\(held\);\s*\}/.test(scene) &&
+    /const held = heldRoom\(\);\s*orb\.th \+=[^\n]*\n[^\n]*orb\.ph = [^\n]*\n\s*keepEyeInRoom\(held\);/.test(scene) &&
+    /orb\.r = clampRadiusInside\(\[orb\.tgt\.x, orb\.tgt\.y, orb\.tgt\.z\], orb\.th, orb\.ph, orb\.r, inside\);/.test(scene));
+  check('a same-room flight is a straight line only when it crosses no room edge (exact, not sampled)',
+    /if \(ra && ra === rb && !leavesRoom\(roomShape\(ra\)\.map\(p => \[tx\(p\[0\]\), tz\(p\[1\]\)\]\), a, b, 0\)\) return 'eye';/.test(scene));
   check('walls render solid while the camera is inside a room', scene.includes('const targetOpacity = camInside ? b : wallFadeTarget(dot, b);'));
   check('the ceiling clears during a flight over the walls', /const ceilTarget = arcFlight \|\| cam\.position\.y > WH \? 0 : 1\.0;/.test(scene));
   check('flyTo plans its path (arc / eye / orbit)', scene.includes("plan: planFlight(from, to, { mode, clearY: WH + 0.5 })") &&
