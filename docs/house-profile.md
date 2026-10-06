@@ -1212,7 +1212,7 @@ renders exactly as it did before — both features simply stay dark.
 | `curtains` | **curtain id**, from the geometry's `curtains[].id` | The curtain follows the `cover.*` entity's `current_position` (0 closed, 100 open), and the window's daylight with it |
 | `corniceLights` | **curtain id** | The curtain's cornice strip follows the light entity: on/off, brightness and colour |
 | `climate` | **room id** | ONE `climate.*` entity (a string, not a list) for the room panel's temperature row |
-| `vacuums` | **furniture item id**, from the geometry's `furniture[].id` | A robot vacuum: click the item for its control card; the sidebar's Controls view shows the same block |
+| `vacuums` | **furniture item id**, from the geometry's `furniture[].id` | A robot vacuum: click the item for its control card; the sidebar shows the same block in the panel of the room the item is in (the root Controls view only when the item has no room) |
 | `plants` | **furniture item id** | A plant: tap the item for its read-only moisture card; the sidebar's Controls view lists every plant |
 | `roomScripts` | **room id** | ONE `script.*` the room panel offers as a two-step "Kill room" button |
 
@@ -1469,7 +1469,7 @@ Keyed by the **furniture item** that draws the robot and its dock (a
 `robot-vacuum` item in `geometry.json`). Furniture renders merged, so the
 item is found by where a tap lands: a tap whose first solid hit falls inside
 that item's box opens the vacuum's card. The card, and a matching block in the
-sidebar's Controls view, show:
+sidebar, show:
 
 - the status (the integration's own `status` attribute when it has one,
   `Charging completed` say, else the vacuum state) and the battery, from
@@ -1806,11 +1806,13 @@ with no reading yet shows the default until Home Assistant reports.
 
 A room's view lists the rows it **derives** from its bindings — main light,
 ambient, galaxy, a door per bound contact, motion, a curtain per bound cover,
-temperature, and the room script last. `sidebar` reshapes one room's list:
+temperature, a robot vacuum's control block (when its furniture item is in
+the room), and the room script last. `sidebar` reshapes one room's list:
 
 - `hide` drops derived rows: `main`, `ambient`, `galaxy`, `motion`,
-  `climate`, `room-script`, one door or curtain by id (`door:<id>`,
-  `curtain:<id>`), or all of them (`doors`, `curtains`). The "HA offline"
+  `climate`, `room-script`, one door, curtain or robot vacuum by id (`door:<id>`,
+  `curtain:<id>`, `vacuum:<furnitureId>`), or all of them (`doors`, `curtains`,
+  `vacuums`). The "HA offline"
   note cannot be hidden.
 - `show` adds **furniture rows**, which are **opt-in**: an item gets a row
   only when it is named here (`item:<furnitureId>`), showing the first light,

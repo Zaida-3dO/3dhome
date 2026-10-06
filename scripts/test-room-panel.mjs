@@ -471,6 +471,12 @@ const onReading = (over = {}) => HAClient.parseClimate({
   // one-tap send), all through sendScript.
   check('index: the only other sends are the room script and extra script rows, through sendScript',
     (html.match(/sendScript\(/g) || []).length === 3);
+  // Vacuum blocks sit in their furniture item's room, root only as the fallback.
+  check('index: the root Controls view renders only the unplaced vacuums', /html \+= vacuumBlocksHtml\(rootVacuumIds\(\)\);/.test(html));
+  check('index: a room derives a vacuum:<id> row for each vacuum in it', /roomVacuumIds\(rid\)\.forEach\(id => keys\.push\('vacuum:' \+ id\)\)/.test(html));
+  check('index: a vacuum is placed by its furniture item room, or not at all', /function vacuumRoomOf\(id\)[\s\S]{0,260}Home3DScene\.ROOMS\[f\.room\] \? f\.room : null/.test(html));
+  check('index: the room panel wires vacuum blocks, and live refresh no longer skips rooms',
+    /wireRoomControls\(panelBody, rid\);\s*wireVacuumBlocks\(panelBody\);/.test(html) && /function refreshVacuumBlocks\(\) \{\s*if \(!panelReady \|\| panelView === 'settings'\) return;/.test(html));
   const vacSend = (html.match(/function vacuumSend\([\s\S]*?\n      \}/) || [''])[0];
   check('index: vacuumSend refuses offline and sends only when connected',
     /if \(!b \|\| haOffline\(ha\)\) return;/.test(vacSend) && /ha\.status === 'connected'/.test(vacSend) &&

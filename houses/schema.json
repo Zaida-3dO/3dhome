@@ -5229,10 +5229,10 @@
               "hide": {
                 "type": "array",
                 "uniqueItems": true,
-                "description": "Derived rows NOT to show: 'main', 'ambient', 'galaxy', 'motion', 'climate', 'room-script', one door or curtain by id ('door:<doorId>', 'curtain:<curtainId>'), or every door / curtain ('doors', 'curtains'). The 'HA offline' note cannot be hidden.",
+                "description": "Derived rows NOT to show: 'main', 'ambient', 'galaxy', 'motion', 'climate', 'room-script', one door, curtain or robot vacuum by id ('door:<doorId>', 'curtain:<curtainId>', 'vacuum:<furnitureId>'), or every door / curtain / vacuum ('doors', 'curtains', 'vacuums'). The 'HA offline' note cannot be hidden.",
                 "items": {
                   "type": "string",
-                  "pattern": "^(main|ambient|galaxy|motion|climate|room-script|doors|curtains|door:[a-z][a-z0-9_]*|curtain:[a-z][a-z0-9_]*)$"
+                  "pattern": "^(main|ambient|galaxy|motion|climate|room-script|doors|curtains|vacuums|door:[a-z][a-z0-9_]*|curtain:[a-z][a-z0-9_]*|vacuum:[a-z][a-z0-9_]*)$"
                 }
               },
               "show": {

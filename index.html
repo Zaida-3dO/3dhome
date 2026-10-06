@@ -180,7 +180,7 @@
     }
     .room-list-dot.on { background: #ffd43b; box-shadow: 0 0 8px #ffd43b; }
 
-    /* Robot vacuum block (Controls view): one per sensors.vacuums binding,
+    /* Robot vacuum block (in its furniture item's room panel, else the root Controls view): one per sensors.vacuums binding,
        the same state and actions as its tap card (src/vacuum-control.js). */
     .vac-block { margin: 6px 16px 12px; padding: 10px 12px; border-radius: 9px;
       border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); }
@@ -3179,7 +3179,7 @@
             </button>`;
           }).join('');
 
-          html += vacuumBlocksHtml();
+          html += vacuumBlocksHtml(rootVacuumIds());
           html += plantBlockHtml();
 
           panelBody.innerHTML = html;
@@ -3207,6 +3207,7 @@
           climateSender.clear();
           panelBody.innerHTML = html;
           wireRoomControls(panelBody, rid);
+          wireVacuumBlocks(panelBody);
         }
       }
 
@@ -3281,7 +3282,7 @@
           '<div class="vac-rooms-h">Clean a room</div><div class="vac-rooms">' +
           b.segments.map(sg => '<button class="vac-room" data-vac-a="room" data-room="' + esc(sg.roomId) + '"' + dis(a.rooms) + '>' +
             esc((Home3DScene.ROOMS[sg.roomId] || {}).name || sg.roomId) + '</button>').join('') + '</div>';
-        return '<div class="vac-block" data-vac="' + esc(id) + '">' +
+        return '<div class="vac-block" data-vac="' + esc(id) + '" data-row="vacuum:' + esc(id) + '">' +
           '<div class="vac-head">' + svgIcon(ICONS.robot, 'row-ico' + (na ? ' dim' : '')) +
           '<span class="vac-name">' + esc(name) + '</span>' + batt + '</div>' +
           '<div class="vac-status' + (!na && r.state === 'error' ? ' err' : '') + '">' + esc(vacuumStatusText(r)) +
@@ -3295,10 +3296,22 @@
             '</div>') +
           rooms + '</div>';
       }
-      function vacuumBlocksHtml() {
-        if (!vacuumBindings.size) return '';
-        return '<div class="panel-section-title">Devices</div>' +
-          Array.from(vacuumBindings.keys()).map(vacuumBlockHtml).join('');
+      // A vacuum's block lives in the panel of the room its furniture item is
+      // in; with no such room (no item, no room, a room this house lacks) it
+      // stays in the root Controls view.
+      function vacuumRoomOf(id) {
+        const f = ((house && house.furniture) || []).find(x => x.id === id);
+        return f && f.room && Home3DScene.ROOMS[f.room] ? f.room : null;
+      }
+      function rootVacuumIds() {
+        return Array.from(vacuumBindings.keys()).filter(id => !vacuumRoomOf(id));
+      }
+      function roomVacuumIds(rid) {
+        return Array.from(vacuumBindings.keys()).filter(id => vacuumRoomOf(id) === rid);
+      }
+      function vacuumBlocksHtml(ids) {
+        if (!ids.length) return '';
+        return '<div class="panel-section-title">Devices</div>' + ids.map(vacuumBlockHtml).join('');
       }
       function vacuumSend(id, action, roomId) {
         const b = vacuumBindings.get(id);
@@ -3323,9 +3336,10 @@
         }));
       }
       function wireVacuumBlocks(root) { root.querySelectorAll('[data-vac]').forEach(wireVacuumBlock); }
-      // Repaint only the blocks, and only while the Controls view shows them.
+      // Repaint only the blocks, and only while a view that shows them is up
+      // (the root Controls view, or the room panel they sit in).
       function refreshVacuumBlocks() {
-        if (!panelReady || selectedRoom || panelView === 'settings') return;
+        if (!panelReady || panelView === 'settings') return;
         panelBody.querySelectorAll('[data-vac]').forEach(block => {
           const id = block.getAttribute('data-vac');
           if (!vacuumBindings.has(id)) return;
@@ -3514,6 +3528,7 @@
         if (key === 'room-script') { const b = roomScriptBindings().get(rid); return (b && b.label) || 'Room script'; }
         if (key.startsWith('door:')) { const d = (roomDoorRows[rid] || []).find(x => 'door:' + x.id === key); return 'Door: ' + ((d && d.name) || key.slice(5)); }
         if (key.startsWith('curtain:')) { const c = (roomCurtains[rid] || []).find(x => 'curtain:' + x.id === key); return (c && c.label) || key.slice(8); }
+        if (key.startsWith('vacuum:')) return vacuumLabels.get(key.slice(7)) || 'Robot vacuum';
         return key;
       }
       // The rows a room DERIVES from its bindings, before its sidebar config.
@@ -3533,6 +3548,8 @@
           if (home.getCurtainOpen(cu.id) !== null) keys.push('curtain:' + cu.id); // null: not in this house's 3D geometry
         });
         if (climateEntityForRoom(rid)) keys.push('climate');
+        // A robot vacuum whose furniture item is in this room (its block).
+        roomVacuumIds(rid).forEach(id => keys.push('vacuum:' + id));
         // Last, below every live control: the room script ("Kill room").
         if (roomScriptBindings().has(rid)) keys.push('room-script');
         return keys;
@@ -3620,6 +3637,7 @@
         }
         if (key === 'climate') return climateRowHtml(climateReading.get(rid) || null, offline, climateHeating(rid));
         if (key.startsWith('extra:') || key.startsWith('item:')) return sidebarRowHtml(key, rid, offline);
+        if (key.startsWith('vacuum:')) return vacuumBindings.has(key.slice(7)) ? vacuumBlockHtml(key.slice(7)) : '';
         if (key === 'room-script') {
           const b = roomScriptBindings().get(rid);
           if (!b) return '';

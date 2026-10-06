@@ -512,10 +512,10 @@ export function roomAccentSummary(geometry, roomsDoc, roomId) {
 // derived rows. Item rows exist only where `show` names them: no profile
 // grows a row it did not ask for. The HA-offline note can never be hidden.
 
-// `hide` group names ('doors', 'curtains'): one entry hides every row of that kind.
+// `hide` group names ('doors', 'curtains', 'vacuums'): one entry hides every row of that kind.
 export { SIDEBAR_GROUPS };
 /** What the sidebar editor offers to hide (besides each door / curtain by id). */
-export const DERIVED_ROW_NAMES = Object.freeze(['main', 'ambient', 'galaxy', 'doors', 'motion', 'curtains', 'climate', 'room-script']);
+export const DERIVED_ROW_NAMES = Object.freeze(['main', 'ambient', 'galaxy', 'doors', 'motion', 'curtains', 'climate', 'vacuums', 'room-script']);
 export const EXTRA_ROW_KINDS = Object.freeze({ light: ['light'], cover: ['cover'], switch: ['switch', 'input_boolean'], script: ['script'] });
 const SIDEBAR_ENTITY_RE = /^[a-z_]+\.[a-z0-9_]+$/;
 

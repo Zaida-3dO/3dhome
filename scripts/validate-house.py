@@ -1131,6 +1131,8 @@ def check_bindings_and_sidebar(rooms_doc, geo, geo_room_ids, geo_channels, repor
                 report.warn(f"{where}/hide", f"'{h}' names no door in geometry.json -- it hides nothing")
             if h.startswith("curtain:") and h[8:] not in geo_curtains:
                 report.warn(f"{where}/hide", f"'{h}' names no curtain in geometry.json -- it hides nothing")
+            if h.startswith("vacuum:") and h[7:] not in (sensors.get("vacuums") or {}):
+                report.warn(f"{where}/hide", f"'{h}' names no sensors.vacuums binding -- it hides nothing")
         for k in (cfg or {}).get("show") or []:
             iid = k[5:]
             f = geo_furniture.get(iid)
