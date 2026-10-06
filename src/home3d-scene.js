@@ -44,7 +44,7 @@ import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './room-pick.js';
 import { easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView,
   ROOM_VIEW, chooseInRoomView, distToPolyEdge, eyeOf, planFlight, inRoomTapIsClickAway, clampRadiusInside, leavesRoom } from './camera-focus.js';
-import { buildNavGraph, navInputsFromHouse, planWalk, outsideView } from './doorway-walk.js';
+import { buildNavGraph, navInputsFromHouse, planWalk, outsideView, heldDoorsToKeep } from './doorway-walk.js';
 import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
@@ -5106,7 +5106,7 @@ export const Home3DScene = (() => {
       if (!flight) return;
       const f = flight;
       flight = null;
-      if (status !== 'superseded') releaseWalkDoors(status === 'cancelled');
+      if (status !== 'superseded') { releaseWalkDoors(status === 'cancelled'); settleWalkDoors(); }
       try { f.resolve(status); } catch (e) { /* a resolver never throws */ }
     }
     function reducedMotion() {
@@ -5194,7 +5194,8 @@ export const Home3DScene = (() => {
     }
     // The door of a cupboard that is the view is HIDDEN while it is: one that
     // opens only 28 degrees otherwise fills the frame, and the shot is of the
-    // cupboard, not its door. Shown again the moment another flight starts.
+    // cupboard, not its door. Shown again the moment another flight starts,
+    // or the eye leaves that view (settleWalkDoors).
     let hiddenViewDoor = null;
     function setViewDoor(id) {
       if (hiddenViewDoor === id) return;
@@ -5208,7 +5209,8 @@ export const Home3DScene = (() => {
     // After a flight: only the destination's outside-view door stays open --
     // and, when the user stopped the walk, any door the camera is standing
     // in or next to (within 1 m), so a leaf never swings shut through it.
-    // Those go back at the next flight.
+    // Those go back at the next flight, or once the camera is clear of them
+    // (settleWalkDoors).
     function releaseWalkDoors(cancelled) {
       const keep = new Set(walkViewDoor ? [walkViewDoor] : []);
       if (cancelled) {
@@ -5219,6 +5221,19 @@ export const Home3DScene = (() => {
         });
       }
       holdDoorsOpen(keep);
+    }
+    // With no flight running, the camera moved by hand or by an API jump
+    // (setView / setOrbit), or a walk stopped short: the cupboard's leaf
+    // comes back once the eye has left its outside view, and a held door
+    // goes back -- to the state any sensor set meanwhile -- once the eye is
+    // over 1 m from it (src/doorway-walk.js heldDoorsToKeep). Run by
+    // endFlight and every drawn frame; nothing to do when nothing is held.
+    function settleWalkDoors() {
+      if (flight || (!walkViewDoor && !walkDoorHold.size)) return;
+      const s = heldDoorsToKeep({ viewDoor: walkViewDoor, atView: !!walkViewDoor && outsideDoorFor(getPose()) === walkViewDoor,
+        held: [...walkDoorHold.keys()], eye: [cam.position.x, cam.position.z], portals: navGraph().portals });
+      if (s.viewDoor !== walkViewDoor) { walkViewDoor = s.viewDoor; setViewDoor(walkViewDoor); }
+      if (s.keep.size !== walkDoorHold.size) holdDoorsOpen(s.keep);
     }
     // The door of the room whose outside view this pose is, or null.
     function outsideDoorFor(pose) {
@@ -5916,6 +5931,7 @@ export const Home3DScene = (() => {
       // A camera flight moves the camera BEFORE this frame's wall fade reads
       // its direction, and reports "still moving" into `animating` below.
       const flightMoving = tickCameraFlight(frameNow);
+      settleWalkDoors();
       if (autoRotate && !orb.drag && !orb.pan) {
         autoAngle += rotateSpeed * dt;
         orb.th = Math.PI * 0.22 + autoAngle;

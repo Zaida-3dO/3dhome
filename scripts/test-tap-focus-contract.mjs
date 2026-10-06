@@ -22,10 +22,14 @@
  *   2b. No REFERENCE to an opener outside those places (an alias like
  *      `const quick = openCard` is caught, not only a call), and the set of
  *      tap listeners on the window / document / canvas is pinned, so a
- *      parallel listener opening its own panel is a visible diff.
+ *      parallel listener opening its own panel is a visible diff -- and so
+ *      is the set of FILES registering a tap listener on anything, whatever
+ *      the receiver is called. index.html's onObjectTap hook is pinned
+ *      verbatim (an opener added there is a diff, whatever its name).
  *   3c. THE PAGE'S FOCUS: src/tap-focus.js (which index.html wires in
  *      verbatim, pinned) is run with the real focus controller for every
- *      routed kind and must start a real flight -- even when the scene can
+ *      routed kind and must start a real flight (a finite pose, r > 0) --
+ *      even when the scene can
  *      derive no view by id (it falls back to the tapped point). A kind
  *      check in the page's focus function or its view resolver fails here.
  *   3d. The sound menu docks beside the speaker only after a flight.
@@ -186,9 +190,11 @@ console.log('static guard');
   ];
   const seen = {};
   const computed = [];
+  const tapFiles = new Set();
   files.forEach(f => codeOnly(read(f)).split('\n').forEach(ln => {
     listenRe.forEach(re => {
       for (const m of ln.matchAll(re)) {
+        tapFiles.add(f);   // ANY receiver, whatever it is called
         const recv = m[1] || '';
         const parts = recv.split('.').filter(Boolean);
         // A bare addEventListener(...) is the window's; otherwise any part of
@@ -206,6 +212,15 @@ console.log('static guard');
   const diff = Object.keys(Object.assign({}, seen, EXPECTED_LISTENERS)).filter(k => (seen[k] || 0) !== (EXPECTED_LISTENERS[k] || 0))
     .map(k => k + ' (expected ' + (EXPECTED_LISTENERS[k] || 0) + ', found ' + (seen[k] || 0) + ')');
   check('the tap listeners on the window / document / canvas are exactly the reviewed set', diff.length === 0, diff);
+  // The receiver pin above keys on the receiver's NAME: `el.addEventListener
+  // ('click', ...)` in a new module handed the canvas would dodge it. So the
+  // FILES that register a tap listener on anything at all are pinned too: a
+  // new file gaining one is a reviewed diff here; a change inside one of
+  // these stays free (review 07c58870).
+  const EXPECTED_TAP_FILES = ['index.html', 'src/edit-bindings.js', 'src/edit-mode.js', 'src/home3d-scene.js',
+    'src/profile-draft.js', 'src/sound-menu.js', 'src/tap-popovers.js'];
+  check('the files registering any tap listener (any receiver) are exactly the reviewed ' + EXPECTED_TAP_FILES.length,
+    JSON.stringify([...tapFiles].sort()) === JSON.stringify(EXPECTED_TAP_FILES), [...tapFiles].sort());
   // The reviewed ones: the scene's on() helper (its calls are scanned above),
   // the modal swallowing input at its own root, the boot title hiding on the
   // first pointer/wheel/key, and the sidebar's write-gated control binder.
@@ -366,9 +381,13 @@ console.log('the page\'s focus flies for every routed kind');
         soundMenu: { open: () => log.push('open:soundMenu'), coverRight: () => 0 }, onClose: () => {} });
       const disp = D.createTapDispatcher({ routes, gate: F.createFocusGate(), focus: (a, b, c) => { const p = focus(a, b, c); log.push('fly:' + flights.length); return p; } });
       await disp.dispatch(t, { x: 0, y: 0, z: 0 }, { x: 0, y: 0 });
-      if (!(flights.length === 1 && log[0] === 'fly:1' && log[1] && log[1].startsWith('open:'))) missing.push(t.kind + ' ' + t.id + ' ' + JSON.stringify(log));
+      // A REAL flight: a finite pose a positive distance out (a fallback
+      // returning { th: NaN, r: 0 } is no flight) -- review 07c58870.
+      const fp = flights[0];
+      const finite = !!fp && Array.isArray(fp.tgt) && fp.tgt.length === 3 && [fp.th, fp.ph, fp.r].concat(fp.tgt).every(Number.isFinite) && fp.r > 0;
+      if (!(flights.length === 1 && finite && log[0] === 'fly:1' && log[1] && log[1].startsWith('open:'))) missing.push(t.kind + ' ' + t.id + ' ' + JSON.stringify(log) + ' ' + JSON.stringify(fp));
     }
-    check('scene ' + hname + ': the page\'s focus starts a real flight before the open, for every routed kind (' + targets.length + ' targets)', missing.length === 0, missing);
+    check('scene ' + hname + ': the page\'s focus starts a real flight (a finite pose, r > 0) before the open, for every routed kind (' + targets.length + ' targets)', missing.length === 0, missing);
   }
   check('the page\'s focus returns null only when focus is off', TF.createTapFocus({ on: () => false, ctl: { request() { throw new Error('asked'); } } })({ kind: 'item', id: 'x' }, null) === null);
   const tfSrc = codeOnly(read('src/tap-focus.js'));
@@ -376,6 +395,17 @@ console.log('the page\'s focus flies for every routed kind');
   check('the page\'s focus function never looks at the kind', !/\bkind\b/.test(tapFocusBody) && (tapFocusBody.match(/return null/g) || []).length === 1 &&
     /if \(!o\.on\(\)\) return null;/.test(tapFocusBody));
   const html = read('index.html');
+  // The page's onObjectTap hook runs on every object tap, before the
+  // dispatch: pinned verbatim, so an opener added there (whatever its name)
+  // is a reviewed diff (review 07c58870).
+  const oot = codeOnly(html.slice(html.indexOf('        onObjectTap: (target, point) => {'),
+    html.indexOf('        // Camera focus: fly to the device, then the card'))).trim();
+  check('index.html\'s onObjectTap only closes the sidebar and hands edit mode the device (pinned verbatim)', oot === [
+    'onObjectTap: (target, point) => {',
+    '          sidebarEvent(\'objectTap\');',
+    '          if (editApi && editApi.isActive()) editApi.selectDevice(target, point && point.clone ? point.clone() : point);',
+    '        },',
+  ].join('\n'), oot);
   const att = html.slice(html.indexOf('attachTapPopovers({'), html.indexOf('state: {', html.indexOf('attachTapPopovers({')));
   check('index.html hands the dispatcher exactly createTapFocus (no wrapper, no kind check)',
     (att.match(/^\s*focus:/gm) || []).length === 1 && /\n\s*focus: focusAllowed \? createTapFocus\(\{ on: focusOn, ctl: focusCtl \}\) : undefined,\n/.test(att));
