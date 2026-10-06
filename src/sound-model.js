@@ -229,17 +229,87 @@ export function volumeOf(raw) {
 }
 
 /**
+ * An `entity_picture`(_local) -> a URL the browser can load, or null.
+ * Absolute http(s) and data:image URLs pass through; a path is joined to Home
+ * Assistant's base URL (none known -> null). HA-proxied art often cannot load
+ * cross-origin from here; the card then falls back to the player icon.
+ */
+export function mediaArtUrl(baseUrl, picture) {
+  const p = typeof picture === 'string' ? picture.trim() : '';
+  if (!p) return null;
+  if (/^https?:\/\//i.test(p) || /^data:image\//i.test(p)) return p;
+  if (p.charAt(0) !== '/' || p.charAt(1) === '/') return null;
+  const b = (typeof baseUrl === 'string' ? baseUrl.trim() : '').replace(/\/+$/, '');
+  return /^https?:\/\//i.test(b) ? b + p : null;
+}
+
+/**
+ * Where the track is, the way Home Assistant's media-control card computes
+ * it: media_position was true at media_position_updated_at, and only a
+ * PLAYING player moves on from there. Seconds, clamped to [0, duration].
+ * null without a positive duration or a numeric position (no bar).
+ * @returns {{ position, duration, fraction } | null}
+ */
+export function mediaProgress(raw, nowMs) {
+  const a = (raw && raw.attributes) || {};
+  const dur = +a.media_duration, pos = +a.media_position;
+  if (!(a.media_duration != null && Number.isFinite(dur) && dur > 0) || a.media_position == null || !Number.isFinite(pos)) return null;
+  let p = pos;
+  const at = Date.parse(a.media_position_updated_at);
+  if (raw.state === 'playing' && Number.isFinite(at)) p += Math.max(0, (nowMs - at) / 1000);
+  p = Math.max(0, Math.min(p, dur));
+  return { position: p, duration: dur, fraction: p / dur };
+}
+
+/**
  * NOW PLAYING: one slide per configured speaker whose state is 'playing',
  * the tapped speaker's first (so it is the initial slide).
- * Each: { entity, label, title, volume, volumeText, tapped }.
+ * Each: { entity, label, title, artist, art, progress, volume, volumeText,
+ * tapped }. progress: what mediaProgress() needs, frozen at the last report
+ * ({ state, position, duration, updatedAt }) or null; the menu ticks the bar.
  */
-export function nowPlaying(cfg, rawOf, sound, tapped) {
+export function nowPlaying(cfg, rawOf, sound, tapped, baseUrl) {
   return orderedSpeakers(cfg, tapped).filter(s => { const r = rawOf(s.entity); return !!r && r.state === 'playing'; }).map(s => {
     const r = rawOf(s.entity);
+    const a = r.attributes || {};
     const vol = volumeOf(r);
-    return { entity: s.entity, label: s.label, title: slideTitle(r, sound), volume: vol,
+    const prog = mediaProgress(r, 0) ? { state: r.state, position: +a.media_position, duration: +a.media_duration,
+      updatedAt: a.media_position_updated_at || null } : null;
+    return { entity: s.entity, label: s.label, title: slideTitle(r, sound),
+      artist: String(a.media_artist || a.media_album_artist || ''),
+      art: mediaArtUrl(baseUrl, a.entity_picture_local) || mediaArtUrl(baseUrl, a.entity_picture),
+      progress: prog, volume: vol,
       volumeText: vol == null ? '--' : Math.round(vol * 100) + '%', tapped: s.entity === tapped };
   });
+}
+
+/**
+ * The artwork's dominant colour, the way HA's card picks its background (the
+ * most populous swatch): pixels bucketed 4 bits per channel, the fullest
+ * bucket's average. rgba: a flat RGBA byte array (a canvas's getImageData).
+ * Transparent pixels are skipped. Returns [r, g, b] or null.
+ */
+export function dominantColor(rgba) {
+  if (!rgba || !rgba.length) return null;
+  const buckets = new Map();
+  let best = null;
+  for (let i = 0; i + 3 < rgba.length; i += 4) {
+    if (rgba[i + 3] < 128) continue;
+    const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+    const k = (r >> 4) << 8 | (g >> 4) << 4 | (b >> 4);
+    let e = buckets.get(k);
+    if (!e) { e = { n: 0, r: 0, g: 0, b: 0 }; buckets.set(k, e); }
+    e.n++; e.r += r; e.g += g; e.b += b;
+    if (!best || e.n > best.n) best = e;
+  }
+  return best ? [Math.round(best.r / best.n), Math.round(best.g / best.n), Math.round(best.b / best.n)] : null;
+}
+
+/** Text over a background colour: white or near-black, whichever contrasts more (WCAG luminance). */
+export function inkFor(rgb) {
+  const lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  const L = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+  return (1.05) / (L + 0.05) >= (L + 0.05) / 0.05 ? '#ffffff' : '#111111';
 }
 
 /**
@@ -454,7 +524,12 @@ export function applyMockCommand(cfg, states, command) {
     else if (command.service === 'volume_set') set(eid, cur.state, { volume_level: command.data.volume_level });
   } else if (command.domain === 'music_assistant' && command.service === 'play_media') {
     const t = SAMPLE_SPOTIFY_TRACKS.find(x => x.uri === command.data.media_id);
-    [].concat(eid).forEach(e => set(e, 'playing', { media_title: t ? t.name : command.data.media_id, media_content_id: command.data.media_id }));
+    // A track, unlike an ambience loop, has an artist, a length and artwork
+    // (a generated gradient: the demo loads nothing from the network).
+    const i = t ? SAMPLE_SPOTIFY_TRACKS.indexOf(t) : 0;
+    [].concat(eid).forEach(e => set(e, 'playing', { media_title: t ? t.name : command.data.media_id, media_content_id: command.data.media_id,
+      media_artist: t ? t.artists.map(x => x.name).join(', ') : null, media_duration: 180 + 17 * i, media_position: 0,
+      media_position_updated_at: new Date().toISOString(), entity_picture: demoArt(i) }));
   }
   return m;
 }
@@ -588,6 +663,15 @@ export const SAMPLE_SPOTIFY_TRACKS = [
 ].map(([name, artists], i) => ({ media_type: 'track', uri: 'spotify--demo://track/demo_' + (i + 1), name, version: '', image: null, favorite: false,
   explicit: null, artists: artists.split(', ').map(a => ({ media_type: 'artist', name: a })) }));
 
+/** A sample track's artwork: a two-colour SVG, as a data: URL (no network). */
+export function demoArt(i) {
+  const pairs = [['#e2563b', '#7a1f4f'], ['#2a9d8f', '#1d3557'], ['#f4a261', '#6d3b8c'], ['#3a86ff', '#0b2545']];
+  const [a, b] = pairs[Math.abs(i | 0) % pairs.length];
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="' + a + '"/>' +
+    '<circle cx="46" cy="46" r="26" fill="' + b + '"/></svg>';
+  return 'data:image/svg+xml,' + encodeURIComponent(svg);
+}
+
 /** The demo's response to a recents or a search call (no Home Assistant). */
 export function mockSpotifyResponse(kind, query) {
   if (kind === 'search') {
@@ -664,7 +748,7 @@ export function createSoundController(d) {
     const statusKey = soundStatusKey(mockMode() ? null : ha().status);
     const live = statusKey === 'ok' || statusKey === 'mock';
     const sound = currentSound(rawOf(cfg.sound));
-    const slides = nowPlaying(cfg, rawOf, sound, tapped);
+    const slides = nowPlaying(cfg, rawOf, sound, tapped, mockMode() ? null : ha().activeUrl);
     const tiles = orderSounds(catalogueTiles(rawOf(cfg.catalogue)), parseRecentIds(cfg.recent ? rawOf(cfg.recent) : null));
     if (busy && !pending && !isBusy(busy, t, soundSettled(busy.target, sound, realSelection(), rawOf))) busy = null;
     const rows = speakerRows(cfg, selection(), tapped);

@@ -460,7 +460,7 @@ console.log('10. an openFrom item opens the menu');
   // Since the focus contract (scripts/test-tap-focus-contract.mjs): a soundMenu
   // tap is a ROUTE like any other -- the camera flies to the speaker first.
   check('tap-popovers: a soundMenu tap is a dispatcher route that opens the menu (after the flight)',
-    /kind: 'soundMenu',[\s\S]{0,400}d\.soundMenu\.open\(\{ itemId: t\.itemId, speaker: t\.speaker, side: !!at\.flew, onClose: why => d\.onClose\(t, why\) \}\);/.test(tp) &&
+    /kind: 'soundMenu',[\s\S]{0,900}d\.soundMenu\.open\(\{ itemId: t\.itemId, speaker: t\.speaker, side: !!at\.flew, anchor, onClose: why => d\.onClose\(t, why\) \}\);/.test(tp) &&
     !/kind: 'soundMenu',[^}]*focus: false/.test(tp));
   const page = read('index.html');
   check('index: imports createSoundMenu', /import \{ createSoundMenu \} from '\.\/src\/sound-menu\.js\?v=__VERSION__';/.test(page));
@@ -871,6 +871,86 @@ console.log('14. Spotify play: configured speakers only, cancel / detach, an unc
     hint('login5 rejected the credential') && hint('Spotify credentials are unauthorized'));
   check('... NOT anything merely mentioning auth or login', !hint('Authentication failed') && !hint('auth required') && !hint('Unauthorized') &&
     !hint('login page unreachable') && !hint('Validation error: Entry not found'));
+}
+
+// ---- 12. NOW PLAYING as HA's media-control card: the data and the progress maths ------------------
+console.log('12. the media card: artist, artwork, progress');
+const SM = await imp('src/sound-menu.js');
+{
+  const T0 = Date.parse('2026-01-01T00:00:00Z');
+  const iso = ms => new Date(ms).toISOString();
+  const pr = (state, pos, dur, at) => ({ state, attributes: { media_position: pos, media_duration: dur, media_position_updated_at: at } });
+  let p = M.mediaProgress(pr('playing', 30, 200, iso(T0)), T0 + 10000);
+  check('progress: a playing track moves on from media_position by the time since media_position_updated_at', p && p.position === 40 && p.duration === 200 && p.fraction === 0.2, p);
+  p = M.mediaProgress(pr('paused', 30, 200, iso(T0)), T0 + 10000);
+  check('progress: a paused one stays where it was reported', p && p.position === 30, p);
+  check('progress: clamped to the duration (and never below 0)', M.mediaProgress(pr('playing', 190, 200, iso(T0)), T0 + 60000).position === 200 &&
+    M.mediaProgress(pr('playing', 30, 200, iso(T0 + 5000)), T0).position === 30);
+  check('progress: an unreadable updated_at -> the reported position', M.mediaProgress(pr('playing', 30, 200, 'garbage'), T0).position === 30);
+  check('progress: no bar without a positive duration or a position', M.mediaProgress(pr('playing', 30, 0, iso(T0)), T0) === null &&
+    M.mediaProgress(pr('playing', null, 200, iso(T0)), T0) === null && M.mediaProgress(st('playing', { media_duration: 200 }), T0) === null &&
+    M.mediaProgress(st('playing'), T0) === null);
+  const frozen = { state: 'playing', position: 30, duration: 200, updatedAt: iso(T0) };
+  check('the bar: a percentage, one decimal, ticking with the clock', SM.progressPct(frozen, T0 + 10000) === 20 && SM.progressPct(frozen, T0 + 11000) === 20.5 &&
+    SM.progressPct(null, T0) === null);
+
+  const states = new Map([[BED, st('playing', { media_title: 'Song', media_artist: 'Band', entity_picture: '/api/media_player_proxy/x?token=1',
+    media_position: 5, media_duration: 100, media_position_updated_at: iso(T0) })],
+  [STUDY, st('playing', { media_title: 'Rain', entity_picture: 'https://i.scdn.co/image/abc', media_album_artist: 'Album artist' })]]);
+  const s = M.nowPlaying(cfg, e => states.get(e) || null, 'Rain', null, 'http://ha.invalid:8123/');
+  check('slide: artist, and media_album_artist when there is none', s[0].artist === 'Band' && s[1].artist === 'Album artist', s.map(x => x.artist));
+  check('slide: an HA-path picture joined to the base URL; an absolute one as is', s[0].art === 'http://ha.invalid:8123/api/media_player_proxy/x?token=1' &&
+    s[1].art === 'https://i.scdn.co/image/abc', s.map(x => x.art));
+  check('slide: a path with no base URL -> no art (the icon fallback)', M.nowPlaying(cfg, e => states.get(e) || null, 'Rain', null, null)[0].art === null);
+  check('art URLs: only http(s), data:image and rooted paths', M.mediaArtUrl(null, 'javascript:alert(1)') === null && M.mediaArtUrl('http://h', '//evil/x') === null &&
+    M.mediaArtUrl(null, 'data:image/png;base64,AA') === 'data:image/png;base64,AA');
+  check('slide: progress frozen at the report (or null: no bar)', J(s[0].progress) === J({ state: 'playing', position: 5, duration: 100, updatedAt: iso(T0) }) && s[1].progress === null);
+  check('the CSS url() cannot be broken out of', SM.cssUrl('a"b\\c\nd') === 'a%22b%5cc%0ad');
+
+  // HA's colours: the most populous swatch, and contrasting text.
+  const px = (rgb, n) => Array.from({ length: n }, () => rgb.concat(255)).flat();
+  check('dominant colour: the fullest bucket wins, averaged', J(M.dominantColor(px([200, 30, 30], 5).concat(px([10, 10, 240], 3)))) === J([200, 30, 30]));
+  check('dominant colour: transparent pixels ignored; nothing -> null', J(M.dominantColor(px([1, 2, 3], 2).map((v, i) => (i % 4 === 3 ? 0 : v)).concat(px([90, 90, 90], 1)))) === J([90, 90, 90]) &&
+    M.dominantColor([]) === null);
+  check('ink: white on a dark colour, near-black on a light one', M.inkFor([20, 20, 60]) === '#ffffff' && M.inkFor([240, 230, 200]) === '#111111');
+
+  // The demo: a Spotify track carries an artist, a length and artwork (no network).
+  const mcfg = M.normaliseSoundMenu(SP);
+  const after = M.applyMockCommand(mcfg, M.mockSoundStates(mcfg), M.spotifyPlayCommands([BED], 'spotify--demo://track/demo_2')[1]);
+  const a = after.get(BED).attributes;
+  check('demo: a played track has an artist, a duration, a position and data: artwork', a.media_artist === 'The Placeholders' && a.media_duration > 0 &&
+    a.media_position === 0 && /^data:image\/svg\+xml,/.test(a.entity_picture) && !Number.isNaN(Date.parse(a.media_position_updated_at)), a);
+}
+
+// ---- 13. placement: the cards' placePopover, anchored at the speaker's box -------------------------
+console.log('13. placement like a tap card');
+{
+  const desk = { left: 0, top: 0, right: 1280, bottom: 800 };
+  const box = { left: 360, right: 460, top: 330, bottom: 420 };
+  let p = SM.fitSoundMenu({ x: 410, y: 380, rect: box }, 400, 640, desk, true);
+  check('desktop: beside the speaker, its gap kept from the speaker\'s BOX (never over it)', p.placement === 'right' && p.left === 460 + 12, p);
+  check('... with the cards\' arrow on its left edge, at the speaker\'s height', p.arrow && p.arrow.side === 'left' && p.arrow.offset === 380 - p.top, p);
+  check('... full height available (the body scrolls past it)', p.height === 640 && SM.fitSoundMenu({ x: 410, y: 380, rect: box }, 400, 900, desk, true).height === 800 - 16);
+  const short = SM.fitSoundMenu({ x: 410, y: 600, rect: { left: 360, right: 460, top: 560, bottom: 640 } }, 400, 200, desk, true);
+  check('desktop: it prefers the side even when it would fit above (the flight framed room there)', short.placement === 'right', short);
+  check('... without the flight it is a card: above first', SM.fitSoundMenu({ x: 410, y: 600 }, 400, 200, desk, false).placement === 'above');
+  // A point anchor is exactly a card's placement.
+  const T2 = await imp('src/tap-popovers.js');
+  const q = SM.fitSoundMenu({ x: 200, y: 400 }, 200, 104, { left: 0, top: 0, right: 400, bottom: 800 }, false);
+  check('a point anchor places exactly as placePopover places a card', J([q.left, q.top, q.placement, q.arrow]) ===
+    J((r => [r.left, r.top, r.placement, r.arrow])(T2.placePopover(200, 400, 200, 104, { left: 0, top: 0, right: 400, bottom: 800 }))));
+  // Phone: nothing fits beside; the card is capped to the room above/below and keeps its arrow.
+  const phone = { left: 0, top: 0, right: 390, bottom: 844 };
+  p = SM.fitSoundMenu({ x: 195, y: 470, rect: { left: 150, right: 240, top: 430, bottom: 510 } }, 374, 700, phone, false);
+  check('phone: above the speaker, height capped to the room there, arrow pointing down at it', p.placement === 'above' && p.height === 430 - 12 - 8 &&
+    p.top === 8 && p.arrow && p.arrow.side === 'bottom', p);
+  p = SM.fitSoundMenu({ x: 195, y: 200, rect: { left: 150, right: 240, top: 160, bottom: 240 } }, 374, 700, phone, false);
+  check('phone, speaker high: below it instead', p.placement === 'below' && p.top === 240 + 12 && p.height === 844 - 8 - 252 && p.arrow.side === 'top', p);
+  p = SM.fitSoundMenu({ x: 195, y: 422, rect: { left: 5, right: 385, top: 200, bottom: 650 } }, 374, 700, phone, false);
+  check('a box too big to sit beside: placed from the point, as a card', p.placement !== 'clamped' && p.arrow !== null, p);
+  p = SM.fitSoundMenu({ x: 195, y: 250 }, 374, 700, { left: 0, top: 0, right: 390, bottom: 480 }, false);
+  check('no room anywhere (under MENU_MIN_H): clamped into the screen, no arrow', p.placement === 'clamped' && p.arrow === null && p.height === 480 - 16, p);
+  check('the flight leaves the card\'s width (plus gaps) beside the speaker on a wide screen', SM.SHEET_W + 2 * SM.SIDE_GAP === 448 && SM.SHEET_W >= 360 && SM.SHEET_W <= 420);
 }
 
 console.log('\n' + passes + ' passed, ' + failures + ' failed');

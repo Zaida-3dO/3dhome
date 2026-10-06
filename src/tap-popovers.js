@@ -456,11 +456,19 @@ export function pickFromHits(hits, bindings, deviceAt) {
  * The arrow points at the tap from whichever side the card is on; its
  * offset is along that edge, kept ARROW_INSET from the corners.
  *
+ * opts (optional; the compact cards pass none and get exactly the above):
+ *   rect    {left, top, right, bottom} -- the anchored item's on-screen box
+ *           (x, y lies inside it). The card keeps its gap from the BOX, not
+ *           the tap point, so a big card beside a speaker never covers it.
+ *   prefer  'side' -- try right/left BEFORE above/below (the sound menu,
+ *           whose flight framed the speaker with room beside it).
+ *
  * @returns {{left, top, placement, arrow: null | {side, offset}}}
  */
-export function placePopover(x, y, w, h, bounds, gap, margin) {
+export function placePopover(x, y, w, h, bounds, gap, margin, opts) {
   const g = gap == null ? 12 : gap;
   const m = margin == null ? 8 : margin;
+  const r = (opts && opts.rect) || { left: x, right: x, top: y, bottom: y };
   const minL = bounds.left + m, maxL = bounds.right - m - w;
   const minT = bounds.top + m, maxT = bounds.bottom - m - h;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
@@ -473,14 +481,19 @@ export function placePopover(x, y, w, h, bounds, gap, margin) {
     return { left, top, placement, arrow };
   };
   const hLeft = clamp(x - w / 2, minL, Math.max(minL, maxL));
-  if (y - g - h >= minT) return out(hLeft, y - g - h, 'above', 'bottom');
-  if (y + g + h <= bounds.bottom - m) return out(hLeft, y + g, 'below', 'top');
-  const roomRight = bounds.right - m - (x + g);   // space for the card right of the tap
-  const roomLeft = (x - g) - (bounds.left + m);
-  const vTop = clamp(y - h / 2, minT, Math.max(minT, maxT));
-  const fitsR = roomRight >= w, fitsL = roomLeft >= w;
-  if (fitsR && (!fitsL || roomRight >= roomLeft)) return out(x + g, vTop, 'right', 'left');
-  if (fitsL) return out(x - g - w, vTop, 'left', 'right');
+  const above = () => (r.top - g - h >= minT ? out(hLeft, r.top - g - h, 'above', 'bottom') : null);
+  const below = () => (r.bottom + g + h <= bounds.bottom - m ? out(hLeft, r.bottom + g, 'below', 'top') : null);
+  const beside = () => {
+    const roomRight = bounds.right - m - (r.right + g);   // space for the card right of the tap
+    const roomLeft = (r.left - g) - (bounds.left + m);
+    const vTop = clamp(y - h / 2, minT, Math.max(minT, maxT));
+    const fitsR = roomRight >= w, fitsL = roomLeft >= w;
+    if (fitsR && (!fitsL || roomRight >= roomLeft)) return out(r.right + g, vTop, 'right', 'left');
+    if (fitsL) return out(r.left - g - w, vTop, 'left', 'right');
+    return null;
+  };
+  const order = opts && opts.prefer === 'side' ? [beside, above, below] : [above, below, beside];
+  for (const f of order) { const p = f(); if (p) return p; }
   return out(clamp(x - w / 2, minL, Math.max(minL, maxL)), clamp(y - g - h, minT, Math.max(minT, maxT)), 'clamped', null);
 }
 
@@ -1355,7 +1368,8 @@ export const clockTick = {
  *
  * @param d  { openCard(t, x, y), project(point) => {x, y} | null,
  *           closeCard(why), soundMenu (src/sound-menu.js handle) | null,
- *           onClose(target, why) }
+ *           onClose(target, why), bounds(x, y) => the visible scene rect a
+ *           card may use, itemRect(t, x, y) => the item's on-screen box | null }
  */
 export function buildTapRoutes(d) {
   // TAP-ROUTES:BEGIN -- the only place a tap opens a card or a modal.
@@ -1375,17 +1389,23 @@ export function buildTapRoutes(d) {
     { kind: 'item', open: card },
     { kind: 'clock', open: card },
     { kind: 'door', focus: false, reason: FOCUS_OPT_OUTS.door, open: (t, point, at) => d.openCard(t, at.x, at.y) },
-    // The sound menu: a modal, opened over the framed speaker. On a wide
-    // screen it docks to the right (cover) so the flight frames the speaker
-    // in the part of the canvas left uncovered.
+    // The sound menu: a big card ANCHORED to the speaker like every card
+    // here (placePopover, with its arrow), opened after the flight. On a wide
+    // screen the flight leaves room beside the speaker (cover) and the menu
+    // prefers that side. anchor() is re-read while it is open (resize).
     {
       kind: 'soundMenu',
       cover: () => (d.soundMenu && typeof d.soundMenu.coverRight === 'function' ? d.soundMenu.coverRight() : 0),
       open: (t, point, at) => {
         if (!d.soundMenu) return;
         d.closeCard('replace');
-        // Docked beside the speaker only when the camera flew to frame it there.
-        d.soundMenu.open({ itemId: t.itemId, speaker: t.speaker, side: !!at.flew, onClose: why => d.onClose(t, why) });
+        const anchor = () => {
+          const p = at.flew ? d.project(point) : null;
+          const x = p ? p.x : at.x, y = p ? p.y : at.y;
+          return { x, y, rect: p && d.itemRect ? d.itemRect(t, x, y) : null, bounds: d.bounds ? d.bounds(x, y) : null };
+        };
+        // Beside the speaker first only when the camera flew to leave room there.
+        d.soundMenu.open({ itemId: t.itemId, speaker: t.speaker, side: !!at.flew, anchor, onClose: why => d.onClose(t, why) });
       },
     },
   ]);
@@ -2316,16 +2336,37 @@ export function attachTapPopovers(o) {
     return false;
   }
 
-  function position() {
-    const el = pop.el;
+  // The visible scene: the canvas within the viewport, minus the sidebar
+  // when it is open. If a card does not fit the leftover space it is
+  // clamped into it, and z-index 60 (> the panel's 50) keeps it on top.
+  function sceneBounds(x, y) {
     const r = canvasRect();
-    // The visible scene: the canvas within the viewport, minus the sidebar
-    // when it is open. If the card does not fit the leftover space it is
-    // clamped into it, and z-index 60 (> the panel's 50) keeps it on top.
-    const bounds = boundsExcluding({
+    return boundsExcluding({
       left: Math.max(0, r.left), top: Math.max(0, r.top),
       right: Math.min(window.innerWidth, r.right), bottom: Math.min(window.innerHeight, r.bottom),
-    }, sidebarRect(), pop.x, pop.y);
+    }, sidebarRect(), x, y);
+  }
+  // A furniture item's world box projected to the screen, clipped to the
+  // scene and grown to hold (x, y); null when it has no box or a corner is
+  // behind the camera. The sound menu keeps its gap from this box.
+  function itemRect(t, x, y) {
+    const box = t && t.itemId && typeof home.furnitureBox === 'function' ? home.furnitureBox(t.itemId) : null;
+    if (!box) return null;
+    const cam = home.getCamera(), c = canvasRect(), b = sceneBounds(x, y);
+    let l = Infinity, tp = Infinity, rt = -Infinity, bt = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      tmpV.set(i & 1 ? box.max[0] : box.min[0], i & 2 ? box.max[1] : box.min[1], i & 4 ? box.max[2] : box.min[2]).project(cam);
+      if (tmpV.z > 1 || tmpV.z < -1) return null;
+      const px = c.left + (tmpV.x + 1) / 2 * c.width, py = c.top + (1 - tmpV.y) / 2 * c.height;
+      l = Math.min(l, px); rt = Math.max(rt, px); tp = Math.min(tp, py); bt = Math.max(bt, py);
+    }
+    return { left: Math.max(b.left, Math.min(l, x)), right: Math.min(b.right, Math.max(rt, x)),
+      top: Math.max(b.top, Math.min(tp, y)), bottom: Math.min(b.bottom, Math.max(bt, y)) };
+  }
+
+  function position() {
+    const el = pop.el;
+    const bounds = sceneBounds(pop.x, pop.y);
     const p = placePopover(pop.x, pop.y, el.offsetWidth, el.offsetHeight, bounds);
     el.style.left = p.left + 'px';
     el.style.top = p.top + 'px';
@@ -2463,6 +2504,8 @@ export function attachTapPopovers(o) {
       project: pt => projectPoint(pt),
       closeCard: why => close(false, why),
       soundMenu: o.soundMenu || null,
+      bounds: (x, y) => sceneBounds(x, y),
+      itemRect: (t, x, y) => itemRect(t, x, y),
       onClose: (t, why) => { if (typeof o.onClose === 'function') { try { o.onClose(t, why); } catch (err) { /* ignore */ } } },
     }),
     gate: focusGate,
