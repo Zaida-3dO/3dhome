@@ -257,6 +257,11 @@ console.log('6. sidebar rows');
   check('hide: a derived row disappears', P.sidebarRows(derived, cfg({ hide: ['ambient'] })).indexOf('ambient') === -1);
   check('hide: one door by id', JSON.stringify(P.sidebarRows(derived, cfg({ hide: ['door:store_door'] })).filter(k => k.startsWith('door:'))) === '["door:front_door"]');
   check('hide: every curtain by group', !P.sidebarRows(derived, cfg({ hide: ['curtains'] })).some(k => k.startsWith('curtain:')));
+  // A robot vacuum's block is a derived row `vacuum:<furnitureId>` (index.html derivedRowKeys), above the room script.
+  const withVac = ['main', 'curtain:lounge_curtain', 'vacuum:demo_robot', 'vacuum:demo_mop', 'room-script'];
+  check('vacuum row: kept in place, above the room script', P.sidebarRows(withVac, cfg({ hide: ['main'] })).join() === 'curtain:lounge_curtain,vacuum:demo_robot,vacuum:demo_mop,room-script');
+  check('hide: one vacuum by id', P.sidebarRows(withVac, cfg({ hide: ['vacuum:demo_robot'] })).join() === 'main,curtain:lounge_curtain,vacuum:demo_mop,room-script');
+  check('hide: every vacuum by group', !P.sidebarRows(withVac, cfg({ hide: ['vacuums'] })).some(k => k.startsWith('vacuum:')) && P.sidebarRows(withVac, cfg({ hide: ['vacuums'] })).length === 3);
   check('the HA-offline note can never be hidden', P.sidebarRows(['ha-offline', 'main'], cfg({ hide: ['ha-offline', 'main'] })).join() === 'ha-offline');
   check('item rows appear ONLY when opted in', !P.sidebarRows(derived, cfg({ hide: ['main'] })).some(k => k.startsWith('item:')) &&
     P.sidebarRows(derived, cfg({ show: ['item:desk_lamp'] })).indexOf('item:desk_lamp') !== -1);

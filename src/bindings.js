@@ -402,7 +402,7 @@ export function removeItemRow(roomsDoc, itemId, ref) {
 // ---- Sidebar (rooms.json 1.11 `sidebar`) --------------------------------------------
 
 /** Sidebar `hide` group names: one entry hides every row of that kind. */
-export const SIDEBAR_GROUPS = Object.freeze({ door: 'doors', curtain: 'curtains' });
+export const SIDEBAR_GROUPS = Object.freeze({ door: 'doors', curtain: 'curtains', vacuum: 'vacuums' });
 
 export const EXTRA_KINDS = Object.freeze({
   light: ['light'],
