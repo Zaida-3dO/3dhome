@@ -61,6 +61,7 @@
  *                the race above or something else has since played on the
  *                speakers. See soundTapPlan / retriggerReady.
  */
+import { pickSpeakerPlayer } from './speaker-players.js';
 
 export const SOUND_NONE = 'None';
 export const PAGE_SIZE = 6;
@@ -262,54 +263,34 @@ export function mediaProgress(raw, nowMs) {
 }
 
 /**
- * NOW PLAYING: one slide per configured speaker whose state is 'playing',
- * the tapped speaker's first (so it is the initial slide).
- * Each: { entity, label, title, artist, art, progress, volume, volumeText,
- * tapped }. progress: what mediaProgress() needs, frozen at the last report
+ * NOW PLAYING: one slide per configured speaker that is 'playing', the
+ * tapped speaker's first (so it is the initial slide).
+ *
+ * A speaker is often several media_players (Music Assistant's _ma and _2
+ * copies, the Cast entity -- src/speaker-players.js): playerOf(entity) ->
+ * { entity, raw } names the one that is actually playing (the controller
+ * resolves it with pickSpeakerPlayer), and the slide shows THAT player's
+ * metadata. Without playerOf, the configured entity itself.
+ *
+ * Each: { entity (the configured speaker), player (the playing sibling),
+ * label, title, artist, art, progress, volume, volumeText, tapped }.
+ * progress: what mediaProgress() needs, frozen at the last report
  * ({ state, position, duration, updatedAt }) or null; the menu ticks the bar.
  */
-export function nowPlaying(cfg, rawOf, sound, tapped, baseUrl) {
-  return orderedSpeakers(cfg, tapped).filter(s => { const r = rawOf(s.entity); return !!r && r.state === 'playing'; }).map(s => {
-    const r = rawOf(s.entity);
+export function nowPlaying(cfg, rawOf, sound, tapped, baseUrl, playerOf) {
+  const pick = playerOf || (e => ({ entity: e, raw: rawOf(e) }));
+  return orderedSpeakers(cfg, tapped).map(s => ({ s, p: pick(s.entity) })).filter(x => !!x.p && !!x.p.raw && x.p.raw.state === 'playing').map(({ s, p }) => {
+    const r = p.raw;
     const a = r.attributes || {};
     const vol = volumeOf(r);
     const prog = mediaProgress(r, 0) ? { state: r.state, position: +a.media_position, duration: +a.media_duration,
       updatedAt: a.media_position_updated_at || null } : null;
-    return { entity: s.entity, label: s.label, title: slideTitle(r, sound),
+    return { entity: s.entity, player: p.entity, label: s.label, title: slideTitle(r, sound),
       artist: String(a.media_artist || a.media_album_artist || ''),
       art: mediaArtUrl(baseUrl, a.entity_picture_local) || mediaArtUrl(baseUrl, a.entity_picture),
       progress: prog, volume: vol,
       volumeText: vol == null ? '--' : Math.round(vol * 100) + '%', tapped: s.entity === tapped };
   });
-}
-
-/**
- * The artwork's dominant colour, the way HA's card picks its background (the
- * most populous swatch): pixels bucketed 4 bits per channel, the fullest
- * bucket's average. rgba: a flat RGBA byte array (a canvas's getImageData).
- * Transparent pixels are skipped. Returns [r, g, b] or null.
- */
-export function dominantColor(rgba) {
-  if (!rgba || !rgba.length) return null;
-  const buckets = new Map();
-  let best = null;
-  for (let i = 0; i + 3 < rgba.length; i += 4) {
-    if (rgba[i + 3] < 128) continue;
-    const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
-    const k = (r >> 4) << 8 | (g >> 4) << 4 | (b >> 4);
-    let e = buckets.get(k);
-    if (!e) { e = { n: 0, r: 0, g: 0, b: 0 }; buckets.set(k, e); }
-    e.n++; e.r += r; e.g += g; e.b += b;
-    if (!best || e.n > best.n) best = e;
-  }
-  return best ? [Math.round(best.r / best.n), Math.round(best.g / best.n), Math.round(best.b / best.n)] : null;
-}
-
-/** Text over a background colour: white or near-black, whichever contrasts more (WCAG luminance). */
-export function inkFor(rgb) {
-  const lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
-  const L = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
-  return (1.05) / (L + 0.05) >= (L + 0.05) / 0.05 ? '#ffffff' : '#111111';
 }
 
 /**
@@ -420,7 +401,8 @@ export function transportCommand(entity, action, raw) {
  * and the app agree that nothing is playing.
  */
 export function slideStopCommands(cfg, entity, slides, sound) {
-  const out = [cmd('media_player', 'media_stop', {}, entity)];
+  const slide = (slides || []).find(s => s.entity === entity);
+  const out = [cmd('media_player', 'media_stop', {}, (slide && slide.player) || entity)];
   const others = (slides || []).filter(s => s.entity !== entity);
   if (!others.length && soundActive(sound)) out.push(selectSoundCommand(cfg, SOUND_NONE));
   return out;
@@ -437,7 +419,12 @@ export function stopAllCommands(cfg, sound, selection, slides) {
   const active = soundActive(sound);
   if (active) out.push(selectSoundCommand(cfg, SOUND_NONE));
   const sel = new Set(active ? selection || [] : []);
-  (slides || []).forEach(s => { if (!sel.has(s.entity)) out.push(cmd('media_player', 'media_stop', {}, s.entity)); });
+  // A speaker playing through a SIBLING player (MA's _2, the Cast entity) is
+  // stopped there: the automation only stops the configured entity.
+  (slides || []).forEach(s => {
+    const player = s.player || s.entity;
+    if (!sel.has(s.entity) || player !== s.entity) out.push(cmd('media_player', 'media_stop', {}, player));
+  });
   return out;
 }
 
@@ -715,6 +702,20 @@ export function createSoundController(d) {
   let mock = null;
   const mockStates = () => (mock || (mock = mockSoundStates(cfg)));
   const rawOf = eid => (mockMode() ? mockStates().get(eid) || null : (ha() && ha().getRawState ? ha().getRawState(eid) : null));
+  // The player of a configured speaker that is actually playing: any of its
+  // sibling media_players (the client's speakerPlayers), picked the way the
+  // smart display picks (pickSpeakerPlayer). No siblings known (the demo, a
+  // client without the grouping): the configured entity.
+  const playerOf = eid => {
+    const h = mockMode() ? null : ha();
+    if (h && typeof h.speakerPlayers === 'function' && typeof h.getPlayerState === 'function') {
+      const ids = h.speakerPlayers(eid);
+      const get = id => h.getPlayerState(id) || (id === eid ? rawOf(eid) : null);
+      const p = ids && ids.length ? pickSpeakerPlayer(ids, get) : null;
+      if (p && p.raw) return { entity: p.entityId, raw: p.raw };
+    }
+    return { entity: eid, raw: rawOf(eid) };
+  };
   let busy = null;      // { since, target }  the sound tiles' busy window
   let pending = null;   // { label, since }   a re-trigger waiting for its second select
   let optSel = null;    // { list, until }    PLAY ON, optimistic until the echo
@@ -748,7 +749,7 @@ export function createSoundController(d) {
     const statusKey = soundStatusKey(mockMode() ? null : ha().status);
     const live = statusKey === 'ok' || statusKey === 'mock';
     const sound = currentSound(rawOf(cfg.sound));
-    const slides = nowPlaying(cfg, rawOf, sound, tapped, mockMode() ? null : ha().activeUrl);
+    const slides = nowPlaying(cfg, rawOf, sound, tapped, mockMode() ? null : ha().activeUrl, playerOf);
     const tiles = orderSounds(catalogueTiles(rawOf(cfg.catalogue)), parseRecentIds(cfg.recent ? rawOf(cfg.recent) : null));
     if (busy && !pending && !isBusy(busy, t, soundSettled(busy.target, sound, realSelection(), rawOf))) busy = null;
     const rows = speakerRows(cfg, selection(), tapped);
@@ -970,12 +971,15 @@ export function createSoundController(d) {
       if (cmds.some(c => c.domain === 'input_select')) { busy = { since: now(), target: SOUND_NONE }; pending = null; }
       return any;
     }
-    const c = transportCommand(arg, action, rawOf(arg));
+    // Transport and volume go to the player that is actually playing.
+    const slide = m.slides.find(s => s.entity === arg);
+    const p = slide ? playerOf(arg) : { entity: arg, raw: rawOf(arg) };
+    const c = transportCommand(slide ? slide.player : arg, action, p.raw);
     return c ? send(c) : false;
   }
 
   return {
-    cfg, model, tap, tick, rawOf,
+    cfg, model, tap, tick, rawOf, playerOf,
     openPicker, setQuery, playTrack,
     closePicker,
     pickerOpen: () => !!picker,

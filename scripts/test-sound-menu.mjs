@@ -907,12 +907,11 @@ const SM = await imp('src/sound-menu.js');
   check('slide: progress frozen at the report (or null: no bar)', J(s[0].progress) === J({ state: 'playing', position: 5, duration: 100, updatedAt: iso(T0) }) && s[1].progress === null);
   check('the CSS url() cannot be broken out of', SM.cssUrl('a"b\\c\nd') === 'a%22b%5cc%0ad');
 
-  // HA's colours: the most populous swatch, and contrasting text.
-  const px = (rgb, n) => Array.from({ length: n }, () => rgb.concat(255)).flat();
-  check('dominant colour: the fullest bucket wins, averaged', J(M.dominantColor(px([200, 30, 30], 5).concat(px([10, 10, 240], 3)))) === J([200, 30, 30]));
-  check('dominant colour: transparent pixels ignored; nothing -> null', J(M.dominantColor(px([1, 2, 3], 2).map((v, i) => (i % 4 === 3 ? 0 : v)).concat(px([90, 90, 90], 1)))) === J([90, 90, 90]) &&
-    M.dominantColor([]) === null);
-  check('ink: white on a dark colour, near-black on a light one', M.inkFor([20, 20, 60]) === '#ffffff' && M.inkFor([240, 230, 200]) === '#111111');
+  // The artwork's colours: the smart display's own rule (one helper; its maths is tested in test-hub-screen).
+  const smSrc = read('src/sound-menu.js');
+  check('colours: the card uses the smart display\'s hubArtColors (one extraction rule, not a copy)',
+    /^import \{ hubArtColors \} from '\.\/furniture\/hub-screen\.js';$/m.test(smSrc) &&
+    /const cols = hubArtColors\(g\.getImageData\(0, 0, 24, 24\)\.data\);\s*look\.bg = cols\.background; look\.ink = cols\.foreground;/.test(smSrc));
 
   // The demo: a Spotify track carries an artist, a length and artwork (no network).
   const mcfg = M.normaliseSoundMenu(SP);
@@ -951,6 +950,70 @@ console.log('13. placement like a tap card');
   p = SM.fitSoundMenu({ x: 195, y: 250 }, 374, 700, { left: 0, top: 0, right: 390, bottom: 480 }, false);
   check('no room anywhere (under MENU_MIN_H): clamped into the screen, no arrow', p.placement === 'clamped' && p.arrow === null && p.height === 480 - 16, p);
   check('the flight leaves the card\'s width (plus gaps) beside the speaker on a wide screen', SM.SHEET_W + 2 * SM.SIDE_GAP === 448 && SM.SHEET_W >= 360 && SM.SHEET_W <= 420);
+}
+
+// ---- 14. a speaker is several media_players: Now playing follows the one playing ---------------
+// The _ma (HA provider, queue = the cast entity) / _2 (MA's native cast) /
+// cast pattern of src/speaker-players.js, demo ids only, grouped by name (no registry).
+console.log('14. sibling players (_ma / _2 / cast)');
+{
+  const P = await imp('src/speaker-players.js');
+  const KMA = 'media_player.demo_kitchen_ma', K2 = 'media_player.demo_kitchen_2', KC = 'media_player.demo_kitchen';
+  const LMA = 'media_player.demo_lounge_ma';
+  const SCFG = M.normaliseSoundMenu({ selection: SEL, toggleScript: SCRIPT, sound: SOUND, catalogue: CAT,
+    speakers: [{ entity: KMA, label: 'Kitchen' }, { entity: LMA, label: 'Lounge' }], openFrom: { kitchen_hub: KMA } });
+  const mk = (sound, sel, kitchen) => new Map([
+    [SEL, st(JSON.stringify(sel))], [SOUND, st(sound, { options: ['None', 'Rain'] })], [CAT, st('1', { tiles: [{ id: 'rain', label: 'Rain', icon: 'weather-pouring' }] })],
+    [KMA, st('off', { friendly_name: 'Demo Kitchen - ma', active_queue: KC, volume_level: 0.5 })],
+    [KC, st('idle', { friendly_name: 'Demo Kitchen' })],
+    [K2, st(kitchen, { friendly_name: 'Demo Kitchen', active_queue: 'demo-uuid-0123456789', media_title: 'Song K', media_artist: 'Band K',
+      volume_level: 0.3, media_duration: 200, media_position: 50, media_position_updated_at: '2026-01-01T00:00:00Z' })],
+    [LMA, st('off', { friendly_name: 'Demo Lounge - ma' })],
+  ]);
+  const client = (states, siblings) => {
+    const calls = [];
+    const h = { status: 'connected', activeUrl: null, getRawState: e => states.get(e) || null,
+      callService: (domain, service, data, target) => { calls.push({ domain, service, data, target }); return true; } };
+    if (siblings) { h.speakerPlayers = e => P.speakerSiblings(e, states, null); h.getPlayerState = e => states.get(e) || null; }
+    return { h, calls };
+  };
+  const ctlFor = (states, siblings) => {
+    const c = client(states, siblings);
+    return { ctl: M.createSoundController({ cfg: SCFG, getHa: () => c.h, sendScript: () => true, now: () => 0 }), calls: c.calls };
+  };
+  let { ctl, calls } = ctlFor(mk('None', [], 'playing'), true);
+  let m = ctl.model();
+  check('siblings: the speaker plays (its _2 does) though the configured _ma is off', m.slides.length === 1 && m.slides[0].entity === KMA && m.slides[0].player === K2, m.slides);
+  check('... and the slide shows THAT player\'s metadata', m.slides[0].title === 'Song K' && m.slides[0].artist === 'Band K' && m.slides[0].volumeText === '30%' &&
+    m.slides[0].progress && m.slides[0].progress.duration === 200);
+  check('... without the grouping (an older client): only the configured entity counts', ctlFor(mk('None', [], 'playing'), false).ctl.model().slides.length === 0);
+  ctl.tap('prev', KMA); ctl.tap('playPause', KMA); ctl.tap('next', KMA); ctl.tap('volUp', KMA);
+  check('transport and volume go to the sibling that is playing', calls.map(c => c.service + ':' + c.target.entity_id).join() ===
+    ['media_previous_track', 'media_play_pause', 'media_next_track', 'volume_set'].map(s => s + ':' + K2).join(), calls);
+  check('... volume steps from THAT player\'s level', calls[3].data.volume_level === 0.35, calls[3]);
+  calls.length = 0;
+  ctl.tap('stop', KMA);
+  check('a slide\'s Stop stops the playing sibling', J(calls.map(c => [c.service, c.target.entity_id])) === J([['media_stop', K2]]), calls);
+  ({ ctl, calls } = ctlFor(mk('Rain', [KMA], 'playing'), true));
+  ctl.tap('stopAll');
+  check('Stop all: None for the automation PLUS media_stop on the sibling it cannot reach (even for a selected speaker)',
+    J(calls.map(c => [c.service, c.target.entity_id])) === J([['select_option', SOUND], ['media_stop', K2]]), calls);
+  // The configured entity itself playing: Stop all leaves it to the automation, as before.
+  const own = mk('Rain', [KMA], 'idle');
+  own.set(KMA, st('playing', { friendly_name: 'Demo Kitchen - ma', active_queue: KC, media_title: 'Rain' }));
+  ({ ctl, calls } = ctlFor(own, true));
+  check('the configured entity playing: it is the player', ctl.model().slides[0].player === KMA);
+  ctl.tap('stopAll');
+  check('... and Stop all is just None (the automation stops it)', J(calls.map(c => c.service)) === J(['select_option']), calls);
+  // Play on and Sounds still drive the helpers with the CONFIGURED entities.
+  ({ ctl, calls } = ctlFor(mk('None', [], 'playing'), true));
+  ctl.tap('snd', 'Rain');
+  check('Sounds: unchanged (selects the sound helper)', J(calls.map(c => [c.service, c.target.entity_id, c.data.option])) === J([['select_option', SOUND, 'Rain']]), calls);
+  check('Play on: rows are the configured speakers', J(ctl.model().rows.map(r => r.entity)) === J([KMA, LMA]));
+  check('a sibling id is not a speaker: a tap naming it sends nothing', ctl.tap('next', K2) === false);
+  const sm = read('src/sound-menu.js');
+  check('the menu subscribes to the client\'s speaker-players feed as soon as it exists (the client records players only while someone listens)',
+    /if \(h\.onSpeakerPlayersChange\) h\.onSpeakerPlayersChange\(\(\) => render\(false\)\);/.test(sm) && /\n  subscribe\(\);\n  if \(o\.debug\) win\.__home3dSound = api;/.test(sm));
 }
 
 console.log('\n' + passes + ' passed, ' + failures + ' failed');

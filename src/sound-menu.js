@@ -49,8 +49,9 @@
 
 import { mdiPath, svgIcon } from './ui-icons.js';
 import { sendScript } from './script-call.js';
-import { normaliseSoundMenu, createSoundController, mediaProgress, dominantColor, inkFor, SOUND_NONE, SPOTIFY_GREEN } from './sound-model.js';
+import { normaliseSoundMenu, createSoundController, mediaProgress, SOUND_NONE, SPOTIFY_GREEN } from './sound-model.js';
 import { placePopover } from './tap-popovers.js';
+import { hubArtColors } from './furniture/hub-screen.js';
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ico = (name, cls) => svgIcon(mdiPath(name), 'sm-ico' + (cls ? ' ' + cls : ''));
@@ -326,7 +327,8 @@ export function createSoundMenu(o) {
   }
 
   // ---- artwork: loaded once per URL, its dominant colour read off a canvas
-  // (HA's card extracts its colours the same way). A URL that will not load
+  // (HA's card extracts its colours the same way; the rule is the smart
+  // display's, src/furniture/hub-screen.js hubArtColors). A URL that will not load
   // (HA-proxied art cross-origin) falls back to the no-art look; one that
   // loads but cannot be read (no CORS) shows over the neutral colour.
   const looks = new Map();
@@ -348,8 +350,10 @@ export function createSoundMenu(o) {
           c.width = c.height = 24;
           const g = c.getContext('2d');
           g.drawImage(img, 0, 0, 24, 24);
-          const rgb = dominantColor(g.getImageData(0, 0, 24, 24).data);
-          if (rgb) { look.bg = 'rgb(' + rgb.join(',') + ')'; look.ink = inkFor(rgb); }
+          // The smart display's own rule (HA's extract_color: the most
+          // populous colour behind, a contrasting palette colour in front).
+          const cols = hubArtColors(g.getImageData(0, 0, 24, 24).data);
+          look.bg = cols.background; look.ink = cols.foreground;
         } catch (e) { /* tainted canvas: the art shows, the neutral colour stays */ }
         if (root) { sig = null; render(false); }
       };
@@ -612,17 +616,25 @@ export function createSoundMenu(o) {
   }
   const onResize = () => place();
 
+  // The client's change feeds. The speaker-players feed also makes the
+  // client RECORD every media_player (it does so only while someone
+  // listens), so the menu subscribes as soon as it exists, not at first open:
+  // a sibling that started playing before the tap is then already known.
+  function subscribe() {
+    const h = ha();
+    if (!h || subscribed.has(h)) return;
+    subscribed.add(h);
+    if (h.onSoundMenuChange) h.onSoundMenuChange(() => render(false));
+    if (h.onStatusChange) h.onStatusChange(() => render(false));
+    if (h.onSpeakerPlayersChange) h.onSpeakerPlayersChange(() => render(false));
+  }
+
   function open(t) {
     if (o.onOpen) { try { o.onOpen(); } catch (e) { /* the page's hook must not cost the menu */ } }
     // The opener's close hook (the tap route: the camera returns when the
     // menu closes). A re-open replaces it.
     onCloseHook = t && typeof t.onClose === 'function' ? t.onClose : null;
-    const h = ha();
-    if (h && !subscribed.has(h)) {
-      subscribed.add(h);
-      if (h.onSoundMenuChange) h.onSoundMenuChange(() => render(false));
-      if (h.onStatusChange) h.onStatusChange(() => render(false));
-    }
+    subscribe();
     ctl.setTapped((t && t.speaker) || null);
     // The anchor: () => { x, y, rect, bounds } (the tap route), or none (centred).
     anchorFn = t && typeof t.anchor === 'function' ? t.anchor : null;
@@ -700,6 +712,7 @@ export function createSoundMenu(o) {
       if (o.debug && win.__home3dSound === api) delete win.__home3dSound;
     },
   };
+  subscribe();
   if (o.debug) win.__home3dSound = api;
   return api;
 }
