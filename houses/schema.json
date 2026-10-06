@@ -1371,6 +1371,8 @@
 
         { "if": { "properties": { "type": { "const": "slat-panel" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_slat-panel" } } } },
 
+        { "if": { "properties": { "type": { "const": "smart-display" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_smart-display" } } } },
+
         { "if": { "properties": { "type": { "const": "sofa" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_sofa" } } } },
 
         { "if": { "properties": { "type": { "const": "speaker" } }, "required": ["type"] }, "then": { "properties": { "params": { "$ref": "#/$defs/furnitureParams_speaker" } } } },
@@ -3764,6 +3766,26 @@
       "additionalProperties": false
     },
 
+    "furnitureParams_smart-display": {
+      "type": "object",
+      "x-kindDefaults": {
+        "nest-hub": { "width": 17.74, "depth": 6.98, "height": 12.05 },
+        "nest-mini-stand": { "width": 9.8, "depth": 8, "height": 15 }
+      },
+      "description": "Params for `smart-display` (src/furniture/smart-display.js): a countertop smart display or speaker. `nest-hub-max` (default): Google Nest Hub Max, 25 x 10.1 x 18.3 cm, a tilted 10-inch screen with a camera dot on a fabric speaker base. `nest-hub`: Nest Hub 2nd gen, 17.74 x 6.98 x 12.05 cm, no camera. `nest-mini-stand`: a Nest Mini puck held upright in a curved cradle on a post and base disc, 9.8 x 8 x 15 cm. It stands on its own bottom: give the placement an `elevation` equal to the surface's top height. `x-kindDefaults` carries the other kinds' envelopes (smart-display.js defaultsFor). Each `default` equals smart-display.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0, "default": 25, "description": "cm. Fixed per kind." },
+        "depth": { "type": "number", "exclusiveMinimum": 0, "default": 10.1, "description": "cm. Fixed per kind." },
+        "height": { "type": "number", "exclusiveMinimum": 0, "default": 18.3, "description": "cm. Fixed per kind." },
+        "kind": { "enum": ["nest-hub-max", "nest-hub", "nest-mini-stand"], "default": "nest-hub-max" },
+        "colorway": { "enum": ["chalk", "charcoal"], "default": "chalk", "description": "Fabric and front colour." },
+        "screenOn": { "type": "boolean", "default": false, "description": "Hubs only: a dim photo-frame glow instead of dark glass." },
+        "screenColor": { "$ref": "#/$defs/hexColor", "default": "#6a645a", "description": "Hubs only: the glow's tint while screenOn." },
+        "standColor": { "enum": ["black", "silver", "white"], "default": "black", "description": "nest-mini-stand only." },
+        "leds": { "type": "boolean", "default": false, "description": "nest-mini-stand only: four tiny status dots." }
+      },
+      "additionalProperties": false
+    },
     "furnitureParams_sofa": {
       "type": "object",
       "description": "Params for `sofa` (src/furniture/sofa.js): a corner (L-shaped) sofa -- fabric seat and back cushions on a plinth base, a low padded arm at the non-chaise end, and a chaise running forward to the full `depth` (no arm or back on its outer end). `chaise: 'none'` is a straight sofa with an arm at both ends whose depth is the whole `depth` (set depth = seatDepth for one). Every part is clamped so any params build to exactly width x depth x height. Each `default` equals sofa.js DEFAULTS (enforced by scripts/test-furniture-defaults.mjs).",

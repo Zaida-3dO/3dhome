@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart display — Spec</title>
+<style>
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#f4f1ec; color:#1a1a1a; font-family:ui-monospace,'SF Mono',Menlo,monospace; padding:24px; }
+  h1 { font-size:14px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; margin-bottom:4px; }
+  .sub { font-size:11px; opacity:0.6; margin-bottom:24px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+  .card { background:#fff; border:1px solid #d8d3c8; border-radius:6px; padding:20px; }
+  .card h2 { font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; opacity:0.7; margin-bottom:14px; }
+  svg { display:block; width:100%; height:auto; }
+  #c3d { width:100%; height:560px; display:block; background:#1a1a1c; border-radius:4px; }
+  .legend { font-size:10px; line-height:1.6; margin-top:14px; opacity:0.75; }
+  .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .btn { padding:6px 10px; font:inherit; font-size:10px; background:#1a1a1c; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .btn:hover { background:#333; }
+  .btn.active { background:#6b5d4a; }
+  .full { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #ece8e0; }
+  th { font-weight:600; opacity:0.6; font-size:10px; text-transform:uppercase; letter-spacing:0.04em; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  pre.json { font-size:10px; background:#f7f5f0; border:1px solid #ece8e0; border-radius:4px; padding:8px; margin-top:10px; white-space:pre-wrap; word-break:break-all; }
+  @media (max-width: 760px) {
+    body { padding:12px; }
+    .grid { grid-template-columns:1fr; }
+    #c3d { height:420px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Which objects this page holds (read by SpecPage in tweaks-panel.jsx and by
+     scripts/test-spec-pages.mjs). -->
+<script type="application/json" id="spec-manifest">
+{
+  "title": "Smart display",
+  "description": "All units cm. A countertop smart display or speaker: the Google Nest Hub Max (default), the Nest Hub 2nd gen, or a Nest Mini held upright on a desk stand. Renders the REAL src/furniture/smart-display.js builder. Use the Tweaks panel to change model, colour and screen.",
+  "objects": [
+    { "id": "smart-display", "label": "Smart display / speaker", "types": ["smart-display"] }
+  ]
+}
+</script>
+
+<!-- React/ReactDOM/Babel/three served LOCALLY (../vendor/) — no CDN: this app must work on a LAN with no internet. -->
+<script src="../vendor/react.production.min.js"></script>
+<script src="../vendor/react-dom.production.min.js"></script>
+<script src="../vendor/babel.min.js"></script>
+<script src="../vendor/three.js"></script>
+<script type="module">
+  import * as M from '../src/furniture/smart-display.js';
+  window.FurnitureSmartDisplay = M;
+  window.dispatchEvent(new Event('furniture-smart-display-ready'));
+</script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="spec-three.jsx"></script>
+
+<script type="text/babel">
+/* =====================================================================
+   SMART DISPLAY SPEC   ·   Nest Hub Max / Nest Hub / Nest Mini on a stand
+
+   Dimensions are the products' published sizes (Nest Hub Max 250 x 101 x
+   183 mm; Nest Hub 2nd gen 177.4 x 69.8 x 120.5 mm; the Mini puck is 98 x
+   42 mm and the stand is a generic aftermarket one, ~15 cm overall), so the
+   envelope is fixed per model and switches with it.
+
+   The geometry is NOT built here -- it lives in src/furniture/smart-display.js
+   and is unit-tested by scripts/test-smart-display.mjs.
+   ===================================================================== */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "kind": "nest-hub-max",
+  "colorway": "chalk",
+  "screenOn": false,
+  "screenColor": "#6a645a",
+  "standColor": "black",
+  "leds": false,
+  "detail": "full"
+}/*EDITMODE-END*/;
+
+function paramsOf(t) {
+  const { detail, ...p } = t;
+  const D = window.FurnitureSmartDisplay.defaultsFor(p);
+  return Object.assign({ width: D.width, depth: D.depth, height: D.height }, p);
+}
+
+let reportTriangles = null;
+
+function buildModel(t, group, THREE) {
+  const M = window.FurnitureSmartDisplay;
+  const item = M.build(THREE, paramsOf(t), { detail: t.detail });
+  const b = new THREE.Box3().setFromObject(item);
+  item.position.z = -(b.min.z + b.max.z) / 2;
+  group.add(item);
+  let tris = 0;
+  item.traverse(o => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+  if (reportTriangles) reportTriangles(tris);
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(0.5, 32), new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 1 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  floor.userData.specBackdrop = 'floor'; // the house's own finish (spec-three.jsx (D))
+  floor.name = 'floor';
+  group.add(floor);
+}
+
+const KIND_LABEL = { 'nest-hub-max': 'Nest Hub Max', 'nest-hub': 'Nest Hub (2nd gen)', 'nest-mini-stand': 'Nest Mini on desk stand' };
+
+function App() {
+  const M = window.FurnitureSmartDisplay;
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [copied, setCopied] = React.useState('');
+  const [triangles, setTriangles] = React.useState(null);
+  reportTriangles = setTriangles;
+  React.useEffect(() => {
+    const c = document.getElementById('c3d');
+    if (c) c.dispatchEvent(new WheelEvent('wheel', { deltaY: -900, cancelable: true }));
+  }, []);
+  const p = paramsOf(t);
+  const json = JSON.stringify({ type: 'smart-display', params: Object.fromEntries(Object.entries(p).filter(([k, v]) => v !== M.DEFAULTS[k])) }, null, 2);
+  const copy = () => {
+    const done = () => { setCopied('copied'); setTimeout(() => setCopied(''), 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => setCopied('copy failed — select the JSON below'));
+    else setCopied('clipboard unavailable — select the JSON below');
+  };
+  const setKind = k => setTweak(k === 'nest-mini-stand' ? { kind: k, colorway: 'charcoal' } : { kind: k, colorway: t.kind === 'nest-mini-stand' ? 'chalk' : t.colorway });
+  const mini = t.kind === 'nest-mini-stand';
+  return (
+    <SpecPage>
+      <div className="grid">
+        <div className="card">
+          <h2>Numbers</h2>
+          <table>
+            <tbody>
+              <tr><th>Feature</th><th className="num">cm</th><th>Variability</th></tr>
+              <tr><td>Width</td><td className="num">{p.width}</td><td><b>Fixed</b> by the model</td></tr>
+              <tr><td>Depth</td><td className="num">{p.depth}</td><td><b>Fixed</b> by the model</td></tr>
+              <tr><td>Height</td><td className="num">{p.height}</td><td><b>Fixed</b> by the model</td></tr>
+              <tr><td>Triangles</td><td className="num">{triangles ?? '—'}</td><td>{t.detail} detail</td></tr>
+            </tbody>
+          </table>
+          <div className="legend">
+            It stands on its own bottom. To put it on a cabinet or table, give the placement an
+            <code> elevation</code> equal to that surface's top height (cm).
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Look</h2>
+          <div className="legend">
+            Hubs: a wide rounded fabric speaker base with a slim screen leaning back a few degrees; a bezel (white for
+            Chalk, near-black for Charcoal) round a dark screen, or a dim warm photo-frame glow; the Max has a camera
+            dot at the top centre. Mini: a fabric puck held upright, facing forward, in a thin curved cradle on a
+            short post and a round base disc; the optional status dots are tiny.
+          </div>
+          <div className="row">
+            {Object.keys(KIND_LABEL).map(k =>
+              <button key={k} className={'btn' + (t.kind === k ? ' active' : '')} onClick={() => setKind(k)}>{KIND_LABEL[k]}</button>)}
+            <button className="btn" onClick={copy}>Copy as furniture JSON</button>
+            {copied && <span className="legend" style={{ marginTop: 6 }}>{copied}</span>}
+          </div>
+          <pre className="json">{json}</pre>
+        </div>
+
+        <div className="card full">
+          <h2>3D — {KIND_LABEL[t.kind]}</h2>
+          <ThreeView t={t} buildModel={buildModel} heightOf={tt => paramsOf(tt).height * 0.01} />
+        </div>
+      </div>
+
+      <TweaksPanel>
+        <TweakSection label="Model" />
+        <TweakSelect label="Model" value={t.kind} options={Object.keys(KIND_LABEL)} onChange={setKind} />
+        <TweakSelect label="Colour" value={t.colorway} options={['chalk', 'charcoal']} onChange={v => setTweak('colorway', v)} />
+        {!mini && <TweakSection label="Screen" />}
+        {!mini && <TweakToggle label="Screen on (ambient glow)" value={t.screenOn} onChange={v => setTweak('screenOn', v)} />}
+        {!mini && t.screenOn && <TweakColor label="Glow colour" value={t.screenColor} onChange={v => setTweak('screenColor', v)} />}
+        {mini && <TweakSection label="Stand" />}
+        {mini && <TweakSelect label="Stand" value={t.standColor} options={['black', 'silver', 'white']} onChange={v => setTweak('standColor', v)} />}
+        {mini && <TweakToggle label="Status dots" value={t.leds} onChange={v => setTweak('leds', v)} />}
+        <TweakSection label="Render" />
+        <TweakRadio label="Detail" value={t.detail} options={['full', 'low']} onChange={v => setTweak('detail', v)} />
+      </TweaksPanel>
+    </SpecPage>
+  );
+}
+
+function mount() { ReactDOM.createRoot(document.getElementById('root')).render(<App />); }
+if (window.FurnitureSmartDisplay) mount();
+else window.addEventListener('furniture-smart-display-ready', mount, { once: true });
+setTimeout(() => window.postMessage({ type: '__activate_edit_mode' }, '*'), 0);
+</script>
+</body>
+</html>
