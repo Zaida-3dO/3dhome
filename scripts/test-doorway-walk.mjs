@@ -21,7 +21,8 @@
  *   6. A cupboard is seen from the room it opens onto, below the ceiling.
  *   6b. A start or end parked against a wall (5-15 cm off it) still walks:
  *      hand-picked rect / L-room spots, and a property run over random
- *      near-wall starts and ends on the flat and the demo house.
+ *      near-wall starts and ends on the flat and the demo house; and one
+ *      up to 3 cm inside or off a wall stub's face steps out and walks.
  *   6c. The path's own guards (fitPath) on waypoints built to stray: a
  *      hairpin the raw spline swings out through the walls, a plateau it
  *      bulges over the ceiling gap.
@@ -32,7 +33,8 @@
  *   8. The tour order: authored order first, the rest appended; the loader,
  *      the validator's key; index.html follows it.
  *   9. Wiring: flyTo walks between in-house views, cancel / reduced motion as
- *      before, doors held open and let go, CI runs this file.
+ *      before, doors held open and let go -- on a cancel, setView / setOrbit
+ *      or a hand move away too (heldDoorsToKeep), CI runs this file.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -427,6 +429,41 @@ nearWallRun('demo (property)', demoSpec, dg, 400);
   check('a camera wedged beside the stub slides out along the slot and walks, never through the stub', pl && audit(demoSpec, dg, samples(pl)).bad.length === 0 &&
     samples(pl).every(e => !W.inSolid(dg, e[0], e[2])), pl && pl.kinds);
 }
+{
+  // Pressed INTO a stub, or touching it (review 7ade30ab): a camera up to
+  // 3 cm inside a stub's face, or up to 3 cm off it, still walks -- out
+  // through the nearest face first, and never inside a stub anywhere but
+  // the few cm next to the end it started (or ends) in.
+  const box = { min: [1, 0, 1], max: [1.4, 3, 1.1] }, room = [[0, 0], [3, 0], [3, 3], [0, 3]];
+  const st = W.clearSteps(room, [1.38, 1.05], 0.25, [box], 0);
+  check('clearSteps: a start 2 cm inside a box steps out through its nearest face first', st && st.length >= 1 &&
+    Math.abs(st[0][0] - 1.43) < 1e-9 && Math.abs(st[0][1] - 1.05) < 1e-9, st);
+  // fitPath lets the eye leave the stub it starts in, but not walk on through it.
+  check('fitPath: a path starting 2 cm inside the stub and stepping straight out is allowed',
+    !!W.fitPath(dg, [[3.92, 1.5, 0.9], [3.85, 1.5, 0.9], [3.6, 1.5, 0.9]]));
+  check('fitPath: ... one that walks on THROUGH the stub it starts in (past 15 cm) is not',
+    W.fitPath(dg, [[3.92, 1.5, 0.9], [4.25, 1.5, 0.9], [4.25, 1.5, 1.4]]) === null);
+  const s0 = dg.solids[0].box;
+  let tried = 0, fell = 0, strayed = 0;
+  const ids = Object.keys(dg.rooms), bad = [];
+  for (let k = 0; k < 160; k++) {
+    const side = Math.floor(rnd() * 4), d = -0.03 + rnd() * 0.06;
+    const fx = s0.min[0] + rnd() * (s0.max[0] - s0.min[0]), fz = s0.min[2] + rnd() * (s0.max[2] - s0.min[2]);
+    const p = side === 0 ? [s0.min[0] - d, fz] : side === 1 ? [s0.max[0] + d, fz] : side === 2 ? [fx, s0.min[2] - d] : [fx, s0.max[2] + d];
+    const ra = W.roomAt(dg.rooms, p[0], p[1]);
+    const rb = ids[Math.floor(rnd() * ids.length)];
+    if (!ra || ra === rb) continue;
+    const eb = F.eyeOf(demoRun.poses[rb] || {});
+    if (!demoRun.poses[rb] || !W.portalRoute(dg, ra, p, rb, [eb[0], eb[2]])) continue;
+    tried++;
+    const A = F.poseFromLook([p[0], 1.2 + rnd(), p[1]], rnd() * 6.28, 0.2, 2, 70), back = rnd() < 0.5;
+    const pl = back ? W.planWalk(dg, demoRun.poses[rb], rb, A, ra) : W.planWalk(dg, A, ra, demoRun.poses[rb], rb);
+    if (!pl) { fell++; if (bad.length < 2) bad.push({ p, ra, rb, back }); continue; }
+    if (samples(pl).some(e => W.inSolid(dg, e[0], e[2]) && Math.hypot(e[0] - p[0], e[2] - p[1]) > 0.16)) strayed++;
+  }
+  check(`demo: ${tried} walks from or to within 3 cm of the stub's faces (inside or out), none falls back to the roof`, tried > 40 && fell === 0, { tried, fell, bad });
+  check('... and none goes inside the stub beyond the few cm it starts or ends in', strayed === 0, strayed);
+}
 
 // ---- 5c: the path's own guards, on waypoints built to stray ---------------------
 section('the path guards');
@@ -608,6 +645,24 @@ section('tour order');
 }
 
 // ---- 9: wiring ----------------------------------------------------------------
+section('doors a walk holds, once no flight runs');
+{
+  const portals = [{ id: 'cup', c: [0, 0] }, { id: 'hall', c: [5, 0] }, { id: 'bed', c: [9, 0] }];
+  const k = o => W.heldDoorsToKeep(Object.assign({ portals }, o));
+  const at = k({ viewDoor: 'cup', atView: true, held: ['cup'], eye: [1.5, 0] });
+  check('at the cupboard outside view: its door stays the view, held', at.viewDoor === 'cup' && [...at.keep].join() === 'cup', at);
+  const left = k({ viewDoor: 'cup', atView: false, held: ['cup'], eye: [1.5, 0] });
+  check('the eye has left that view (orbit, zoom, setView, a cancel): the leaf is shown again and the door let go',
+    left.viewDoor === null && left.keep.size === 0, left);
+  const close = k({ viewDoor: 'cup', atView: false, held: ['cup', 'hall'], eye: [0.6, 0.3] });
+  check('... but a door the eye is still within 1 m of stays open, the cupboard door included (never shut through the camera)',
+    close.viewDoor === null && [...close.keep].sort().join() === 'cup', close);
+  const walk = k({ viewDoor: null, atView: false, held: ['hall', 'bed'], eye: [5.9, 0.2] });
+  check('a stopped walk: only the doors within 1 m stay held', [...walk.keep].join() === 'hall', walk);
+  const clear = k({ viewDoor: null, atView: false, held: ['hall', 'bed'], eye: [5, 1.01] });
+  check('... and once the eye is over 1 m clear, every one goes', clear.keep.size === 0, clear);
+}
+
 section('wiring');
 {
   const scene = read('src/home3d-scene.js');
@@ -621,7 +676,22 @@ section('wiring');
   check('a cupboard\'s own door is hidden while it is the view, shown when another flight starts',
     /walkViewDoor = outsideDoorFor\(to\);\s*setViewDoor\(walkViewDoor\);/.test(scene) &&
     /if \(show && show\.pivot\) show\.pivot\.visible = true;/.test(scene) && /doorById\[hiddenViewDoor\]\.pivot\.visible = false;/.test(scene));
-  check('cancel / land lets the held doors go; a superseding flight hands them over', /flight = null;\s*if \(status !== 'superseded'\) releaseWalkDoors\(status === 'cancelled'\);/.test(scene));
+  check('cancel / land lets the held doors go (and settles the rest at once); a superseding flight hands them over',
+    /flight = null;\s*if \(status !== 'superseded'\) \{ releaseWalkDoors\(status === 'cancelled'\); settleWalkDoors\(\); \}/.test(scene));
+  // Reviews 5a0c350c / ec775cca: with no flight running, a cancelled walk,
+  // setView / setOrbit or a hand orbit / zoom away lets the cupboard's leaf
+  // and the held doors go. Every drawn frame settles them (setView, setOrbit
+  // and the hand gestures all draw one), through the tested heldDoorsToKeep.
+  const settle = scene.slice(scene.indexOf('    function settleWalkDoors() {'), scene.indexOf('    // The door of the room whose outside view this pose is'));
+  check('settleWalkDoors: idle while a flight runs, decides through heldDoorsToKeep, at the eye where it is',
+    settle.includes('if (flight || (!walkViewDoor && !walkDoorHold.size)) return;') &&
+    settle.includes('atView: !!walkViewDoor && outsideDoorFor(getPose()) === walkViewDoor,') &&
+    settle.includes('held: [...walkDoorHold.keys()], eye: [cam.position.x, cam.position.z], portals: navGraph().portals });'));
+  check('... shows the leaf when the view is left, and swings back what is let go (to the latest sensor state)',
+    settle.includes('if (s.viewDoor !== walkViewDoor) { walkViewDoor = s.viewDoor; setViewDoor(walkViewDoor); }') &&
+    settle.includes('if (s.keep.size !== walkDoorHold.size) holdDoorsOpen(s.keep);') &&
+    /walkDoorHold\.forEach\(\(pct, id\) => \{ if \(!ids\.has\(id\)\) \{ walkDoorHold\.delete\(id\); swingDoor\(id, pct\); \} \}\);/.test(scene));
+  check('... on every drawn frame', /const flightMoving = tickCameraFlight\(frameNow\);\s*settleWalkDoors\(\);/.test(scene));
   check('... except, when cancelled, a door the camera stands within 1 m of', /if \(cancelled\) \{[\s\S]{0,300}Math\.hypot\(c\.x - p\.c\[0\], c\.z - p\.c\[1\]\) < 1\) keep\.add\(id\);/.test(scene));
   check('the ceiling only clears for the flight over the walls, not a walk', /const ceilTarget = arcFlight \|\| cam\.position\.y > WH \? 0 : 1\.0;/.test(scene) &&
     scene.includes('const arcFlight = !!(flight && flight.arc);'));

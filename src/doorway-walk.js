@@ -298,6 +298,18 @@ export function clearSteps(poly, p, clear, obstacles, pad) {
   // (1 cm clear of the thing itself, so a stride never grazes its corner.)
   const solid = q => obs.some(b => inBox2(b, q[0], q[1], -(pad || 0) + 0.01));
   const free = q => insidePoly(poly, q[0], q[1]) && !solid(q);
+  // A start inside (or touching) one -- a camera pressed into a pillar --
+  // first steps straight out through its nearest free face, 3 cm clear of
+  // the thing itself, and goes on from there (review 7ade30ab).
+  const own = obs.find(b => inBox2(b, p[0], p[1], -(pad || 0) + 0.01));
+  if (own) {
+    const lo = [own.min[0] + (pad || 0) - 0.03, own.min[2] + (pad || 0) - 0.03], hi = [own.max[0] - (pad || 0) + 0.03, own.max[2] - (pad || 0) + 0.03];
+    const out = [[lo[0], p[1]], [hi[0], p[1]], [p[0], lo[1]], [p[0], hi[1]]]
+      .sort((a, b) => hyp(a[0] - p[0], a[1] - p[1]) - hyp(b[0] - p[0], b[1] - p[1])).find(free);
+    if (!out) return null;
+    const rest = clearSteps(poly, out, clear, obstacles, pad);
+    return rest ? [out].concat(rest) : null;
+  }
   const h = 0.05, R = 30, W2 = 2 * R + 1;
   const at = (i, j) => [p[0] + (i - R) * h, p[1] + (j - R) * h];
   const prev = new Int32Array(W2 * W2).fill(-2);
@@ -491,9 +503,18 @@ export function fitPath(graph, way, opts, blocked) {
   const opt = Object.assign({}, WALK, opts || {});
   const yMax = graph.ceiling - opt.ceilingGap;
   const clampY = p => [p[0], Math.max(opt.minY, Math.min(yMax, p[1])), p[2]];
+  // A camera that starts or ends pressed into a wall stub (a pillar) walks
+  // out of it: the run of samples still inside a stub, from that end and
+  // within 15 cm of it, is not a wall hit (review 7ade30ab).
+  const inStubAt = (path, i, end) => inSolid(graph, path[i][0], path[i][2]) &&
+    hyp(path[i][0] - end[0], path[i][2] - end[2]) <= 0.15;
   const valid = path => {
-    for (const p of path) {
-      if (whyNotFree(graph, p[0], p[1], p[2], opt)) return false;
+    let i0 = 0, i1 = path.length - 1;
+    while (i0 <= i1 && inStubAt(path, i0, path[0])) i0++;
+    while (i1 >= i0 && inStubAt(path, i1, path[path.length - 1])) i1--;
+    for (let i = 0; i < path.length; i++) {
+      const p = path[i], why = whyNotFree(graph, p[0], p[1], p[2], opt);
+      if (why && !(why === 'wall' && (i < i0 || i > i1))) return false;
       if (blocked && blocked(p)) return false;
     }
     return true;
@@ -874,4 +895,29 @@ export function outsideView(graph, roomId, opts) {
   const r = hyp(h, y - aim[1]);
   return { pose: poseFromLook([e[0], y, e[1]], yaw, pitch, r, best.fov), portal: best.p.id, standIn: best.other,
     seen: best.seen.length / targets.length };
+}
+
+/**
+ * Which doors a walk is still holding open once no flight is running (reviews
+ * 5a0c350c, ec775cca). The cupboard's own door (its leaf hidden) only while
+ * the eye is still at that outside view (`atView`); any other held door only
+ * while the eye is within `near` m (default 1) of its opening, so a leaf
+ * never swings shut through the camera. Everything else is let go -- to its
+ * remembered openness, which a door sensor may have updated meanwhile.
+ * @param o.viewDoor  the outside-view door id, or null
+ * @param o.atView    is the eye still at that view?
+ * @param o.held      ids of the doors held open
+ * @param o.eye       [x, z] world
+ * @param o.portals   graph.portals ({ id, c })
+ * @returns { viewDoor: id | null, keep: Set of ids }
+ */
+export function heldDoorsToKeep(o) {
+  const near = o.near != null ? o.near : 1;
+  const viewDoor = o.viewDoor && o.atView ? o.viewDoor : null;
+  const keep = new Set(viewDoor ? [viewDoor] : []);
+  (o.held || []).forEach(id => {
+    const p = (o.portals || []).find(q => q.id === id);
+    if (p && hyp(o.eye[0] - p.c[0], o.eye[1] - p.c[1]) < near) keep.add(id);
+  });
+  return { viewDoor, keep };
 }
