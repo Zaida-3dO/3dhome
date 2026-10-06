@@ -43,7 +43,7 @@ import { createBootGate } from './boot-gate.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './room-pick.js';
 import { easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView,
-  ROOM_VIEW, chooseInRoomView, distToPolyEdge, eyeOf, planFlight, inRoomTapIsClickAway } from './camera-focus.js';
+  ROOM_VIEW, chooseInRoomView, distToPolyEdge, eyeOf, planFlight, inRoomTapIsClickAway, clampRadiusInside, leavesRoom } from './camera-focus.js';
 import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
@@ -5130,15 +5130,9 @@ export const Home3DScene = (() => {
       const a = eyeOf(from), b = eyeOf(to);
       const ra = eyeInRoom(a), rb = eyeInRoom(b);
       if (!ra && !rb) return 'orbit';
-      if (ra && ra === rb) {
-        const poly = roomShape(ra), toHouse = sceneToHouse(S, OX, OY);
-        let inside = true;
-        for (let i = 1; i < 10 && inside; i++) {
-          const p = toHouse(a[0] + (b[0] - a[0]) * i / 10, a[2] + (b[2] - a[2]) * i / 10);
-          inside = insidePoly(poly, p[0], p[1]);
-        }
-        if (inside) return 'eye';
-      }
+      // Same room: a straight line only when it crosses none of the room's
+      // edges (exact; 9 samples could miss a sharp notch between them).
+      if (ra && ra === rb && !leavesRoom(roomShape(ra).map(p => [tx(p[0]), tz(p[1])]), a, b, 0)) return 'eye';
       return 'arc';
     }
     function cancelFlight() {
@@ -5189,10 +5183,11 @@ export const Home3DScene = (() => {
     // Chosen once per room and cached; the cache is keyed by the canvas
     // aspect and the covering sidebar (the frame depends on both) and is
     // dropped whenever the furniture is rebuilt -- every edit-mode change
-    // (move, add, delete, a draft applied) assigns a new furnitureResult.
+    // (move, add, delete, a draft applied) assigns a new furnitureResult --
+    // shown or hidden, or the aspect changes.
     // lastRoomViewStats() reports what the last one cost and chose.
     const roomViewCache = new Map();
-    let roomViewCacheFurn = null;
+    let roomViewCacheFurn = null, roomViewCacheVis = null, roomViewCacheAspect = null;
     let lastRoomViewStats = null;
     let lastRoomViewInputs = null;   // what the last computed room view was chosen from (checks / tuning)
     function roomItems(id, poly) {
@@ -5220,7 +5215,13 @@ export const Home3DScene = (() => {
       return out;
     }
     function inRoomView(id, opts) {
-      if (roomViewCacheFurn !== furnitureResult) { roomViewCache.clear(); roomViewCacheFurn = furnitureResult; }
+      // Dropped on a furniture rebuild, on a furniture show/hide (a view chosen
+      // with the furniture hidden can stand the eye in a wardrobe), and when
+      // the aspect changes (only the latest is kept: a resize is not a leak).
+      const aspectKey = cam.aspect.toFixed(2);
+      if (roomViewCacheFurn !== furnitureResult || roomViewCacheVis !== furnitureVisible || roomViewCacheAspect !== aspectKey) {
+        roomViewCache.clear(); roomViewCacheFurn = furnitureResult; roomViewCacheVis = furnitureVisible; roomViewCacheAspect = aspectKey;
+      }
       const ins = opts && opts.inset && opts.inset.right > 0 ? opts.inset : null;
       const key = id + '|' + cam.aspect.toFixed(2) + '|' + (ins ? [ins.right, ins.width, ins.height].map(Math.round).join('x') : '-');
       let res = roomViewCache.get(key);
@@ -5405,9 +5406,12 @@ export const Home3DScene = (() => {
       const inBox = p => p.x > box.min[0] - PAD && p.x < box.max[0] + PAD && p.y > box.min[1] - PAD && p.y < box.max[1] + PAD &&
         p.z > box.min[2] - PAD && p.z < box.max[2] + PAD;
       let rays = 0;
-      const test = (eye, samples, limit) => {
-        // The camera's view direction, as the render loop's wall fade reads it.
-        let dx = centre[0] - eye[0], dy = centre[1] - eye[1], dz = centre[2] - eye[2];
+      const test = (eye, samples, limit, look) => {
+        // The camera's view direction, as the render loop's wall fade reads
+        // it: eye -> the pose's look-at point (orb.tgt once it lands), which
+        // a covering sidebar shifts off the item's centre.
+        const aim = look || centre;
+        let dx = aim[0] - eye[0], dy = aim[1] - eye[1], dz = aim[2] - eye[2];
         const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
         // From inside a room nothing fades (eyeInRoom): the render loop draws every wall solid.
         const inside = !!eyeInRoom(eye);
@@ -5460,10 +5464,10 @@ export const Home3DScene = (() => {
       const t0 = performance.now();
       const occluded = makeOcclusionTest(box, OCCLUSION_REACH, targetId);
       const res = chooseItemView({ box, baseTh, basePh: ITEM_VIEW.ph, fov: cam.fov, aspect: cam.aspect,
-        inset: opts && opts.inset, occluded, allowed: makeAllowed(roomId) });
+        inset: opts && opts.inset, occluded, allowed: makeAllowed(roomId), aboveY: WH + 0.3 });
       const st = occluded.stats();
       lastFocusStats = { ms: +(performance.now() - t0).toFixed(2), tried: res.tried, occludedRays: res.occluded,
-        penalty: +res.penalty.toFixed(3), occluders: st.occluders, boxes: st.boxes, rays: st.rays,
+        penalty: +res.penalty.toFixed(3), fallback: res.fallback || null, occluders: st.occluders, boxes: st.boxes, rays: st.rays,
         dTh: +(res.pose.th - baseTh).toFixed(3), ph: +res.pose.ph.toFixed(3), r: +res.pose.r.toFixed(2) };
       return res.pose;
     }
@@ -5946,7 +5950,27 @@ export const Home3DScene = (() => {
       // camera forward along its view ray -- shortening the orbit radius
       // until PUSH_DISTANCE, then pushing the target itself forward, so
       // zoom-in never stops and never flips. Above 1 zooms out.
+      // While the camera stands in the FOCUSED room (an in-room room view),
+      // a zoom-out or an orbit keeps the eye in that room, clear of its
+      // walls: the user looks round the room rather than backing through the
+      // wall behind it into the outside fade rules. A click-away (or another
+      // room) flies out as ever. Returns the room to hold, or null.
+      function heldRoom() {
+        const fr = pickFocusRoom ? pickFocusRoom() : null;
+        return fr && eyeInRoom([cam.position.x, cam.position.y, cam.position.z]) === fr ? fr : null;
+      }
+      function keepEyeInRoom(room) {
+        if (!room || !roomShape(room)) return;
+        const poly = roomShape(room), wpoly = poly.map(p => [tx(p[0]), tz(p[1])]), toHouse = sceneToHouse(S, OX, OY);
+        const inside = e => {
+          if (!(e[1] < WH - 0.05)) return false;
+          const h = toHouse(e[0], e[2]);
+          return insidePoly(poly, h[0], h[1]) && distToPolyEdge(wpoly, e[0], e[2]) > 0.12;
+        };
+        orb.r = clampRadiusInside([orb.tgt.x, orb.tgt.y, orb.tgt.z], orb.th, orb.ph, orb.r, inside);
+      }
       function zoomBy(factor) {
+        const held = factor > 1 ? heldRoom() : null;
         const d = dolly(orb.r, factor);
         orb.r = d.r;
         if (d.push > 0) {
@@ -5958,6 +5982,7 @@ export const Home3DScene = (() => {
             Math.min(PAN_BOUNDS.maxY, t.y),
             Math.max(PAN_BOUNDS.minZ, Math.min(PAN_BOUNDS.maxZ, t.z)));
         }
+        keepEyeInRoom(held);
       }
 
       on(container, "pointerdown", e => {
@@ -5977,8 +6002,10 @@ export const Home3DScene = (() => {
         mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
         mouse.y = -((e.clientY - r.top) / r.height) * 2 + 1;
         if (orb.drag && touchIds.size < 2) {
+          const held = heldRoom();
           orb.th += (e.clientX - orb.px) * 0.005;
           orb.ph = Math.max(0.05, Math.min(Math.PI - 0.05, orb.ph - (e.clientY - orb.py) * 0.005));
+          keepEyeInRoom(held);
           orb.px = e.clientX; orb.py = e.clientY;
           updCam();
         } else if (orb.pan) {

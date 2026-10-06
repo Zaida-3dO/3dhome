@@ -457,7 +457,11 @@ console.log('10. an openFrom item opens the menu');
     Object.assign({}, ctx, { soundOpenFrom: null })).kind === 'item');
   const tp = read('src/tap-popovers.js');
   check('tap-popovers: openFrom items are tappable', /\.\.\.\(soundOpenFrom \? soundOpenFrom\.keys\(\) : \[\]\)/.test(tp));
-  check('tap-popovers: a soundMenu tap opens the menu (no card, no camera flight)', /res\.target\.kind === 'soundMenu'\)[\s\S]{0,400}o\.soundMenu\.open\(\{ itemId: res\.target\.itemId, speaker: res\.target\.speaker \}\);\s*return;/.test(tp));
+  // Since the focus contract (scripts/test-tap-focus-contract.mjs): a soundMenu
+  // tap is a ROUTE like any other -- the camera flies to the speaker first.
+  check('tap-popovers: a soundMenu tap is a dispatcher route that opens the menu (after the flight)',
+    /kind: 'soundMenu',[\s\S]{0,400}d\.soundMenu\.open\(\{ itemId: t\.itemId, speaker: t\.speaker, side: !!at\.flew, onClose: why => d\.onClose\(t, why\) \}\);/.test(tp) &&
+    !/kind: 'soundMenu',[^}]*focus: false/.test(tp));
   const page = read('index.html');
   check('index: imports createSoundMenu', /import \{ createSoundMenu \} from '\.\/src\/sound-menu\.js\?v=__VERSION__';/.test(page));
   check('index: builds it from sensors.soundMenu, closing any card on open', /createSoundMenu\(\{\s*soundMenu: sensors && sensors\.soundMenu, getHa: \(\) => ha,[\s\S]{0,160}onOpen: \(\) => \{ if \(tapPopovers && tapPopovers\.isOpen\(\)\) tapPopovers\.close\(\); \}/.test(page));
@@ -468,7 +472,7 @@ console.log('10. an openFrom item opens the menu');
   check('modal: swallows the wheel (and blocks it outside the scrolling body)', /root\.addEventListener\('wheel', onWheel, \{ passive: false \}\)/.test(sm) &&
     /e\.stopPropagation\(\);\s*\/\/[^\n]*\n[^\n]*\n\s*if \(!\(body && body\.contains\(e\.target\)\)\) e\.preventDefault\(\);/.test(sm));
   check('modal: Esc closes, and no key reaches the page beneath', /win\.addEventListener\('keydown', onKeyDown, true\)/.test(sm) &&
-    /e\.stopPropagation\(\);[^\n]*\n\s*if \(e\.key === 'Escape'\) \{\s*e\.preventDefault\(\);\s*if \(ctl\.pickerOpen\(\)\) \{ ctl\.closePicker\(\); render\(true\); \} else close\(true\);/.test(sm));
+    /e\.stopPropagation\(\);[^\n]*\n\s*if \(e\.key === 'Escape'\) \{\s*e\.preventDefault\(\);\s*if \(ctl\.pickerOpen\(\)\) \{ ctl\.closePicker\(\); render\(true\); \} else close\(true, 'escape'\);/.test(sm));
   check('modal: opening calls onOpen (closes any card) first', /function open\(t\) \{\s*if \(o\.onOpen\)/.test(sm));
   check('modal: aria-modal dialog (room nav stands down for it)', /setAttribute\('aria-modal', 'true'\)/.test(sm) && /\[aria-modal="true"\]/.test(page));
 }
@@ -745,7 +749,7 @@ const LOCAL = { media_type: 'track', uri: 'library://track/9', name: 'Local', im
 }
 {
   const sm = read('src/sound-menu.js');
-  check('picker UI: Esc closes the picker before the menu', /if \(ctl\.pickerOpen\(\)\) \{ ctl\.closePicker\(\); render\(true\); \} else close\(true\);/.test(sm));
+  check('picker UI: Esc closes the picker before the menu', /if \(ctl\.pickerOpen\(\)\) \{ ctl\.closePicker\(\); render\(true\); \} else close\(true, 'escape'\);/.test(sm));
   check('picker UI: the search box survives repaints (only the list is rebuilt)', /querySelector\('\[data-plist\]'\)\.innerHTML = pickerList\(m\)/.test(sm) &&
     /if \(force \|\| sheet\.dataset\.mode !== 'picker'\)/.test(sm));
   check('picker UI: artwork never sends a referrer', /referrerpolicy="no-referrer"/.test(sm));

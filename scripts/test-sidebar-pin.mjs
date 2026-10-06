@@ -110,13 +110,15 @@ check('opts omitted -> collapsible (the safe reading)', is(P.sidebarReduce({ ope
   const src = read('src/tap-popovers.js');
   const onClick = src.slice(src.indexOf('const onClick = e =>'), src.indexOf('const onWheel'));
   check('popover: onObjectTap runs BEFORE the card opens',
-    onClick.indexOf('o.onObjectTap(res.target, res.point)') > -1 && onClick.indexOf('o.onObjectTap(res.target, res.point)') < onClick.indexOf('open(res.target'));
+    // Every tap opens through the dispatcher (src/tap-dispatch.js): the hook
+    // must run before it.
+    onClick.indexOf('o.onObjectTap(res.target, res.point)') > -1 &&
+    onClick.indexOf('o.onObjectTap(res.target, res.point)') < onClick.indexOf('tapDispatch.dispatch(res.target'));
   check('popover: the sidebar flip that hook made is absorbed (takeRecords), not a card close',
-    // Camera focus (src/camera-focus.js) may fly before the card opens; the
-    // flip is still absorbed before either path opens it.
-    // Absorbed IMMEDIATELY before the open path: only comments sit between
-    // it and the line that either flies (then opens) or opens at once.
-    /syncSidebarOpen\(\);\s*\}\s*(\/\/[^\n]*\n\s*)*const target = res\.target, point = res\.point;\s*const flight = [^\n]*\n\s*if \(flight\) \{[\s\S]*?open\(target[\s\S]*?\n\s*open\(res\.target/.test(onClick) && /sidebarObs\.takeRecords\(\)/.test(src));
+    // Camera focus may fly before the card opens; the flip is still absorbed
+    // before the dispatcher runs. Absorbed IMMEDIATELY before it: only
+    // comments sit between it and the dispatch.
+    /syncSidebarOpen\(\);\s*\}\s*(\/\/[^\n]*\n\s*)*tapDispatch\.dispatch\(res\.target, res\.point,/.test(onClick) && /sidebarObs\.takeRecords\(\)/.test(src));
   check('popover: a closing sidebar is not dodged', /if \(sb\.classList && !sb\.classList\.contains\('open'\)\) return null;/.test(src));
 }
 

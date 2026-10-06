@@ -207,6 +207,28 @@ console.log('occlusion-aware framing');
   const walled = F.chooseItemView({ box: plant, baseTh: front, basePh: ph, fov: 50, aspect: 1.6, occluded: fakeOccluded([]), allowed: eastOnly });
   const we = F.backVector(walled.pose.th, walled.pose.ph).map((b, i) => walled.pose.tgt[i] + b * walled.pose.r);
   check('a disallowed camera position (the plain front, here) is skipped', we[0] > 0.3 && walled.pose.th !== front, we);
+  // Every candidate behind a wall (review e6e86241 item 5): with aboveY the
+  // answer rises above the walls instead of the unchecked front pose.
+  const nowhere = e => e[1] >= 2.8;   // only above the walls is "allowed"
+  const lost = F.chooseItemView({ box: plant, baseTh: front, basePh: ph, fov: 50, aspect: 1.6, occluded: fakeOccluded([]), allowed: nowhere });
+  const le = F.backVector(lost.pose.th, lost.pose.ph).map((b, i) => lost.pose.tgt[i] + b * lost.pose.r);
+  check('(fixture) without aboveY every candidate refused: the old front pose, behind the "wall"', lost.tried === 0 && le[1] < 2.8, le);
+  const up = F.chooseItemView({ box: plant, baseTh: front, basePh: ph, fov: 50, aspect: 1.6, occluded: fakeOccluded([]), allowed: nowhere, aboveY: 3 });
+  const ue = F.backVector(up.pose.th, up.pose.ph).map((b, i) => up.pose.tgt[i] + b * up.pose.r);
+  check('every candidate refused + aboveY: the dollhouse view from above the walls, at the preferred azimuth',
+    up.fallback === 'above' && ue[1] >= 3 - 1e-9 && up.pose.th === front && nowhere(ue), { ue, fb: up.fallback });
+  check('...and it still frames the whole item (no closer than the fit)', F.boxCorners(plant).every(p => { const n = project(up.pose, 1.6, p); return Math.abs(n.x) <= 1 && Math.abs(n.y) <= 1; }));
+  // The occlusion test is told the pose's look-at point (review e6e86241
+  // item 4): the render loop fades walls by eye -> orb.tgt, and an inset
+  // shifts that off the item's centre.
+  const looks = [];
+  F.chooseItemView({ box: plant, baseTh: front, basePh: ph, fov: 50, aspect: 1.6, inset: { right: 300, width: 1600, height: 1000 },
+    occluded: (e, s, l, tgt) => { looks.push(tgt); return 0; } });
+  check('the ray test receives the inset-shifted look-at point, not the item centre', looks.length === 1 && Array.isArray(looks[0]) &&
+    Math.hypot(looks[0][0], looks[0][2]) > 0.01, looks);
+  const sceneSrc = read('src/home3d-scene.js');
+  check('scene: the wall fade in the occlusion test aims at that look-at point', /const test = \(eye, samples, limit, look\) => \{[\s\S]{0,400}const aim = look \|\| centre;/.test(sceneSrc));
+  check('scene: device framing passes aboveY (wall height + margin)', /allowed: makeAllowed\(roomId\), aboveY: WH \+ 0\.3/.test(sceneSrc));
   // The ray test can stop early: the clear case costs one candidate's rays.
   const counted = fakeOccluded([]);
   F.chooseItemView({ box: plant, baseTh: front, basePh: ph, fov: 50, aspect: 1.6, occluded: counted });
@@ -372,6 +394,14 @@ console.log('controller');
     c = mk(); fl.length = 0;
     c.markGesture(); c.request({ room: 'room_b' }, 'explicit'); while (q.length) q.shift()();
     check('a wheel with nothing pending does not make the next keyboard selection a gesture', fl.length === 1, fl.length);
+    // A no-op drag, then a selection made WITHOUT a pointer (keyboard Enter
+    // on a room-list button): no hold() runs, so only flush()'s own guard
+    // (nothing pending -> drop the gesture flag) keeps it explicit (review
+    // e6e86241 item 1: this pins that guard on its own).
+    c = mk(); fl.length = 0;
+    await dragNoChange(c);
+    c.request({ room: 'room_b' }, 'explicit'); while (q.length) q.shift()();
+    check('no-op drag, then a keyboard selection (no hold): exactly 1 flight', fl.length === 1 && fl[0] === VIEWS['r:room_b'], fl.length);
     // A scheduled flush does not fire mid-hold; the hold's release decides.
     c = mk(); fl.length = 0;
     c.request({ room: 'room_a' }, 'explicit'); c.hold(); while (q.length) q.shift()();
@@ -455,7 +485,8 @@ console.log('wiring');
     (scene.match(/cancelFlight\(\);/g) || []).length >= 6);
   check('scene: the flight feeds `animating` (zero frames after landing)', /if \(flightMoving\) animating = true;/.test(scene));
   check('scene: reduced motion jumps', /prefers-reduced-motion: reduce/.test(scene) && /reducedMotion\(\)\) \{ applyPose\(pose\)/.test(scene));
-  check('tap-popovers: the card opens through the generation gate', /focusThenOpen\(focusGate/.test(tap));
+  check('tap-popovers: every tap opens through the dispatcher and its generation gate',
+    /createTapDispatcher\(\{[\s\S]{0,900}gate: focusGate,/.test(tap) && /focusThenOpen\(o\.gate/.test(read('src/tap-dispatch.js')));
   check('tap-popovers: every close reports why', !/[^.]close\(\);/.test(tap.slice(tap.indexOf('export function attachTapPopovers'))));
 }
 

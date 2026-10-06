@@ -358,5 +358,35 @@ console.log('7. the scene\'s room click is wired through pickRoom');
   ok(!/\.find\(x => x\.object\.userData\.clickable\)/.test(src), 'the old first-catcher rule is gone');
 }
 
+// ---- 8. throughFadedWall (camera focus's click-away; review e6e86241) ------
+// Fake hits, so each branch is pinned on its own: a see-through VERTICAL
+// building face before a neighbour's catcher sets the flag; a see-through
+// HORIZONTAL face (the ceiling from above) does not; see-through FURNITURE
+// (a glass cabinet front) does not.
+console.log('8. throughFadedWall: vertical building faces only');
+{
+  const I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const mesh = (opacity, userData, parent) => ({ isMesh: true, visible: true, parent: parent || null, userData: userData || {},
+    matrixWorld: { elements: I }, material: { transparent: opacity < 1, opacity } });
+  const catcherB = { object: mesh(0, { roomId: 'room_b', clickable: true }), point: { x: tx(400), y: 0.006, z: tz(100) }, face: { normal: { x: 0, y: 1, z: 0 }, materialIndex: 0 } };
+  const dir = { x: 0.8, y: -0.6, z: 0 };
+  const vertical = { object: mesh(0.05), point: { x: tx(300), y: 1, z: tz(100) }, face: { normal: { x: -1, y: 0, z: 0 }, materialIndex: 0 } };
+  const horizontal = { object: mesh(0.05), point: { x: tx(350), y: 2.5, z: tz(100) }, face: { normal: { x: 0, y: 1, z: 0 }, materialIndex: 0 } };
+  const furnGroup = { visible: true, parent: null, userData: { furniture: true } };
+  const glassCab = { object: mesh(0.2, {}, furnGroup), point: { x: tx(290), y: 1, z: tz(100) }, face: { normal: { x: -1, y: 0, z: 0 }, materialIndex: 0 } };
+  const r1 = R.pickRoom([vertical, catcherB], dir, rooms, toHouse, null);
+  ok(r1.roomId === 'room_b' && r1.throughFadedWall === true, 'a see-through vertical face, then a neighbour floor: throughFadedWall', r1);
+  const r2 = R.pickRoom([horizontal, catcherB], dir, rooms, toHouse, null);
+  ok(r2.roomId === 'room_b' && r2.throughFadedWall === false, 'a see-through HORIZONTAL face (the ceiling from above): not flagged', r2);
+  const r3 = R.pickRoom([glassCab, catcherB], dir, rooms, toHouse, null);
+  ok(r3.roomId === 'room_b' && r3.throughFadedWall === false, 'see-through FURNITURE (a glass cabinet front): not flagged', r3);
+  const r4 = R.pickRoom([catcherB], dir, rooms, toHouse, null);
+  ok(r4.throughFadedWall === false, 'a neighbour floor seen directly: not flagged', r4);
+  // End to end with preferFocused: focused on A, the faded-wall hop is the click-away.
+  const f = { roomId: 'room_a', floorPoint: [400, 100] };
+  ok(R.pickRoom([vertical, catcherB], dir, rooms, toHouse, f).roomId === null, 'focused on A: B through a faded wall is the click-away');
+  ok(R.pickRoom([glassCab, catcherB], dir, rooms, toHouse, f).roomId === 'room_b', 'focused on A: B through a glass cabinet is still B');
+}
+
 if (failed) { console.log('\n' + failed + ' FAILED'); process.exit(1); }
 console.log('\nall room-pick tests passed');

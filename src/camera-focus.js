@@ -332,10 +332,16 @@ export function deviceCandidates(baseTh, basePh, opts) {
  * @param o.fov       vertical FOV, degrees
  * @param o.aspect    canvas width / height
  * @param o.inset     { right, width, height } -- a covering sidebar, or null
- * @param o.occluded  (eye, samples, limit) => number of sample rays blocked
- *                    (may stop counting at `limit`)
+ * @param o.occluded  (eye, samples, limit, tgt) => number of sample rays
+ *                    blocked (may stop counting at `limit`); tgt is the
+ *                    pose's look-at point (the render loop's wall fade reads
+ *                    eye -> tgt, which an inset shifts off the item centre)
  * @param o.allowed   (eye) => bool -- false for a camera behind a wall
- * @returns { pose, occluded, penalty, tried }
+ * @param o.aboveY    OPTIONAL world height above the walls: when allowed()
+ *                    refuses EVERY candidate, the answer is the preferred
+ *                    azimuth from above this height (the dollhouse view)
+ *                    rather than an unchecked front pose behind a wall
+ * @returns { pose, occluded, penalty, tried, fallback? }
  */
 export function chooseItemView(o) {
   const opt = Object.assign({}, OCCLUSION_VIEW, o.options || {});
@@ -363,12 +369,24 @@ export function chooseItemView(o) {
     tried++;
     // Only a count that could still beat the best is worth finishing.
     const limit = best ? Math.ceil(best.occluded + best.penalty - c.penalty) : samples.length;
-    const occ = o.occluded ? o.occluded(eye, samples, limit) : 0;
+    const occ = o.occluded ? o.occluded(eye, samples, limit, tgt) : 0;
     const score = occ + c.penalty;
     if (!best || score < best.occluded + best.penalty) best = { pose, occluded: occ, penalty: c.penalty };
     if (occ === 0) break;   // penalty order: nothing later can score lower
   }
-  if (!best) return { pose: first, occluded: null, penalty: 0, tried };
+  if (!best) {
+    // Every candidate stood behind a wall. Rise above the walls instead: the
+    // steepest candidate polar at the preferred azimuth, pulled back until
+    // the eye clears aboveY (never closer than the fit).
+    if (o.aboveY != null && first) {
+      const ph = Math.min(opt.topPolar, o.basePh);
+      const cos = Math.cos(ph);
+      const need = cos > 1e-6 ? (o.aboveY - first.tgt[1]) / cos : first.r;
+      const r = Math.max(first.r, need);
+      return { pose: { th: first.th, ph, r, tgt: first.tgt, fov }, occluded: null, penalty: 0, tried, fallback: 'above' };
+    }
+    return { pose: first, occluded: null, penalty: 0, tried };
+  }
   return { pose: best.pose, occluded: best.occluded, penalty: best.penalty, tried };
 }
 
@@ -564,6 +582,27 @@ export function leavesRoom(poly, eye, pt, tail) {
     if (t > 0 && t < lim) return true;
   }
   return false;
+}
+
+/**
+ * Keep an orbit camera's eye inside a region while the user drives it (an
+ * in-room view: a zoom-out or an orbit must not carry the eye through the
+ * wall behind it). The eye is tgt + backVector(th, ph) * r; returns the
+ * largest r <= `r` whose eye `inside(eye)` accepts, found by bisection from
+ * the target outward. Unchanged when the eye is already inside, or when even
+ * an eye at `minR` is not (the target itself is outside: nothing to keep).
+ */
+export function clampRadiusInside(tgt, th, ph, r, inside, minR) {
+  const b = backVector(th, ph);
+  const eyeAt = rr => [tgt[0] + b[0] * rr, tgt[1] + b[1] * rr, tgt[2] + b[2] * rr];
+  if (inside(eyeAt(r))) return r;
+  let lo = minR != null ? minR : 0.05, hi = r;
+  if (!(hi > lo) || !inside(eyeAt(lo))) return r;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (inside(eyeAt(mid))) lo = mid; else hi = mid;
+  }
+  return lo;
 }
 
 function inBox(b, p, pad) {
