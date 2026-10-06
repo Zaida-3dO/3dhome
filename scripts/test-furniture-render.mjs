@@ -1150,8 +1150,18 @@ const buildFixture = (quality, opts) => quietly(() => F.buildFurnitureSync(THREE
 {
   const sync = buildFixture(ULTRA);
   let yields = 0;
+  const progress = [];
   const sliced = (await quietlyAsync(() => F.buildFurnitureSliced(THREE, fixture.furniture, fixtureBuilders,
-    { tx, tz, quality: ULTRA, walls: fixture.walls, sliceMs: 0, yieldFn: () => { yields++; return Promise.resolve(); } }))).value;
+    { tx, tz, quality: ULTRA, walls: fixture.walls, sliceMs: 0, yieldFn: () => { yields++; return Promise.resolve(); },
+      onProgress: (done, total) => progress.push([done, total]) }))).value;
+  // onProgress (the cold-start overlay's "Furnishing... n/N", 2026-10-06):
+  // total is the item count, done never goes backwards, starts after the
+  // first item, and the last report is n/n.
+  const N = fixture.furniture.length;
+  check('sliced: onProgress reports done/total, monotonic, ending at total/total',
+    progress.length > 1 && progress.every(([, t]) => t === N) && progress[0][0] === 1 &&
+    progress.every(([d], i) => i === 0 || d >= progress[i - 1][0]) &&
+    progress[progress.length - 1][0] === N, JSON.stringify(progress.slice(0, 4)) + ' ... ' + JSON.stringify(progress.slice(-2)));
   const keys = r => r.beauty.map(m => m.userData.bucket + '#' + m.userData.triangles).sort().join('\n');
   check('sliced: builds exactly what the one-task build does (buckets, triangles, proxies)', sliced &&
     keys(sliced) === keys(sync) && sliced.stats.proxyTriangles === sync.stats.proxyTriangles &&

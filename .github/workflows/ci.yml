@@ -307,6 +307,14 @@ jobs:
           set -euo pipefail
           node scripts/test-first-frame-gate.mjs
           node scripts/test-title-fade.mjs
+      - name: Loading overlay stays up until the house is furnished (boot gate + timeout)
+        run: |
+          # src/boot-gate.js behaviourally (every wait settled, then one drawn
+          # frame; a failure counts as settled; the timeout completes it), and
+          # the wiring: the scene's waits and timeout, and index.html
+          # dismissing on onFurnished rather than onReady.
+          set -euo pipefail
+          node scripts/test-boot-gate.mjs
       - name: Gaming chair builder
         run: |
           # Asserts src/furniture/gaming-chair.js: the furniture frame (floor at

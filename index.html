@@ -707,18 +707,24 @@
        DO NOT: add an external CSS file, a web font, or a JS module for this.
        DO NOT: move it below the script tags.
 
-       WHY IT IS INDETERMINATE (this is a correctness point, not a taste one):
-       a real progress bar here would be WORSE than none. Every milestone we
-       can actually measure — config, rooms.json, HA initial state, house
-       profile, scene construction — completes in ~150-200ms combined (see
-       docs/perf-cold-start.md). The part that genuinely takes 9-45s is GPU
-       shader compilation inside compileAsync(), which exposes no progress
-       signal at all: isReady() is a per-program boolean and three.js does not
-       surface the count. A bar wired to the knowable milestones would race to
-       ~95% in a fifth of a second and then sit frozen for ten seconds or more,
-       which reads as *more* broken than no bar at all. So the long tail is an
-       honest indeterminate shimmer, and the only text change is at the one
-       real milestone we have: when shader compilation starts.
+       WHY IT IS MOSTLY INDETERMINATE (a correctness point, not a taste one):
+       a progress bar over the whole boot would be WORSE than none. Every
+       milestone we can measure before the scene draws — config, rooms.json,
+       HA initial state, house profile, scene construction — completes in
+       ~150-200ms combined (see docs/perf-cold-start.md). The part that
+       genuinely takes 9-45s cold is GPU shader compilation inside
+       compileAsync(), which exposes no progress signal at all. A bar wired to
+       the knowable milestones would race to ~95% and then sit frozen, which
+       reads as *more* broken than no bar. So the compile phase is an honest
+       indeterminate shimmer with one status line ("Preparing lighting…").
+
+       The ONE phase with a real count is the furniture: since 2026-10-06 the
+       overlay stays up until the house is visually complete ("the
+       loading screens should not go away until the app is fully ready"), so
+       after the house compiles it shows "Furnishing… n/N" with a determinate
+       fill driven by the time-sliced build's item count, then "Finishing
+       touches…" while the furniture's own shaders compile. It comes down on
+       the scene's onFurnished (src/boot-gate.js), which also has a timeout.
 
        NO backdrop-filter, by design. A blur was requested, but there is
        nothing to blur — the canvas is empty until the scene first draws — and
@@ -796,6 +802,20 @@
       100% { transform: translateX(340%); }
     }
 
+    /* Determinate mode (the furniture phase only — see the comment above):
+       the shimmer stops and a fill shows the real fraction. */
+    #home3d-loading .home3d-loading-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0;
+      border-radius: 3px;
+      background: rgba(122, 162, 255, 0.95);
+      transition: width 200ms ease-out;
+      display: none;
+    }
+    #home3d-loading .home3d-loading-track.is-determinate::after { display: none; }
+    #home3d-loading .home3d-loading-track.is-determinate .home3d-loading-fill { display: block; }
+
     #home3d-loading .home3d-loading-status {
       font-size: 12.5px;
       line-height: 1.4;
@@ -826,7 +846,7 @@
 
   <div id="home3d-loading" role="status" aria-live="polite">
     <p class="home3d-loading-title">Loading your home</p>
-    <div class="home3d-loading-track"></div>
+    <div class="home3d-loading-track"><div class="home3d-loading-fill"></div></div>
     <p class="home3d-loading-status" id="home3d-loading-status">Starting up&hellip;</p>
   </div>
 
@@ -879,6 +899,17 @@
         status: function (text) {
           if (done || !statusEl) return;
           statusEl.textContent = text;
+        },
+        /* The furniture phase: a real count. Switches the track to a
+           determinate fill; progress(null) switches it back to the shimmer. */
+        progress: function (fraction) {
+          if (done || !el) return;
+          var track = el.querySelector('.home3d-loading-track');
+          var fill = el.querySelector('.home3d-loading-fill');
+          if (!track || !fill) return;
+          if (fraction == null) { track.classList.remove('is-determinate'); return; }
+          track.classList.add('is-determinate');
+          fill.style.width = Math.round(Math.max(0, Math.min(1, fraction)) * 100) + '%';
         },
         /* Idempotent. Safe to call from several completion paths — and it is
            called from more than one, because compileAsync() is not guaranteed
@@ -1323,6 +1354,14 @@
       }
 
       const container = document.getElementById('scene-container');
+      // Preview tile: no loading overlay (it would be most of a 379x163
+      // tile), so the canvas itself is held invisible until the scene's
+      // onFurnished -- the same "visually complete" gate the overlay uses,
+      // with the same timeout -- then fades in.
+      if (isPreview) {
+        container.style.opacity = '0';
+        container.style.transition = 'opacity 300ms ease';
+      }
       const panel = document.getElementById('panel');
       const panelBody = document.getElementById('panel-body');
       // Keep a sidebar slider's filled part under its thumb as it moves. One
@@ -1755,11 +1794,28 @@
         pixelRatio: scenePixelRatio,
         antialias: !isPreview,
         // Cold-start overlay handoff. onCompileStart names the slow phase;
-        // onReady is the dismiss signal and is guaranteed to fire exactly once
-        // on every path (including precompile failure and renderers with no
-        // compileAsync), so the overlay can never be stranded on screen.
+        // onReady means the HOUSE can draw, and the furniture follows;
+        // onFurnished is the dismiss signal -- the house is visually complete
+        // and a frame has drawn it (src/boot-gate.js). It is guaranteed to
+        // fire exactly once, with a timeout after onReady, so the overlay can
+        // never be stranded on screen. (It used to dismiss on onReady, which
+        // showed an empty house for a second or more before the furniture.)
         onCompileStart: () => window.__home3dLoading.status('Preparing lighting…'),
-        onReady: () => window.__home3dLoading.dismiss(),
+        onReady: () => {
+          window.__home3dLoading.status(furnitureOn ? 'Furnishing…' : 'Finishing touches…');
+        },
+        onFurnishProgress: (done, total) => {
+          if (!total) return;
+          window.__home3dLoading.status(done < total ? 'Furnishing… ' + done + '/' + total : 'Finishing touches…');
+          window.__home3dLoading.progress(done / total);
+        },
+        onFurnished: () => {
+          window.__home3dLoading.dismiss();
+          // The preview tile has no overlay; its canvas is held transparent
+          // until now instead (see the isPreview block above), so the tile
+          // never shows the house without its furniture either.
+          if (isPreview) container.style.opacity = '1';
+        },
         // A room tapped in the 3D view opens the sidebar UNPINNED (or, open
         // already, switches it to that room): see src/sidebar-pin.js.
         onRoomClick: isPreview ? undefined : (roomId => {
