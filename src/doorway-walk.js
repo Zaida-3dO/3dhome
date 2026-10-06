@@ -41,14 +41,20 @@ export const WALK = Object.freeze({
   travelPitchDeg: 6,    // looking slightly down while walking
   turnOut: 1.0,         // m of travel over which the camera turns to the walking direction
   turnIn: 1.5,          // m of travel over which it turns to the final view
-  lookChord: 0.8,       // m: the walking direction is the path's chord this long
-  minMs: 800, maxMs: 3000, msBase: 400, msPerM: 260, msPerRad: 120,
+  lookChord: 1.6,       // m: the walking direction is the path's chord this long (turns start before a door)
+  minMs: 800, maxMs: 4000,
+  walkSpeed: 6.5,       // m/s of cruise a straight stretch is timed at
+  maxYawRate: 200,      // deg/s: the head never turns faster than this (while the cap allows)
   sample: 0.02,         // m between validation samples
   obstacleMinY: 1.2,    // furniture taller than this is walked round
   obstaclePad: 0.15,
   outsideStandoff: 1.3, // how far back from a cupboard's door its view stands
   outsideAimY: 1.0,
-  outsideFov: 70,
+  outsideFov: 70,       // vertical, degrees: the widest an outside view gets
+  outsideMinFov: 45,    // ... and the narrowest
+  outsideMargin: 0.3,   // m either side of the opening kept in frame
+  clutterReach: 1.5,    // m: a door leaf nearer than this, in frame, crowds an outside view
+  clutterPenalty: 0.5,
 });
 
 const hyp = Math.hypot;
@@ -707,18 +713,46 @@ function planWith(graph, from, fromRoom, to, toRoom, obstacles, opt) {
     const x = Math.cos(ty) * k + Math.cos(dy) * (1 - k), z = Math.sin(ty) * k + Math.sin(dy) * (1 - k);
     return { yaw: Math.atan2(z, x), pitch: tpch * k + dp * (1 - k) };
   }
+  // TIMING. Each stretch of the walk costs the longer of walking it (at
+  // walkSpeed) and turning the head through it (at maxYawRate), so the camera
+  // slows down where it turns hard -- before and through a doorway -- instead
+  // of whipping round at walking pace. Progress along the walk is by that
+  // cost; the duration is the total cost, stretched by the speed profile's
+  // 1.33x peak (walkEase) so the peak turn rate stays under the cap.
+  const N = Math.max(200, Math.ceil(total / 0.02)), step = total / N;
+  const costCum = new Float64Array(N + 1), dys = new Float64Array(N + 1);
+  const yawRad = opt.maxYawRate * Math.PI / 180;
+  const peak = 1 / (1 - 0.25);   // walkEase's peak rate, x the average
+  let turn = 0, prevY = look(0, sampleAt(0).head).yaw;
+  for (let i = 1; i <= N; i++) {
+    const y = look(i * step, sampleAt(i * step).head).yaw;
+    dys[i] = Math.abs(shortestArc(prevY, y));
+    turn += dys[i]; prevY = y;
+  }
+  // When the whole walk would run past maxMs, the straight stretches go
+  // faster (up to 3x) before the turns do: the turning keeps its budget.
+  let C = 0;
+  for (let k = 0, v = opt.walkSpeed; k < 6; k++, v *= 1.25) {
+    for (let i = 1; i <= N; i++) costCum[i] = costCum[i - 1] + Math.max(step / v, dys[i] / yawRad);
+    C = costCum[N] || 1;
+    if ((peak * C + 0.25) * 1000 <= opt.maxMs || v >= opt.walkSpeed * 3) break;
+  }
+  const dAt = q => {
+    const c = q * C;
+    let lo = 0, hi = N;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (costCum[m] <= c) lo = m; else hi = m; }
+    const seg = costCum[hi] - costCum[lo], f = seg > 0 ? (c - costCum[lo]) / seg : 0;
+    return (lo + f) * step;
+  };
   const at = t => {
     const q = Math.max(0, Math.min(1, t));
     if (q >= 1) return clonePose(to);
     if (q <= 0) return clonePose(from);
-    const d = q * total, sm = sampleAt(d), lk = look(d, sm.head);
+    const d = dAt(q), sm = sampleAt(d), lk = look(d, sm.head);
     const r = Math.exp(Math.log(ra) + (Math.log(rb) - Math.log(ra)) * q);
     return poseFromLook(sm.eye, lk.yaw, lk.pitch, r, fa + (fb - fa) * q);
   };
-  // How much the camera turns, for the duration.
-  let turn = 0, prevY = null;
-  for (let i = 0; i <= 60; i++) { const y = look(total * i / 60, sampleAt(total * i / 60).head).yaw; if (prevY != null) turn += Math.abs(shortestArc(prevY, y)); prevY = y; }
-  const ms = Math.round(Math.max(opt.minMs, Math.min(opt.maxMs, opt.msBase + opt.msPerM * total + opt.msPerRad * turn)));
+  const ms = Math.round(Math.max(opt.minMs, Math.min(opt.maxMs, (peak * C + 0.25) * 1000)));
   const roomsWalked = [fromRoom].concat(route.map(r => r.into));
   return {
     mode: 'walk', at, ease: walkEase, path, waypoints: way, kinds: W.map(w => w.kind),
@@ -758,9 +792,12 @@ function crosses(p, q, a, b) {
  * to `outsideStandoff`, and to either side), kept 25 cm off that room's walls.
  * Each is scored by how much of the cupboard's floor it sees: a sight line
  * counts when it stays in the two rooms and the opening and passes no door
- * leaf (`opts.leaves`: [[hinge], [tip]] segments, x/z -- the leaf as it
- * stands when held open, since a cupboard door may only open 28 degrees and
- * stand right in the way of a straight-on view). Ties go to the spot most
+ * leaf (`opts.leaves`: [[hinge], [tip], doorId] segments, x/z -- the leaf as
+ * it stands when held open). The leaf of the door being looked through is
+ * left out: the scene hides it while it is the view (a cupboard door that
+ * opens only 28 degrees otherwise fills the frame). The other leaves also
+ * count against a spot when they stand close in front of the lens, where
+ * they would crowd the frame (`clutterReach`, `clutterPenalty`). Ties go to the spot most
  * square to the door and furthest back. It aims at the middle of what it sees.
  * Null when the room has no opening onto another.
  * @returns { pose, portal, standIn, seen } or null
@@ -770,6 +807,15 @@ export function outsideView(graph, roomId, opts) {
   const poly = graph.rooms[roomId];
   if (!poly) return null;
   const leaves = (opts && opts.leaves) || [];
+  // The lens: zoomed in so the opening (plus a margin) spans the frame's
+  // width from where the camera stands -- the shot is the cupboard, not the
+  // hallway round it -- between outsideMinFov and outsideFov (vertical).
+  const aspect = opt.aspect > 0 ? opt.aspect : 1.6;
+  const lensFor = (e, p) => {
+    const dist = Math.max(0.3, hyp(p.c[0] - e[0], p.c[1] - e[1]));
+    const v = 2 * Math.atan((p.width / 2 + opt.outsideMargin) / dist / aspect) * 180 / Math.PI;
+    return Math.max(opt.outsideMinFov, Math.min(opt.outsideFov, v));
+  };
   const xs = poly.map(p => p[0]), zs = poly.map(p => p[1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs), minZ = Math.min(...zs), maxZ = Math.max(...zs);
   const targets = [];
@@ -785,7 +831,7 @@ export function outsideView(graph, roomId, opts) {
     const op = graph.rooms[other];
     const free = (x, z) => insidePoly(op, x, z) || insidePoly(poly, x, z) || inPortal(p, x, z, 0.06);
     const sees = (e, t) => {
-      if (leaves.some(l => crosses(e, t, l[0], l[1]))) return false;
+      if (leaves.some(l => l[2] !== p.id && crosses(e, t, l[0], l[1]))) return false;
       const L = hyp(t[0] - e[0], t[1] - e[1]), m = Math.max(2, Math.ceil(L / 0.03));
       for (let i = 1; i < m; i++) if (!free(e[0] + (t[0] - e[0]) * i / m, e[1] + (t[1] - e[1]) * i / m)) return false;
       return true;
@@ -796,8 +842,27 @@ export function outsideView(graph, roomId, opts) {
       if (!insidePoly(op, e[0], e[1]) || distToPolyEdge(op, e[0], e[1]) < 0.25) continue;
       const seen = targets.filter(t => sees(e, t));
       if (!seen.length) continue;
-      const score = seen.length / targets.length - 0.04 * Math.abs(side) - 0.02 * (opt.outsideStandoff - d);
-      if (!best || score > best.score + 1e-9) best = { score, e, seen, p, other };
+      // Clutter: another door's leaf close in front of the lens (in the
+      // horizontal field of view, within clutterReach) fills the frame
+      // without blocking a single sight line -- a hallway front door
+      // standing ajar beside a cupboard. Each costs up to clutterPenalty.
+      const cx = seen.reduce((m, t) => m + t[0], 0) / seen.length, cz = seen.reduce((m, t) => m + t[1], 0) / seen.length;
+      const yaw = Math.atan2(cz - e[1], cx - e[0]);
+      const fov = lensFor(e, p), halfH = Math.atan(Math.tan(fov * Math.PI / 360) * aspect);
+      let clutter = 0;
+      leaves.forEach(l => {
+        if (l[2] === p.id) return;
+        let worst = 0;
+        for (let k = 0; k <= 8; k++) {
+          const x = l[0][0] + (l[1][0] - l[0][0]) * k / 8, z = l[0][1] + (l[1][1] - l[0][1]) * k / 8;
+          const dist = hyp(x - e[0], z - e[1]);
+          if (dist >= opt.clutterReach || Math.abs(shortestArc(yaw, Math.atan2(z - e[1], x - e[0]))) > halfH) continue;
+          worst = Math.max(worst, 1 - dist / opt.clutterReach);
+        }
+        clutter += opt.clutterPenalty * worst;
+      });
+      const score = seen.length / targets.length - clutter - 0.04 * Math.abs(side) - 0.02 * (opt.outsideStandoff - d);
+      if (!best || score > best.score + 1e-9) best = { score, e, seen, p, other, fov };
     }
   });
   if (!best) return null;
@@ -807,6 +872,6 @@ export function outsideView(graph, roomId, opts) {
   const dx = aim[0] - e[0], dz = aim[2] - e[1], h = hyp(dx, dz);
   const yaw = Math.atan2(dz, dx), pitch = Math.atan2(y - aim[1], h);
   const r = hyp(h, y - aim[1]);
-  return { pose: poseFromLook([e[0], y, e[1]], yaw, pitch, r, opt.outsideFov), portal: best.p.id, standIn: best.other,
+  return { pose: poseFromLook([e[0], y, e[1]], yaw, pitch, r, best.fov), portal: best.p.id, standIn: best.other,
     seen: best.seen.length / targets.length };
 }

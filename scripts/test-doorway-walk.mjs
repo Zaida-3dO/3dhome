@@ -25,6 +25,8 @@
  *   6c. The path's own guards (fitPath) on waypoints built to stray: a
  *      hairpin the raw spline swings out through the walls, a plateau it
  *      bulges over the ceiling gap.
+ *   6d. The head turns no faster than 240 deg/s in real time (the walk slows
+ *      where it turns); a cupboard's own door is hidden while it is the view.
  *   7. Tall furniture is walked round; furniture that blocks every way does
  *      not send the camera over the roof.
  *   8. The tour order: authored order first, the rest appended; the loader,
@@ -139,6 +141,18 @@ function samples(plan) {
   for (let i = 0; i <= 2000; i++) out.push(F.eyeOf(plan.at(i / 2000)));
   return out;
 }
+// Peak yaw rate (deg/s) of a plan as the scene runs it: walkEase over plan.ms,
+// measured over every 1/60 s window.
+function maxYawRate(plan) {
+  const n = Math.max(60, Math.round(plan.ms / 1000 * 60));
+  let prev = W.lookOf(plan.at(0)).yaw, best = 0;
+  for (let i = 1; i <= n; i++) {
+    const y = W.lookOf(plan.at(W.walkEase(i / n))).yaw;
+    best = Math.max(best, Math.abs(F.shortestArc(prev, y)) / D2R / (plan.ms / 1000 / n));
+    prev = y;
+  }
+  return best;
+}
 function orderedSamples(plan) { const out = []; for (let i = 0; i <= 2000; i++) out.push(F.eyeOf(plan.at(i / 2000))); return out; }
 
 // ---- 1: the graph -----------------------------------------------------------
@@ -206,7 +220,7 @@ function inRoomPoses(spec, graph) {
 function walkAll(name, spec, graph, minPortals) {
   const poses = inRoomPoses(spec, graph);
   const ids = Object.keys(poses);
-  let planned = 0, worst = -Infinity, allBad = [], jumps = 0, plans = {};
+  let planned = 0, worst = -Infinity, allBad = [], jumps = 0, plans = {}, fastest = { rate: 0 };
   for (const a of ids) for (const b of ids) {
     if (a === b) continue;
     const ea = F.eyeOf(poses[a]), eb = F.eyeOf(poses[b]);
@@ -224,7 +238,11 @@ function walkAll(name, spec, graph, minPortals) {
       const la = W.lookOf(ps[i - 1]), lb = W.lookOf(ps[i]);
       if (Math.abs(F.shortestArc(la.yaw, lb.yaw)) > 4 * D2R) { jumps++; break; }
     }
+    // The head's turn rate, in real time: 1000 frames over plan.ms.
+    const rate = maxYawRate(plan);
+    if (rate > fastest.rate) fastest = { rate, hop: a + '>' + b, ms: plan.ms };
   }
+  check(`${name}: the head never turns faster than 240 deg/s (fastest ${fastest.rate.toFixed(0)} deg/s, ${fastest.hop})`, fastest.rate <= 240, fastest);
   check(`${name}: walks planned between ${planned} pairs of views (at least ${minPortals})`, planned >= minPortals, planned);
   check(`${name}: every sample inside a room or an opening, under the ceiling, never through a wall`, allBad.length === 0, allBad.slice(0, 3));
   check(`${name}: highest eye ${worst.toFixed(3)} m <= ceiling - 0.2 (${(spec.ceiling - 0.2).toFixed(2)})`, worst <= spec.ceiling - 0.2 + 1e-9, worst);
@@ -316,7 +334,16 @@ section('the walk itself');
     check(`through a doorway the camera looks where it is going (within 15 deg; worst ${(worst / D2R).toFixed(1)})`, n > 0 && worst < 15 * D2R, { n, worst: worst / D2R });
   }
   const lens = Object.values(P).map(p => [p.length, p.ms]).sort((x, y) => x[0] - y[0]);
-  check('duration: 0.8-3 s', lens.every(([, ms]) => ms >= 800 && ms <= 3000), lens.slice(0, 2).concat(lens.slice(-2)));
+  check('duration: 0.8-4 s', lens.every(([, ms]) => ms >= 800 && ms <= 4000), lens.slice(0, 2).concat(lens.slice(-2)));
+  {
+    // The turn-rate cap stretches a turning walk, not a straight one: a
+    // straight 4 m hall walk keeps its walking pace.
+    const a = F.poseFromLook([4.6, 1.6, 2.5], 0, 0.1, 2, 70), b = F.poseFromLook([9.5, 1.6, 2.5], 0, 0.1, 2, 70);
+    const st = W.planWalk(g, a, 'hall', b, 'hall');
+    check(`a straight walk is timed by its length (${st && st.ms} ms for ${st && st.length.toFixed(1)} m), not slowed`, st && st.ms < 1800 && maxYawRate(st) < 30, st && [st.ms, maxYawRate(st)]);
+    const turny = P['ensuite>living'];
+    check(`a walk that turns through four doors is slowed for it (${turny.ms} ms) and still turns <= 240 deg/s`, turny.ms > 2000 && maxYawRate(turny) <= 240, [turny.ms, maxYawRate(turny)]);
+  }
   check('... longer walks take longer (shortest < longest)', lens[0][1] < lens[lens.length - 1][1], [lens[0], lens[lens.length - 1]]);
   // The speed profile.
   let mono = true, peak = 0;
@@ -456,6 +483,42 @@ section('a cupboard, seen from outside');
       lv && le[2] > e[2] + 0.1 && lv.seen >= 0.5 && !segHits([le[0], le[2]], [lv.pose.tgt[0], lv.pose.tgt[2]], leaf[0], leaf[1]), lv && { le, seen: lv.seen });
     check('... still in the hall, under the ceiling', lv && insidePoly(flat.rooms.hall, le[0], le[2]) && le[1] <= flat.ceiling - 0.2);
   }
+  {
+    // The door being looked through is hidden while it is the view: its own
+    // leaf (tagged with its id) is not in the way; another door's still is.
+    const leaf = [[6.95, 0.65], [6.95 + 0.7 * Math.sin(28 * D2R), 0.65 + 0.7 * Math.cos(28 * D2R)]];
+    const own = W.outsideView(g, 'cupboard', { leaves: [leaf.concat(['cupboard_door'])] });
+    const other = W.outsideView(g, 'cupboard', { leaves: [leaf.concat(['some_other_door'])] });
+    const oe = own && F.eyeOf(own.pose), xe = other && F.eyeOf(other.pose);
+    check('its own (hidden) leaf does not move the view: straight on again', own && Math.abs(oe[2] - e[2]) < 1e-9 && Math.abs(oe[0] - e[0]) < 1e-9, oe);
+    check('... another door\'s leaf in the same place still does', other && Math.abs(xe[2] - e[2]) > 0.1, xe);
+  }
+  {
+    // Another door's leaf ajar close in front of a straight-on view (a hall
+    // front door beside the cupboard) blocks no sight line but crowds the
+    // frame: the view moves so less of that leaf is in it, close up.
+    const L = [[7.05, 0.2], [7.3, 0.72], 'front_door'];
+    const crowd = v => {
+      const ee = F.eyeOf(v.pose), yaw = W.lookOf(v.pose).yaw, half = Math.atan(Math.tan(35 * D2R) * 1.6);
+      let n = 0;
+      for (let k = 0; k <= 8; k++) {
+        const x = L[0][0] + (L[1][0] - L[0][0]) * k / 8, z = L[0][1] + (L[1][1] - L[0][1]) * k / 8;
+        if (Math.hypot(x - ee[0], z - ee[2]) < 1.5 && Math.abs(F.shortestArc(yaw, Math.atan2(z - ee[2], x - ee[0]))) <= half) n++;
+      }
+      return n;
+    };
+    const plain = W.outsideView(g, 'cupboard'), aware = W.outsideView(g, 'cupboard', { leaves: [L] });
+    check('a neighbouring door ajar in front of the view: the view moves so it crowds the frame less, and still sees the cupboard',
+      crowd(aware) < crowd(plain) && aware.seen >= 0.8, { plain: crowd(plain), aware: crowd(aware), seen: aware.seen });
+  }
+  {
+    // The lens is zoomed onto the opening: the opening and 30 cm either side
+    // span the frame's width (within 45-70 degrees vertical).
+    const v = W.outsideView(g, 'cupboard', { aspect: 1.6 }), ve = F.eyeOf(v.pose), d = flat.doors.find(x => x.id === 'cupboard_door');
+    const want = 2 * Math.atan((d.width / 2 + 0.3) / Math.hypot(d.c[0] - ve[0], d.c[1] - ve[2]) / 1.6) / D2R;
+    check(`the outside view zooms onto the opening (${v.pose.fov.toFixed(1)} deg, not the 70 deg room lens)`,
+      Math.abs(v.pose.fov - Math.max(45, Math.min(70, want))) < 1e-6 && v.pose.fov < 70, [v.pose.fov, want]);
+  }
   check('the cupboard really is too small to stand in (the in-room chooser falls back)',
     F.chooseInRoomView({ poly: flat.rooms.cupboard, ceiling: 2.5, items: [], aspect: 1.6 }).fallback === true);
   const ds = W.outsideView(dg, 'store');
@@ -555,6 +618,9 @@ section('wiring');
   check('flyTo: the arc only when the walk is impossible or an end is outside', /if \(plan\) return \{ mode: 'walk', plan \};\s*\}\s*return \{ mode: 'arc' \};/.test(fly));
   check('reduced motion (or ms 0) still jumps, and lets the doors go', fly.includes('if (!(ms > 0) || reducedMotion()) { applyPose(pose); releaseWalkDoors(); wake(250); return Promise.resolve(\'landed\'); }'));
   check('the tick uses the walk\'s own speed profile', scene.includes('applyPose(flight.plan.at((flight.plan.ease || easeInOut)(Math.max(0, t))));'));
+  check('a cupboard\'s own door is hidden while it is the view, shown when another flight starts',
+    /walkViewDoor = outsideDoorFor\(to\);\s*setViewDoor\(walkViewDoor\);/.test(scene) &&
+    /if \(show && show\.pivot\) show\.pivot\.visible = true;/.test(scene) && /doorById\[hiddenViewDoor\]\.pivot\.visible = false;/.test(scene));
   check('cancel / land lets the held doors go; a superseding flight hands them over', /flight = null;\s*if \(status !== 'superseded'\) releaseWalkDoors\(status === 'cancelled'\);/.test(scene));
   check('... except, when cancelled, a door the camera stands within 1 m of', /if \(cancelled\) \{[\s\S]{0,300}Math\.hypot\(c\.x - p\.c\[0\], c\.z - p\.c\[1\]\) < 1\) keep\.add\(id\);/.test(scene));
   check('the ceiling only clears for the flight over the walls, not a walk', /const ceilTarget = arcFlight \|\| cam\.position\.y > WH \? 0 : 1\.0;/.test(scene) &&

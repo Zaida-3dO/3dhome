@@ -955,9 +955,12 @@ nothing authored, every view is **derived**, so any house works unchanged:
   frame. From inside a room, a tap on its own walls, ceiling or floor (or Escape,
   with no card open) is the click-away and flies back out. The choice is made once per room and cached until the furniture
   changes. A room too small to stand a camera in (a cupboard) is framed from
-  **the room it opens onto**: standing back from its widest door (up to 1.3 m,
-  kept 25 cm off that room's walls) at 1.6 m eye height, looking in — and that
-  door swings open while it is the view. Only a room with no opening onto
+  **the room it opens onto**: standing back from its door (up to 1.3 m, kept
+  25 cm off that room's walls) at 1.6 m eye height, looking in through it with
+  the lens zoomed onto the opening (45–70°), at the spot that sees the most of
+  the cupboard with the fewest other door leaves crowding the frame. Its own
+  door leaf is hidden while it is the view (a cupboard door may only open
+  28°), and shown again when the camera moves on. Only a room with no opening onto
   another room is still framed from above, from the house's home angle (the
   `iso` preset, which `cameraPresets.iso` overrides).
 - **Getting there.** Between two views inside the house the camera **walks**:
@@ -968,8 +971,11 @@ nothing authored, every view is **derived**, so any house works unchanged:
   it and back afterwards. The route is worked out from the plan alone: each
   door joins the rooms either side of it, and two rooms whose edges face each
   other with no wall between (an open-plan kitchen and living room) join along
-  that unwalled stretch. Tall furniture (over 1.2 m) is walked round. A walk
-  takes 0.8–3 s by its length. Only a flight with one end outside the house
+  that unwalled stretch. Tall furniture (over 1.2 m) and wall stubs standing
+  inside a room are walked round; a camera parked against a wall steps clear
+  of it first. A walk is timed by its length and its turns: the head never
+  turns faster than about 200°/s, so the camera slows where it turns through
+  a doorway, and a walk takes 0.8–4 s. Only a flight with one end outside the house
   (to or from the home view), or between rooms no door connects, still rises
   over the walls and drops in.
 - **A furniture item** is framed whole and close: the distance fits its world box

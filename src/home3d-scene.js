@@ -5121,6 +5121,7 @@ export const Home3DScene = (() => {
       // seen from outside (a cupboard) keeps its own door open while it is
       // the view. Anything held before and not wanted now swings back.
       walkViewDoor = outsideDoorFor(to);
+      setViewDoor(walkViewDoor);
       const wanted = new Set((route.plan ? route.plan.portals : []).filter(id => doorById[id]).concat(walkViewDoor ? [walkViewDoor] : []));
       endFlight('superseded');
       holdDoorsOpen(wanted);
@@ -5189,6 +5190,19 @@ export const Home3DScene = (() => {
       });
       // Held, but not wanted any more: back to where it was.
       walkDoorHold.forEach((pct, id) => { if (!ids.has(id)) { walkDoorHold.delete(id); swingDoor(id, pct); } });
+      requestRender();
+    }
+    // The door of a cupboard that is the view is HIDDEN while it is: one that
+    // opens only 28 degrees otherwise fills the frame, and the shot is of the
+    // cupboard, not its door. Shown again the moment another flight starts.
+    let hiddenViewDoor = null;
+    function setViewDoor(id) {
+      if (hiddenViewDoor === id) return;
+      const show = hiddenViewDoor && doorById[hiddenViewDoor];
+      if (show && show.pivot) show.pivot.visible = true;
+      hiddenViewDoor = id && doorById[id] && doorById[id].pivot ? id : null;
+      if (hiddenViewDoor) doorById[hiddenViewDoor].pivot.visible = false;
+      invalidateShadows();
       requestRender();
     }
     // After a flight: only the destination's outside-view door stays open --
@@ -5265,15 +5279,16 @@ export const Home3DScene = (() => {
     // its door open while it is the view.
     const outsideViews = new Map();   // room id -> { pose, portal, standIn } | null
     function outsideRoomView(id) {
-      if (!outsideViews.has(id)) {
-        // Each door's leaf as it stands held open (its collision-solved
-        // maximum): a cupboard door stopped at 28 degrees blocks a straight-on view.
-        const leaves = (DOORS || []).filter(d => doorById[d.id]).map(d => {
-          const h = doorBasis(d).hinge, t = doorLeafTip(d, doorById[d.id].maxDeg);
-          return [[tx(h[0]), tz(h[1])], [tx(t[0]), tz(t[1])]];
-        });
-        outsideViews.set(id, outsideView(navGraph(), id, { leaves }));
-      }
+      // Every door's leaf where it is heading (a swing's target, else where
+      // it stands): the neighbours' doors as they will be when the camera
+      // arrives. The cupboard's own door is hidden while it is the view
+      // (setViewDoor). Chosen per request -- doors move -- and cheap.
+      const leaves = (DOORS || []).filter(d => doorById[d.id]).map(d => {
+        const dr = doorById[d.id], sw = doorSwings.get(d.id), pct = sw ? sw.to : dr.openPct;
+        const h = doorBasis(d).hinge, t = doorLeafTip(d, dr.maxDeg * pct / 100);
+        return [[tx(h[0]), tz(h[1])], [tx(t[0]), tz(t[1])], d.id];
+      });
+      outsideViews.set(id, outsideView(navGraph(), id, { leaves, aspect: cam.aspect }));
       const v = outsideViews.get(id);
       return v ? clonePose(v.pose) : null;
     }
@@ -6915,6 +6930,8 @@ export const Home3DScene = (() => {
       navPortals() { return navGraph().portals.map(p => ({ id: p.id, kind: p.kind, rooms: p.rooms.slice(), width: +p.width.toFixed(3) })); },
       // Where the camera is mid-flight: 'walk' | 'arc' | 'eye' | 'orbit', or null.
       flightMode() { return flight ? flight.mode : null; },
+      // The cupboard door hidden while its cupboard is the view, or null.
+      hiddenViewDoor() { return hiddenViewDoor; },
       // A built furniture item's world box { min, max } (metres), or null.
       furnitureBox(id) {
         const e = furnitureResult && furnitureResult.byId ? furnitureResult.byId[id] : null;

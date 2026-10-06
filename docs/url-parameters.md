@@ -243,7 +243,7 @@ scene creation.
 
 With focus on (the default), tapping a room flies the camera (~0.7 s) to that
 room's showcase view (from one room to another it walks through the doorways,
-below the ceiling, in 0.8–3 s), and tapping a device flies in on the device before its
+below the ceiling, in 0.8–4 s), and tapping a device flies in on the device before its
 card opens. Clicking away with nothing left selected — a background tap, the
 sidebar's X or Back, Escape, or tapping away from a card — flies back to where
 the camera was before the first selection. Dragging, wheeling or pinching
