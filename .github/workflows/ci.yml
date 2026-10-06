@@ -742,6 +742,8 @@ jobs:
         run: node scripts/test-tap-focus-contract.mjs
       - name: Room views from inside the room -- in the polygon, under the ceiling, L rooms, corner shots, flights over the walls
         run: node scripts/test-room-view.mjs
+      - name: Room-to-room walks through doorways -- graph, inside a room or an opening, under the ceiling, no wall crossed, reverse, tour order
+        run: node scripts/test-doorway-walk.mjs
       - name: Edit mode -- never imported at boot, offered and drafts applied only outside preview / HA popup / iframes
         run: node scripts/test-edit-mode-boot.mjs
       - name: Profile drafts -- where a draft applies, no token in a draft or export, pose->view round trip, export

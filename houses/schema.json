@@ -4864,6 +4864,24 @@
             "pattern": "^[a-z][a-z0-9_]*$"
           },
           "default": {}
+        },
+        "navigation": {
+          "type": "object",
+          "description": "OPTIONAL room-to-room navigation. `order` is the tour the previous / next room arrows (and the left / right arrow keys) step through, wrapping at both ends. Rooms it leaves out are appended after it in the profile's own room order, so a new room is never unreachable; an unknown id is a load warning and is skipped. Without it the arrows follow the order of `rooms`. Added in schemaVersion 1.6; an older engine ignores it.",
+          "properties": {
+            "order": {
+              "type": "array",
+              "description": "Room ids, in tour order. Each must be a `rooms[].id`; no repeats.",
+              "items": {
+                "$ref": "#/$defs/roomId"
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "order"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

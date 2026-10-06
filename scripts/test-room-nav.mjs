@@ -70,11 +70,13 @@ console.log('home pose across cycling');
 console.log('index.html wiring');
 {
   const html = read('index.html');
-  check('imports the helpers', /import \{ nextRoom, prevRoom, roomNavKeyAction \} from '\.\/src\/room-nav\.js\?v=__VERSION__'/.test(html));
+  check('imports the helpers', /import \{ nextRoom, prevRoom, roomNavKeyAction, tourOrder \} from '\.\/src\/room-nav\.js\?v=__VERSION__'/.test(html));
   check('aria-labels "Previous room: X" / "Next room: X"', html.includes("'Previous room: '") && html.includes("'Next room: '"));
   const step = html.slice(html.indexOf('function stepRoom'), html.indexOf("roomNavPrev.addEventListener('click'"));
   check('stepRoom: same path as a list tap (selectedRoom, renderPanel, focusRoom explicit)',
-    /selectedRoom = id; renderPanel\(\); focusRoom\('explicit'\);/.test(step) && /home\.roomIds/.test(step));
+    /selectedRoom = id; renderPanel\(\); focusRoom\('explicit'\);/.test(step) && /\(tourIds, selectedRoom\)/.test(step) &&
+    // The tour: the profile's navigation.order, else home.roomIds (src/room-nav.js tourOrder).
+    html.includes('const tourIds = tourOrder(home.roomIds, house.navigation && house.navigation.order);'));
   check('stepRoom never touches the focus controller / home pose directly', !/focusCtl|getPose|flyTo/.test(step));
   check('key handler passes edit item + dialog state', /editItemSelected:[^\n]*hasItemTarget/.test(html) && /tapPopovers\.isOpen\(\)/.test(html));
   check('both buttons wired', /roomNavPrev\.addEventListener\('click', \(\) => stepRoom\('prev'\)\)/.test(html) && /roomNavNext\.addEventListener\('click', \(\) => stepRoom\('next'\)\)/.test(html));

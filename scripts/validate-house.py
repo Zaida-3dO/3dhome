@@ -257,6 +257,7 @@ def check_geometry(geo, report, schema=None):
     check_wall_finishes(geo, room_ids, report)
     check_focus_views(geo, report)
     check_fixture_statics(geo, report)
+    check_navigation(geo, room_ids, report)
 
     seen_channels = set()
     for entry in geo.get("lights", []):
@@ -352,6 +353,35 @@ def check_fixture_statics(geo, report):
             "geometry.json/schemaVersion",
             f"a light fixture's `static` ({owners[0]}) needs schemaVersion 1.5 or newer, but this profile "
             f"declares '{version}' -- bump it",
+        )
+
+
+def check_navigation(geo, room_ids, report):
+    """`navigation.order` (schemaVersion 1.6): the prev / next room tour.
+
+    The schema checks the shape; this checks every id is a room (the engine
+    skips an unknown one with a warning, so the tour silently shortens -- an
+    error here, where it can be fixed) and ties the key to the declared
+    version. A room the order leaves out is fine: the engine appends it.
+    """
+    nav = geo.get("navigation")
+    if nav is None:
+        return
+    order = nav.get("order") if isinstance(nav, dict) else None
+    if not isinstance(order, list):
+        return  # the schema reports the shape
+    for i, rid in enumerate(order):
+        if rid not in room_ids:
+            report.error(f"navigation/order/{i}", f"'{rid}' is not a room in this profile")
+    version = str(geo.get("schemaVersion") or "")
+    try:
+        major, minor = (int(part) for part in version.split(".", 1))
+    except ValueError:
+        major = minor = -1
+    if (major, minor) < (1, 6):
+        report.warn(
+            "geometry.json/schemaVersion",
+            f"`navigation` needs schemaVersion 1.6 or newer, but this profile declares '{version}' -- bump it",
         )
 
 

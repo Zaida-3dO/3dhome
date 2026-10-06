@@ -44,6 +44,7 @@ import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './room-pick.js';
 import { easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView,
   ROOM_VIEW, chooseInRoomView, distToPolyEdge, eyeOf, planFlight, inRoomTapIsClickAway, clampRadiusInside, leavesRoom } from './camera-focus.js';
+import { buildNavGraph, navInputsFromHouse, planWalk, outsideView } from './doorway-walk.js';
 import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
@@ -5105,6 +5106,7 @@ export const Home3DScene = (() => {
       if (!flight) return;
       const f = flight;
       flight = null;
+      if (status !== 'superseded') releaseWalkDoors(status === 'cancelled');
       try { f.resolve(status); } catch (e) { /* a resolver never throws */ }
     }
     function reducedMotion() {
@@ -5112,28 +5114,107 @@ export const Home3DScene = (() => {
         window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
     }
     function flyTo(pose, opts) {
-      endFlight('superseded');
       const from = getPose(), to = clonePose(pose);
-      const mode = flightMode(from, to);
-      const ms = opts && opts.ms != null ? opts.ms : (mode === 'arc' ? 1200 : 700);
-      if (!(ms > 0) || reducedMotion()) { applyPose(pose); wake(250); return Promise.resolve('landed'); }
+      const route = flightRoute(from, to);
+      const mode = route.mode;
+      // Doors: a walk swings open every door it passes through, and a room
+      // seen from outside (a cupboard) keeps its own door open while it is
+      // the view. Anything held before and not wanted now swings back.
+      walkViewDoor = outsideDoorFor(to);
+      const wanted = new Set((route.plan ? route.plan.portals : []).filter(id => doorById[id]).concat(walkViewDoor ? [walkViewDoor] : []));
+      endFlight('superseded');
+      holdDoorsOpen(wanted);
+      const ms = opts && opts.ms != null ? opts.ms : (mode === 'walk' ? route.plan.ms : mode === 'arc' ? 1200 : 700);
+      if (!(ms > 0) || reducedMotion()) { applyPose(pose); releaseWalkDoors(); wake(250); return Promise.resolve('landed'); }
       return new Promise(resolve => {
-        flight = { from, to, plan: planFlight(from, to, { mode, clearY: WH + 0.5 }), arc: mode === 'arc', t0: performance.now(), ms, resolve };
+        const plan = route.plan || planFlight(from, to, { mode, clearY: WH + 0.5 });
+        flight = { from, to, plan, mode, arc: mode === 'arc', walk: mode === 'walk', t0: performance.now(), ms, resolve };
         wake(ms + 50);
       });
     }
-    // How a flight travels (camera-focus.js planFlight): between two views
-    // from outside, the orbit lerp as ever; within one room, a straight line;
-    // into, out of or between rooms, up over the walls and down again -- the
-    // orbit lerp would slide the camera through them.
-    function flightMode(from, to) {
+    // How a flight travels: between two views from outside, the orbit lerp
+    // as ever (camera-focus.js planFlight); within one room, a straight line;
+    // between two views INSIDE the house, a walk through the doorways, below
+    // the ceiling (src/doorway-walk.js planWalk). Only a flight with one end
+    // outside the house (the home view) -- or between rooms the walk cannot
+    // connect -- still goes up over the walls and down again: the orbit lerp
+    // would slide the camera through them.
+    function flightRoute(from, to) {
       const a = eyeOf(from), b = eyeOf(to);
       const ra = eyeInRoom(a), rb = eyeInRoom(b);
-      if (!ra && !rb) return 'orbit';
+      if (!ra && !rb) return { mode: 'orbit' };
       // Same room: a straight line only when it crosses none of the room's
       // edges (exact; 9 samples could miss a sharp notch between them).
-      if (ra && ra === rb && !leavesRoom(roomShape(ra).map(p => [tx(p[0]), tz(p[1])]), a, b, 0)) return 'eye';
-      return 'arc';
+      if (ra && ra === rb && !leavesRoom(roomShape(ra).map(p => [tx(p[0]), tz(p[1])]), a, b, 0)) return { mode: 'eye' };
+      if (ra && rb) {
+        const plan = planWalk(navGraph(), from, ra, to, rb, { obstacles: walkObstacles() });
+        lastWalk = plan ? { from: ra, to: rb, rooms: plan.rooms, portals: plan.portals, length: +plan.length.toFixed(2), ms: plan.ms,
+          maxY: +plan.maxY.toFixed(3), ceiling: navGraph().ceiling, waypoints: plan.waypoints.map(p => p.map(v => +v.toFixed(3))),
+          path: plan.path.map(p => p.map(v => +v.toFixed(3))) } : { from: ra, to: rb, failed: true };
+        if (plan) return { mode: 'walk', plan };
+      }
+      return { mode: 'arc' };
+    }
+    // The navigation graph (src/doorway-walk.js), built once from the house.
+    let _navGraph = null, lastWalk = null;
+    function navGraph() {
+      if (!_navGraph) _navGraph = buildNavGraph(navInputsFromHouse(HOUSE));
+      return _navGraph;
+    }
+    // Tall furniture the walk steps round (a wardrobe, a fridge); anything
+    // under the walking eye's knees is walked over.
+    function walkObstacles() {
+      const byId = furnitureResult && furnitureVisible && furnitureResult.byId ? furnitureResult.byId : null;
+      if (!byId) return [];
+      return Object.keys(byId).map(k => byId[k].worldBox).filter(b => b && b.max[1] > 1.2);
+    }
+    // ---- Doors held open for a walk / an outside view ----
+    // door id -> the openness to go back to. A sensor or the panel slider
+    // setting a held door updates this instead of swinging it shut mid-walk.
+    const walkDoorHold = new Map();
+    let walkViewDoor = null;
+    function swingDoor(id, pct) {
+      const dr = doorById[id];
+      if (!dr) return;
+      const sw = doorSwings.get(id);
+      if (sw ? sw.to === pct : dr.openPct === pct) return;
+      doorSwings.set(id, { from: dr.openPct, to: pct, startedAt: performance.now() });
+    }
+    function holdDoorsOpen(ids) {
+      ids.forEach(id => {
+        const dr = doorById[id];
+        if (!dr) return;
+        if (!walkDoorHold.has(id)) { const sw = doorSwings.get(id); walkDoorHold.set(id, sw ? sw.to : dr.openPct); }
+        swingDoor(id, 100);
+      });
+      // Held, but not wanted any more: back to where it was.
+      walkDoorHold.forEach((pct, id) => { if (!ids.has(id)) { walkDoorHold.delete(id); swingDoor(id, pct); } });
+      requestRender();
+    }
+    // After a flight: only the destination's outside-view door stays open --
+    // and, when the user stopped the walk, any door the camera is standing
+    // in or next to (within 1 m), so a leaf never swings shut through it.
+    // Those go back at the next flight.
+    function releaseWalkDoors(cancelled) {
+      const keep = new Set(walkViewDoor ? [walkViewDoor] : []);
+      if (cancelled) {
+        const c = cam.position;
+        walkDoorHold.forEach((pct, id) => {
+          const p = navGraph().portals.find(q => q.id === id);
+          if (p && Math.hypot(c.x - p.c[0], c.z - p.c[1]) < 1) keep.add(id);
+        });
+      }
+      holdDoorsOpen(keep);
+    }
+    // The door of the room whose outside view this pose is, or null.
+    function outsideDoorFor(pose) {
+      const e = eyeOf(pose);
+      for (const v of outsideViews.values()) {
+        if (!v) continue;
+        const f = eyeOf(v.pose);
+        if (Math.hypot(e[0] - f[0], e[1] - f[1], e[2] - f[2]) < 0.02) return doorById[v.portal] ? v.portal : null;
+      }
+      return null;
     }
     function cancelFlight() {
       if (!flight) return false;
@@ -5145,7 +5226,7 @@ export const Home3DScene = (() => {
       if (!flight) return false;
       const t = (now - flight.t0) / flight.ms;
       if (t >= 1) { applyPose(flight.to); endFlight('landed'); return false; }
-      applyPose(flight.plan.at(easeInOut(Math.max(0, t))));
+      applyPose(flight.plan.at((flight.plan.ease || easeInOut)(Math.max(0, t))));
       return true;
     }
 
@@ -5176,7 +5257,25 @@ export const Home3DScene = (() => {
         const d = v.tgt ? null : above();
         return { th: v.th, ph: v.ph, r: v.r, tgt: v.tgt ? v.tgt.slice() : [d.tgt[0], v.targetHeight || 0, d.tgt[2]], fov: v.fov };
       }
-      return inRoomView(id, opts) || above();
+      return inRoomView(id, opts) || outsideRoomView(id) || above();
+    }
+    // A room no camera can stand in (a cupboard) is seen from the room it
+    // opens onto, through its door, at walking eye height -- inside the
+    // house, never from above (src/doorway-walk.js outsideView). flyTo holds
+    // its door open while it is the view.
+    const outsideViews = new Map();   // room id -> { pose, portal, standIn } | null
+    function outsideRoomView(id) {
+      if (!outsideViews.has(id)) {
+        // Each door's leaf as it stands held open (its collision-solved
+        // maximum): a cupboard door stopped at 28 degrees blocks a straight-on view.
+        const leaves = (DOORS || []).filter(d => doorById[d.id]).map(d => {
+          const h = doorBasis(d).hinge, t = doorLeafTip(d, doorById[d.id].maxDeg);
+          return [[tx(h[0]), tz(h[1])], [tx(t[0]), tz(t[1])]];
+        });
+        outsideViews.set(id, outsideView(navGraph(), id, { leaves }));
+      }
+      const v = outsideViews.get(id);
+      return v ? clonePose(v.pose) : null;
     }
     // ---- In-room room views (src/camera-focus.js chooseInRoomView) --------
     //
@@ -5816,7 +5915,8 @@ export const Home3DScene = (() => {
       let animating = false;
       const camDir = new THREE.Vector3().subVectors(orb.tgt, cam.position).normalize();
       // From inside a room every wall is solid (eyeInRoom).
-      const camInside = !!eyeInRoom([cam.position.x, cam.position.y, cam.position.z]);
+      // A walk is inside throughout, its doorways included.
+      const camInside = !!(flight && flight.walk) || !!eyeInRoom([cam.position.x, cam.position.y, cam.position.z]);
       wallMeshes.forEach(({ mesh, nx, nz, outer, base, baseDepthWrite }) => {
         if (!outer) return;
         // `base`: the opacity this mesh is drawn at when its wall is solid.
@@ -6183,6 +6283,7 @@ export const Home3DScene = (() => {
       setDoorOpen(roomId, pct) {
         const dr = doorByRoom[roomId];
         if (!dr) return;
+        if (dr.id && walkDoorHold.has(dr.id)) { walkDoorHold.set(dr.id, Math.max(0, Math.min(100, +pct || 0))); return; }
         // A manual set wins outright over an in-flight sensor swing on the
         // same door: cancel the animation rather than letting the two fight
         // over openPct frame by frame.
@@ -6222,6 +6323,8 @@ export const Home3DScene = (() => {
         const dr = doorById[doorId];
         if (!dr) return;
         const target = Math.max(0, Math.min(100, +pct || 0));
+        // Held open by a walk or an outside view: applied when it is let go.
+        if (walkDoorHold.has(doorId)) { walkDoorHold.set(doorId, target); return; }
         const inFlight = doorSwings.get(doorId);
         if (inFlight && inFlight.to === target) return;   // already on its way
         if (!inFlight && dr.openPct === target) {
@@ -6803,6 +6906,15 @@ export const Home3DScene = (() => {
       lastRoomViewStats() { return lastRoomViewStats; },
       // The inputs that view was chosen from (world metres), for offline tuning.
       lastRoomViewInputs() { return lastRoomViewInputs; },
+      // The last room-to-room walk planned (src/doorway-walk.js): rooms and
+      // doors passed, length, duration, highest eye vs the ceiling, and the
+      // sampled path (world metres) -- or { failed: true } when it fell back
+      // to the flight over the walls. null before the first.
+      lastWalk() { return lastWalk; },
+      // The navigation graph's portals (doors and open-plan joins), for checks.
+      navPortals() { return navGraph().portals.map(p => ({ id: p.id, kind: p.kind, rooms: p.rooms.slice(), width: +p.width.toFixed(3) })); },
+      // Where the camera is mid-flight: 'walk' | 'arc' | 'eye' | 'orbit', or null.
+      flightMode() { return flight ? flight.mode : null; },
       // A built furniture item's world box { min, max } (metres), or null.
       furnitureBox(id) {
         const e = furnitureResult && furnitureResult.byId ? furnitureResult.byId[id] : null;
