@@ -16,7 +16,9 @@
  *      eyes it says are blocked, and only the best few eyes are ray-tested.
  *   6. A cupboard no camera can stand in falls back (pose null).
  *   7. A covering sidebar shifts the frame so the room sits in the visible part.
- *   8. Flights: into/out of a room the eye stays above the walls except
+ *   8. Flights (planFlight's arc: now only with one end outside the house --
+ *      room to room walks, scripts/test-doorway-walk.mjs): into/out of a room
+ *      the eye stays above the walls except
  *      straight above either end; within a room it is a straight line;
  *      outside it is the old orbit lerp; the azimuth never jumps.
  *   9. Wiring: roomView prefers the in-room view (an authored view still
@@ -358,9 +360,11 @@ section('wiring');
 {
   const scene = read('src/home3d-scene.js');
   const rv = scene.slice(scene.indexOf('    function roomView(id, opts) {'), scene.indexOf('    // ---- In-room room views'));
-  check('roomView: an authored view returns before anything is derived', rv.indexOf('const v = ROOMS[id].view;') < rv.indexOf('return inRoomView(id, opts) || above();') &&
+  check('roomView: an authored view returns before anything is derived', rv.indexOf('const v = ROOMS[id].view;') < rv.indexOf('return inRoomView(id, opts) || outsideRoomView(id) || above();') &&
     /if \(v\) \{[\s\S]*?return \{ th: v\.th/.test(rv));
-  check('roomView: in-room first, the view from above only as the fallback', rv.includes('return inRoomView(id, opts) || above();'));
+  // A cupboard is now seen from the room it opens onto (test-doorway-walk.mjs);
+  // the view from above only for a room with no opening onto another.
+  check('roomView: in-room first, then from outside its door, the view from above only as the last fallback', rv.includes('return inRoomView(id, opts) || outsideRoomView(id) || above();'));
   check('the room-view cache is dropped when the furniture is rebuilt, shown/hidden, or the aspect changes (latest aspect only)',
     /if \(roomViewCacheFurn !== furnitureResult \|\| roomViewCacheVis !== furnitureVisible \|\| roomViewCacheAspect !== aspectKey\) \{\s*roomViewCache\.clear\(\);/.test(scene));
   check('a zoom-out or an orbit in the focused room keeps the eye in it',
@@ -368,11 +372,13 @@ section('wiring');
     /const held = heldRoom\(\);\s*orb\.th \+=[^\n]*\n[^\n]*orb\.ph = [^\n]*\n\s*keepEyeInRoom\(held\);/.test(scene) &&
     /orb\.r = clampRadiusInside\(\[orb\.tgt\.x, orb\.tgt\.y, orb\.tgt\.z\], orb\.th, orb\.ph, orb\.r, inside\);/.test(scene));
   check('a same-room flight is a straight line only when it crosses no room edge (exact, not sampled)',
-    /if \(ra && ra === rb && !leavesRoom\(roomShape\(ra\)\.map\(p => \[tx\(p\[0\]\), tz\(p\[1\]\)\]\), a, b, 0\)\) return 'eye';/.test(scene));
+    /if \(ra && ra === rb && !leavesRoom\(roomShape\(ra\)\.map\(p => \[tx\(p\[0\]\), tz\(p\[1\]\)\]\), a, b, 0\)\) return \{ mode: 'eye' \};/.test(scene));
   check('walls render solid while the camera is inside a room', scene.includes('const targetOpacity = camInside ? b : wallFadeTarget(dot, b);'));
   check('the ceiling clears during a flight over the walls', /const ceilTarget = arcFlight \|\| cam\.position\.y > WH \? 0 : 1\.0;/.test(scene));
-  check('flyTo plans its path (arc / eye / orbit)', scene.includes("plan: planFlight(from, to, { mode, clearY: WH + 0.5 })") &&
-    scene.includes('applyPose(flight.plan.at(easeInOut(Math.max(0, t))));'));
+  // Room to room is now a walk through the doorways (test-doorway-walk.mjs);
+  // the arc remains for a flight with one end outside the house.
+  check('flyTo plans its path (walk / arc / eye / orbit)', scene.includes("const plan = route.plan || planFlight(from, to, { mode, clearY: WH + 0.5 });") &&
+    scene.includes('applyPose(flight.plan.at((flight.plan.ease || easeInOut)(Math.max(0, t))));'));
   check('device occlusion agrees: nothing fades from inside a room', scene.includes('const fades = w => !inside && wallFadeTarget('));
   const em = read('src/edit-mode.js');
   check('Reset to derived keeps the derived view\'s own lens', em.includes('if (pose && pose.fov == null) pose.fov = DEFAULT_FOV;') &&

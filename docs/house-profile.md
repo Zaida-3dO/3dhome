@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.11"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card, `1.9` its `cameras` rows, `1.10` its `actions` rows and a TV row's `art` condition, and `1.11` the optional top-level `bindings` and `sidebar`. `geometry.json` is at `"1.5"`: `1.1` added the optional `windows` and `curtains`, `1.2` the optional `furniture`, `1.3` a wall's optional `finishes`, `1.4` the optional camera-focus `view` on a room, a furniture item or a curtain, and `1.5` a light fixture's optional `static` look. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.11"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card, `1.9` its `cameras` rows, `1.10` its `actions` rows and a TV row's `art` condition, and `1.11` the optional top-level `bindings` and `sidebar`. `geometry.json` is at `"1.6"`: `1.1` added the optional `windows` and `curtains`, `1.2` the optional `furniture`, `1.3` a wall's optional `finishes`, `1.4` the optional camera-focus `view` on a room, a furniture item or a curtain, `1.5` a light fixture's optional `static` look, and `1.6` the optional `navigation` tour order. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -142,6 +142,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | `furniture` | no | Placed furniture, free-standing or wall-anchored — see below. Needs `schemaVersion` `1.2`. |
 | `lights` | no | The light fixtures, grouped by room. |
 | `cameraPresets` | no | Per-house camera overrides. Usually omit — see below. |
+| `navigation` | no | `{ "order": [room ids] }` — the tour the previous / next room arrows step through. See [Room navigation order](#room-navigation-order). Needs `schemaVersion` `1.6`. |
 
 ### Room id is the join key
 
@@ -954,10 +955,29 @@ nothing authored, every view is **derived**, so any house works unchanged:
   frame. From inside a room, a tap on its own walls, ceiling or floor (or Escape,
   with no card open) is the click-away and flies back out. The choice is made once per room and cached until the furniture
   changes. A room too small to stand a camera in (a cupboard) is framed from
-  above instead: from the house's home angle (the `iso` preset, which
-  `cameraPresets.iso` overrides), at the smallest distance that keeps the whole
-  room on screen, floor to ceiling. Flying into or out of a room, the camera
-  rises over the walls and drops in rather than passing through them.
+  **the room it opens onto**: standing back from its door (up to 1.3 m, kept
+  25 cm off that room's walls) at 1.6 m eye height, looking in through it with
+  the lens zoomed onto the opening (45–70°), at the spot that sees the most of
+  the cupboard with the fewest other door leaves crowding the frame. Its own
+  door leaf is hidden while it is the view (a cupboard door may only open
+  28°), and shown again when the camera moves on. Only a room with no opening onto
+  another room is still framed from above, from the house's home angle (the
+  `iso` preset, which `cameraPresets.iso` overrides).
+- **Getting there.** Between two views inside the house the camera **walks**:
+  out through the door (or the open-plan opening), along the hall and in
+  through the next door, at 1.6 m eye height through each opening, turning to
+  look where it is going and then to the view — never closer than 20 cm to the
+  ceiling and never through a wall. The doors it passes through swing open for
+  it and back afterwards. The route is worked out from the plan alone: each
+  door joins the rooms either side of it, and two rooms whose edges face each
+  other with no wall between (an open-plan kitchen and living room) join along
+  that unwalled stretch. Tall furniture (over 1.2 m) and wall stubs standing
+  inside a room are walked round; a camera parked against a wall steps clear
+  of it first. A walk is timed by its length and its turns: the head never
+  turns faster than about 200°/s, so the camera slows where it turns through
+  a doorway, and a walk takes 0.8–4 s. Only a flight with one end outside the house
+  (to or from the home view), or between rooms no door connects, still rises
+  over the walls and drops in.
 - **A furniture item** is framed whole and close: the distance fits its world box
   to the screen. The angle is its front if nothing stands in the way; otherwise
   the nearest of a few dozen candidate angles (up to 90° round, and up to nearly
@@ -1117,6 +1137,23 @@ light group, a cover, a switch or a script button, labelled, reorderable, a
 script optionally behind an "Are you sure?" dialog). See `sidebar` below. A furniture item's Home
 Assistant section has the same opt-in as a tick box, **Show in the room
 sidebar**.
+
+### Room navigation order
+
+With a room selected, the sidebar's previous / next arrows (and the left / right
+arrow keys) step to the neighbouring room, wrapping at both ends. By default
+that is the order of `rooms`. To give the tour your own order — the way you
+would walk someone round the house — list it:
+
+```json
+"navigation": { "order": ["lounge", "kitchen", "hall", "study", "bedroom"] }
+```
+
+A room the list leaves out is **appended** after it, in the order of `rooms`,
+so a room you add later is never unreachable from the arrows. An id that is not
+a room is a validator error and a load warning, and is skipped. Each step flies
+the camera there as a tap would — walking through the doorways (see
+[Camera focus views](#camera-focus-views)).
 
 ### Camera presets — why they are optional
 

@@ -1,11 +1,27 @@
 /**
  * Previous / next room navigation -- the pure rules.
  *
- * `nextRoom` / `prevRoom` walk the house's room order (home.roomIds, the same
- * order as the Controls list) with wraparound. `roomNavKeyAction` decides what
+ * `nextRoom` / `prevRoom` walk the house's tour order (tourOrder: the
+ * profile's `navigation.order`, else home.roomIds -- the Controls list's
+ * order) with wraparound. `roomNavKeyAction` decides what
  * a keydown means: cycle, or leave it alone (so the camera-flight cancel, the
  * edit-mode nudge, a slider or a dialog keep their keys).
  */
+
+/**
+ * The prev / next order. With no authored `order`: the house's room order.
+ * With one: its rooms first, in its order (unknown ids and repeats dropped),
+ * then every room it leaves out, in the house's order -- APPENDED rather than
+ * skipped, so a room added to the house is never unreachable from the arrows.
+ */
+export function tourOrder(roomIds, order) {
+  const ids = Array.isArray(roomIds) ? roomIds : [];
+  if (!Array.isArray(order) || !order.length) return ids.slice();
+  const seen = new Set(), out = [];
+  order.forEach(id => { if (ids.includes(id) && !seen.has(id)) { seen.add(id); out.push(id); } });
+  ids.forEach(id => { if (!seen.has(id)) out.push(id); });
+  return out;
+}
 
 /** The room after `id` (wraps). Unknown / null `id`: the first room. Empty list: null. */
 export function nextRoom(ids, id) {

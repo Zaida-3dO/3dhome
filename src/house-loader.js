@@ -1533,6 +1533,20 @@ export const HouseLoader = (() => {
         };
       });
 
+    // ---- Navigation (schemaVersion 1.6) ----------------------------------
+    // The prev / next tour order. Unknown ids warn and are dropped; the page
+    // appends any room the order leaves out (src/room-nav.js tourOrder).
+    const navigation = { order: [] };
+    if (geo.navigation != null) {
+      const ord = geo.navigation && Array.isArray(geo.navigation.order) ? geo.navigation.order : null;
+      if (!ord) warn('navigation needs an `order` list of room ids -- ignored');
+      else ord.forEach(id => {
+        if (!rooms[id]) warn('navigation.order names room "' + id + '", which is not in this profile -- skipped');
+        else if (navigation.order.indexOf(id) !== -1) warn('navigation.order lists room "' + id + '" twice -- the repeat is skipped');
+        else navigation.order.push(id);
+      });
+    }
+
     const centre = Array.isArray(geo.viewCentre) && geo.viewCentre.length === 2
       ? [geo.viewCentre[0], geo.viewCentre[1]]
       : [(footprint.minX + footprint.maxX) / 2, (footprint.minY + footprint.maxY) / 2];
@@ -1567,6 +1581,9 @@ export const HouseLoader = (() => {
       slabs: slabs,
       rooms: rooms,
       roomOrder: roomOrder,
+      // { order: [room ids] }: the authored prev / next tour, empty when the
+      // profile has none (then the arrows follow roomOrder).
+      navigation: navigation,
       doors: doors,
       windows: windows,
       curtains: curtains,

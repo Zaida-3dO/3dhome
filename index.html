@@ -1188,7 +1188,7 @@
     import { createSoundMenu } from './src/sound-menu.js?v=__VERSION__';
     // The sidebar's open / pinned state machine (collapsible widths only).
     import { sidebarReduce, SIDEBAR_INITIAL } from './src/sidebar-pin.js?v=__VERSION__';
-    import { nextRoom, prevRoom, roomNavKeyAction } from './src/room-nav.js?v=__VERSION__';
+    import { nextRoom, prevRoom, roomNavKeyAction, tourOrder } from './src/room-nav.js?v=__VERSION__';
     // Camera focus: the camera flies to a tapped room or device, and back.
     import { createFocusController, deviceKey, escapeDeselects } from './src/camera-focus.js?v=__VERSION__';
     // The page's half of the tap focus contract (scripts/test-tap-focus-contract.mjs).
@@ -2628,19 +2628,21 @@
       const roomNavNext = document.getElementById('room-nav-next');
       const roomNavCount = document.getElementById('room-nav-count');
       const roomLabelOf = id => (Home3DScene.ROOMS[id] && Home3DScene.ROOMS[id].name) || id;
+      // The tour: the profile's navigation.order, then any room it leaves out.
+      const tourIds = tourOrder(home.roomIds, house.navigation && house.navigation.order);
       function updateRoomNav() {
-        const show = !!selectedRoom && home.roomIds.length > 1;
+        const show = !!selectedRoom && tourIds.length > 1;
         roomNavEl.classList.toggle('show', show);
         if (!show) return;
-        const p = prevRoom(home.roomIds, selectedRoom), n = nextRoom(home.roomIds, selectedRoom);
+        const p = prevRoom(tourIds, selectedRoom), n = nextRoom(tourIds, selectedRoom);
         roomNavPrev.querySelector('.room-nav-name').textContent = roomLabelOf(p);
         roomNavNext.querySelector('.room-nav-name').textContent = roomLabelOf(n);
         roomNavPrev.setAttribute('aria-label', 'Previous room: ' + roomLabelOf(p));
         roomNavNext.setAttribute('aria-label', 'Next room: ' + roomLabelOf(n));
-        roomNavCount.textContent = (home.roomIds.indexOf(selectedRoom) + 1) + '/' + home.roomIds.length;
+        roomNavCount.textContent = (tourIds.indexOf(selectedRoom) + 1) + '/' + tourIds.length;
       }
       function stepRoom(dir) {
-        const id = dir === 'next' ? nextRoom(home.roomIds, selectedRoom) : prevRoom(home.roomIds, selectedRoom);
+        const id = dir === 'next' ? nextRoom(tourIds, selectedRoom) : prevRoom(tourIds, selectedRoom);
         if (!id || id === selectedRoom) return;
         selectedRoom = id; renderPanel(); focusRoom('explicit');
       }
