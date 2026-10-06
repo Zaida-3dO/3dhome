@@ -16,4 +16,6 @@ ok(/HOLD_MS = 7000/.test(html), 'hold 7s');
 ok(/L\.dismiss = function[^}]*start\(\)/.test(html), 'timer starts on loading-overlay dismiss');
 ok(/style\.display = 'none'/.test(html.split('HOLD_MS')[1] || ''), 'card display:none after fade');
 ok(/'pointerdown', 'wheel'/.test(html), 'early dismiss on pointerdown/wheel');
+ok(/setTimeout\(start, 20000\)/.test(html), '20s upper-bound fallback starts the timer');
+ok(/typeof L\.isDone !== 'function' \|\| typeof L\.dismiss !== 'function'\) \{ start\(\)/.test(html), 'missing isDone/dismiss starts immediately');
 process.exit(fail ? 1 : 0);

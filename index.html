@@ -908,7 +908,9 @@
         });
       }
       var L = window.__home3dLoading;
-      if (!L) { start(); return; }
+      // Upper bound: if the overlay never reports dismissal, still start.
+      setTimeout(start, 20000);
+      if (!L || typeof L.isDone !== 'function' || typeof L.dismiss !== 'function') { start(); return; }
       if (L.isDone()) { start(); return; }
       var orig = L.dismiss;
       L.dismiss = function () { orig.apply(L, arguments); start(); };
