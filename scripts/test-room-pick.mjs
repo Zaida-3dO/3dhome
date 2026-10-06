@@ -352,7 +352,8 @@ console.log('7. the scene\'s room click is wired through pickRoom');
     'placing a new item picks its room through pickRoom (walls resolve to the side tapped)');
   // Camera focus passes the focused room as a fifth argument (room-pick.js
   // preferFocused); the transform is still read per tap.
-  ok(/const toHouse = sceneToHouse\(S, OX, OY\);[\s\S]{0,900}pickRoom\(rc\.intersectObjects\(scene\.children, true\), rc\.ray\.direction,\s*roomPolygons\(ROOMS\), toHouse, focus\)/.test(src),
+  // (The hits may be taken first into `hits`: the in-room click-away reads them too.)
+  ok(/const toHouse = sceneToHouse\(S, OX, OY\);[\s\S]{0,900}(const hits = rc\.intersectObjects\(scene\.children, true\);\s*const picked = pickRoom\(hits|pickRoom\(rc\.intersectObjects\(scene\.children, true\)), rc\.ray\.direction,\s*roomPolygons\(ROOMS\), toHouse, focus\)/.test(src),
     'the click handler calls it with the ray, the rooms and the current transform');
   ok(!/\.find\(x => x\.object\.userData\.clickable\)/.test(src), 'the old first-catcher rule is gone');
 }

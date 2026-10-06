@@ -41,7 +41,8 @@ import { createTvScreens } from './furniture/tv-screen.js';
 import { createBootGate } from './boot-gate.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './room-pick.js';
-import { lerpPose, easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView } from './camera-focus.js';
+import { easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView,
+  ROOM_VIEW, chooseInRoomView, distToPolyEdge, eyeOf, planFlight, inRoomTapIsClickAway } from './camera-focus.js';
 import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
@@ -4500,7 +4501,8 @@ export const Home3DScene = (() => {
     }
     function snapFade(entry) {
       const camDir = new THREE.Vector3().subVectors(orb.tgt, cam.position).normalize();
-      const op = wallFadeTarget(entry.nx * camDir.x + entry.nz * camDir.z, entry.base == null ? 1 : entry.base);
+      const op = eyeInRoom([cam.position.x, cam.position.y, cam.position.z]) ? (entry.base == null ? 1 : entry.base)
+        : wallFadeTarget(entry.nx * camDir.x + entry.nz * camDir.z, entry.base == null ? 1 : entry.base);
       entry.mesh.material.opacity = op;
       entry.mesh.material.depthWrite = wallFadeDepthWrite(op, entry.base, entry.baseDepthWrite);
     }
@@ -5105,12 +5107,33 @@ export const Home3DScene = (() => {
     }
     function flyTo(pose, opts) {
       endFlight('superseded');
-      const ms = opts && opts.ms != null ? opts.ms : 700;
+      const from = getPose(), to = clonePose(pose);
+      const mode = flightMode(from, to);
+      const ms = opts && opts.ms != null ? opts.ms : (mode === 'arc' ? 1200 : 700);
       if (!(ms > 0) || reducedMotion()) { applyPose(pose); wake(250); return Promise.resolve('landed'); }
       return new Promise(resolve => {
-        flight = { from: getPose(), to: clonePose(pose), t0: performance.now(), ms, resolve };
+        flight = { from, to, plan: planFlight(from, to, { mode, clearY: WH + 0.5 }), arc: mode === 'arc', t0: performance.now(), ms, resolve };
         wake(ms + 50);
       });
+    }
+    // How a flight travels (camera-focus.js planFlight): between two views
+    // from outside, the orbit lerp as ever; within one room, a straight line;
+    // into, out of or between rooms, up over the walls and down again -- the
+    // orbit lerp would slide the camera through them.
+    function flightMode(from, to) {
+      const a = eyeOf(from), b = eyeOf(to);
+      const ra = eyeInRoom(a), rb = eyeInRoom(b);
+      if (!ra && !rb) return 'orbit';
+      if (ra && ra === rb) {
+        const poly = roomShape(ra), toHouse = sceneToHouse(S, OX, OY);
+        let inside = true;
+        for (let i = 1; i < 10 && inside; i++) {
+          const p = toHouse(a[0] + (b[0] - a[0]) * i / 10, a[2] + (b[2] - a[2]) * i / 10);
+          inside = insidePoly(poly, p[0], p[1]);
+        }
+        if (inside) return 'eye';
+      }
+      return 'arc';
     }
     function cancelFlight() {
       if (!flight) return false;
@@ -5122,7 +5145,7 @@ export const Home3DScene = (() => {
       if (!flight) return false;
       const t = (now - flight.t0) / flight.ms;
       if (t >= 1) { applyPose(flight.to); endFlight('landed'); return false; }
-      applyPose(lerpPose(flight.from, flight.to, easeInOut(Math.max(0, t))));
+      applyPose(flight.plan.at(easeInOut(Math.max(0, t))));
       return true;
     }
 
@@ -5130,8 +5153,10 @@ export const Home3DScene = (() => {
     // The pose the camera flies to for a selection. A profile `view` (geometry
     // schemaVersion 1.4, compiled by house-loader) wins; otherwise the view is
     // DERIVED, so any house works with nothing authored. A room's derived view
-    // uses the house's own home angle (the `iso` preset, which a profile may
-    // override) -- a fixed showcase view per room, not the current azimuth.
+    // is taken from INSIDE the room (inRoomView below: the corner shot that
+    // shows the most of its floor and furniture). Only a room no camera can
+    // usefully stand in (a cupboard) falls back to the view from above, at the
+    // house's own home angle (the `iso` preset, which a profile may override).
     function roomShape(id) {
       const rm = ROOMS[id];
       if (!rm) return null;
@@ -5141,17 +5166,157 @@ export const Home3DScene = (() => {
       const poly = roomShape(id);
       if (!poly) return null;
       const home = CAMERA_PRESETS.iso;
-      const derived = () => deriveRoomView({
-        poly, toWorld: (x, y) => [tx(x), tz(y)], th: home.th, ph: home.ph, fov: cam.fov,
+      const above = () => deriveRoomView({
+        poly, toWorld: (x, y) => [tx(x), tz(y)], th: home.th, ph: home.ph, fov: ROOM_VIEW.fov,
         aspect: cam.aspect, inset: opts && opts.inset, maxR: _defaultDistance * 3,
         height: HOUSE.ceilingHeight || WH,
       });
       const v = ROOMS[id].view;
       if (v) {
-        const d = v.tgt ? null : derived();
+        const d = v.tgt ? null : above();
         return { th: v.th, ph: v.ph, r: v.r, tgt: v.tgt ? v.tgt.slice() : [d.tgt[0], v.targetHeight || 0, d.tgt[2]], fov: v.fov };
       }
-      return derived();
+      return inRoomView(id, opts) || above();
+    }
+    // ---- In-room room views (src/camera-focus.js chooseInRoomView) --------
+    //
+    // Chosen once per room and cached; the cache is keyed by the canvas
+    // aspect and the covering sidebar (the frame depends on both) and is
+    // dropped whenever the furniture is rebuilt -- every edit-mode change
+    // (move, add, delete, a draft applied) assigns a new furnitureResult.
+    // lastRoomViewStats() reports what the last one cost and chose.
+    const roomViewCache = new Map();
+    let roomViewCacheFurn = null;
+    let lastRoomViewStats = null;
+    let lastRoomViewInputs = null;   // what the last computed room view was chosen from (checks / tuning)
+    function roomItems(id, poly) {
+      const byId = furnitureResult && furnitureVisible && furnitureResult.byId ? furnitureResult.byId : null;
+      if (!byId) return [];
+      const out = [];
+      Object.keys(byId).forEach(k => {
+        const e = byId[k], b = e.worldBox;
+        if (!b) return;
+        // Its own room's, and standing in it: a wall-mounted item may sit on
+        // the boundary, but one outside it (a balcony deck tagged to the room
+        // it opens off) is not part of the shot.
+        const cx = (b.min[0] + b.max[0]) / 2, cz = (b.min[2] + b.max[2]) / 2;
+        const inRoom = insidePoly(poly, cx, cz) || distToPolyEdge(poly, cx, cz) < 0.2;
+        if ((e.room == null || e.room === id) && inRoom) out.push({ id: k, box: b });
+      });
+      // Its curtains too: a window wall is half of what a room looks like.
+      CURTAINS.forEach(cu => {
+        const e = curtainById[cu.id];
+        if (cu.room !== id || !e || !e.built || !e.built.group) return;
+        const bb = new THREE.Box3().setFromObject(e.built.group);
+        if (bb.isEmpty()) return;
+        out.push({ id: cu.id, kind: 'curtain', box: { min: bb.min.toArray(), max: bb.max.toArray() } });
+      });
+      return out;
+    }
+    function inRoomView(id, opts) {
+      if (roomViewCacheFurn !== furnitureResult) { roomViewCache.clear(); roomViewCacheFurn = furnitureResult; }
+      const ins = opts && opts.inset && opts.inset.right > 0 ? opts.inset : null;
+      const key = id + '|' + cam.aspect.toFixed(2) + '|' + (ins ? [ins.right, ins.width, ins.height].map(Math.round).join('x') : '-');
+      let res = roomViewCache.get(key);
+      const hit = !!res;
+      if (!res) { res = computeInRoomView(id, ins); roomViewCache.set(key, res); }
+      lastRoomViewStats = Object.assign({ room: id, cached: hit }, res.stats);
+      return res.pose ? clonePose(res.pose) : null;
+    }
+    function computeInRoomView(id, inset) {
+      const t0 = performance.now();
+      const poly = roomShape(id).map(p => [tx(p[0]), tz(p[1])]);
+      const ceiling = HOUSE.ceilingHeight || WH;
+      const items = roomItems(id, poly);
+      const lights = [];
+      const groups = LIGHTS[id] || {};
+      Object.keys(groups).forEach(ch => ((groups[ch] && groups[ch].positions) || []).forEach(p => {
+        if (!p || !p.at) return;
+        const y = p.heightCm != null ? Math.min(ceiling - 0.03, p.heightCm / 100) : ceiling - 0.05;
+        lights.push([tx(p.at[0]), y, tz(p.at[1])]);
+      }));
+      const doors = [];
+      (DOORS || []).forEach(d => {
+        const c = d.wall === 'x' ? [d.c, d.at] : [d.at, d.c];
+        const w = [tx(c[0]), tz(c[1])];
+        if (distToPolyEdge(poly, w[0], w[1]) < 0.3) doors.push(w);
+      });
+      // The building's meshes near the room, judged as an in-room camera
+      // draws them: every wall solid (eyeInRoom), the ceiling never in the
+      // way of anything under it, glass and the floor click-catchers not.
+      let cx = 0, cz = 0;
+      poly.forEach(p => { cx += p[0]; cz += p[1]; });
+      cx /= poly.length; cz /= poly.length;
+      let reach = 0;
+      poly.forEach(p => { reach = Math.max(reach, Math.hypot(p[0] - cx, p[1] - cz)); });
+      // Only what stands INSIDE the room can hide part of it from a camera in
+      // it: the room's own walls are its polygon (the chooser tests that
+      // itself), so meshes are kept when their box reaches into the room's
+      // box shrunk by 5 cm -- doors, curtains, fittings, a chimney breast --
+      // which keeps the ray test to a fraction of the building.
+      const rb = new THREE.Box3(
+        new THREE.Vector3(Math.min(...poly.map(p => p[0])) + 0.05, 0.01, Math.min(...poly.map(p => p[1])) + 0.05),
+        new THREE.Vector3(Math.max(...poly.map(p => p[0])) - 0.05, ceiling - 0.01, Math.max(...poly.map(p => p[1])) - 0.05));
+      const _mb = new THREE.Box3();
+      const list = occluderList([cx, ceiling / 2, cz], reach + 1.5).filter(o => {
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        return _mb.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld).intersectsBox(rb);
+      });
+      const fadeOf = new Map();
+      wallMeshes.forEach(w => fadeOf.set(w.mesh, w));
+      const blocks = h => {
+        const o = h.object;
+        if (o === ceilingMesh) return false;
+        const f = fadeOf.get(o);
+        if (f) return (f.base == null ? 1 : f.base) >= OPACITY_SOLID;
+        return materialOpacity(o.material, h.face ? h.face.materialIndex : 0) >= OPACITY_SOLID;
+      };
+      const PAD = 0.03;
+      const occluded = (eye, s, own) => {
+        _occO.set(eye[0], eye[1], eye[2]);
+        _occD.set(s[0] - eye[0], s[1] - eye[1], s[2] - eye[2]);
+        const dist = _occD.length();
+        if (!(dist > 0.05)) return false;
+        _occD.divideScalar(dist);
+        _occRc.set(_occO, _occD);
+        _occRc.near = 0; _occRc.far = dist - 0.03;
+        const hits = _occRc.intersectObjects(list, false);
+        for (let k = 0; k < hits.length; k++) {
+          const p = hits[k].point;
+          // A hit on the item itself (a curtain is a building mesh) is not in the way.
+          if (own && p.x > own.min[0] - PAD && p.x < own.max[0] + PAD && p.y > own.min[1] - PAD && p.y < own.max[1] + PAD &&
+            p.z > own.min[2] - PAD && p.z < own.max[2] + PAD) continue;
+          if (blocks(hits[k])) return true;
+        }
+        return false;
+      };
+      lastRoomViewInputs = { room: id, poly, ceiling, items, lights, doors, aspect: cam.aspect, inset };
+      const res = chooseInRoomView({ poly, ceiling, items, lights, doors, aspect: cam.aspect, inset, occluded });
+      const eyePlan = res.eye ? sceneToHouse(S, OX, OY)(res.eye[0], res.eye[2]) : null;
+      return { pose: res.pose, stats: {
+        ms: +(performance.now() - t0).toFixed(2), fallback: res.fallback, coverage: +res.coverage.toFixed(3),
+        score: +res.score.toFixed(3), kind: res.kind, eyes: res.tried, rays: res.rays, items: items.length,
+        lights: lights.length, doors: doors.length, occluders: list.length,
+        eyePlan: eyePlan ? [Math.round(eyePlan[0]), Math.round(eyePlan[1])] : null,
+        eyeHeight: res.eye ? +res.eye[1].toFixed(2) : null,
+        pitchDeg: res.pose ? +(90 - res.pose.ph * 180 / Math.PI).toFixed(1) : null,
+        fov: res.pose ? +res.pose.fov.toFixed(1) : null,
+      } };
+    }
+    // The room an eye (world [x, y, z]) stands in, below the wall tops; or
+    // null. From inside a room every wall renders solid: the outside-camera
+    // fade (a wall facing the camera goes see-through) would open the room's
+    // own side walls onto the garden at the edges of a wide lens.
+    let _toHouse = null;
+    function eyeInRoom(eye) {
+      if (!(eye[1] < WH)) return null;
+      if (!_toHouse) _toHouse = sceneToHouse(S, OX, OY);
+      const p = _toHouse(eye[0], eye[2]);
+      for (const id of Object.keys(ROOMS)) {
+        const poly = roomShape(id);
+        if (poly && insidePoly(poly, p[0], p[1])) return id;
+      }
+      return null;
     }
     function authoredOwner(kind, id) {
       if (kind === 'room') return ROOMS[id] || null;
@@ -5238,7 +5403,9 @@ export const Home3DScene = (() => {
         // The camera's view direction, as the render loop's wall fade reads it.
         let dx = centre[0] - eye[0], dy = centre[1] - eye[1], dz = centre[2] - eye[2];
         const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
-        const fades = w => wallFadeTarget(w.nx * dx + w.nz * dz, w.base) < OPACITY_SOLID;
+        // From inside a room nothing fades (eyeInRoom): the render loop draws every wall solid.
+        const inside = !!eyeInRoom(eye);
+        const fades = w => !inside && wallFadeTarget(w.nx * dx + w.nz * dz, w.base) < OPACITY_SOLID;
         const blocks = h => {
           if (inBox(h.point)) return false;                         // the item itself
           const o = h.object;
@@ -5638,6 +5805,8 @@ export const Home3DScene = (() => {
       // still moving so the loop knows to keep rendering until it settles.
       let animating = false;
       const camDir = new THREE.Vector3().subVectors(orb.tgt, cam.position).normalize();
+      // From inside a room every wall is solid (eyeInRoom).
+      const camInside = !!eyeInRoom([cam.position.x, cam.position.y, cam.position.z]);
       wallMeshes.forEach(({ mesh, nx, nz, outer, base, baseDepthWrite }) => {
         if (!outer) return;
         // `base`: the opacity this mesh is drawn at when its wall is solid.
@@ -5658,7 +5827,7 @@ export const Home3DScene = (() => {
         // Fade those; leave the far side solid so the house still reads as a
         // building rather than an open shell. Walls seen edge-on sit at dot ~= 0
         // and stay solid, which is what keeps the side walls from popping.
-        const targetOpacity = wallFadeTarget(dot, b); // 0.05 x base facing the camera (was 0.12) — design intent: exterior walls fainter when facing camera
+        const targetOpacity = camInside ? b : wallFadeTarget(dot, b); // 0.05 x base facing the camera (was 0.12) — design intent: exterior walls fainter when facing camera
         mesh.material.opacity += (targetOpacity - mesh.material.opacity) * 0.12;
         // BLACK-HALF FIX (scout-blackhalf): the living-room acoustic slat panel
         // meshes are a stack of coplanar transparent boxes registered here —
@@ -5673,8 +5842,11 @@ export const Home3DScene = (() => {
       });
       // Ceilings — see-through while the camera is above the house, solid once
       // it dips below ceiling height (i.e. you're looking from inside a room).
-      const ceilTarget = cam.position.y > WH ? 0 : 1.0;
-      ceilingMesh.material.opacity += (ceilTarget - ceilingMesh.material.opacity) * 0.12;
+      // A flight over the walls (into or out of a room) clears it from the
+      // start and quickly, so the camera never rises through a solid one.
+      const arcFlight = !!(flight && flight.arc);
+      const ceilTarget = arcFlight || cam.position.y > WH ? 0 : 1.0;
+      ceilingMesh.material.opacity += (ceilTarget - ceilingMesh.material.opacity) * (arcFlight ? 0.3 : 0.12);
       if (Math.abs(ceilTarget - ceilingMesh.material.opacity) > 0.004) animating = true;
 
       // Clouds drift only while the scene is "awake" (auto-rotating preview, or a
@@ -5849,8 +6021,14 @@ export const Home3DScene = (() => {
           const t = d.y < -1e-6 ? -o.y / d.y : -1;
           focus = { roomId: fr, floorPoint: t > 0 ? toHouse(o.x + d.x * t, o.z + d.z * t) : null };
         }
-        const picked = pickRoom(rc.intersectObjects(scene.children, true), rc.ray.direction,
-          roomPolygons(ROOMS), toHouse, focus);
+        const hits = rc.intersectObjects(scene.children, true);
+        const picked = pickRoom(hits, rc.ray.direction, roomPolygons(ROOMS), toHouse, focus);
+        // From inside the focused room, a tap on its own walls, ceiling or
+        // floor is the click-away: no room click, so the page's background
+        // handler sees an empty tap and the camera flies home.
+        const first = hits.find(h => isDrawn(h.object));
+        if (inRoomTapIsClickAway({ cameraRoom: eyeInRoom([cam.position.x, cam.position.y, cam.position.z]), focusedRoom: fr,
+          pickedRoom: picked.roomId, hitFurniture: !!(first && isFurniture(first.object)) })) return;
         if (picked.roomId && onRoomClick) onRoomClick(picked.roomId);
       });
       on(container, "wheel", e => {
@@ -6569,6 +6747,11 @@ export const Home3DScene = (() => {
       },
       hasAuthoredView(kind, id) { const e = authoredOwner(kind, id); return !!(e && e.view); },
       lastFocusStats() { return lastFocusStats; },
+      // What the last room view (in-room chooser) cost and chose: ms, coverage,
+      // fallback (true = no in-room vantage was good enough), eye, pitch, fov.
+      lastRoomViewStats() { return lastRoomViewStats; },
+      // The inputs that view was chosen from (world metres), for offline tuning.
+      lastRoomViewInputs() { return lastRoomViewInputs; },
       // A built furniture item's world box { min, max } (metres), or null.
       furnitureBox(id) {
         const e = furnitureResult && furnitureResult.byId ? furnitureResult.byId[id] : null;

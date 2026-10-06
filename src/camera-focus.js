@@ -372,6 +372,523 @@ export function chooseItemView(o) {
   return { pose: best.pose, occluded: best.occluded, penalty: best.penalty, tried };
 }
 
+/**
+ * IN-ROOM ROOM VIEWS -- the estate agent's corner photo.
+ *
+ * A room with no authored `view` is framed from INSIDE it: a camera standing
+ * in a corner (or along a wall), below the ceiling, pitched down, looking
+ * across the room with a wide lens -- the angle that shows the most of the
+ * room. "The most of the room" is COVERAGE: the room's floor (a grid of
+ * samples over its polygon) plus its furniture (samples on each item's box,
+ * weighted by how big the item reads) plus its ceiling fixtures, counted as
+ * the fraction that is inside the frustum AND unoccluded. Floor and furniture
+ * count together, each by its area.
+ *
+ * Per room, once (the scene caches it), never per frame:
+ *   1. Vantage points: every convex corner, inset `inset` from both walls,
+ *      and points along each wall, inset from it; each at a couple of eye
+ *      heights, never closer than `ceilingGap` to the ceiling; strictly
+ *      inside the polygon and never inside (or touching) a furniture box.
+ *   2. Visibility per (eye, sample) -- it does not depend on where the camera
+ *      points: a sample is blocked when the eye->sample segment leaves the
+ *      room polygon (an L-shaped room's own notch walls), crosses another of
+ *      the room's furniture boxes, or -- for the best few eyes only, since it
+ *      is the expensive part -- the caller's ray test says a solid mesh is in
+ *      the way. From inside a room every wall renders solid, so a wall always
+ *      blocks.
+ *   3. Orientations per eye: yaws aimed at the furniture-weighted centroid,
+ *      the room's interior point and the farthest corner, each with small
+ *      offsets, times a range of downward pitches. Scored by frustum tests
+ *      alone (cheap), so trying many costs nothing.
+ *   4. Score = coverage + mild preferences: a corner vantage, floor corners
+ *      in frame, a long view (not a blank wall), standing near a doorway, a
+ *      photographer's tilt (about 22 degrees down); minus wall-blocked
+ *      samples and furniture right in front of the lens.
+ * If even the best in-room view covers less than `minCoverage` (a cupboard
+ * a camera cannot stand in), the result says so and the caller falls back to
+ * the above-the-walls view (deriveRoomView).
+ *
+ * World coordinates throughout: polygons are [[x, z], ...] in metres, boxes
+ * { min: [x,y,z], max: [x,y,z] }.
+ */
+export const IN_ROOM_VIEW = Object.freeze({
+  inset: 0.4,               // from each wall (the polygon is the walls' inner face)
+  heights: [2.0, 2.25],     // eye heights (m), capped by the ceiling
+  ceilingGap: 0.22,         // the eye stays at least this far below the ceiling
+  minHeight: 1.5,
+  fov: 70,                  // vertical, degrees: a wide lens
+  minHFov: 70,              // the visible window is at least this wide (portrait)
+  maxFov: 86,
+  // Downward tilts tried. Capped low enough that the ceiling and its
+  // fixtures stay in the top of the frame -- a steeper tilt shows more floor
+  // but loses the downlights, which are what the room's controls drive.
+  pitchesDeg: [14, 18, 22, 26, 30],
+  maxPitch: 26,             // ... and no steeper, unless the room is small:
+  smallRoom: 2.5,           // a room whose plan is narrower than this (m) in either
+                            // direction may tilt to the steepest -- its floor is
+                            // right under the camera
+  pitchPref: 24,            // degrees down: the photographer's tilt
+  pitchPenalty: 0.1,        // per 20 degrees away from pitchPref
+  yawOffsetsDeg: [-24, -16, -8, 0, 8, 16, 24],
+  floorSamples: 32,
+  floorMargin: 0.15,        // floor samples keep this far off the walls
+  floorY: 0.05,
+  eyePad: 0.2,              // the eye keeps this far out of every furniture box
+  refine: 5,                // eyes that get the expensive ray test
+  minCoverage: 0.2,         // below this, fall back to the view from above
+  frustumMargin: 0.96,
+  cornerBonus: 0.03,
+  cornersSeenBonus: 0.04,   // all floor corners in frame
+  depthBonus: 0.04,         // the optical axis runs the full room diagonal
+  doorBonus: 0.025,
+  doorReach: 2,             // m
+  wallPenalty: 0.15,        // x the weighted fraction a wall hides
+  clipPenalty: 2,           // x the weighted share of a NEAR item cut off by the frame's bottom edge
+  clipReach: 2.5,           // m: beyond this a clipped item costs nothing
+  nearPenalty: 0.04,        // per item within `near` of the lens, in frame
+  near: 0.8,
+  floorWeight: 1,           // x the floor area (m2)
+  itemCap: 6,
+  curtainFactor: 1,
+  lightWeight: 0.25,        // each ceiling fixture: they are what the room's controls drive
+  minR: 1.2, maxR: 8,
+});
+
+/** Signed area of a [[x, z]] polygon (positive counter-clockwise in x/z). */
+export function polySignedArea(poly) {
+  let a = 0;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) a += poly[j][0] * poly[i][1] - poly[i][0] * poly[j][1];
+  return a / 2;
+}
+
+/** Distance from (x, z) to the polygon's boundary. */
+export function distToPolyEdge(poly, x, z) {
+  let d = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const ax = poly[j][0], az = poly[j][1], bx = poly[i][0], bz = poly[i][1];
+    const ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez;
+    const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / l2)) : 0;
+    d = Math.min(d, Math.hypot(x - (ax + ex * t), z - (az + ez * t)));
+  }
+  return d;
+}
+
+/** Inward unit normal of edge j -> i (whatever the winding). */
+function inwardNormal(poly, j, i) {
+  const ax = poly[j][0], az = poly[j][1], bx = poly[i][0], bz = poly[i][1];
+  const l = Math.hypot(bx - ax, bz - az) || 1;
+  let nx = -(bz - az) / l, nz = (bx - ax) / l;
+  const mx = (ax + bx) / 2, mz = (az + bz) / 2, e = Math.min(0.02, l / 4);
+  if (!insidePoly(poly, mx + nx * e, mz + nz * e)) { nx = -nx; nz = -nz; }
+  return [nx, nz];
+}
+
+/**
+ * Candidate eye positions (x, z) inside a room: each convex corner inset
+ * from both of its walls (kind 'corner'), each reflex corner likewise (kind
+ * 'edge' -- it is not a corner shot), and points along each wall inset from
+ * it (kind 'edge'). Every one is strictly inside, at least ~`inset` off
+ * every wall. A room too small for any gets its interior point (kind
+ * 'centre') when that clears the walls by a third of the inset.
+ */
+export function roomVantages(poly, inset) {
+  const n = poly.length, out = [];
+  const ccw = polySignedArea(poly) > 0;
+  const ok = (x, z) => insidePoly(poly, x, z) && distToPolyEdge(poly, x, z) >= inset * 0.85;
+  for (let i = 0; i < n; i++) {
+    const h = (i - 1 + n) % n, k = (i + 1) % n;
+    const n1 = inwardNormal(poly, h, i), n2 = inwardNormal(poly, i, k);
+    // Convex when the turn h -> i -> k agrees with the winding.
+    const cross = (poly[i][0] - poly[h][0]) * (poly[k][1] - poly[i][1]) - (poly[i][1] - poly[h][1]) * (poly[k][0] - poly[i][0]);
+    const convex = ccw ? cross > 0 : cross < 0;
+    const x = poly[i][0] + (n1[0] + n2[0]) * inset, z = poly[i][1] + (n1[1] + n2[1]) * inset;
+    if (ok(x, z)) out.push({ x, z, kind: convex ? 'corner' : 'edge', vertex: i });
+  }
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const ax = poly[j][0], az = poly[j][1], bx = poly[i][0], bz = poly[i][1];
+    const len = Math.hypot(bx - ax, bz - az);
+    if (len < 2 * inset + 0.3) continue;
+    const nn = inwardNormal(poly, j, i);
+    const fr = len > 3 ? [0.25, 0.5, 0.75] : [0.5];
+    fr.forEach(f => {
+      const x = ax + (bx - ax) * f + nn[0] * inset, z = az + (bz - az) * f + nn[1] * inset;
+      if (ok(x, z)) out.push({ x, z, kind: 'edge' });
+    });
+  }
+  if (!out.length) {
+    const c = interiorPoint(poly);
+    if (insidePoly(poly, c[0], c[1]) && distToPolyEdge(poly, c[0], c[1]) >= inset / 3) out.push({ x: c[0], z: c[1], kind: 'centre' });
+  }
+  return out;
+}
+
+/** A grid of about `n` points over the polygon, each `margin` clear of the walls. */
+export function floorGrid(poly, n, margin) {
+  const area = Math.abs(polySignedArea(poly));
+  if (!(area > 0)) return [];
+  const xs = poly.map(p => p[0]), zs = poly.map(p => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minZ = Math.min(...zs), maxZ = Math.max(...zs);
+  let step = Math.sqrt(area / Math.max(1, n));
+  let pts = [];
+  for (let tries = 0; tries < 4; tries++) {
+    pts = [];
+    for (let x = minX + step / 2; x < maxX; x += step) for (let z = minZ + step / 2; z < maxZ; z += step) {
+      if (insidePoly(poly, x, z) && distToPolyEdge(poly, x, z) >= Math.min(margin, step / 3)) pts.push([x, z]);
+    }
+    if (pts.length >= n * 0.6) break;
+    step *= 0.8;
+  }
+  return pts;
+}
+
+/** Does segment p -> q (x/z) cross segment a -> b? Parameter on p -> q, or -1. */
+function segCross(px, pz, qx, qz, ax, az, bx, bz) {
+  const rx = qx - px, rz = qz - pz, sx = bx - ax, sz = bz - az;
+  const den = rx * sz - rz * sx;
+  if (Math.abs(den) < 1e-12) return -1;
+  const t = ((ax - px) * sz - (az - pz) * sx) / den;
+  const u = ((ax - px) * rz - (az - pz) * rx) / den;
+  return t > 1e-9 && t < 1 && u >= 0 && u <= 1 ? t : -1;
+}
+
+/**
+ * Does the sight line eye -> point leave the room before it arrives? The
+ * last `tail` metres are forgiven: a wall-mounted item sits on the boundary.
+ */
+export function leavesRoom(poly, eye, pt, tail) {
+  const len = Math.hypot(pt[0] - eye[0], pt[2] - eye[2]);
+  if (!(len > 1e-6)) return false;
+  const lim = 1 - Math.min(0.5, (tail != null ? tail : 0.12) / len);
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const t = segCross(eye[0], eye[2], pt[0], pt[2], poly[j][0], poly[j][1], poly[i][0], poly[i][1]);
+    if (t > 0 && t < lim) return true;
+  }
+  return false;
+}
+
+function inBox(b, p, pad) {
+  const e = pad || 0;
+  return p[0] >= b.min[0] - e && p[0] <= b.max[0] + e && p[1] >= b.min[1] - e && p[1] <= b.max[1] + e &&
+    p[2] >= b.min[2] - e && p[2] <= b.max[2] + e;
+}
+
+/** How big an item reads: its footprint plus half its largest side, clamped. */
+export function itemWeight(box, cap) {
+  const w = box.max[0] - box.min[0], h = box.max[1] - box.min[1], d = box.max[2] - box.min[2];
+  return Math.max(0.05, Math.min(cap || 6, w * d + Math.max(w, d) * h));
+}
+
+/** Distance along (dx, dz) from (x, z) to the polygon's boundary (Infinity if none). */
+function rayToBoundary(poly, x, z, dx, dz) {
+  let best = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const ax = poly[j][0], az = poly[j][1], sx = poly[i][0] - ax, sz = poly[i][1] - az;
+    const den = dx * sz - dz * sx;
+    if (Math.abs(den) < 1e-12) continue;
+    const t = ((ax - x) * sz - (az - z) * sx) / den, u = ((ax - x) * dz - (az - z) * dx) / den;
+    if (t > 1e-6 && u >= 0 && u <= 1) best = Math.min(best, t);
+  }
+  return best;
+}
+
+/** Forward, right and up unit vectors for a camera at yaw `yaw` (x/z) pitched DOWN by `pitch`. */
+export function lookBasis(yaw, pitch) {
+  const cp = Math.cos(pitch);
+  const f = [cp * Math.cos(yaw), -Math.sin(pitch), cp * Math.sin(yaw)];
+  const r = [-Math.sin(yaw), 0, Math.cos(yaw)];
+  const u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+  return { f, r, u };
+}
+
+/**
+ * The orbit pose (th, ph, r, tgt) of a camera at `eye` looking along
+ * (yaw, pitch); the orbit target sits `r` metres down the view.
+ */
+export function poseFromLook(eye, yaw, pitch, r, fov) {
+  const { f } = lookBasis(yaw, pitch);
+  const th = Math.atan2(-f[2], -f[0]);
+  const ph = Math.acos(Math.max(-1, Math.min(1, -f[1])));
+  return { th, ph, r, tgt: [eye[0] + f[0] * r, eye[1] + f[1] * r, eye[2] + f[2] * r], fov };
+}
+
+/**
+ * Choose a room's in-room view.
+ * @param o.poly      [[x, z]] world metres
+ * @param o.ceiling   ceiling height (m)
+ * @param o.items     [{ id, box }] the room's furniture (world boxes)
+ * @param o.lights    [[x, y, z]] the room's fixtures
+ * @param o.doors     [[x, z]] door centres on this room's walls
+ * @param o.aspect    canvas width / height
+ * @param o.inset     { right, width, height } a covering sidebar, or null
+ * @param o.occluded  (eye, point, box) => bool -- a solid mesh between them
+ *                    (the walls, doors, fittings); `box` is the item the
+ *                    point is on (a hit inside it is the item itself), null
+ *                    for the floor and lights. Called for the best few eyes.
+ * @param o.options   overrides of IN_ROOM_VIEW
+ * @returns { pose, eye, coverage, score, fallback, kind, tried, rays }
+ *          pose null and fallback true when no vantage reaches minCoverage
+ */
+export function chooseInRoomView(o) {
+  const opt = Object.assign({}, IN_ROOM_VIEW, o.options || {});
+  const poly = o.poly, D2R = Math.PI / 180;
+  const ceiling = o.ceiling > 0 ? o.ceiling : 2.5;
+  const items = (o.items || []).filter(it => it && it.box);
+  const area = Math.abs(polySignedArea(poly));
+
+  // ---- Samples, grouped by what they belong to (each group a weight).
+  const groups = [];
+  const floor = floorGrid(poly, opt.floorSamples, opt.floorMargin).map(p => [p[0], opt.floorY, p[1]]);
+  if (floor.length) groups.push({ kind: 'floor', weight: area * opt.floorWeight, pts: floor });
+  items.forEach((it, idx) => groups.push({ kind: 'item', id: it.id, idx, weight: itemWeight(it.box, opt.itemCap) * (it.kind === 'curtain' ? opt.curtainFactor : 1), pts: boxSamples(it.box) }));
+  (o.lights || []).forEach(p => groups.push({ kind: 'light', weight: opt.lightWeight, pts: [p] }));
+  const totalW = groups.reduce((s, g) => s + g.weight, 0) || 1;
+  const flat = [];   // { p, g }
+  groups.forEach((g, gi) => g.pts.forEach(p => flat.push({ p, g: gi })));
+  const corners = poly.map(p => [p[0], 0.02, p[1]]);
+
+  // ---- The lens: a vertical FOV wide enough that the visible window (the
+  // canvas left of any covering sidebar) spans at least minHFov.
+  const inset = o.inset && o.inset.right > 0 && o.inset.width > o.inset.right ? o.inset : null;
+  const aspect = o.aspect > 0 ? o.aspect : 1;
+  const frac = inset ? inset.right / inset.width : 0;
+  let tanV = Math.tan(opt.fov * D2R / 2);
+  tanV = Math.max(tanV, Math.tan(opt.minHFov * D2R / 2) / (aspect * (1 - frac)));
+  tanV = Math.min(tanV, Math.tan(opt.maxFov * D2R / 2));
+  const fov = 2 * Math.atan(tanV) / D2R;
+  const tanH = tanV * aspect;
+  const xMin = -tanH * opt.frustumMargin, xMax = tanH * (1 - 2 * frac) * opt.frustumMargin, yLim = tanV * opt.frustumMargin;
+  const yawShift = Math.atan(frac * tanH);   // centre the VISIBLE window on the aim
+
+  // ---- Aim points: the weighted centroid of everything, the room's interior point.
+  let ax = 0, az = 0;
+  groups.forEach(g => g.pts.forEach(p => { ax += p[0] * g.weight / g.pts.length; az += p[2] * g.weight / g.pts.length; }));
+  ax /= totalW; az /= totalW;
+  const ip = interiorPoint(poly);
+  const aims = [[ax, az], ip];
+  const span = (k) => Math.max(...poly.map(p => p[k])) - Math.min(...poly.map(p => p[k]));
+  const small = Math.min(span(0), span(1)) < opt.smallRoom;
+  const maxPitch = small ? Infinity : opt.maxPitch;
+  // In a small room everything is near the lens: cutting the nearest thing
+  // off is the price of seeing the room at all, so it is not penalised.
+  const clipPenalty = small ? 0 : opt.clipPenalty;
+  const pitches = opt.pitchesDeg.filter(pd => pd <= maxPitch);
+  const diag = (() => { let m = 0; poly.forEach(a => poly.forEach(b => { m = Math.max(m, Math.hypot(a[0] - b[0], a[1] - b[1])); })); return m || 1; })();
+
+  // ---- Eyes.
+  const topEye = ceiling - opt.ceilingGap;
+  const heights = [];
+  opt.heights.forEach(h => { const y = Math.min(h, topEye); if (y >= Math.min(opt.minHeight, topEye) && heights.every(q => Math.abs(q - y) > 0.05)) heights.push(y); });
+  const eyes = [];
+  roomVantages(poly, opt.inset).forEach(v => heights.forEach(y => {
+    const e = [v.x, y, v.z];
+    if (items.some(it => inBox(it.box, e, opt.eyePad))) return;
+    eyes.push({ e, kind: v.kind });
+  }));
+
+  // Cheap visibility (orientation-free): polygon walls and furniture boxes.
+  let rays = 0;
+  function visibility(eye) {
+    const vis = new Uint8Array(flat.length), wall = new Uint8Array(flat.length);
+    flat.forEach((s, k) => {
+      if (leavesRoom(poly, eye, s.p)) { wall[k] = 1; return; }
+      const g = groups[s.g];
+      for (let b = 0; b < items.length; b++) {
+        if (g.kind === 'item' && g.idx === b) continue;
+        const bx = items[b].box;
+        if (inBox(bx, s.p, 0.005) || inBox(bx, eye, 0)) continue;
+        if (segmentHitsBox(eye, s.p, bx)) return;
+      }
+      vis[k] = 1;
+    });
+    const cornerVis = corners.map(c => !leavesRoom(poly, eye, c, 0.05));
+    return { vis, wall, cornerVis };
+  }
+  const doorBonus = eye => {
+    if (!o.doors || !o.doors.length) return 0;
+    const d = Math.min(...o.doors.map(p => Math.hypot(p[0] - eye[0], p[1] - eye[2])));
+    return opt.doorBonus * Math.max(0, 1 - d / opt.doorReach);
+  };
+  function scoreEye(ev) {
+    const eye = ev.e, V = ev.V;
+    const yaws = [];
+    const far = poly.reduce((m, p) => { const d = Math.hypot(p[0] - eye[0], p[1] - eye[2]); return d > m.d ? { d, p } : m; }, { d: -1, p: null });
+    aims.concat(far.p ? [far.p] : []).forEach(a => {
+      const base = Math.atan2(a[1] - eye[2], a[0] - eye[0]) + yawShift;
+      opt.yawOffsetsDeg.forEach(dd => yaws.push(base + dd * D2R));
+    });
+    // Everything orientation-free, once per eye: the eye-relative vector of
+    // each sample that counts either way (seen, or hidden by a wall), and
+    // what it is worth; the near items; the visible floor corners.
+    const qs = [], ws = [], gi = [];
+    for (let k = 0; k < flat.length; k++) {
+      if (!V.vis[k] && !V.wall[k]) continue;
+      const p = flat[k].p, g = groups[flat[k].g];
+      qs.push(p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]);
+      // Visible item samples remember their item: one cut off by the
+      // bottom of the frame is a foreground item clipped in half.
+      gi.push(V.vis[k] && g.kind === 'item' ? flat[k].g : -1);
+      // Positive: coverage when in frame. Negative: a wall hides it.
+      ws.push(V.vis[k] ? g.weight / g.pts.length / totalW : -opt.wallPenalty * g.weight / g.pts.length / totalW);
+    }
+    // How much a clipped item costs: in full when it is right in front of
+    // the lens (a table cut in half in the foreground), fading out by
+    // clipReach metres away (an item merely at the bottom of a long view).
+    const clipW = new Float64Array(groups.length);
+    for (let g = 0; g < groups.length; g++) {
+      if (groups[g].kind !== 'item') continue;
+      const b = items[groups[g].idx].box;
+      const d = Math.hypot(Math.max(b.min[0] - eye[0], 0, eye[0] - b.max[0]), Math.max(b.min[2] - eye[2], 0, eye[2] - b.max[2]));
+      clipW[g] = groups[g].weight / totalW * Math.max(0, 1 - d / opt.clipReach);
+    }
+    const nearQ = [];
+    items.forEach(it => {
+      const b = it.box;
+      const dx = Math.max(b.min[0] - eye[0], 0, eye[0] - b.max[0]), dy = Math.max(b.min[1] - eye[1], 0, eye[1] - b.max[1]), dz = Math.max(b.min[2] - eye[2], 0, eye[2] - b.max[2]);
+      if (Math.hypot(dx, dy, dz) < opt.near) nearQ.push((b.min[0] + b.max[0]) / 2 - eye[0], (b.min[1] + b.max[1]) / 2 - eye[1], (b.min[2] + b.max[2]) / 2 - eye[2]);
+    });
+    const cornerQ = [];
+    corners.forEach((c, i) => { if (V.cornerVis[i]) cornerQ.push(c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]); });
+    const gIn = new Int16Array(groups.length), gLow = new Int16Array(groups.length);
+    let best = null;
+    const fixed = (ev.kind === 'corner' ? opt.cornerBonus : 0) + doorBonus(eye);
+    for (const yaw of yaws) for (const pd of pitches) {
+      const pitch = pd * D2R, B = lookBasis(yaw, pitch);
+      const f0 = B.f[0], f1 = B.f[1], f2 = B.f[2], r0 = B.r[0], r2 = B.r[2], u0 = B.u[0], u1 = B.u[1], u2 = B.u[2];
+      const inFrame = (Q, i) => {
+        const qx = Q[i], qy = Q[i + 1], qz = Q[i + 2];
+        const z = qx * f0 + qy * f1 + qz * f2;
+        if (z < 0.15) return false;
+        const x = (qx * r0 + qz * r2) / z, y = (qx * u0 + qy * u1 + qz * u2) / z;
+        return x >= xMin && x <= xMax && y >= -yLim && y <= yLim;
+      };
+      // Under the bottom edge of the frame (in front of the camera).
+      const below = (Q, i) => {
+        const qx = Q[i], qy = Q[i + 1], qz = Q[i + 2];
+        const z = qx * f0 + qy * f1 + qz * f2;
+        return z > 0.15 && (qx * u0 + qy * u1 + qz * u2) / z < -yLim;
+      };
+      let cov = 0, hid = 0;
+      gIn.fill(0); gLow.fill(0);
+      for (let i = 0, k = 0; i < qs.length; i += 3, k++) {
+        if (!inFrame(qs, i)) {
+          if (gi[k] >= 0 && below(qs, i)) gLow[gi[k]]++;
+          continue;
+        }
+        if (gi[k] >= 0) gIn[gi[k]]++;
+        if (ws[k] > 0) cov += ws[k]; else hid -= ws[k];
+      }
+      let clip = 0;
+      for (let g = 0; g < groups.length; g++) {
+        if (gIn[g] && gLow[g]) clip += clipW[g] * gLow[g] / (gIn[g] + gLow[g]);
+      }
+      let nearN = 0, cs = 0;
+      for (let i = 0; i < nearQ.length; i += 3) if (inFrame(nearQ, i)) nearN++;
+      for (let i = 0; i < cornerQ.length; i += 3) if (inFrame(cornerQ, i)) cs++;
+      const depth = Math.min(1, rayToBoundary(poly, eye[0], eye[2], Math.cos(yaw - yawShift), Math.sin(yaw - yawShift)) / diag);
+      const score = cov + fixed + opt.cornersSeenBonus * cs / corners.length + opt.depthBonus * depth - hid - opt.nearPenalty * nearN - clipPenalty * clip -
+        opt.pitchPenalty * Math.abs(pd - opt.pitchPref) / 20;
+      if (!best || score > best.score) best = { score, coverage: cov, yaw, pitch };
+    }
+    return best;
+  }
+
+  eyes.forEach(ev => { ev.V = visibility(ev.e); ev.best = scoreEye(ev); });
+  // The expensive part, for the best few only: the scene's own meshes.
+  const ranked = eyes.filter(ev => ev.best).sort((a, b) => b.best.score - a.best.score);
+  const top = ranked.slice(0, Math.max(1, opt.refine));
+  if (o.occluded) top.forEach(ev => {
+    flat.forEach((s, k) => {
+      if (!ev.V.vis[k]) return;
+      rays++;
+      const g = groups[s.g];
+      if (o.occluded(ev.e, s.p, g.kind === 'item' ? items[g.idx].box : null)) { ev.V.vis[k] = 0; ev.V.wall[k] = 1; }
+    });
+    ev.best = scoreEye(ev);
+  });
+  top.sort((a, b) => b.best.score - a.best.score);
+  const win = top[0];
+  if (!win || win.best.coverage < opt.minCoverage) {
+    return { pose: null, eye: win ? win.e : null, coverage: win ? win.best.coverage : 0, score: win ? win.best.score : 0,
+      fallback: true, kind: win ? win.kind : null, tried: eyes.length, rays };
+  }
+  const eye = win.e, { yaw, pitch } = win.best;
+  // Orbit distance: to the aim along the view, kept above the floor.
+  const dAim = Math.hypot(ax - eye[0], az - eye[2]);
+  let r = dAim / Math.max(0.2, Math.cos(pitch));
+  r = Math.min(r, (eye[1] - 0.25) / Math.max(0.05, Math.sin(pitch)));
+  r = Math.max(opt.minR, Math.min(opt.maxR, r));
+  return { pose: poseFromLook(eye, yaw, pitch, r, fov), eye, coverage: win.best.coverage, score: win.best.score,
+    fallback: false, kind: win.kind, tried: eyes.length, rays,
+    // The runners-up, best first (eye, kind, score, coverage, yaw/pitch in degrees): for tuning.
+    ranked: ranked.slice(0, 8).map(ev => ({ eye: ev.e.map(v => +v.toFixed(2)), kind: ev.kind, score: +ev.best.score.toFixed(3),
+      coverage: +ev.best.coverage.toFixed(3), yaw: Math.round((ev.best.yaw - yawShift) / D2R), pitch: Math.round(ev.best.pitch / D2R) })) };
+}
+
+/**
+ * CAMERA FLIGHTS INTO AND OUT OF ROOMS.
+ *
+ * An orbit-space lerp (lerpPose) is right between two views from above, but
+ * a camera flying into a room by it slides through walls on the way. So:
+ *   'orbit'  neither end is inside a room: lerpPose, as before;
+ *   'eye'    both ends are inside the SAME room and the straight line between
+ *            them stays in it: the eye moves in a straight line;
+ *   'arc'    otherwise: the eye rises straight up to `clearY` (above the
+ *            walls), glides across, and drops straight down into the room.
+ *            Parameterised by path length so the speed is continuous; the
+ *            view direction, orbit distance and lens interpolate across the
+ *            whole flight, so the camera turns smoothly and never spins.
+ * Returns at(t) -> pose for an (already eased) t in [0, 1].
+ */
+export function eyeOf(p) {
+  const b = backVector(p.th, p.ph);
+  return [p.tgt[0] + b[0] * p.r, p.tgt[1] + b[1] * p.r, p.tgt[2] + b[2] * p.r];
+}
+
+export function planFlight(from, to, o) {
+  const mode = (o && o.mode) || 'orbit';
+  if (mode === 'orbit') return { mode, at: t => lerpPose(from, to, t), path: null };
+  const A = eyeOf(from), B = eyeOf(to);
+  const fa = from.fov != null ? from.fov : 50, fb = to.fov != null ? to.fov : 50;
+  let pts;
+  if (mode === 'eye') pts = [A, B];
+  else {
+    const cy = o.clearY;
+    pts = [A, [A[0], Math.max(cy, A[1]), A[2]], [B[0], Math.max(cy, B[1]), B[2]], B];
+  }
+  const segs = [];
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) { const l = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]); segs.push(l); total += l; }
+  const eyeAt = t => {
+    if (!(total > 1e-9)) return A.slice();
+    let d = Math.max(0, Math.min(1, t)) * total;
+    for (let i = 0; i < segs.length; i++) {
+      if (d <= segs[i] || i === segs.length - 1) {
+        const k = segs[i] > 0 ? Math.min(1, d / segs[i]) : 1, p = pts[i], q = pts[i + 1];
+        return [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, p[2] + (q[2] - p[2]) * k];
+      }
+      d -= segs[i];
+    }
+    return B.slice();
+  };
+  // The VIEW DIRECTION turns from the start's to the end's (azimuth by the
+  // shortest arc, polar linearly) while the eye follows the path, and the
+  // orbit target rides `r` ahead of it. Aiming at an interpolated look-at
+  // point instead spins the camera when the eye passes over it.
+  const ra = Math.max(1e-6, from.r), rb = Math.max(1e-6, to.r);
+  const dTh = shortestArc(from.th, to.th);
+  const at = t => {
+    const k = Math.max(0, Math.min(1, t));
+    if (k >= 1) return clonePose(to);
+    if (k <= 0) return clonePose(from);
+    const e = eyeAt(k);
+    const th = from.th + dTh * k, ph = from.ph + (to.ph - from.ph) * k;
+    const r = Math.exp(Math.log(ra) + (Math.log(rb) - Math.log(ra)) * k);
+    const b = backVector(th, ph);
+    return { th, ph, r, tgt: [e[0] - b[0] * r, e[1] - b[1] * r, e[2] - b[2] * r], fov: fa + (fb - fa) * k };
+  };
+  return { mode, at, path: pts, eyeAt };
+}
+
 /** The plan-space front of an item rotated `deg` clockwise (docs/house-profile.md): (-sin r, cos r). */
 export function frontFromRotation(deg) {
   const r = (deg || 0) * Math.PI / 180;
@@ -392,6 +909,40 @@ export function compileFocusView(view, tx, tz) {
   const t = Array.isArray(view.target) && view.target.length === 2 && num(view.target[0]) && num(view.target[1])
     ? [tx(view.target[0]), h, tz(view.target[1])] : null;
   return { th: view.azimuth, ph: view.polar, r: view.distance, tgt: t, targetHeight: h, fov: num(view.fov) ? view.fov : 50 };
+}
+
+/**
+ * CLICK-AWAY FROM INSIDE A ROOM. From an outside view, a tap that misses
+ * the house is the click-away; from an in-room view there is nothing to
+ * miss -- every tap lands on the room's own walls, ceiling or floor, and
+ * picked that same room again, so the camera never went home. So: while the
+ * camera stands in the room that is focused, a tap that resolves to that
+ * room is the click-away -- unless it landed on furniture (that stays a
+ * tap on the room, as before). A tap through a doorway into another room
+ * still selects that room.
+ * @param o.cameraRoom  the room the camera stands in (below the walls), or null
+ * @param o.focusedRoom the room camera focus has framed, or null
+ * @param o.pickedRoom  the room the tap resolved to, or null
+ * @param o.hitFurniture the first thing the tap hit is furniture
+ */
+export function inRoomTapIsClickAway(o) {
+  return !!(o && o.cameraRoom && o.cameraRoom === o.focusedRoom && o.pickedRoom === o.cameraRoom && !o.hitFurniture);
+}
+
+/**
+ * Does this keydown deselect the room (the keyboard click-away)? Escape,
+ * with a room selected and nothing else for Escape to close first: no card,
+ * no dialog, not typing in a field, not in edit mode (which owns Escape).
+ */
+export function escapeDeselects(o) {
+  if (!o || o.key !== 'Escape' || !o.selectedRoom) return false;
+  if (o.cardOpen || o.dialogOpen || o.editActive || o.defaultPrevented) return false;
+  const t = o.target;
+  if (t) {
+    const tag = String(t.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || t.isContentEditable) return false;
+  }
+  return true;
 }
 
 /** A stable key for a device target. */

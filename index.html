@@ -1189,7 +1189,7 @@
     import { sidebarReduce, SIDEBAR_INITIAL } from './src/sidebar-pin.js?v=__VERSION__';
     import { nextRoom, prevRoom, roomNavKeyAction } from './src/room-nav.js?v=__VERSION__';
     // Camera focus: the camera flies to a tapped room or device, and back.
-    import { createFocusController, deviceKey } from './src/camera-focus.js?v=__VERSION__';
+    import { createFocusController, deviceKey, escapeDeselects } from './src/camera-focus.js?v=__VERSION__';
     // Edit-mode drafts (src/profile-draft.js): the boot-time read only. The
     // edit UI itself (src/edit-mode.js) is a dynamic import -- loadEditMode().
     import { bootDraft, draftAllowed, mountDraftEscape } from './src/profile-draft.js?v=__VERSION__';
@@ -2654,6 +2654,18 @@
       }
       roomNavPrev.addEventListener('click', () => stepRoom('prev'));
       roomNavNext.addEventListener('click', () => stepRoom('next'));
+      // Escape with nothing else to close deselects the room: the keyboard
+      // click-away (camera-focus.js escapeDeselects). Capture phase, so a
+      // card that Escape is about to close still counts as open here.
+      window.addEventListener('keydown', e => {
+        if (!escapeDeselects({
+          key: e.key, target: e.target, selectedRoom, defaultPrevented: e.defaultPrevented,
+          cardOpen: !!(tapPopovers && tapPopovers.isOpen()),
+          dialogOpen: Array.from(document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]')).some(d => !d.closest('[hidden]')),
+          editActive: !!(editApi && editApi.isActive()),
+        })) return;
+        selectedRoom = null; renderPanel(); focusRoom('explicit');
+      }, true);
       window.addEventListener('keydown', e => {
         const dialogOpen = !!(tapPopovers && tapPopovers.isOpen())
           || Array.from(document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]'))
