@@ -702,7 +702,8 @@ const CONSOLE = [
   check('wiring: the cornice switch is a power switch, the slider is not', /sendCornice\(l\.id, l\.entities, \{ on: !st\.on \}, true, 0\);/.test(tpSrc) &&
     /sendCornice\(l\.id, l\.entities, \{ on: true, bri: \+r\.value \}, false, 200\);/.test(tpSrc));
   check('wiring: covers go through the sidebar sender, per curtain', /sender\.input\(id, pct\)/.test(tpSrc) && /sender\.commit\(id, \+r\.value\)/.test(tpSrc) &&
-    /sender\.press\(cv\.id, o\.HAClient\.coverOpenCloseCommand\(cmd, cv\.entities\)\)/.test(tpSrc));
+    /sender\.press\(cv\.id, o\.HAClient\.coverOpenCloseCommand\(out, cv\.entities\)\)/.test(tpSrc) &&
+    /const out = curtainButtonAction\(cmd, /.test(tpSrc));
 
   // The client records a cornice light's raw state (the row's 'unavailable').
   const { HAClient } = await imp('src/ha-client.js');
