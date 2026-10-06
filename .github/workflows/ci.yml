@@ -694,6 +694,8 @@ jobs:
         run: node scripts/test-small-items.mjs
       - name: TV screens -- state mapping, dynamic screen part, uniform-only switch, HA wiring
         run: node scripts/test-tv-screen.mjs
+      - name: Smart display now playing -- state to screen mapping, player from openFrom, redraw only on change, text fallback, fake HA only
+        run: node scripts/test-hub-screen.mjs
       - name: Frame TVs -- card action buttons (shared script sender), art condition, art screen look
         run: node scripts/test-frame-art.mjs
       - name: Bathroom fittings -- presets, triangle caps, loft winding, notch, envelopes

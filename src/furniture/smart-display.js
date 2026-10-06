@@ -36,6 +36,11 @@
  * photo-frame glow while true. It adds no light to the room (an emissive
  * finish never does). The Max also has a camera dot at the top centre.
  *
+ * NOW PLAYING. The screen is a dynamic part tagged `hubScreen`: while the
+ * media_player the item opens the sound menu for (rooms.json
+ * sensors.soundMenu.openFrom) is `playing`, the scene draws its artwork and
+ * title on it (src/furniture/hub-screen.js). Otherwise it is the look above.
+ *
  * PERF. Small item: one extruded rounded slab, one rounded base, a screen
  * box and a tiny camera cylinder. See scripts/test-smart-display.mjs for the
  * triangle caps.
@@ -45,6 +50,7 @@
  */
 import { makeFinish } from './finishes.js';
 import { select, toggle, color, unsupported, only } from './controls.js';
+import { hubBlankTexture } from './hub-screen.js';
 
 const HUBS = ['nest-hub-max', 'nest-hub'];
 
@@ -269,12 +275,24 @@ export function build(THREE, params, opts) {
   const sw = Math.max(W - 2 * bezSide, 0.005);
   const sh = Math.max(hs - bezTop - bezBot, 0.005);
   const screenMat = makeFinish(THREE, 'emissive', p.screenOn ? p.screenColor : SCREEN_OFF);
+  // NOW PLAYING (src/furniture/hub-screen.js): the scene draws the speaker's
+  // artwork and title on this screen while it plays, and restores the look
+  // below (hubOff) when it stops. The map is a 1x1 white stand-in until then,
+  // so the material's program never changes between the two.
+  screenMat.emissiveMap = hubBlankTexture(THREE);
+  screenMat.userData.hubOff = { color: screenMat.color.getHex(), emissive: screenMat.emissive.getHex(),
+    intensity: screenMat.emissiveIntensity };
+  screenMat.userData.hubMode = 'idle';
   {
     const geo = new THREE.BoxGeometry(sw, sh, 0.004);
     geo.translate(0, bezBot + sh / 2, -GAP + 0.0005 - 0.002 + 0.0015);   // front face at +0.0005 past the bezel face
     const screen = new THREE.Mesh(geo, screenMat);
     screen.name = 'smartDisplayScreen';
     screen.userData.keep = true;
+    // Its own live mesh (never merged), so the scene can draw on it per item.
+    screen.userData.dynamic = true;
+    screen.userData.hubScreen = true;
+    screen.userData.hubAspect = sw / sh;
     slab.add(screen);
   }
 

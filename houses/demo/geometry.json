@@ -692,6 +692,9 @@
     { "id": "lounge_speaker", "room": "lounge", "type": "box", "wall": 1, "centre": 110, "offset": 15, "elevation": 75,
       "params": {"width": 14, "depth": 14, "height": 20, "color": "#2f3238"},
       "label": "Lounge speaker", "notes": "Stands on the sideboard. Opens the sound menu as its speaker (rooms.json sensors.soundMenu.openFrom)." },
+    { "id": "lounge_hub", "room": "lounge", "type": "smart-display", "wall": 1, "centre": 190, "offset": 12, "elevation": 75,
+      "params": {"kind": "nest-hub-max", "colorway": "charcoal"},
+      "label": "Smart display", "notes": "Stands on the sideboard. Mapped in sensors.soundMenu.openFrom, so its screen shows what that speaker is playing -- here a generic sample, since the demo has no Home Assistant." },
     { "id": "bedroom_speaker", "room": "bedroom", "type": "box", "wall": 11, "centre": 505, "offset": 20, "elevation": 55,
       "params": {"width": 10, "depth": 10, "height": 14, "color": "#3a3d44"},
       "label": "Bedroom speaker", "notes": "Stands on the bedside table. Opens the sound menu as its speaker (sensors.soundMenu.openFrom)." }

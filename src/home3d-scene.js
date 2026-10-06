@@ -38,6 +38,7 @@ import {
 import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
 import { createTvScreens } from './furniture/tv-screen.js';
+import { createHubScreens } from './furniture/hub-screen.js';
 import { createBootGate } from './boot-gate.js';
 import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './room-pick.js';
@@ -4443,6 +4444,10 @@ export const Home3DScene = (() => {
     // the ?debug=1 seam). A reading that lands before the furniture attaches
     // is applied when it does; a real change repaints one frame.
     const tvScreens = createTvScreens(() => requestRender());
+    // Smart displays' now-playing screens (src/furniture/hub-screen.js): the
+    // content each was last told by setHubScreen, drawn on its own small
+    // canvas texture only when that content changes; one repaint per change.
+    const hubScreens = createHubScreens({ THREE, repaint: () => requestRender() });
     function stopLiveClocks() {
       liveClockStops.forEach(stop => stop());
       liveClockStops.clear();
@@ -4484,6 +4489,7 @@ export const Home3DScene = (() => {
       // TV screens: index each built TV's screen, in the look its set was
       // last reported in (dark if none has been); painted by the render below.
       tvScreens.attach(result.dynamicByItemId);
+      hubScreens.attach(result.dynamicByItemId);
       // Start a live clock for every placed wall-clock. onTick asks for a
       // single repaint (requestRender, not wake()) -- a one-shot redraw per
       // second-boundary tick, never a sustained render loop; see the
@@ -6289,6 +6295,24 @@ export const Home3DScene = (() => {
        * effect when it does.
        */
       setTvScreen(itemId, on) { tvScreens.set(itemId, on); },
+      /**
+       * Set a smart display's screen (a `smart-display` hub, by item id) to
+       * hub-screen.js content: { mode: 'playing', title, artist, art } draws
+       * the now-playing card (art: a URL, a { gradient } cover, or null for
+       * text only); { mode: 'idle' } restores its built look; 'hold' keeps
+       * what is showing. Redrawn and repainted only when the content changed.
+       * Remembered, so a call before the furniture attaches takes effect then.
+       */
+      setHubScreen(itemId, content) { hubScreens.set(itemId, content); },
+      // Every built hub screen and what it shows, for tests and the debug seam.
+      getHubScreens() {
+        return hubScreens.entries().map(([itemId, mesh]) => {
+          const c = new THREE.Box3().setFromObject(mesh).getCenter(new THREE.Vector3());
+          const st = hubScreens.state(itemId);
+          return { itemId, mode: st.mode, art: st.art, version: st.version, draws: hubScreens.stats.draws,
+            emissiveIntensity: mesh.material.emissiveIntensity, centre: c.toArray() };
+        });
+      },
       // Every built TV screen and its live look, for tests and the debug seam:
       // where it is (world centre, metres) and which way it faces (the
       // horizontal unit normal of its front), so a check can aim setOrbit.
@@ -6819,6 +6843,7 @@ export const Home3DScene = (() => {
         stopLiveClocks();
         if (furnitureResult) { disposeFurniture(furnitureResult); furnitureResult = null; }
         tvScreens.clear();
+        hubScreens.clear();
         shadowDepthProbeMats.forEach(m => m.dispose());
         shadowDepthProbeMats.length = 0;
         // The first-frame gate's fallback timer and context-restored listener:

@@ -1162,6 +1162,7 @@
     import { Home3DScene }    from './src/home3d-scene.js?v=__VERSION__';
     import { HAClient }       from './src/ha-client.js?v=__VERSION__';
     import { tvBindings, tvScreenOn, tvScreenMode } from './src/furniture/tv-screen.js?v=__VERSION__';
+    import { hubDisplayBindings, hubScreenContent, DEMO_NOW_PLAYING } from './src/furniture/hub-screen.js?v=__VERSION__';
     import { sendScript, createActionButton } from './src/script-call.js?v=__VERSION__';
     import { parseSunTime }   from './src/sun-position.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
@@ -2957,7 +2958,19 @@
           home.setTvScreen(itemId, tvScreenMode(ha.getRawState(b.entity), b.art, b.art && ha.getRawState(b.art.entity)));
         }));
 
+        // Smart display -> what its speaker is playing (src/furniture/hub-screen.js).
+        // The player is the item's sensors.soundMenu.openFrom entry; the sound
+        // menu's callback fires on its state and on the title/artist/picture.
+        const hubBindings = hubDisplayBindings(haConfig.sensors && haConfig.sensors.soundMenu);
+        if (hubBindings.size) ha.onSoundMenuChange((entityId, raw) => hubBindings.forEach((eid, itemId) => {
+          if (eid === entityId) home.setHubScreen(itemId, hubScreenContent(raw, ha.activeUrl));
+        }));
+
         ha.connect();
+      } else if (!isPreview) {
+        // No Home Assistant (the demo house): every smart display that opens
+        // the sound menu shows a generic sample, so the screen can be seen.
+        hubDisplayBindings(sensors && sensors.soundMenu).forEach((eid, itemId) => home.setHubScreen(itemId, DEMO_NOW_PLAYING));
       }
 
       // ---- Tap-an-object popovers (src/tap-popovers.js) ----
