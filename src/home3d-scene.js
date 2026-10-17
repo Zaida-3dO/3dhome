@@ -44,6 +44,7 @@ import { rugPatternForBox } from './rug-pattern.js';
 import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './room-pick.js';
 import { easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView,
   ROOM_VIEW, chooseInRoomView, distToPolyEdge, eyeOf, planFlight, inRoomTapIsClickAway, clampRadiusInside, leavesRoom } from './camera-focus.js';
+import { previewPose } from './preview-orbit.js';
 import { buildNavGraph, navInputsFromHouse, planWalk, outsideView, heldDoorsToKeep } from './doorway-walk.js';
 import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
@@ -4981,6 +4982,13 @@ export const Home3DScene = (() => {
     const _defaultDistance = Math.max(6, Math.max(_fpW, _fpD) / (2 * Math.tan(cam.fov * Math.PI / 360)) * 1.15);
     const _t0 = _homeTgt();
     const orb = { drag: false, pan: false, px: 0, py: 0, th: Math.PI * 0.22, ph: Math.PI * 0.32, r: _defaultDistance, tgt: _t0 };
+    // Preview orbit geometry (src/preview-orbit.js). Reduced motion keeps the
+    // fixed top height, as the preview always has.
+    const _previewGeom = {
+      rotateSpeed, th0: Math.PI * 0.22, rTop: _defaultDistance, phTop: Math.PI * 0.32,
+      halfDiag: Math.hypot(_fpW, _fpD) / 2, midY: WH / 2,
+      still: (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; } })()
+    };
     const clickStart = { x: 0, y: 0 };
     const rc = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
@@ -5941,7 +5949,10 @@ export const Home3DScene = (() => {
       settleWalkDoors();
       if (autoRotate && !orb.drag && !orb.pan) {
         autoAngle += rotateSpeed * dt;
-        orb.th = Math.PI * 0.22 + autoAngle;
+        // Rise and fall (src/preview-orbit.js): a pure function of elapsed
+        // rotation, so the phase is deterministic. Azimuth is unchanged.
+        const pp = previewPose(autoAngle / rotateSpeed, _previewGeom);
+        orb.th = pp.th; orb.ph = pp.ph; orb.r = pp.r; orb.tgt.y = pp.tgtY;
         updCam();
       }
       // Update sunlight every 60 seconds
