@@ -45,7 +45,7 @@ import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './r
 import { easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView,
   ROOM_VIEW, chooseInRoomView, distToPolyEdge, eyeOf, planFlight, inRoomTapIsClickAway, clampRadiusInside, leavesRoom } from './camera-focus.js';
 import { previewPose } from './preview-orbit.js';
-import { buildNavGraph, navInputsFromHouse, planWalk, outsideView, heldDoorsToKeep } from './doorway-walk.js';
+import { buildNavGraph, navInputsFromHouse, planWalk, planGlide, outsideView, heldDoorsToKeep, sightLeaves, sharedVantage, roomAt, inPortal } from './doorway-walk.js';
 import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
 import {
@@ -5140,7 +5140,7 @@ export const Home3DScene = (() => {
       const wanted = new Set((route.plan ? route.plan.portals : []).filter(id => doorById[id]).concat(walkViewDoor ? [walkViewDoor] : []));
       endFlight('superseded');
       holdDoorsOpen(wanted);
-      const ms = opts && opts.ms != null ? opts.ms : (mode === 'walk' ? route.plan.ms : mode === 'arc' ? 1200 : 700);
+      const ms = opts && opts.ms != null ? opts.ms : (route.plan ? route.plan.ms : mode === 'arc' ? 1200 : 700);
       if (!(ms > 0) || reducedMotion()) { applyPose(pose); releaseWalkDoors(); wake(250); return Promise.resolve('landed'); }
       return new Promise(resolve => {
         const plan = route.plan || planFlight(from, to, { mode, clearY: WH + 0.5 });
@@ -5149,7 +5149,9 @@ export const Home3DScene = (() => {
       });
     }
     // How a flight travels: between two views from outside, the orbit lerp
-    // as ever (camera-focus.js planFlight); within one room, a straight line;
+    // as ever (camera-focus.js planFlight); within one room, a straight line
+    // timed and turned like a walk (planGlide) -- a turn on the spot when the
+    // two views share their eye (two open-plan rooms, sharedRoomView);
     // between two views INSIDE the house, a walk through the doorways, below
     // the ceiling (src/doorway-walk.js planWalk). Only a flight with one end
     // outside the house (the home view) -- or between rooms the walk cannot
@@ -5161,15 +5163,24 @@ export const Home3DScene = (() => {
       if (!ra && !rb) return { mode: 'orbit' };
       // Same room: a straight line only when it crosses none of the room's
       // edges (exact; 9 samples could miss a sharp notch between them).
-      if (ra && ra === rb && !leavesRoom(roomShape(ra).map(p => [tx(p[0]), tz(p[1])]), a, b, 0)) return { mode: 'eye' };
+      if (ra && ra === rb && !leavesRoom(roomShape(ra).map(p => [tx(p[0]), tz(p[1])]), a, b, 0)) {
+        const plan = planGlide(from, to);
+        lastWalk = walkReport(ra, rb, plan);
+        return { mode: 'eye', plan };
+      }
       if (ra && rb) {
         const plan = planWalk(navGraph(), from, ra, to, rb, { obstacles: walkObstacles() });
-        lastWalk = plan ? { from: ra, to: rb, rooms: plan.rooms, portals: plan.portals, length: +plan.length.toFixed(2), ms: plan.ms,
-          maxY: +plan.maxY.toFixed(3), ceiling: navGraph().ceiling, waypoints: plan.waypoints.map(p => p.map(v => +v.toFixed(3))),
-          path: plan.path.map(p => p.map(v => +v.toFixed(3))) } : { from: ra, to: rb, failed: true };
+        lastWalk = plan ? walkReport(ra, rb, plan) : { from: ra, to: rb, failed: true };
         if (plan) return { mode: 'walk', plan };
       }
       return { mode: 'arc' };
+    }
+    function walkReport(ra, rb, plan) {
+      return { from: ra, to: rb, mode: plan.mode, rooms: plan.rooms || [ra], portals: plan.portals || [], length: +plan.length.toFixed(2), ms: plan.ms,
+        turnInPlace: !!plan.turnInPlace, speed: +plan.stats.speed.toFixed(2), peakYawRate: Math.round(plan.stats.peakYawRate),
+        cruiseShare: +plan.stats.cruiseShare.toFixed(2),
+        maxY: +plan.maxY.toFixed(3), ceiling: navGraph().ceiling, waypoints: (plan.waypoints || []).map(p => p.map(v => +v.toFixed(3))),
+        path: plan.path.map(p => p.map(v => +v.toFixed(3))) };
     }
     // The navigation graph (src/doorway-walk.js), built once from the house.
     let _navGraph = null, lastWalk = null;
@@ -5301,7 +5312,73 @@ export const Home3DScene = (() => {
         const d = v.tgt ? null : above();
         return { th: v.th, ph: v.ph, r: v.r, tgt: v.tgt ? v.tgt.slice() : [d.tgt[0], v.targetHeight || 0, d.tgt[2]], fov: v.fov };
       }
+      const shared = sharedRoomView(id, opts);
+      if (shared) return shared;
       return inRoomView(id, opts) || outsideRoomView(id) || above();
+    }
+    // ---- Open-plan rooms sharing one vantage (src/doorway-walk.js sharedVantage)
+    //
+    // Two rooms joined by an open-plan join (no wall between: a living room
+    // and its kitchen) may share ONE camera position, when from there each is
+    // framed nearly as well as by its own view. Going between them is then a
+    // turn on the spot (flightRoute: the same eye -> planGlide). An authored
+    // view never moves: an authored room's eye is the only candidate, and its
+    // partner turns to face its own room from there. Cached with the room
+    // views (same invalidation), keyed by the candidate eyes so an authored
+    // view edited in edit mode is picked up.
+    // sharedWith: room -> the room whose polygon its shared eye stands in
+    // (standingRoom: the camera there counts as standing in the focused room).
+    const sharedWith = new Map();
+    // The room (world x, z) is in, or for a point in an open-plan join the
+    // first of its two rooms; null outside both.
+    function walkRoomOrJoin(x, z) {
+      const g = navGraph(), r = roomAt(g.rooms, x, z);
+      if (r) return r;
+      const j = g.portals.find(p => p.kind === 'open' && inPortal(p, x, z, 0));
+      return j ? j.rooms[0] : null;
+    }
+    function openPartners(id) {
+      return navGraph().portals.filter(p => p.kind === 'open' && p.rooms.includes(id)).map(p => p.rooms[0] === id ? p.rooms[1] : p.rooms[0]);
+    }
+    // A room's own view, as sharedVantage weighs it: authored (with a target),
+    // else the in-room chooser's, with its score and runners-up.
+    function ownRoomView(id, opts) {
+      const v = ROOMS[id] && ROOMS[id].view;
+      if (v) {
+        if (!v.tgt) return null;
+        const pose = authoredView(v, v.tgt);
+        return { pose, eye: eyeOf(pose), authored: true, score: 1, coverage: 1 };
+      }
+      const res = inRoomResult(id, opts);
+      if (!res || !res.pose) return null;
+      return { pose: res.pose, eye: res.eye, score: res.stats.score, coverage: res.stats.coverage, ranked: res.ranked || [] };
+    }
+    function sharedRoomView(id, opts) {
+      sharedWith.delete(id);
+      for (const other of openPartners(id)) {
+        if (!ROOMS[other]) continue;
+        const ownA = ownRoomView(id, opts), ownB = ownRoomView(other, opts);
+        if (!ownA || !ownB) return null;
+        const ins = opts && opts.inset && opts.inset.right > 0 ? opts.inset : null;
+        const eyeKey = e => e ? e.map(v => v.toFixed(2)).join(',') : '-';
+        const key = 'shared|' + [id, other].sort().join('|') + '|' + eyeKey(ownA.eye) + '|' + eyeKey(ownB.eye) + '|' + cam.aspect.toFixed(2) + '|' +
+          (ins ? [ins.right, ins.width, ins.height].map(Math.round).join('x') : '-');
+        let sv = roomViewCache.get(key);
+        if (sv === undefined) {
+          sv = sharedVantage({ graph: navGraph(), rooms: [id, other], own: { [id]: ownA, [other]: ownB },
+            viewFrom: (room, eye) => {
+              const r = computeInRoomView(room, ins, { eyes: [eye], with: room === id ? other : id });
+              return r.pose ? { pose: r.pose, score: r.stats.score, coverage: r.stats.coverage } : null;
+            } });
+          roomViewCache.set(key, sv);
+        }
+        if (sv && sv.poses[id]) {
+          const at = eyeInRoom(sv.eye);
+          if (at && at !== id) sharedWith.set(id, at);
+          return clonePose(sv.poses[id]);
+        }
+      }
+      return null;
     }
     // A room no camera can stand in (a cupboard) is seen from the room it
     // opens onto, through its door, at walking eye height -- inside the
@@ -5358,7 +5435,7 @@ export const Home3DScene = (() => {
       });
       return out;
     }
-    function inRoomView(id, opts) {
+    function inRoomResult(id, opts) {
       // Dropped on a furniture rebuild, on a furniture show/hide (a view chosen
       // with the furniture hidden can stand the eye in a wardrobe), and when
       // the aspect changes (only the latest is kept: a resize is not a leak).
@@ -5372,9 +5449,16 @@ export const Home3DScene = (() => {
       const hit = !!res;
       if (!res) { res = computeInRoomView(id, ins); roomViewCache.set(key, res); }
       lastRoomViewStats = Object.assign({ room: id, cached: hit }, res.stats);
+      return res;
+    }
+    function inRoomView(id, opts) {
+      const res = inRoomResult(id, opts);
       return res.pose ? clonePose(res.pose) : null;
     }
-    function computeInRoomView(id, inset) {
+    // extra (a shared open-plan vantage, sharedRoomView): { eyes: [[x, y, z]]
+    // only these eyes, with: the room they stand in -- sight lines may cross
+    // the join into it, and its meshes are occluders too }.
+    function computeInRoomView(id, inset, extra) {
       const t0 = performance.now();
       const poly = roomShape(id).map(p => [tx(p[0]), tz(p[1])]);
       const ceiling = HOUSE.ceilingHeight || WH;
@@ -5405,9 +5489,12 @@ export const Home3DScene = (() => {
       // itself), so meshes are kept when their box reaches into the room's
       // box shrunk by 5 cm -- doors, curtains, fittings, a chimney breast --
       // which keeps the ray test to a fraction of the building.
+      // A shared vantage: the room the eye stands in counts too (its island
+      // may stand between the eye and this room).
+      const span = extra && extra.with && roomShape(extra.with) ? poly.concat(roomShape(extra.with).map(p => [tx(p[0]), tz(p[1])])) : poly;
       const rb = new THREE.Box3(
-        new THREE.Vector3(Math.min(...poly.map(p => p[0])) + 0.05, 0.01, Math.min(...poly.map(p => p[1])) + 0.05),
-        new THREE.Vector3(Math.max(...poly.map(p => p[0])) - 0.05, ceiling - 0.01, Math.max(...poly.map(p => p[1])) - 0.05));
+        new THREE.Vector3(Math.min(...span.map(p => p[0])) + 0.05, 0.01, Math.min(...span.map(p => p[1])) + 0.05),
+        new THREE.Vector3(Math.max(...span.map(p => p[0])) - 0.05, ceiling - 0.01, Math.max(...span.map(p => p[1])) - 0.05));
       const _mb = new THREE.Box3();
       const list = occluderList([cx, ceiling / 2, cz], reach + 1.5).filter(o => {
         if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
@@ -5442,9 +5529,11 @@ export const Home3DScene = (() => {
         return false;
       };
       lastRoomViewInputs = { room: id, poly, ceiling, items, lights, doors, aspect: cam.aspect, inset };
-      const res = chooseInRoomView({ poly, ceiling, items, lights, doors, aspect: cam.aspect, inset, occluded });
+      const sight = extra && extra.with ? (e, p, tail) => sightLeaves(navGraph(), [id, extra.with], e, p, tail) : undefined;
+      const res = chooseInRoomView({ poly, ceiling, items, lights, doors, aspect: cam.aspect, inset, occluded,
+        eyes: extra && extra.eyes, sight });
       const eyePlan = res.eye ? sceneToHouse(S, OX, OY)(res.eye[0], res.eye[2]) : null;
-      return { pose: res.pose, stats: {
+      return { pose: res.pose, eye: res.eye, ranked: res.ranked, stats: {
         ms: +(performance.now() - t0).toFixed(2), fallback: res.fallback, coverage: +res.coverage.toFixed(3),
         score: +res.score.toFixed(3), kind: res.kind, eyes: res.tried, rays: res.rays, items: items.length,
         lights: lights.length, doors: doors.length, occluders: list.length,
@@ -5459,6 +5548,14 @@ export const Home3DScene = (() => {
     // fade (a wall facing the camera goes see-through) would open the room's
     // own side walls onto the garden at the edges of a wide lens.
     let _toHouse = null;
+    // The room the camera counts as standing in, for the focused room's
+    // rules (the click-away, keeping a zoom in the room): the room its eye
+    // is in -- or the focused room itself, when that room's view is a
+    // vantage it shares with the room the eye stands in (sharedRoomView).
+    function standingRoom(eye) {
+      const r = eyeInRoom(eye), fr = pickFocusRoom ? pickFocusRoom() : null;
+      return r && fr && r !== fr && sharedWith.get(fr) === r ? fr : r;
+    }
     function eyeInRoom(eye) {
       if (!(eye[1] < WH)) return null;
       if (!_toHouse) _toHouse = sceneToHouse(S, OX, OY);
@@ -6106,16 +6203,27 @@ export const Home3DScene = (() => {
       // room) flies out as ever. Returns the room to hold, or null.
       function heldRoom() {
         const fr = pickFocusRoom ? pickFocusRoom() : null;
-        return fr && eyeInRoom([cam.position.x, cam.position.y, cam.position.z]) === fr ? fr : null;
+        return fr && standingRoom([cam.position.x, cam.position.y, cam.position.z]) === fr ? fr : null;
       }
       function keepEyeInRoom(room) {
         if (!room || !roomShape(room)) return;
-        const poly = roomShape(room), wpoly = poly.map(p => [tx(p[0]), tz(p[1])]), toHouse = sceneToHouse(S, OX, OY);
-        const inside = e => {
-          if (!(e[1] < WH - 0.05)) return false;
-          const h = toHouse(e[0], e[2]);
-          return insidePoly(poly, h[0], h[1]) && distToPolyEdge(wpoly, e[0], e[2]) > 0.12;
-        };
+        // A room seen from a vantage it shares with its open-plan neighbour
+        // (sharedRoomView): the eye may stay in either.
+        const ids = [room].concat(sharedWith.get(room) && roomShape(sharedWith.get(room)) ? [sharedWith.get(room)] : []);
+        const polys = ids.map(id => { const poly = roomShape(id); return { poly, wpoly: poly.map(p => [tx(p[0]), tz(p[1])]) }; });
+        const toHouse = sceneToHouse(S, OX, OY);
+        const inside = ids.length > 1
+          // Either room, or the opening between them (no dead band in the
+          // gap for the bisection to stop in), 12 cm clear of every wall.
+          ? e => e[1] < WH - 0.05 && [[0, 0], [0.12, 0], [-0.12, 0], [0, 0.12], [0, -0.12]].every(([dx, dz]) => {
+            const r = walkRoomOrJoin(e[0] + dx, e[2] + dz);
+            return r && ids.includes(r);
+          })
+          : e => {
+            if (!(e[1] < WH - 0.05)) return false;
+            const h = toHouse(e[0], e[2]);
+            return polys.some(({ poly, wpoly }) => insidePoly(poly, h[0], h[1]) && distToPolyEdge(wpoly, e[0], e[2]) > 0.12);
+          };
         orb.r = clampRadiusInside([orb.tgt.x, orb.tgt.y, orb.tgt.z], orb.th, orb.ph, orb.r, inside);
       }
       function zoomBy(factor) {
@@ -6209,7 +6317,7 @@ export const Home3DScene = (() => {
         // floor is the click-away: no room click, so the page's background
         // handler sees an empty tap and the camera flies home.
         const first = hits.find(h => isDrawn(h.object));
-        if (inRoomTapIsClickAway({ cameraRoom: eyeInRoom([cam.position.x, cam.position.y, cam.position.z]), focusedRoom: fr,
+        if (inRoomTapIsClickAway({ cameraRoom: standingRoom([cam.position.x, cam.position.y, cam.position.z]), focusedRoom: fr,
           pickedRoom: picked.roomId, hitFurniture: !!(first && isFurniture(first.object)) })) return;
         if (picked.roomId && onRoomClick) onRoomClick(picked.roomId);
       });

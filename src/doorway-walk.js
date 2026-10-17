@@ -3,9 +3,10 @@
  *
  * The old flight between two in-room views rose over the wall tops, crossed
  * the roof and dropped back in. This walks instead: out through the door (or
- * an open-plan opening), along the hall, in through the next door, turning to
- * look where it is going and then to the view -- always below the ceiling and
- * never through a wall.
+ * an open-plan opening), along the hall, in through the next door, turning
+ * while it moves -- out of the start view, along the walk through each door,
+ * round to the final view before it arrives -- at one constant speed, always
+ * below the ceiling and never through a wall.
  *
  * Pure: no THREE, no DOM. The scene (src/home3d-scene.js) builds the graph
  * once from the compiled house and asks for a plan per flight. Tested in
@@ -21,8 +22,11 @@
  *                   waypoints inside L-shaped rooms, a centripetal
  *                   Catmull-Rom spline through the lot, checked sample by
  *                   sample (inside a room or an opening, under the ceiling)
+ *   planGlide       the same timing for a straight line inside one room, and
+ *                   a turn on the spot when both views share their eye
  *   outsideView     the view of a room no camera can stand in (a cupboard):
  *                   from the neighbouring room, through its door
+ *   sharedVantage   one eye for two open-plan rooms, when it frames both well
  */
 import { insidePoly } from './footstep-walk.js';
 import { distToPolyEdge, shortestArc, eyeOf, clonePose, poseFromLook, interiorPoint } from './camera-focus.js';
@@ -39,12 +43,17 @@ export const WALK = Object.freeze({
   minOpen: 0.5,         // an unwalled stretch at least this long is an open-plan join
   wideMargin: 0.4,      // a wide opening is crossed at least this far in from its ends
   travelPitchDeg: 6,    // looking slightly down while walking
-  turnOut: 1.0,         // m of travel over which the camera turns to the walking direction
-  turnIn: 1.5,          // m of travel over which it turns to the final view
   lookChord: 1.6,       // m: the walking direction is the path's chord this long (turns start before a door)
-  minMs: 800, maxMs: 4000,
-  walkSpeed: 6.5,       // m/s of cruise a straight stretch is timed at
-  maxYawRate: 200,      // deg/s: the head never turns faster than this (while the cap allows)
+  // TIMING (2026-10-17: "click boom done", about a second a hop). The
+  // camera travels at one constant speed, so a hop's duration is its length
+  // over walkSpeed plus the short ramps at either end; it slows below that
+  // only where the head would otherwise turn faster than maxYawRate.
+  walkSpeed: 5.5,       // m/s: the cruise speed
+  accel: 30,            // m/s^2: the ramp from rest and back (0 -> 5.5 m/s in 0.18 s, over 0.5 m)
+  maxYawRate: 500,      // deg/s: the head never turns faster than this
+  minMs: 330,           // the quickest a hop may be
+  maxMs: 3000,          // ... and the slowest: a longer walk speeds up as a whole
+  turnMinMs: 300,       // a turn on the spot (two rooms sharing one vantage) takes at least this
   sample: 0.02,         // m between validation samples
   obstacleMinY: 1.2,    // furniture taller than this is walked round
   obstaclePad: 0.15,
@@ -544,8 +553,9 @@ export function fitPath(graph, way, opts, blocked) {
  * @param graph   buildNavGraph()
  * @param o.obstacles  [{ min, max }] world boxes of tall furniture (optional)
  * @returns null when no in-house walk exists (no route, or none that stays
- *          clear), else { at(t) -> pose, path (dense [x, y, z]), waypoints,
- *          portals: [ids], rooms: [ids walked through], length, ms, maxY }
+ *          clear), else { at(t) -> pose (t: the fraction of ms elapsed;
+ *          ease is the identity), path (dense [x, y, z]), waypoints, portals:
+ *          [ids], rooms: [ids walked through], length, ms, maxY, stats }
  */
 export function planWalk(graph, from, fromRoom, to, toRoom, o) {
   const opt = Object.assign({}, WALK, (o && o.options) || {});
@@ -677,21 +687,106 @@ function planWith(graph, from, fromRoom, to, toRoom, obstacles, opt) {
   // Land exactly on the ends (the clamp may have nudged an end that sat high).
   path[0] = A.slice(); path[path.length - 1] = B.slice();
 
-  // Arc length along the path.
+  // The doors crossed, in order (their waypoints), for the head's turns.
+  const doorPts = W.filter(w => w.kind === 'door').map(w => w.p);
+  const res = timeWalk(path, from, to, opt, doorPts, route.length > 0);
+  const roomsWalked = [fromRoom].concat(route.map(r => r.into));
+  return Object.assign(res, {
+    mode: 'walk', path, waypoints: way, kinds: W.map(w => w.kind),
+    portals: route.map(r => graph.portals[r.portal].id), rooms: roomsWalked,
+    maxY: Math.max(...path.map(p => p[1])), walkY,
+  });
+}
+
+/**
+ * A glide in a straight line inside one room -- or, when the two eyes are
+ * the same spot, a turn on the spot (two open-plan rooms sharing one
+ * vantage). The caller has checked the line stays in the room (the scene's
+ * flightRoute: leavesRoom). Timed and turned exactly as a walk is.
+ * @returns { at(t), ease, ms, length, path, turn, stats } (mode 'glide')
+ */
+export function planGlide(from, to, o) {
+  const opt = Object.assign({}, WALK, (o && o.options) || {});
+  const A = eyeOf(from), B = eyeOf(to);
+  const L = hyp(B[0] - A[0], B[1] - A[1], B[2] - A[2]);
+  const n = Math.max(1, Math.ceil(L / opt.sample));
+  const path = [];
+  for (let i = 0; i <= n; i++) path.push([A[0] + (B[0] - A[0]) * i / n, A[1] + (B[1] - A[1]) * i / n, A[2] + (B[2] - A[2]) * i / n]);
+  path[0] = A.slice(); path[n] = B.slice();
+  return Object.assign(timeWalk(path, from, to, opt, [], false), { mode: 'glide', path, portals: [], maxY: Math.max(A[1], B[1]) });
+}
+
+/** Quintic smoothstep: 0 -> 1 with zero slope AND zero curvature at both ends. */
+const q5 = x => { const t = Math.max(0, Math.min(1, x)); return t * t * t * (t * (t * 6 - 15) + 10); };
+
+/**
+ * Time a path: where the camera is, and where it looks, at each moment.
+ *
+ * WHERE IT LOOKS is a function of the distance travelled, d:
+ *   - over the first leg (the start to the first door) it turns from the
+ *     start view's direction to the walking direction;
+ *   - between doors it looks along the walk (the path's chord, lookChord
+ *     long: a smoothed tangent);
+ *   - over the last leg (the last door to the end) it turns from the walking
+ *     direction to the final view's, so it ARRIVES facing it -- there is no
+ *     turn left to do once it stops (2026-10-17: "you shouldn't do a
+ *     move then a rotate").
+ *   With no door (one room, round a corner) the two legs meet half way. A
+ *   short hop (under 2 m), and a glide, blend straight from the start view
+ *   to the end's. Every blend is a quintic smoothstep, so the head's angular
+ *   velocity is continuous, and zero at both ends.
+ *
+ * HOW FAST: one cruise speed (walkSpeed), ramping up from rest and back down
+ * at `accel`. Only where the head would turn faster than maxYawRate is the
+ * speed lowered -- the turn rate is the look's slope (rad/m) times the speed
+ * -- and that limit is smoothed by the same acceleration, so the speed (and
+ * with it the angular velocity) never steps. Two equal eyes are a turn on
+ * the spot: timed by the angle, the same quintic in time.
+ *
+ * Returns at(t) for t the fraction of `ms` elapsed (ease is the identity:
+ * the timing is all in here), plus stats for checks: the cruise speed, the
+ * peak turn rate, and the share of the time spent at cruise.
+ */
+function timeWalk(path, from, to, opt, doorPts, walking) {
   const cum = [0];
   for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + hyp(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1], path[i][2] - path[i - 1][2]));
   const total = cum[cum.length - 1];
+  const s = lookOf(from), e = lookOf(to);
+  const ra = Math.max(1e-6, from.r), rb = Math.max(1e-6, to.r);
+  const fa = from.fov != null ? from.fov : 50, fb = to.fov != null ? to.fov : 50;
+  const yawRad = opt.maxYawRate * Math.PI / 180;
+  const dTurn = shortestArc(s.yaw, e.yaw);
+  const ease = t => Math.max(0, Math.min(1, t));
 
+  // ---- A turn on the spot.
+  if (total < 0.01) {
+    const T = Math.max(opt.turnMinMs / 1000, 1.875 * Math.abs(dTurn) / yawRad, 1.875 * Math.abs(e.pitch - s.pitch) / yawRad);
+    const eye = eyeOf(from);
+    const at = t => {
+      const q = Math.max(0, Math.min(1, t));
+      if (q >= 1) return clonePose(to);
+      if (q <= 0) return clonePose(from);
+      const u = q5(q);
+      const r = Math.exp(Math.log(ra) + (Math.log(rb) - Math.log(ra)) * u);
+      return poseFromLook(eye, s.yaw + dTurn * u, s.pitch + (e.pitch - s.pitch) * u, r, fa + (fb - fa) * u);
+    };
+    return { at, ease, ms: Math.round(T * 1000), length: total, turn: Math.abs(dTurn), turnInPlace: true,
+      stats: { speed: 0, peakYawRate: 1.875 * Math.abs(dTurn) / T * 180 / Math.PI, cruiseShare: 0, doors: 0 } };
+  }
+
+  const locate = d => {
+    let lo = 0, hi = cum.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= d) lo = m; else hi = m; }
+    const seg = cum[hi] - cum[lo];
+    return { lo, hi, f: seg > 0 ? (d - cum[lo]) / seg : 0 };
+  };
+  const posAt = d => {
+    const { lo, hi, f } = locate(d), p = path[lo], q = path[hi];
+    return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f];
+  };
   // The walking direction at each sample, unwrapped: the chord of the path
   // `lookChord` long centred on it (clamped at the ends) -- a smoothed tangent,
   // so a tight bend before a door turns the head over a stride, not a frame.
-  const posAt = d => {
-    let lo = 0, hi = cum.length - 1;
-    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= d) lo = m; else hi = m; }
-    const seg = cum[hi] - cum[lo], f = seg > 0 ? (d - cum[lo]) / seg : 0;
-    const p = path[lo], q = path[hi];
-    return [p[0] + (q[0] - p[0]) * f, p[2] + (q[2] - p[2]) * f];
-  };
   const half = Math.min(opt.lookChord / 2, total / 2);
   const head = new Array(path.length);
   let last = null;
@@ -700,98 +795,109 @@ function planWith(graph, from, fromRoom, to, toRoom, obstacles, opt) {
     if (d0 < 0) { d1 -= d0; d0 = 0; }
     if (d1 > total) { d0 = Math.max(0, d0 - (d1 - total)); d1 = total; }
     const p = posAt(d0), q = posAt(d1);
-    let y = hyp(q[0] - p[0], q[1] - p[1]) > 1e-6 ? Math.atan2(q[1] - p[1], q[0] - p[0]) : (last != null ? last : 0);
+    let y = hyp(q[0] - p[0], q[2] - p[2]) > 1e-6 ? Math.atan2(q[2] - p[2], q[0] - p[0]) : (last != null ? last : 0);
     if (last != null) y = last + shortestArc(last, y);
     head[i] = y; last = y;
   }
-  const s = lookOf(from), e = lookOf(to);
+  const headAt = d => { const { lo, hi, f } = locate(d); return head[lo] + (head[hi] - head[lo]) * f; };
+  // Where along the path each door is crossed (the nearest sample, in order).
+  const doorD = [];
+  let from_i = 0;
+  doorPts.forEach(c => {
+    let best = from_i, bd = Infinity;
+    for (let i = from_i; i < path.length; i++) {
+      const dd = hyp(path[i][0] - c[0], path[i][2] - c[1]);
+      if (dd < bd) { bd = dd; best = i; }
+    }
+    doorD.push(cum[best]); from_i = best;
+  });
   // The start and end directions, unwrapped next to the walk's own.
   const S = head[0] + shortestArc(head[0], s.yaw), E = head[head.length - 1] + shortestArc(head[head.length - 1], e.yaw);
+  // The turn out of the start view spans the first leg, the turn into the
+  // final view the last -- and further, back through the doors before it,
+  // when that leg is too short to make the turn at cruise speed within
+  // maxYawRate (a quintic's peak slope is 1.875x its average). The head then
+  // starts turning for the view before the last door, rather than the walk
+  // slowing to a crawl to turn after it.
+  const need = ang => 1.875 * Math.abs(ang) * opt.walkSpeed / yawRad;
+  const outLen = Math.min(total, Math.max(doorD.length ? doorD[0] : total / 2, need(head[0] - S)));
+  const inLen = Math.min(total, Math.max(doorD.length ? total - doorD[doorD.length - 1] : total / 2, need(E - head[head.length - 1])));
+  const outEnd = Math.max(1e-6, outLen), inStart = Math.min(total - 1e-6, total - inLen);
   const tp = opt.travelPitchDeg * Math.PI / 180;
-  const k = Math.max(0, Math.min(1, (total - 0.8) / 1.2));   // a short hop just turns
-  const dTurn = shortestArc(s.yaw, e.yaw);
-  const ra = Math.max(1e-6, from.r), rb = Math.max(1e-6, to.r);
-  const fa = from.fov != null ? from.fov : 50, fb = to.fov != null ? to.fov : 50;
-  const tOut = Math.min(opt.turnOut, total * 0.4), tIn = Math.min(opt.turnIn, total * 0.45);
-
-  function sampleAt(d) {
-    let lo = 0, hi = cum.length - 1;
-    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= d) lo = m; else hi = m; }
-    const seg = cum[hi] - cum[lo], f = seg > 0 ? (d - cum[lo]) / seg : 0;
-    const p = path[lo], q = path[hi];
-    return { eye: [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f], head: head[lo] + (head[hi] - head[lo]) * f };
-  }
-  function look(d, H) {
-    const a = smooth(tOut > 0 ? d / tOut : 1), b = smooth(tIn > 0 ? (d - (total - tIn)) / tIn : 1);
-    // Turn from the start view to the walking direction, then to the view.
-    const m1 = S + (H - S) * a, ty = m1 + (E - m1) * b;
-    const p1 = s.pitch + (tp - s.pitch) * a, tpch = p1 + (e.pitch - p1) * b;
-    const u = smooth(total > 0 ? d / total : 1);
+  const k = walking ? Math.max(0, Math.min(1, (total - 0.8) / 1.2)) : 0;   // a short hop (or a glide) just turns
+  function look(d) {
+    const u = q5(d / total);
     const dy = s.yaw + dTurn * u, dp = s.pitch + (e.pitch - s.pitch) * u;
-    if (k >= 1) return { yaw: ty, pitch: tpch };
     if (k <= 0) return { yaw: dy, pitch: dp };
+    const a = q5(d / outEnd), b = q5((d - inStart) / (total - inStart));
+    const m1 = S + (headAt(d) - S) * a, ty = m1 + (E - m1) * b;
+    const p1 = s.pitch + (tp - s.pitch) * a, tpch = p1 + (e.pitch - p1) * b;
+    if (k >= 1) return { yaw: ty, pitch: tpch };
     // Blend as unit vectors: no wrap to get wrong.
     const x = Math.cos(ty) * k + Math.cos(dy) * (1 - k), z = Math.sin(ty) * k + Math.sin(dy) * (1 - k);
     return { yaw: Math.atan2(z, x), pitch: tpch * k + dp * (1 - k) };
   }
-  // TIMING. Each stretch of the walk costs the longer of walking it (at
-  // walkSpeed) and turning the head through it (at maxYawRate), so the camera
-  // slows down where it turns hard -- before and through a doorway -- instead
-  // of whipping round at walking pace. Progress along the walk is by that
-  // cost; the duration is the total cost, stretched by the speed profile's
-  // 1.33x peak (walkEase) so the peak turn rate stays under the cap.
-  const N = Math.max(200, Math.ceil(total / 0.02)), step = total / N;
-  const costCum = new Float64Array(N + 1), dys = new Float64Array(N + 1);
-  const yawRad = opt.maxYawRate * Math.PI / 180;
-  const peak = 1 / (1 - 0.25);   // walkEase's peak rate, x the average
-  let turn = 0, prevY = look(0, sampleAt(0).head).yaw;
-  for (let i = 1; i <= N; i++) {
-    const y = look(i * step, sampleAt(i * step).head).yaw;
-    dys[i] = Math.abs(shortestArc(prevY, y));
-    turn += dys[i]; prevY = y;
+
+  // ---- The speed along the path, on a grid in distance.
+  const N = Math.max(200, Math.ceil(total / 0.01)), h = total / N;
+  const yaws = new Float64Array(N + 1);
+  let prevY = null, turn = 0;
+  for (let i = 0; i <= N; i++) {
+    let y = look(i * h).yaw;
+    if (prevY != null) { y = prevY + shortestArc(prevY, y); turn += Math.abs(y - prevY); }
+    yaws[i] = y; prevY = y;
   }
-  // When the whole walk would run past maxMs, the straight stretches go
-  // faster (up to 3x) before the turns do: the turning keeps its budget.
-  let C = 0;
-  for (let k = 0, v = opt.walkSpeed; k < 6; k++, v *= 1.25) {
-    for (let i = 1; i <= N; i++) costCum[i] = costCum[i - 1] + Math.max(step / v, dys[i] / yawRad);
-    C = costCum[N] || 1;
-    if ((peak * C + 0.25) * 1000 <= opt.maxMs || v >= opt.walkSpeed * 3) break;
-  }
+  const acc = opt.accel;
+  const v = new Float64Array(N + 1), tc = new Float64Array(N + 1);
+  let V = opt.walkSpeed, cruise = 0, T = 0;
+  const profile = () => {
+    for (let i = 0; i <= N; i++) {
+      const i0 = Math.max(0, i - 1), i1 = Math.min(N, i + 1);
+      const slope = Math.abs(yaws[i1] - yaws[i0]) / (h * (i1 - i0));   // rad per metre
+      v[i] = Math.min(V, slope > 1e-9 ? 0.97 * yawRad / slope : V);   // 3% under: the grid's slope is an estimate
+    }
+    v[0] = 0; v[N] = 0;
+    // Accelerate and brake at `acc`: v^2 changes by at most 2 acc h a step.
+    for (let i = 1; i <= N; i++) v[i] = Math.min(v[i], Math.sqrt(v[i - 1] * v[i - 1] + 2 * acc * h));
+    for (let i = N - 1; i >= 0; i--) v[i] = Math.min(v[i], Math.sqrt(v[i + 1] * v[i + 1] + 2 * acc * h));
+    cruise = 0;
+    for (let i = 1; i <= N; i++) {
+      const dt = 2 * h / Math.max(1e-9, v[i - 1] + v[i]);
+      tc[i] = tc[i - 1] + dt;
+      if (v[i - 1] >= V * 0.999 && v[i] >= V * 0.999) cruise += dt;
+    }
+    T = tc[N];
+  };
+  profile();
+  // A very long walk cruises faster, as a whole, so it never takes longer
+  // than maxMs; the turns keep their cap (only the cruise speed rises).
+  for (let k = 0; k < 4 && T > opt.maxMs / 1000 && V < opt.walkSpeed * 2; k++) { V = Math.min(opt.walkSpeed * 2, V * T / (opt.maxMs / 1000) * 1.02); profile(); }
+  // ... and a tiny hop is never quicker than minMs (slowed as a whole).
+  const scale = T < opt.minMs / 1000 ? opt.minMs / 1000 / T : 1;
+  const ms = Math.round(T * scale * 1000);
+  // Elapsed fraction -> distance. Within a grid step the speed changes
+  // linearly with time, so the distance is the integral of that line.
   const dAt = q => {
-    const c = q * C;
+    const c = q * T;
     let lo = 0, hi = N;
-    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (costCum[m] <= c) lo = m; else hi = m; }
-    const seg = costCum[hi] - costCum[lo], f = seg > 0 ? (c - costCum[lo]) / seg : 0;
-    return (lo + f) * step;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (tc[m] <= c) lo = m; else hi = m; }
+    const dt = tc[hi] - tc[lo], f = dt > 0 ? Math.max(0, Math.min(1, (c - tc[lo]) / dt)) : 0;
+    const v0 = v[lo], v1 = v[hi], vm = (v0 + v1) / 2;
+    const frac = vm > 1e-12 ? (v0 * f + (v1 - v0) * f * f / 2) / vm : f;
+    return Math.min(total, (lo + frac) * h);
   };
   const at = t => {
     const q = Math.max(0, Math.min(1, t));
     if (q >= 1) return clonePose(to);
     if (q <= 0) return clonePose(from);
-    const d = dAt(q), sm = sampleAt(d), lk = look(d, sm.head);
-    const r = Math.exp(Math.log(ra) + (Math.log(rb) - Math.log(ra)) * q);
-    return poseFromLook(sm.eye, lk.yaw, lk.pitch, r, fa + (fb - fa) * q);
+    const d = dAt(q), lk = look(d), u = q5(d / total);
+    const r = Math.exp(Math.log(ra) + (Math.log(rb) - Math.log(ra)) * u);
+    return poseFromLook(posAt(d), lk.yaw, lk.pitch, r, fa + (fb - fa) * u);
   };
-  const ms = Math.round(Math.max(opt.minMs, Math.min(opt.maxMs, (peak * C + 0.25) * 1000)));
-  const roomsWalked = [fromRoom].concat(route.map(r => r.into));
-  return {
-    mode: 'walk', at, ease: walkEase, path, waypoints: way, kinds: W.map(w => w.kind),
-    portals: route.map(r => graph.portals[r.portal].id), rooms: roomsWalked,
-    length: total, ms, turn, maxY: Math.max(...path.map(p => p[1])), walkY,
-  };
-}
-
-/**
- * The walk's speed profile: speed up over the first quarter, cruise, slow
- * down over the last quarter. Peak speed 1.33x the average (an ease-in-out
- * cubic peaks at 3x, which on a 13 m walk through four doors is a blur).
- */
-export function walkEase(t, accel) {
-  const a = accel != null ? accel : 0.25, x = Math.max(0, Math.min(1, t)), v = 1 / (1 - a);
-  if (x < a) return v * x * x / (2 * a);
-  if (x > 1 - a) return 1 - v * (1 - x) * (1 - x) / (2 * a);
-  return v * (a / 2 + x - a);
+  let peak = 0;
+  for (let i = 1; i <= N; i++) peak = Math.max(peak, Math.abs(yaws[i] - yaws[i - 1]) / ((tc[i] - tc[i - 1]) * scale));
+  return { at, ease, ms, length: total, turn,
+    stats: { speed: V / scale, peakYawRate: peak * 180 / Math.PI, cruiseShare: cruise / T, doors: doorD.length } };
 }
 
 // ---- Rooms seen from outside ----------------------------------------------
@@ -895,6 +1001,82 @@ export function outsideView(graph, roomId, opts) {
   const r = hyp(h, y - aim[1]);
   return { pose: poseFromLook([e[0], y, e[1]], yaw, pitch, r, best.fov), portal: best.p.id, standIn: best.other,
     seen: best.seen.length / targets.length };
+}
+
+// ---- Open-plan rooms sharing one vantage ---------------------------------------
+
+/**
+ * Does the sight line eye -> pt leave the space made of `roomIds`' polygons
+ * and the open-plan joins between them before it arrives? The last `tail`
+ * metres (default 12 cm) are forgiven, as leavesRoom forgives them: a
+ * wall-mounted item sits on the boundary. A door is not part of the space:
+ * only an open-plan join (no wall, no leaf) is looked through.
+ */
+export function sightLeaves(graph, roomIds, eye, pt, tail) {
+  const polys = roomIds.map(id => graph.rooms[id]).filter(Boolean);
+  const joins = graph.portals.filter(p => p.kind === 'open' && roomIds.includes(p.rooms[0]) && roomIds.includes(p.rooms[1]));
+  const L = hyp(pt[0] - eye[0], pt[2] - eye[2]);
+  if (!(L > 1e-6)) return false;
+  const lim = 1 - Math.min(0.5, (tail != null ? tail : 0.12) / L);
+  const n = Math.max(2, Math.ceil(L / 0.03));
+  for (let i = 1; i < n; i++) {
+    const t = i / n;
+    if (t >= lim) break;
+    const x = eye[0] + (pt[0] - eye[0]) * t, z = eye[2] + (pt[2] - eye[2]) * t;
+    if (!polys.some(poly => insidePoly(poly, x, z)) && !joins.some(p => inPortal(p, x, z, 0.06))) return true;
+  }
+  return false;
+}
+
+/**
+ * Two open-plan rooms that can share one vantage (2026-10-17: living
+ * room and kitchen "should just rotate"): when the camera may stand in ONE
+ * place for both views, going between them is a turn on the spot.
+ *
+ * A candidate is an eye one room's chooser rated (X's own view eye, or one
+ * of its runners-up) standing within `reach` (1 m) of the other room Y --
+ * near the join, so Y is framed from beside it, not from across X. From it,
+ * each room is framed by the in-room chooser given just that eye
+ * (o.viewFrom; for Y the sight lines may cross the join -- sightLeaves).
+ * It qualifies when BOTH views reach `ratio` (0.75) of their own view's
+ * coverage and score: the shared spot frames both rooms nearly as well as
+ * each room's best. Of those that qualify, the best worse-of-the-two. An
+ * authored view is never moved: an authored room's only candidate is its
+ * own eye, and two authored rooms share nothing.
+ *
+ * @param o.graph     buildNavGraph()
+ * @param o.rooms     [a, b]
+ * @param o.own       { [id]: { pose, eye, score, coverage, authored, ranked: [{ eye }] } }
+ * @param o.viewFrom  (room, eye) => { pose, score, coverage } | null
+ * @param o.ratio     default 0.75
+ * @param o.reach     default 1 (m)
+ * @returns null, or { anchor: X, eye, poses: { [a]: pose, [b]: pose }, ratio }
+ */
+export function sharedVantage(o) {
+  const [a, b] = o.rooms, own = o.own || {}, rooms = o.graph.rooms;
+  const ratio = o.ratio != null ? o.ratio : 0.75, reach = o.reach != null ? o.reach : 1;
+  if (!own[a] || !own[b] || !own[a].pose || !own[b].pose || !rooms[a] || !rooms[b]) return null;
+  if (own[a].authored && own[b].authored) return null;
+  const rel = (r, base) => r && r.pose && base.coverage > 0 && base.score > 0 ? Math.min(r.coverage / base.coverage, r.score / base.score) : 0;
+  let best = null;
+  [[a, b], [b, a]].forEach(([x, y]) => {
+    const ox = own[x], oy = own[y];
+    const cands = [ox.eye].concat(ox.authored ? [] : (ox.ranked || []).map(r => r.eye)).filter(Boolean);
+    const seen = [];
+    cands.forEach(eye => {
+      if (seen.some(q => hyp(q[0] - eye[0], q[1] - eye[1], q[2] - eye[2]) < 0.02)) return;
+      seen.push(eye);
+      if (insidePoly(rooms[y], eye[0], eye[2]) || distToPolyEdge(rooms[y], eye[0], eye[2]) > reach) return;
+      const mine = ox.eye && hyp(ox.eye[0] - eye[0], ox.eye[1] - eye[1], ox.eye[2] - eye[2]) < 0.02;
+      // An authored room's view never moves -- and nor does Y's when it is authored.
+      if (oy.authored) return;
+      const vx = mine ? ox : o.viewFrom(x, eye), vy = o.viewFrom(y, eye);
+      const rx = mine ? 1 : rel(vx, ox), ry = rel(vy, oy), q = Math.min(rx, ry);
+      if (rx < ratio || ry < ratio) return;
+      if (!best || q > best.ratio) best = { anchor: x, eye: eye.slice(), poses: { [x]: clonePose(vx.pose), [y]: clonePose(vy.pose) }, ratio: q };
+    });
+  });
+  return best;
 }
 
 /**

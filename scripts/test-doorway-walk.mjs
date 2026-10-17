@@ -17,7 +17,19 @@
  *   3. An L-shaped room gets a corner waypoint instead of cutting its notch.
  *   4. Reverse: b -> a is a -> b backwards.
  *   5. The view turns smoothly, lands and starts exactly, looks along the
- *      walk through a doorway, and the duration scales with length (capped).
+ *      walk through a doorway.
+ *   5a. Timing: one constant cruise speed (a straight walk takes L / V plus
+ *      the ramps, at exactly V between them; longer by exactly the extra
+ *      length over V), slowed only where the head turns at the cap; a tour
+ *      of a compact flat averages <= 1.2 s a hop, none over 1.5 s but the
+ *      longest. Every walk arrives already facing its view (no
+ *      move-then-rotate: <= 5 deg left 25 cm out, the turn at rest with the
+ *      eye), never turns hard while stopped, and its angular velocity never
+ *      steps from frame to frame.
+ *   5b. Open-plan rooms sharing one vantage (sharedVantage, sightLeaves):
+ *      one eye, inside and under the ceiling, framing both rooms at least
+ *      75% as well as their own views; the flight between them a pure
+ *      rotation at the cap; an authored view never moved.
  *   6. A cupboard is seen from the room it opens onto, below the ceiling.
  *   6b. A start or end parked against a wall (5-15 cm off it) still walks:
  *      hand-picked rect / L-room spots, and a property run over random
@@ -26,8 +38,9 @@
  *   6c. The path's own guards (fitPath) on waypoints built to stray: a
  *      hairpin the raw spline swings out through the walls, a plateau it
  *      bulges over the ceiling gap.
- *   6d. The head turns no faster than 240 deg/s in real time (the walk slows
- *      where it turns); a cupboard's own door is hidden while it is the view.
+ *   6d. The head turns no faster than maxYawRate (500 deg/s) in real time
+ *      (the walk slows where it would turn faster); a cupboard's own door is
+ *      hidden while it is the view.
  *   7. Tall furniture is walked round; furniture that blocks every way does
  *      not send the camera over the roof.
  *   8. The tour order: authored order first, the rest appended; the loader,
@@ -143,17 +156,48 @@ function samples(plan) {
   for (let i = 0; i <= 2000; i++) out.push(F.eyeOf(plan.at(i / 2000)));
   return out;
 }
-// Peak yaw rate (deg/s) of a plan as the scene runs it: walkEase over plan.ms,
-// measured over every 1/60 s window.
+// Peak yaw rate (deg/s) of a plan as the scene runs it -- plan.at(plan.ease(t))
+// over plan.ms -- measured over every 1/60 s window.
 function maxYawRate(plan) {
   const n = Math.max(60, Math.round(plan.ms / 1000 * 60));
   let prev = W.lookOf(plan.at(0)).yaw, best = 0;
   for (let i = 1; i <= n; i++) {
-    const y = W.lookOf(plan.at(W.walkEase(i / n))).yaw;
+    const y = W.lookOf(plan.at(plan.ease(i / n))).yaw;
     best = Math.max(best, Math.abs(F.shortestArc(prev, y)) / D2R / (plan.ms / 1000 / n));
     prev = y;
   }
   return best;
+}
+// The motion of a plan in real time, sampled at `hz`: per step the eye's
+// speed (m/s), the head's angular velocity (deg/s, signed), and the path
+// distance still to go (m).
+function motion(plan, hz) {
+  const T = plan.ms / 1000, n = Math.max(2, Math.round(T * (hz || 240))), dt = T / n;
+  const P = []; for (let i = 0; i <= n; i++) P.push(plan.at(plan.ease(i / n)));
+  const E = P.map(F.eyeOf), Y = P.map(p => W.lookOf(p).yaw);
+  const steps = [];
+  let trav = 0;
+  for (let i = 1; i <= n; i++) {
+    const l = Math.hypot(E[i][0] - E[i - 1][0], E[i][1] - E[i - 1][1], E[i][2] - E[i - 1][2]);
+    trav += l;
+    steps.push({ v: l / dt, w: F.shortestArc(Y[i - 1], Y[i]) / D2R / dt, trav, yaw: Y[i] });
+  }
+  steps.forEach(st => { st.left = trav - st.trav; });
+  return { steps, dt, total: trav };
+}
+// What a walk's ARRIVAL looks like: how far (deg) the head still has to turn
+// once the eye is 25 cm (of path) from the end -- a move-then-rotate leaves
+// most of its turn for there -- and its turn rate over the final 1/120 s.
+function arrival(plan, to) {
+  const m = motion(plan, 480), fy = W.lookOf(to).yaw;
+  const at25 = m.total > 0.3 ? m.steps.find(st => st.left <= 0.25) : null;
+  const tail = m.steps.slice(-4);
+  return {
+    left25: at25 ? Math.abs(F.shortestArc(at25.yaw, fy)) / D2R : 0,
+    endRate: Math.abs(tail.reduce((a, st) => a + st.w, 0) / tail.length),
+    // the yaw a hair before landing, against the view
+    err: Math.abs(F.shortestArc(W.lookOf(plan.at(plan.ease(1 - 1e-6))).yaw, fy)) / D2R,
+  };
 }
 function orderedSamples(plan) { const out = []; for (let i = 0; i <= 2000; i++) out.push(F.eyeOf(plan.at(i / 2000))); return out; }
 
@@ -223,6 +267,7 @@ function walkAll(name, spec, graph, minPortals) {
   const poses = inRoomPoses(spec, graph);
   const ids = Object.keys(poses);
   let planned = 0, worst = -Infinity, allBad = [], jumps = 0, plans = {}, fastest = { rate: 0 };
+  const worstArr = { err: 0, left25: 0, endRate: 0 }, worstMove = { v: 0, stopTurn: 0, dw: 0 };
   for (const a of ids) for (const b of ids) {
     if (a === b) continue;
     const ea = F.eyeOf(poses[a]), eb = F.eyeOf(poses[b]);
@@ -235,16 +280,39 @@ function walkAll(name, spec, graph, minPortals) {
     const bad = A1.bad.concat(A2.bad), maxY = Math.max(A1.maxY, A2.maxY);
     worst = Math.max(worst, maxY);
     if (bad.length) allBad.push({ a, b, bad: bad.slice(0, 2) });
-    const ps = []; for (let i = 0; i <= 1000; i++) ps.push(plan.at(W.walkEase(i / 1000)));
+    const ps = []; for (let i = 0; i <= 1000; i++) ps.push(plan.at(plan.ease(i / 1000)));
     for (let i = 1; i < ps.length; i++) {
       const la = W.lookOf(ps[i - 1]), lb = W.lookOf(ps[i]);
       if (Math.abs(F.shortestArc(la.yaw, lb.yaw)) > 4 * D2R) { jumps++; break; }
     }
-    // The head's turn rate, in real time: 1000 frames over plan.ms.
+    // The head's turn rate, in real time: 60 frames a second over plan.ms.
     const rate = maxYawRate(plan);
     if (rate > fastest.rate) fastest = { rate, hop: a + '>' + b, ms: plan.ms };
+    // Arriving: already facing the view, the head slowing to rest with the eye.
+    const arr = arrival(plan, poses[b]);
+    if (arr.err > worstArr.err) worstArr.err = arr.err;
+    if (arr.left25 > worstArr.left25) { worstArr.left25 = arr.left25; worstArr.hop25 = a + '>' + b; }
+    if (arr.endRate > worstArr.endRate) worstArr.endRate = arr.endRate;
+    // In real time at 120 frames a second: never faster than the cruise speed,
+    // never turning hard while (nearly) stopped, and the angular velocity
+    // never stepping from one frame to the next.
+    const m = motion(plan, 120);
+    let prevW = null;
+    m.steps.forEach(st => {
+      if (st.v / plan.stats.speed > worstMove.v) worstMove.v = st.v / plan.stats.speed;
+      if (st.v < 0.5 && Math.abs(st.w) > 60) worstMove.stopTurn++;
+      if (prevW != null && Math.abs(st.w - prevW) > worstMove.dw) { worstMove.dw = Math.abs(st.w - prevW); worstMove.dwHop = a + '>' + b; }
+      prevW = st.w;
+    });
   }
-  check(`${name}: the head never turns faster than 240 deg/s (fastest ${fastest.rate.toFixed(0)} deg/s, ${fastest.hop})`, fastest.rate <= 240, fastest);
+  const cap = W.WALK.maxYawRate;
+  check(`${name}: the head never turns faster than maxYawRate (${cap} deg/s; fastest ${fastest.rate.toFixed(0)} deg/s, ${fastest.hop})`, fastest.rate <= cap * 1.03, fastest);
+  check(`${name}: every walk arrives facing its view (worst ${worstArr.err.toFixed(3)} deg off a hair before landing)`, worstArr.err < 0.5, worstArr);
+  check(`${name}: no move-then-rotate -- 25 cm from the end at most 5 deg of turn is left (worst ${worstArr.left25.toFixed(1)}, ${worstArr.hop25})`, worstArr.left25 <= 5, worstArr);
+  check(`${name}: ... and the turn comes to rest with the eye (final 1/120 s under 20 deg/s; worst ${worstArr.endRate.toFixed(1)})`, worstArr.endRate < 20, worstArr);
+  check(`${name}: no stop-then-turn -- never under 0.5 m/s while turning over 60 deg/s (${worstMove.stopTurn} frames)`, worstMove.stopTurn === 0, worstMove);
+  check(`${name}: the angular velocity never steps (largest change frame to frame at 120 Hz ${worstMove.dw.toFixed(0)} deg/s <= 200)`, worstMove.dw <= 200, worstMove);
+  check(`${name}: never faster than the cruise speed (at most ${worstMove.v.toFixed(3)}x it)`, worstMove.v <= 1.02, worstMove);
   check(`${name}: walks planned between ${planned} pairs of views (at least ${minPortals})`, planned >= minPortals, planned);
   check(`${name}: every sample inside a room or an opening, under the ceiling, never through a wall`, allBad.length === 0, allBad.slice(0, 3));
   check(`${name}: highest eye ${worst.toFixed(3)} m <= ceiling - 0.2 (${(spec.ceiling - 0.2).toFixed(2)})`, worst <= spec.ceiling - 0.2 + 1e-9, worst);
@@ -335,23 +403,157 @@ section('the walk itself');
     }
     check(`through a doorway the camera looks where it is going (within 15 deg; worst ${(worst / D2R).toFixed(1)})`, n > 0 && worst < 15 * D2R, { n, worst: worst / D2R });
   }
+  // 5b: timing (2026-10-17: "on average the transition should take
+  // like a second, no more than like 1.5 seconds"; "the camera speed should
+  // be constant, so longer distances will take slightly longer").
+  const V = W.WALK.walkSpeed, ramp = V / W.WALK.accel;   // the two ramps together cost V/accel of time
   const lens = Object.values(P).map(p => [p.length, p.ms]).sort((x, y) => x[0] - y[0]);
-  check('duration: 0.8-4 s', lens.every(([, ms]) => ms >= 800 && ms <= 4000), lens.slice(0, 2).concat(lens.slice(-2)));
-  {
-    // The turn-rate cap stretches a turning walk, not a straight one: a
-    // straight 4 m hall walk keeps its walking pace.
-    const a = F.poseFromLook([4.6, 1.6, 2.5], 0, 0.1, 2, 70), b = F.poseFromLook([9.5, 1.6, 2.5], 0, 0.1, 2, 70);
-    const st = W.planWalk(g, a, 'hall', b, 'hall');
-    check(`a straight walk is timed by its length (${st && st.ms} ms for ${st && st.length.toFixed(1)} m), not slowed`, st && st.ms < 1800 && maxYawRate(st) < 30, st && [st.ms, maxYawRate(st)]);
-    const turny = P['ensuite>living'];
-    check(`a walk that turns through four doors is slowed for it (${turny.ms} ms) and still turns <= 240 deg/s`, turny.ms > 2000 && maxYawRate(turny) <= 240, [turny.ms, maxYawRate(turny)]);
-  }
+  check(`duration: every walk ${W.WALK.minMs}-${W.WALK.maxMs} ms`, lens.every(([, ms]) => ms >= W.WALK.minMs && ms <= W.WALK.maxMs), lens.slice(0, 2).concat(lens.slice(-2)));
   check('... longer walks take longer (shortest < longest)', lens[0][1] < lens[lens.length - 1][1], [lens[0], lens[lens.length - 1]]);
-  // The speed profile.
-  let mono = true, peak = 0;
-  for (let i = 1; i <= 1000; i++) { const d = W.walkEase(i / 1000) - W.walkEase((i - 1) / 1000); if (d < -1e-12) mono = false; peak = Math.max(peak, d * 1000); }
-  check('speed profile: 0 -> 1, monotone, peak 1.33x the average (not an ease-in-out cubic\'s 3x)',
-    W.walkEase(0) === 0 && Math.abs(W.walkEase(1) - 1) < 1e-12 && mono && peak < 1.34 && peak > 1.3, peak);
+  {
+    // A straight walk is timed by its length alone: L / V plus the ramps,
+    // cruising at exactly V -- and a longer one takes longer by exactly the
+    // extra length over V (one constant speed).
+    const walk = (x0, x1) => W.planWalk(g, F.poseFromLook([x0, 1.6, 2.5], 0, 0.1, 2, 70), 'hall', F.poseFromLook([x1, 1.6, 2.5], 0, 0.1, 2, 70), 'hall');
+    const st = walk(4.6, 9.5), sh = walk(4.6, 7.0);
+    const want = (st.length / V + ramp) * 1000;
+    check(`a straight ${st.length.toFixed(1)} m walk takes L/V + the ramps (${st.ms} ms, want ${want.toFixed(0)})`, Math.abs(st.ms - want) < 15, [st.ms, want]);
+    const mid = motion(st, 240).steps.filter(x => x.trav > 0.6 && x.left > 0.6);
+    const vs = mid.map(x => x.v);
+    check(`... at one constant speed between the ramps (${Math.min(...vs).toFixed(3)}-${Math.max(...vs).toFixed(3)} m/s, cruise ${V})`,
+      vs.length > 50 && Math.min(...vs) > V * 0.995 && Math.max(...vs) < V * 1.005, [Math.min(...vs), Math.max(...vs)]);
+    check(`... so 2.5 m further takes (2.5 / V) s longer (${st.ms - sh.ms} ms)`, Math.abs((st.ms - sh.ms) - (st.length - sh.length) / V * 1000) < 15, [st.ms, sh.ms]);
+    check('... and the turn-rate cap does not slow it (it barely turns)', maxYawRate(st) < 30 && st.stats.cruiseShare > 0.6, [maxYawRate(st), st.stats.cruiseShare]);
+    const turny = P['ensuite>living'];
+    check(`a walk that turns through four doors still turns <= ${W.WALK.maxYawRate} deg/s (${turny.ms} ms, peak ${maxYawRate(turny).toFixed(0)})`,
+      maxYawRate(turny) <= W.WALK.maxYawRate * 1.03, [turny.ms, maxYawRate(turny)]);
+    // The speed only drops below the cruise where the head would otherwise
+    // out-turn the cap: at every slower frame (outside the ramps) the head
+    // is turning close to the cap.
+    let slowNoTurn = 0;
+    Object.values(P).forEach(pl => {
+      const m = motion(pl, 240);
+      m.steps.forEach(x => { if (x.trav > 0.6 && x.left > 0.6 && x.v < pl.stats.speed * 0.9 && Math.abs(x.w) < W.WALK.maxYawRate * 0.5) slowNoTurn++; });
+    });
+    check(`... it is slowed only where it turns (${slowNoTurn} slow frames turning under half the cap)`, slowNoTurn === 0, slowNoTurn);
+  }
+}
+{
+  // A tour of a compact flat, each room's view in the corner beside its door
+  // (as a real house's often is), forwards and back round: about a second a
+  // hop -- none over 1.5 s but the longest.
+  const compact = { ceiling: 2.5,
+    rooms: { living: [[0, 0], [4, 0], [4, 3.5], [0, 3.5]], kitchen: [[0, 3.6], [4, 3.6], [4, 6], [0, 6]], hall: [[4.1, 0], [5.3, 0], [5.3, 6], [4.1, 6]],
+      bed: [[5.4, 0], [8.5, 0], [8.5, 3], [5.4, 3]], bath: [[5.4, 3.1], [7.5, 3.1], [7.5, 4.5], [5.4, 4.5]], office: [[5.4, 4.6], [8.5, 4.6], [8.5, 6], [5.4, 6]] },
+    walls: [{ a: [4.05, -0.05], b: [4.05, 6.05], thickness: T }, { a: [5.35, -0.05], b: [5.35, 6.05], thickness: T },
+      { a: [5.35, 3.05], b: [8.55, 3.05], thickness: T }, { a: [5.35, 4.55], b: [8.55, 4.55], thickness: T }, { a: [7.55, 3.05], b: [7.55, 4.55], thickness: T }],
+    doors: [{ id: 'living_door', c: [4.05, 1.5], u: [0, 1], width: 0.8, depth: T, top: 2.03 }, { id: 'bed_door', c: [5.35, 1.5], u: [0, 1], width: 0.8, depth: T, top: 2.03 },
+      { id: 'bath_door', c: [5.35, 3.8], u: [0, 1], width: 0.8, depth: T, top: 2.03 }, { id: 'office_door', c: [5.35, 5.3], u: [0, 1], width: 0.8, depth: T, top: 2.03 }] };
+  const cg = W.buildNavGraph(compact);
+  const doorOf = { living: [4.05, 1.5], kitchen: [2, 3.55], hall: [4.7, 3], bed: [5.35, 1.5], bath: [5.35, 3.8], office: [5.35, 5.3] };
+  const views = {};
+  for (const id of Object.keys(compact.rooms)) {
+    const poly = compact.rooms[id], d = doorOf[id], c = F.polygonCentroid(poly);
+    const v = F.roomVantages(poly, 0.4).sort((x, y) => Math.hypot(x.x - d[0], x.z - d[1]) - Math.hypot(y.x - d[0], y.z - d[1]))[0];
+    views[id] = F.poseFromLook([v.x, 2.0, v.z], Math.atan2(c[1] - v.z, c[0] - v.x), 24 * D2R, 2, 70);
+  }
+  const tour = ['living', 'kitchen', 'hall', 'bed', 'bath', 'office'];
+  for (const dir of [1, -1]) {
+    const hops = [];
+    let bad = 0;
+    for (let i = 0; i < tour.length; i++) {
+      const a = tour[(i * dir + 12) % 6], b = tour[((i + 1) * dir + 12) % 6];
+      const pl = W.planWalk(cg, views[a], a, views[b], b);
+      hops.push([a + '>' + b, pl ? pl.ms : null, pl ? +pl.length.toFixed(2) : null]);
+      if (pl) bad += audit(compact, cg, samples(pl)).bad.length;
+    }
+    const ms = hops.map(h => h[1]).filter(x => x > 0).sort((x, y) => x - y), avg = ms.reduce((x, y) => x + y, 0) / ms.length;
+    const name = dir > 0 ? 'forwards' : 'backwards';
+    check(`compact tour ${name}: every hop walks, inside, under the ceiling, through no wall (${ms.map(x => (x / 1000).toFixed(2)).join(' / ')} s)`,
+      ms.length === 6 && bad === 0, { hops, bad });
+    check(`... averaging ${(avg / 1000).toFixed(2)} s <= 1.2 s`, avg <= 1200, hops);
+    check(`... none over 1.5 s but the longest (next longest ${(ms[ms.length - 2] / 1000).toFixed(2)} s; longest ${(ms[ms.length - 1] / 1000).toFixed(2)} s)`, ms[ms.length - 2] <= 1500 && ms[ms.length - 1] <= 2000, hops);
+  }
+}
+
+// ---- 5a: open-plan rooms sharing one vantage ---------------------------------------
+// 2026-10-17: kitchen to living room "should just rotate: it should
+// just have an angle where the camera stays in one place for both".
+section('open-plan rooms sharing one vantage');
+{
+  const pair = ['living', 'kitchen'];
+  const ownOf = id => { const r = F.chooseInRoomView({ poly: flat.rooms[id], ceiling: flat.ceiling, items: [], aspect: 1.6 }); return { pose: r.pose, eye: r.eye, score: r.score, coverage: r.coverage, ranked: r.ranked }; };
+  const viewFrom = (room, eye) => F.chooseInRoomView({ poly: flat.rooms[room], ceiling: flat.ceiling, items: [], aspect: 1.6, eyes: [eye],
+    sight: (e, p, t) => W.sightLeaves(g, pair, e, p, t) });
+  const own = { living: ownOf('living'), kitchen: ownOf('kitchen') };
+  const sv = W.sharedVantage({ graph: g, rooms: pair, own, viewFrom });
+  const eL = sv && F.eyeOf(sv.poses.living), eK = sv && F.eyeOf(sv.poses.kitchen);
+  check('the flat\'s living room and kitchen share one vantage', !!sv && Math.hypot(eL[0] - eK[0], eL[1] - eK[1], eL[2] - eK[2]) < 1e-9, sv && [eL, eK]);
+  check('... inside the house, under the ceiling gap (whyNotFree), in one of the two rooms and within 1 m of the other',
+    sv && W.whyNotFree(g, eL[0], eL[1], eL[2]) === '' && eL[1] <= flat.ceiling - 0.2 &&
+    pair.some(r => insidePoly(flat.rooms[r], eL[0], eL[2])) && pair.every(r => insidePoly(flat.rooms[r], eL[0], eL[2]) || F.distToPolyEdge(flat.rooms[r], eL[0], eL[2]) <= 1), eL);
+  // Independently: each view looks INTO its own room -- the room's centre is
+  // in the frame's horizontal field -- with no wall between.
+  const inFrame = (pose, pt) => {
+    const lk = W.lookOf(pose), e = F.eyeOf(pose);
+    return Math.abs(F.shortestArc(lk.yaw, Math.atan2(pt[1] - e[2], pt[0] - e[0]))) < Math.atan(Math.tan(pose.fov * D2R / 2) * 1.6);
+  };
+  check('... each view faces its own room (its centre in the frame, no wall crossed to it)', sv && pair.every(r => {
+    const c = F.polygonCentroid(flat.rooms[r]), e = F.eyeOf(sv.poses[r]);
+    return inFrame(sv.poses[r], c) && !flat.walls.some(w => segX([e[0], e[2]], c, w.a, w.b));
+  }));
+  check('... each framed at least 75% as well as by its own view (coverage and score)', sv && pair.every(r => {
+    const v = viewFrom(r, eL);
+    return v.coverage >= 0.75 * own[r].coverage && v.score >= 0.75 * own[r].score;
+  }) && sv.ratio >= 0.75, sv && sv.ratio);
+  check('sightLeaves: through the open-plan join the sight line stays in; into the hall (through a wall) it leaves',
+    !W.sightLeaves(g, pair, [2, 1.6, 1], [2, 0.05, 6]) && W.sightLeaves(g, pair, [2, 1.6, 1], [6, 0.05, 2.5]) &&
+    W.sightLeaves(g, ['kitchen'], [2, 1.6, 1], [2, 0.05, 6]));
+  // The flight between them: a turn on the spot.
+  const a = sv.poses.living, b = sv.poses.kitchen;
+  const turn = W.planGlide(a, b), back = W.planGlide(b, a);
+  const m = motion(turn, 480);
+  const moved = Math.max(...m.steps.map(st => st.v));
+  const dYaw = Math.abs(F.shortestArc(W.lookOf(a).yaw, W.lookOf(b).yaw)) / D2R;
+  const wantMs = Math.max(W.WALK.turnMinMs, 1.875 * dYaw / W.WALK.maxYawRate * 1000);
+  check(`living room <-> kitchen is a pure rotation (${dYaw.toFixed(0)} deg in ${turn.ms} ms; the eye never moves)`, turn.turnInPlace && turn.length < 1e-6 && moved < 1e-6, moved);
+  check(`... timed by the angle at the turn-rate cap (${turn.ms} ms, want ${wantMs.toFixed(0)}), the same back`, Math.abs(turn.ms - wantMs) <= 1 && back.ms === turn.ms, [turn.ms, back.ms, wantMs]);
+  const rate = maxYawRate(turn);
+  let dw = 0;
+  const m2 = motion(turn, 120);
+  m2.steps.forEach((st, i) => { if (i) dw = Math.max(dw, Math.abs(st.w - m2.steps[i - 1].w)); });
+  check(`... never faster than ${W.WALK.maxYawRate} deg/s (${rate.toFixed(0)}), its angular velocity never stepping (${dw.toFixed(0)} deg/s a frame)`, rate <= W.WALK.maxYawRate * 1.03 && dw <= 200, [rate, dw]);
+  const end = turn.at(1), arr = arrival(turn, b);
+  check('... landing exactly on the kitchen view, its turn at rest', Math.abs(end.th - b.th) < 1e-9 && end.tgt.every((v, i) => Math.abs(v - b.tgt[i]) < 1e-9) && arr.endRate < 20, arr);
+  // Authored views are never moved.
+  const authored = (r, pose) => Object.assign({}, own, { [r]: { pose, eye: F.eyeOf(pose), authored: true, score: 1, coverage: 1 } });
+  check('two authored views share nothing', W.sharedVantage({ graph: g, rooms: pair, viewFrom,
+    own: { living: Object.assign({}, own.living, { authored: true }), kitchen: Object.assign({}, own.kitchen, { authored: true }) } }) === null);
+  // A kitchen view authored in its corner beside the join (as the real
+  // house's is): the living room turns to face its own room from there, and
+  // the kitchen's view does not move.
+  const kAuth = F.poseFromLook([3.6, 2.2, 2.7], Math.atan2(1.5 - 2.7, 2 - 3.6), 24 * D2R, 2.5, 70);
+  const sa = W.sharedVantage({ graph: g, rooms: pair, own: authored('kitchen', kAuth), viewFrom });
+  check('an authored kitchen view beside the join: the living room shares its eye, the kitchen view unchanged',
+    sa && sa.anchor === 'kitchen' && JSON.stringify(sa.poses.kitchen) === JSON.stringify(kAuth) &&
+    Math.hypot(...F.eyeOf(sa.poses.living).map((v, i) => v - F.eyeOf(kAuth)[i])) < 1e-9 && inFrame(sa.poses.living, F.polygonCentroid(flat.rooms.living)), sa && sa.anchor);
+  // An authored view standing across its room from the join: too far to
+  // share (reach) -- each room keeps its own view and the walk between them.
+  const kFar = F.poseFromLook([0.4, 2.2, 0.4], Math.atan2(1.5 - 0.4, 2 - 0.4), 24 * D2R, 2.5, 70);
+  check('... one standing across its room (3 m from the living room) shares nothing', W.sharedVantage({ graph: g, rooms: pair, own: authored('kitchen', kFar), viewFrom }) === null);
+  check('... nor any when the bar is (impossibly) high', W.sharedVantage({ graph: g, rooms: pair, own, viewFrom, ratio: 1.5 }) === null);
+  {
+    // BOTH rooms must be framed well from the shared spot: a runner-up eye
+    // beside the join that frames the living room fine but its own kitchen
+    // poorly is not shared (and is, once the kitchen is framed well too).
+    const near = [3.6, 2.2, 2.7], dummy = F.poseFromLook(near, 0, 0.4, 2, 70);
+    const stubOwn = { living: { pose: dummy, eye: [0.4, 2.2, 6.6], score: 1, coverage: 1, ranked: [] },
+      kitchen: { pose: dummy, eye: [0.4, 2.2, 0.4], score: 1, coverage: 1, ranked: [{ eye: near }] } };
+    const stub = kq => (room) => ({ pose: dummy, coverage: room === 'kitchen' ? kq : 0.95, score: room === 'kitchen' ? kq : 0.95 });
+    check('... the shared spot must frame BOTH rooms: its own room poorly (0.5) -> not shared; well (0.8) -> shared',
+      W.sharedVantage({ graph: g, rooms: pair, own: stubOwn, viewFrom: stub(0.5) }) === null &&
+      !!W.sharedVantage({ graph: g, rooms: pair, own: stubOwn, viewFrom: stub(0.8) }));
+  }
 }
 
 // ---- 5b: a camera parked against a wall ------------------------------------------
@@ -669,10 +871,31 @@ section('wiring');
   const fly = scene.slice(scene.indexOf('    function flyTo(pose, opts) {'), scene.indexOf('    function cancelFlight() {'));
   check('flyTo: a walk between two in-house views, its own duration', fly.includes("if (ra && rb) {") &&
     fly.includes('const plan = planWalk(navGraph(), from, ra, to, rb, { obstacles: walkObstacles() });') &&
-    fly.includes("(mode === 'walk' ? route.plan.ms :"));
+    fly.includes('(route.plan ? route.plan.ms :'));
   check('flyTo: the arc only when the walk is impossible or an end is outside', /if \(plan\) return \{ mode: 'walk', plan \};\s*\}\s*return \{ mode: 'arc' \};/.test(fly));
   check('reduced motion (or ms 0) still jumps, and lets the doors go', fly.includes('if (!(ms > 0) || reducedMotion()) { applyPose(pose); releaseWalkDoors(); wake(250); return Promise.resolve(\'landed\'); }'));
-  check('the tick uses the walk\'s own speed profile', scene.includes('applyPose(flight.plan.at((flight.plan.ease || easeInOut)(Math.max(0, t))));'));
+  const route = scene.slice(scene.indexOf('    function flightRoute(from, to) {'), scene.indexOf('    function walkReport('));
+  check('one room, a straight line: timed and turned like a walk (planGlide) -- a turn on the spot for a shared eye',
+    /\{\s*const plan = planGlide\(from, to\);\s*lastWalk = walkReport\(ra, rb, plan\);\s*return \{ mode: 'eye', plan \};/.test(route));
+  const rv = scene.slice(scene.indexOf('    function roomView(id, opts) {'), scene.indexOf('    function sharedRoomView(id, opts) {'));
+  check('a room view: authored first, then a vantage shared with an open-plan neighbour, then its own in-room view',
+    rv.indexOf('const v = ROOMS[id].view;') < rv.indexOf('const shared = sharedRoomView(id, opts);') &&
+    /const shared = sharedRoomView\(id, opts\);\s*if \(shared\) return shared;\s*return inRoomView\(id, opts\) \|\| outsideRoomView\(id\) \|\| above\(\);/.test(rv));
+  const sr = scene.slice(scene.indexOf('    function sharedRoomView(id, opts) {'), scene.indexOf('    // ---- In-room room views'));
+  check('sharedRoomView: open-plan partners only, through sharedVantage, the partner framed from that one eye with sight through the join',
+    sr.includes('for (const other of openPartners(id)) {') && sr.includes('sv = sharedVantage({ graph: navGraph(), rooms: [id, other],') &&
+    sr.includes('computeInRoomView(room, ins, { eyes: [eye], with: room === id ? other : id })') &&
+    scene.includes("p.kind === 'open' && p.rooms.includes(id)") &&
+    scene.includes('const sight = extra && extra.with ? (e, p, tail) => sightLeaves(navGraph(), [id, extra.with], e, p, tail) : undefined;') &&
+    scene.includes('eyes: extra && extra.eyes, sight });'));
+  check('... cached with the room views, keyed by both rooms\' own eyes (an edited authored view is picked up)',
+    sr.includes("const key = 'shared|' + [id, other].sort().join('|') + '|' + eyeKey(ownA.eye) + '|' + eyeKey(ownB.eye)") && sr.includes('roomViewCache.set(key, sv);'));
+  check('standing at a shared vantage counts as standing in the focused room: the click-away, and a zoom held in the room (either room\'s floor)',
+    /function standingRoom\(eye\) \{\s*const r = eyeInRoom\(eye\), fr = pickFocusRoom \? pickFocusRoom\(\) : null;\s*return r && fr && r !== fr && sharedWith\.get\(fr\) === r \? fr : r;/.test(scene) &&
+    scene.includes('return fr && standingRoom([cam.position.x, cam.position.y, cam.position.z]) === fr ? fr : null;') &&
+    scene.includes('if (inRoomTapIsClickAway({ cameraRoom: standingRoom([cam.position.x, cam.position.y, cam.position.z]), focusedRoom: fr,') &&
+    scene.includes('const ids = [room].concat(sharedWith.get(room) && roomShape(sharedWith.get(room)) ? [sharedWith.get(room)] : []);'));
+  check('the tick uses the walk\'s own speed profile',scene.includes('applyPose(flight.plan.at((flight.plan.ease || easeInOut)(Math.max(0, t))));'));
   check('a cupboard\'s own door is hidden while it is the view, shown when another flight starts',
     /walkViewDoor = outsideDoorFor\(to\);\s*setViewDoor\(walkViewDoor\);/.test(scene) &&
     /if \(show && show\.pivot\) show\.pivot\.visible = true;/.test(scene) && /doorById\[hiddenViewDoor\]\.pivot\.visible = false;/.test(scene));

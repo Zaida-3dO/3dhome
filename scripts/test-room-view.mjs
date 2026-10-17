@@ -371,8 +371,10 @@ section('wiring');
     /function zoomBy\(factor\) \{\s*const held = factor > 1 \? heldRoom\(\) : null;[\s\S]{0,800}keepEyeInRoom\(held\);\s*\}/.test(scene) &&
     /const held = heldRoom\(\);\s*orb\.th \+=[^\n]*\n[^\n]*orb\.ph = [^\n]*\n\s*keepEyeInRoom\(held\);/.test(scene) &&
     /orb\.r = clampRadiusInside\(\[orb\.tgt\.x, orb\.tgt\.y, orb\.tgt\.z\], orb\.th, orb\.ph, orb\.r, inside\);/.test(scene));
+  // The straight line is now timed and turned like a walk (planGlide,
+  // test-doorway-walk.mjs).
   check('a same-room flight is a straight line only when it crosses no room edge (exact, not sampled)',
-    /if \(ra && ra === rb && !leavesRoom\(roomShape\(ra\)\.map\(p => \[tx\(p\[0\]\), tz\(p\[1\]\)\]\), a, b, 0\)\) return \{ mode: 'eye' \};/.test(scene));
+    /if \(ra && ra === rb && !leavesRoom\(roomShape\(ra\)\.map\(p => \[tx\(p\[0\]\), tz\(p\[1\]\)\]\), a, b, 0\)\) \{\s*const plan = planGlide\(from, to\);[\s\S]{0,80}return \{ mode: 'eye', plan \};/.test(scene));
   check('walls render solid while the camera is inside a room', scene.includes('const targetOpacity = camInside ? b : wallFadeTarget(dot, b);'));
   check('the ceiling clears during a flight over the walls', /const ceilTarget = arcFlight \|\| cam\.position\.y > WH \? 0 : 1\.0;/.test(scene));
   // Room to room is now a walk through the doorways (test-doorway-walk.mjs);
@@ -384,7 +386,9 @@ section('wiring');
   check('Reset to derived keeps the derived view\'s own lens', em.includes('if (pose && pose.fov == null) pose.fov = DEFAULT_FOV;') &&
     !em.includes('      if (pose) pose.fov = DEFAULT_FOV;'));
   {
-    const i = scene.indexOf('if (inRoomTapIsClickAway({ cameraRoom: eyeInRoom([cam.position.x, cam.position.y, cam.position.z]), focusedRoom: fr,');
+    // standingRoom: the room the eye is in, or the focused room when its view
+    // is a vantage shared with that room (test-doorway-walk.mjs).
+    const i = scene.indexOf('if (inRoomTapIsClickAway({ cameraRoom: standingRoom([cam.position.x, cam.position.y, cam.position.z]), focusedRoom: fr,');
     const j = scene.indexOf('if (picked.roomId && onRoomClick) onRoomClick(picked.roomId);');
     check('a tap from inside the focused room is the click-away, decided (and returned) before the room click',
       i > 0 && j > i && j - i < 300 && /\}\)\) return;/.test(scene.slice(i, j)));

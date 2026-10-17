@@ -617,17 +617,21 @@ export function itemWeight(box, cap) {
   return Math.max(0.05, Math.min(cap || 6, w * d + Math.max(w, d) * h));
 }
 
-/** Distance along (dx, dz) from (x, z) to the polygon's boundary (Infinity if none). */
-function rayToBoundary(poly, x, z, dx, dz) {
-  let best = Infinity;
+/**
+ * Distance along (dx, dz) from (x, z) to the polygon's boundary (Infinity if
+ * none). `far`: to its furthest crossing instead -- the far wall, for an eye
+ * standing outside the polygon (a shared open-plan vantage).
+ */
+function rayToBoundary(poly, x, z, dx, dz, far) {
+  let best = far ? -Infinity : Infinity;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
     const ax = poly[j][0], az = poly[j][1], sx = poly[i][0] - ax, sz = poly[i][1] - az;
     const den = dx * sz - dz * sx;
     if (Math.abs(den) < 1e-12) continue;
     const t = ((ax - x) * sz - (az - z) * sx) / den, u = ((ax - x) * dz - (az - z) * dx) / den;
-    if (t > 1e-6 && u >= 0 && u <= 1) best = Math.min(best, t);
+    if (t > 1e-6 && u >= 0 && u <= 1) best = far ? Math.max(best, t) : Math.min(best, t);
   }
-  return best;
+  return far && best < 0 ? Infinity : best;
 }
 
 /** Forward, right and up unit vectors for a camera at yaw `yaw` (x/z) pitched DOWN by `pitch`. */
@@ -664,6 +668,14 @@ export function poseFromLook(eye, yaw, pitch, r, fov) {
  *                    point is on (a hit inside it is the item itself), null
  *                    for the floor and lights. Called for the best few eyes.
  * @param o.options   overrides of IN_ROOM_VIEW
+ * @param o.eyes      [[x, y, z]] -- only these eyes (kind 'fixed'), instead of
+ *                    the room's own vantages: the view of an open-plan room
+ *                    from a vantage it shares with its neighbour
+ *                    (src/doorway-walk.js sharedVantage)
+ * @param o.sight     (eye, point, tail) => bool: does the sight line leave the
+ *                    space it may cross? Defaults to leavesRoom(poly, ...); an
+ *                    eye outside `poly` passes one that also allows the
+ *                    neighbour and the opening between (doorway-walk.js sightLeaves)
  * @returns { pose, eye, coverage, score, fallback, kind, tried, rays }
  *          pose null and fallback true when no vantage reaches minCoverage
  */
@@ -718,18 +730,20 @@ export function chooseInRoomView(o) {
   const heights = [];
   opt.heights.forEach(h => { const y = Math.min(h, topEye); if (y >= Math.min(opt.minHeight, topEye) && heights.every(q => Math.abs(q - y) > 0.05)) heights.push(y); });
   const eyes = [];
-  roomVantages(poly, opt.inset).forEach(v => heights.forEach(y => {
+  if (o.eyes) o.eyes.forEach(e => { if (!items.some(it => inBox(it.box, e, opt.eyePad))) eyes.push({ e: e.slice(), kind: 'fixed' }); });
+  else roomVantages(poly, opt.inset).forEach(v => heights.forEach(y => {
     const e = [v.x, y, v.z];
     if (items.some(it => inBox(it.box, e, opt.eyePad))) return;
     eyes.push({ e, kind: v.kind });
   }));
+  const leaves = o.sight || ((eye, p, tail) => leavesRoom(poly, eye, p, tail));
 
   // Cheap visibility (orientation-free): polygon walls and furniture boxes.
   let rays = 0;
   function visibility(eye) {
     const vis = new Uint8Array(flat.length), wall = new Uint8Array(flat.length);
     flat.forEach((s, k) => {
-      if (leavesRoom(poly, eye, s.p)) { wall[k] = 1; return; }
+      if (leaves(eye, s.p)) { wall[k] = 1; return; }
       const g = groups[s.g];
       for (let b = 0; b < items.length; b++) {
         if (g.kind === 'item' && g.idx === b) continue;
@@ -739,7 +753,7 @@ export function chooseInRoomView(o) {
       }
       vis[k] = 1;
     });
-    const cornerVis = corners.map(c => !leavesRoom(poly, eye, c, 0.05));
+    const cornerVis = corners.map(c => !leaves(eye, c, 0.05));
     return { vis, wall, cornerVis };
   }
   const doorBonus = eye => {
@@ -790,6 +804,7 @@ export function chooseInRoomView(o) {
     const gIn = new Int16Array(groups.length), gLow = new Int16Array(groups.length);
     let best = null;
     const fixed = (ev.kind === 'corner' ? opt.cornerBonus : 0) + doorBonus(eye);
+    const eyeOut = !insidePoly(poly, eye[0], eye[2]);
     for (const yaw of yaws) for (const pd of pitches) {
       const pitch = pd * D2R, B = lookBasis(yaw, pitch);
       const f0 = B.f[0], f1 = B.f[1], f2 = B.f[2], r0 = B.r[0], r2 = B.r[2], u0 = B.u[0], u1 = B.u[1], u2 = B.u[2];
@@ -823,7 +838,7 @@ export function chooseInRoomView(o) {
       let nearN = 0, cs = 0;
       for (let i = 0; i < nearQ.length; i += 3) if (inFrame(nearQ, i)) nearN++;
       for (let i = 0; i < cornerQ.length; i += 3) if (inFrame(cornerQ, i)) cs++;
-      const depth = Math.min(1, rayToBoundary(poly, eye[0], eye[2], Math.cos(yaw - yawShift), Math.sin(yaw - yawShift)) / diag);
+      const depth = Math.min(1, rayToBoundary(poly, eye[0], eye[2], Math.cos(yaw - yawShift), Math.sin(yaw - yawShift), eyeOut) / diag);
       const score = cov + fixed + opt.cornersSeenBonus * cs / corners.length + opt.depthBonus * depth - hid - opt.nearPenalty * nearN - clipPenalty * clip -
         opt.pitchPenalty * Math.abs(pd - opt.pitchPref) / 20;
       if (!best || score > best.score) best = { score, coverage: cov, yaw, pitch };
