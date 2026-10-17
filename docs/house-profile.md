@@ -965,19 +965,29 @@ nothing authored, every view is **derived**, so any house works unchanged:
   `iso` preset, which `cameraPresets.iso` overrides).
 - **Getting there.** Between two views inside the house the camera **walks**:
   out through the door (or the open-plan opening), along the hall and in
-  through the next door, at 1.6 m eye height through each opening, turning to
-  look where it is going and then to the view — never closer than 20 cm to the
+  through the next door, at 1.6 m eye height through each opening — never closer than 20 cm to the
   ceiling and never through a wall. The doors it passes through swing open for
   it and back afterwards. The route is worked out from the plan alone: each
   door joins the rooms either side of it, and two rooms whose edges face each
   other with no wall between (an open-plan kitchen and living room) join along
   that unwalled stretch. Tall furniture (over 1.2 m) and wall stubs standing
   inside a room are walked round; a camera parked against a wall steps clear
-  of it first. A walk is timed by its length and its turns: the head never
-  turns faster than about 200°/s, so the camera slows where it turns through
-  a doorway, and a walk takes 0.8–4 s. Only a flight with one end outside the house
-  (to or from the home view), or between rooms no door connects, still rises
-  over the walls and drops in.
+  of it first. The camera travels at one constant speed (5.5 m/s, easing in
+  and out over its first and last half metre), so a hop takes about a second
+  and a longer one proportionally longer; it slows below that only where the
+  head would otherwise turn faster than 500°/s. While it moves it turns: out
+  of the start view over the first stretch, along the walk through each
+  doorway, and round to the final view over the last stretch — so it arrives
+  already facing the view, with no turn left to do once it stops. A move
+  within one room is the same, in a straight line.
+  Two open-plan rooms may **share one spot**: when one camera position beside
+  the opening frames both rooms nearly as well as each room's own view (at
+  least 75% as well), both views stand there, and going between the two rooms
+  is a turn on the spot. An authored `view` never moves — the other room turns
+  to face itself from the authored spot (when that is within 1 m of it and
+  frames it well enough); two authored views share nothing. Only a flight with
+  one end outside the house (to or from the home view), or between rooms no
+  door connects, still rises over the walls and drops in.
 - **A furniture item** is framed whole and close: the distance fits its world box
   to the screen. The angle is its front if nothing stands in the way; otherwise
   the nearest of a few dozen candidate angles (up to 90° round, and up to nearly
