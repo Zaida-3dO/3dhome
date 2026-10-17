@@ -123,7 +123,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | Field | Required | What it is |
 |---|---|---|
 | `kind` | yes | `"geometry"`. Tells the validator which half of the schema to apply. |
-| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.11"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card, `1.9` its `cameras` rows, `1.10` its `actions` rows and a TV row's `art` condition, and `1.11` the optional top-level `bindings` and `sidebar`. `geometry.json` is at `"1.6"`: `1.1` added the optional `windows` and `curtains`, `1.2` the optional `furniture`, `1.3` a wall's optional `finishes`, `1.4` the optional camera-focus `view` on a room, a furniture item or a curtain, `1.5` a light fixture's optional `static` look, and `1.6` the optional `navigation` tour order. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
+| `schemaVersion` | yes | Which version of the schema you wrote against, `"MAJOR.MINOR"`. `rooms.json` is at `"1.11"`: `1.1` added the optional `sensors` block, `1.2` its `curtains`/`corniceLights` keys, `1.3` its `climate` key, `1.4` its `vacuums` key, `1.5` its `plants` key, `1.6` its `items` key, `1.7` its `roomScripts` key, `1.8` the `switches` rows of an item card, `1.9` its `cameras` rows, `1.10` its `actions` rows and a TV row's `art` condition, and `1.11` the optional top-level `bindings` and `sidebar`. `geometry.json` is at `"1.7"`: `1.1` added the optional `windows` and `curtains`, `1.2` the optional `furniture`, `1.3` a wall's optional `finishes`, `1.4` the optional camera-focus `view` on a room, a furniture item or a curtain, `1.5` a light fixture's optional `static` look, `1.6` the optional `navigation` tour order, and `1.7` the optional `camera` motion tuning. Older profiles still load. The engine refuses a MAJOR it does not know and may migrate an older MINOR. |
 | `id` | yes | Profile id; should match the directory name, since that is what `HOME3D_HOUSE` selects. |
 | `name` | yes | Display name. |
 | `units` | no | `"cm"`. The only value. |
@@ -143,6 +143,7 @@ else's transform renders off-centre, or at the wrong scale, or both.
 | `lights` | no | The light fixtures, grouped by room. |
 | `cameraPresets` | no | Per-house camera overrides. Usually omit — see below. |
 | `navigation` | no | `{ "order": [room ids] }` — the tour the previous / next room arrows step through. See [Room navigation order](#room-navigation-order). Needs `schemaVersion` `1.6`. |
+| `camera` | no | Tunes how the camera moves — walk speed, the preview's rise and fall, flight times — with no rebuild. See [Camera motion](#camera-motion). Needs `schemaVersion` `1.7`. |
 
 ### Room id is the join key
 
@@ -1164,6 +1165,80 @@ so a room you add later is never unreachable from the arrows. An id that is not
 a room is a validator error and a load warning, and is skipped. Each step flies
 the camera there as a tap would — walking through the doorways (see
 [Camera focus views](#camera-focus-views)).
+
+### Camera motion
+
+The optional `camera` block tunes how the camera **moves**. It is read when the page loads, so
+on a deployment where `geometry.json` is a mounted file you edit it and reload — no rebuild, no
+redeploy. Needs `schemaVersion` `"1.7"` (the validator warns below that).
+
+Every key is optional, and **absent means exactly what the engine always did** — a profile with no
+`camera` block is unchanged. A value that is not a number, or is outside its range, is ignored
+with one `console.warn` (also listed in the profile's load warnings) and its default is used; a
+bad value never breaks the page. Only motion is here: the ceiling clearance, the distance kept from
+walls and the pillar allowance stay fixed, because they keep the camera out of the masonry.
+
+Units are in the key names (`Mps` metres per second, `Sec` seconds, `Ms` milliseconds, `M` metres,
+`Deg` degrees, `Laps` laps of the preview orbit).
+
+**`camera.walk`** — room-to-room travel (the previous/next arrows, tapping a room):
+
+| Key | Default | Range | What it does |
+|---|---|---|---|
+| `speedMps` | `5.5` | 0.5 – 30 | Cruise speed. A hop lasts its length over this, plus the ramps. Double it and the straight part of a hop takes half the time. |
+| `easeSec` | `0.1833` | 0.02 – 2 | How long the walk takes to reach cruise speed from rest, and to stop again. Longer = softer starts and stops. |
+| `maxTurnDegPerSec` | `500` | 30 – 2000 | The fastest the view may turn. A hop that would need a sharper turn slows down instead. Lower = calmer turns. |
+| `minMoveMs` | `330` | 50 – 3000 | The quickest any walk may be; a tiny hop is slowed to this. |
+| `maxMoveMs` | `3000` | 500 – 20000 | The slowest any walk may be; a very long walk speeds up as a whole to fit (by at most twice `speedMps`). Never below `minMoveMs`. |
+| `minTurnMs` | `300` | 50 – 3000 | The quickest a turn on the spot may be (two open-plan rooms sharing one spot). |
+| `lookAheadM` | `1.6` | 0.2 – 6 | How far ahead along the path the view looks. Longer = turns start earlier and are rounder; shorter = the view hugs the path. |
+| `lookDownDeg` | `6` | 0 – 30 | How far the view tilts down while walking. |
+| `eyeHeightM` | `1.6` | 0.5 – 2.4 | Eye height through doorways, and for the view of a cupboard from outside. Always kept clear of the ceiling and of each door's head. |
+| `sharedSpot.enabled` | `true` | true / false | Open-plan rooms that frame well from one spot share it, so moving between them is a turn on the spot. `false` = every room keeps its own view and the camera always walks. |
+| `sharedSpot.maxDistM` | `1` | 0 – 5 | How near the join between the rooms a shared spot may be. |
+| `sharedSpot.minCoverage` | `0.75` | 0.3 – 1 | A shared spot is used only if it frames **both** rooms at least this fraction as well as each room's own view. |
+
+**`camera.preview`** — the auto-rotating preview (`?preview=true`): it holds the top view, descends
+to eye level outside the house, circles there, and climbs back. Lengths are in laps of the orbit:
+
+| Key | Default | Range | What it does |
+|---|---|---|---|
+| `rotateSecPerLap` | `120` | 10 – 3600 | Seconds per full turn. The URL `?rotateSpeed=<radians per second>` **overrides** it (URL, then profile, then default); `?rotateSpeed=0` freezes the preview whatever the profile says. |
+| `topHoldLaps` | `1` | 0 – 10 | Laps spent at the top view before each descent. |
+| `descentLaps` | `0.4` | 0.05 – 5 | Laps the descent takes. |
+| `eyeLevelLaps` | `1` | 0 – 10 | Laps spent at eye level. |
+| `ascentLaps` | `0.3333` | 0.05 – 5 | Laps the climb back takes. |
+| `eyeHeightM` | `1.7` | 0.5 – 3 | Camera height at eye level. |
+| `eyeLevelDistanceFactor` | `1.5` | 1.05 – 4 | At eye level the camera stands this multiple of the footprint's half-diagonal from the centre, plus `eyeLevelExtraM` — so it is always outside the house. |
+| `eyeLevelExtraM` | `3` | 0 – 20 | Extra stand-off added to that. |
+
+**`camera.flight`** — flights that are not walks:
+
+| Key | Default | Range | What it does |
+|---|---|---|---|
+| `homeToRoomMs` | `1200` | 100 – 10000 | The flight between the home (outside) view and a room. |
+| `betweenOutsideViewsMs` | `700` | 100 – 10000 | A flight between two outside views. |
+
+A copy-paste block holding today's values (change one number at a time and reload):
+
+```json
+"camera": {
+  "walk": {
+    "speedMps": 5.5, "easeSec": 0.1833, "maxTurnDegPerSec": 500,
+    "minMoveMs": 330, "maxMoveMs": 3000, "minTurnMs": 300,
+    "lookAheadM": 1.6, "lookDownDeg": 6, "eyeHeightM": 1.6,
+    "sharedSpot": { "enabled": true, "maxDistM": 1.0, "minCoverage": 0.75 }
+  },
+  "preview": {
+    "rotateSecPerLap": 120, "topHoldLaps": 1, "descentLaps": 0.4, "eyeLevelLaps": 1,
+    "ascentLaps": 0.3333, "eyeHeightM": 1.7, "eyeLevelDistanceFactor": 1.5, "eyeLevelExtraM": 3
+  },
+  "flight": { "homeToRoomMs": 1200, "betweenOutsideViewsMs": 700 }
+}
+```
+
+Reduced-motion users still get jumps rather than flights, and the preview keeps its fixed top
+height, whatever this block says.
 
 ### Camera presets — why they are optional
 

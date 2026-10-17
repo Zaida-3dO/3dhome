@@ -4882,6 +4882,193 @@
             "order"
           ],
           "additionalProperties": false
+        },
+        "camera": {
+          "type": "object",
+          "description": "OPTIONAL camera-motion tuning, read at load: edit the profile and reload, no rebuild. Every key is optional; absent = the value the engine always used. A value outside its range (or not a number) is ignored with one console warning and the default is used. Added in schemaVersion 1.7; an older engine ignores it.",
+          "additionalProperties": false,
+          "properties": {
+            "walk": {
+              "type": "object",
+              "description": "Room-to-room walks (through doorways, below the ceiling).",
+              "additionalProperties": false,
+              "properties": {
+                "speedMps": {
+                  "type": "number",
+                  "minimum": 0.5,
+                  "maximum": 30,
+                  "default": 5.5,
+                  "description": "Cruise speed of a room-to-room walk, metres per second. A hop lasts its length over this, plus the two ramps. Higher = quicker hops."
+                },
+                "easeSec": {
+                  "type": "number",
+                  "minimum": 0.02,
+                  "maximum": 2,
+                  "default": 0.1833,
+                  "description": "How long the walk takes to reach cruise speed from rest, and to stop again, in seconds. Default is the engine's own 30 m/s^2 ramp at 5.5 m/s. Longer = softer starts and stops."
+                },
+                "maxTurnDegPerSec": {
+                  "type": "number",
+                  "minimum": 30,
+                  "maximum": 2000,
+                  "default": 500,
+                  "description": "The fastest the view may turn, degrees per second. A hop that needs a sharper turn than this slows down rather than whip round."
+                },
+                "minMoveMs": {
+                  "type": "number",
+                  "minimum": 50,
+                  "maximum": 3000,
+                  "default": 330,
+                  "description": "The quickest any walk may be, milliseconds: a tiny hop is slowed to this."
+                },
+                "maxMoveMs": {
+                  "type": "number",
+                  "minimum": 500,
+                  "maximum": 20000,
+                  "default": 3000,
+                  "description": "The slowest any walk may be, milliseconds: a very long walk speeds up as a whole to fit. Never below minMoveMs."
+                },
+                "minTurnMs": {
+                  "type": "number",
+                  "minimum": 50,
+                  "maximum": 3000,
+                  "default": 300,
+                  "description": "The quickest a turn on the spot may be, milliseconds (two open-plan rooms sharing one spot)."
+                },
+                "lookAheadM": {
+                  "type": "number",
+                  "minimum": 0.2,
+                  "maximum": 6,
+                  "default": 1.6,
+                  "description": "How far ahead along the path the view looks while walking, metres. Longer = turns start earlier and are rounder; shorter = the view tracks the path tightly."
+                },
+                "lookDownDeg": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 30,
+                  "default": 6,
+                  "description": "How far the view tilts down while walking, degrees."
+                },
+                "eyeHeightM": {
+                  "type": "number",
+                  "minimum": 0.5,
+                  "maximum": 2.4,
+                  "default": 1.6,
+                  "description": "Eye height through doorways and for the view of a cupboard from outside, metres above the floor. Always kept clear of the ceiling and each door's head."
+                },
+                "sharedSpot": {
+                  "type": "object",
+                  "description": "Open-plan rooms that frame well from one spot share that eye, so the move between them is a turn on the spot.",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "default": true,
+                      "description": "false = every room keeps its own view and the camera always walks."
+                    },
+                    "maxDistM": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 5,
+                      "default": 1,
+                      "description": "How near the join between two open-plan rooms a shared viewing spot may be, metres."
+                    },
+                    "minCoverage": {
+                      "type": "number",
+                      "minimum": 0.3,
+                      "maximum": 1,
+                      "default": 0.75,
+                      "description": "A shared spot is used only if it frames BOTH rooms at least this fraction as well as each room's own view (0.3-1). 1 = never in practice."
+                    }
+                  }
+                }
+              }
+            },
+            "preview": {
+              "type": "object",
+              "description": "The auto-rotating preview (?preview=true): top hold, descent, eye-level laps, ascent.",
+              "additionalProperties": false,
+              "properties": {
+                "rotateSecPerLap": {
+                  "type": "number",
+                  "minimum": 10,
+                  "maximum": 3600,
+                  "default": 120,
+                  "description": "Seconds per full turn of the preview orbit. A URL ?rotateSpeed=<radians per second> overrides it (URL > profile > default); ?rotateSpeed=0 freezes."
+                },
+                "topHoldLaps": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "default": 1,
+                  "description": "Laps spent at the top view before each descent."
+                },
+                "descentLaps": {
+                  "type": "number",
+                  "minimum": 0.05,
+                  "maximum": 5,
+                  "default": 0.4,
+                  "description": "Laps the descent to eye level takes."
+                },
+                "eyeLevelLaps": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "default": 1,
+                  "description": "Laps spent at eye level."
+                },
+                "ascentLaps": {
+                  "type": "number",
+                  "minimum": 0.05,
+                  "maximum": 5,
+                  "default": 0.3333,
+                  "description": "Laps the climb back to the top view takes."
+                },
+                "eyeHeightM": {
+                  "type": "number",
+                  "minimum": 0.5,
+                  "maximum": 3,
+                  "default": 1.7,
+                  "description": "Camera height at eye level, metres."
+                },
+                "eyeLevelDistanceFactor": {
+                  "type": "number",
+                  "minimum": 1.05,
+                  "maximum": 4,
+                  "default": 1.5,
+                  "description": "At eye level the camera stands this multiple of the footprint's half-diagonal from the centre (plus eyeLevelExtraM), always outside the house."
+                },
+                "eyeLevelExtraM": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 20,
+                  "default": 3,
+                  "description": "Extra distance, metres, added to the eye-level stand-off."
+                }
+              }
+            },
+            "flight": {
+              "type": "object",
+              "description": "Flight durations that are not walks.",
+              "additionalProperties": false,
+              "properties": {
+                "homeToRoomMs": {
+                  "type": "number",
+                  "minimum": 100,
+                  "maximum": 10000,
+                  "default": 1200,
+                  "description": "Duration, milliseconds, of the flight between the home (outside) view and a room view."
+                },
+                "betweenOutsideViewsMs": {
+                  "type": "number",
+                  "minimum": 100,
+                  "maximum": 10000,
+                  "default": 700,
+                  "description": "Duration, milliseconds, of a flight between two outside views."
+                }
+              }
+            }
+          }
         }
       },
       "required": [

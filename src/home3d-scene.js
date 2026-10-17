@@ -45,6 +45,7 @@ import { pickRoom, roomPolygons, sceneToHouse, isFurniture, stepBack } from './r
 import { easeInOut, clonePose, deriveRoomView, deriveItemView, frontFromRotation, chooseItemView, ITEM_VIEW, segmentHitsBox, compileFocusView,
   ROOM_VIEW, chooseInRoomView, distToPolyEdge, eyeOf, planFlight, inRoomTapIsClickAway, clampRadiusInside, leavesRoom } from './camera-focus.js';
 import { previewPose } from './preview-orbit.js';
+import { DEFAULT_CAMERA, walkOptions, sharedSpotOptions, previewOptions } from './camera-config.js';
 import { buildNavGraph, navInputsFromHouse, planWalk, planGlide, outsideView, heldDoorsToKeep, sightLeaves, sharedVantage, roomAt, inPortal } from './doorway-walk.js';
 import { materialOpacity, isDrawn, OPACITY_SOLID } from './tap-popovers.js';
 import { RUG_PATTERN_DEFAULTS } from './rug-pattern.js';
@@ -4987,6 +4988,7 @@ export const Home3DScene = (() => {
     const _previewGeom = {
       rotateSpeed, th0: Math.PI * 0.22, rTop: _defaultDistance, phTop: Math.PI * 0.32,
       halfDiag: Math.hypot(_fpW, _fpD) / 2, midY: WH / 2,
+      ...previewOptions((HOUSE.camera || DEFAULT_CAMERA)),
       still: (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; } })()
     };
     const clickStart = { x: 0, y: 0 };
@@ -5140,7 +5142,7 @@ export const Home3DScene = (() => {
       const wanted = new Set((route.plan ? route.plan.portals : []).filter(id => doorById[id]).concat(walkViewDoor ? [walkViewDoor] : []));
       endFlight('superseded');
       holdDoorsOpen(wanted);
-      const ms = opts && opts.ms != null ? opts.ms : (route.plan ? route.plan.ms : mode === 'arc' ? 1200 : 700);
+      const ms = opts && opts.ms != null ? opts.ms : (route.plan ? route.plan.ms : mode === 'arc' ? (HOUSE.camera || DEFAULT_CAMERA).flight.homeToRoomMs : (HOUSE.camera || DEFAULT_CAMERA).flight.betweenOutsideViewsMs);
       if (!(ms > 0) || reducedMotion()) { applyPose(pose); releaseWalkDoors(); wake(250); return Promise.resolve('landed'); }
       return new Promise(resolve => {
         const plan = route.plan || planFlight(from, to, { mode, clearY: WH + 0.5 });
@@ -5164,12 +5166,12 @@ export const Home3DScene = (() => {
       // Same room: a straight line only when it crosses none of the room's
       // edges (exact; 9 samples could miss a sharp notch between them).
       if (ra && ra === rb && !leavesRoom(roomShape(ra).map(p => [tx(p[0]), tz(p[1])]), a, b, 0)) {
-        const plan = planGlide(from, to);
+        const plan = planGlide(from, to, { options: walkOptions((HOUSE.camera || DEFAULT_CAMERA)) });
         lastWalk = walkReport(ra, rb, plan);
         return { mode: 'eye', plan };
       }
       if (ra && rb) {
-        const plan = planWalk(navGraph(), from, ra, to, rb, { obstacles: walkObstacles() });
+        const plan = planWalk(navGraph(), from, ra, to, rb, { obstacles: walkObstacles(), options: walkOptions((HOUSE.camera || DEFAULT_CAMERA)) });
         lastWalk = plan ? walkReport(ra, rb, plan) : { from: ra, to: rb, failed: true };
         if (plan) return { mode: 'walk', plan };
       }
@@ -5357,6 +5359,8 @@ export const Home3DScene = (() => {
       sharedWith.delete(id);
       for (const other of openPartners(id)) {
         if (!ROOMS[other]) continue;
+        const spot = sharedSpotOptions((HOUSE.camera || DEFAULT_CAMERA));
+        if (!spot) return null;
         const ownA = ownRoomView(id, opts), ownB = ownRoomView(other, opts);
         if (!ownA || !ownB) return null;
         const ins = opts && opts.inset && opts.inset.right > 0 ? opts.inset : null;
@@ -5365,7 +5369,7 @@ export const Home3DScene = (() => {
           (ins ? [ins.right, ins.width, ins.height].map(Math.round).join('x') : '-');
         let sv = roomViewCache.get(key);
         if (sv === undefined) {
-          sv = sharedVantage({ graph: navGraph(), rooms: [id, other], own: { [id]: ownA, [other]: ownB },
+          sv = sharedVantage({ graph: navGraph(), rooms: [id, other], ratio: spot.ratio, reach: spot.reach, own: { [id]: ownA, [other]: ownB },
             viewFrom: (room, eye) => {
               const r = computeInRoomView(room, ins, { eyes: [eye], with: room === id ? other : id });
               return r.pose ? { pose: r.pose, score: r.stats.score, coverage: r.stats.coverage } : null;
@@ -5395,7 +5399,7 @@ export const Home3DScene = (() => {
         const h = doorBasis(d).hinge, t = doorLeafTip(d, dr.maxDeg * pct / 100);
         return [[tx(h[0]), tz(h[1])], [tx(t[0]), tz(t[1])], d.id];
       });
-      outsideViews.set(id, outsideView(navGraph(), id, { leaves, aspect: cam.aspect }));
+      outsideViews.set(id, outsideView(navGraph(), id, Object.assign({ leaves, aspect: cam.aspect }, walkOptions((HOUSE.camera || DEFAULT_CAMERA)))));
       const v = outsideViews.get(id);
       return v ? clonePose(v.pose) : null;
     }
