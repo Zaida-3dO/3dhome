@@ -66,6 +66,25 @@ const still = { ...g, still: true };
 near(previewPose(2 * lap, still).camY, previewPose(0, still).camY, 1e-12, 'reduced motion holds the top');
 assert.ok(previewPose(2 * lap, still).th !== previewPose(0, still).th); ok('reduced motion');
 
+// 5b. Degenerate speeds (?rotateSpeed=0 is documented as "frozen"): never NaN, hold the top pose
+for (const sp of [0, -0.024, NaN, Infinity]) {
+  for (const t of [0, 1000, NaN]) {
+    const p = previewPose(t, { ...g, rotateSpeed: sp });
+    for (const k of ['th', 'ph', 'r', 'tgtY', 'camY', 'horiz']) assert.ok(Number.isFinite(p[k]), `speed ${sp} t ${t}: ${k} is ${p[k]}`);
+  }
+}
+near(previewPose(0, { ...g, rotateSpeed: 0 }).camY, at(0).camY, 1e-12, 'speed 0 holds the top height');
+near(previewPose(1e6, { ...g, rotateSpeed: 0 }).th, g.th0, 1e-12, 'speed 0 holds the azimuth');
+near(previewPose(2 * lap, { ...g, rotateSpeed: -g.rotateSpeed }).camY, EYE_HEIGHT_M, 1e-9, 'negative speed: same cycle');
+assert.ok(previewPose(5, { ...g, rotateSpeed: -g.rotateSpeed }).th < g.th0, 'negative speed turns the other way');
+ok('degenerate speeds');
+
+// 5c. Radius formula pinned: values, and the house fits the frame at eye level
+near(lowRadius(g), Math.max(7 * 1.5 + 3, 0.6 * 20 * Math.sin(g.phTop)), 1e-12, 'lowRadius value');
+near(lowRadius({ ...g, halfDiag: 1 }), 0.6 * 20 * Math.sin(g.phTop), 1e-12, 'small house: 0.6 top-reach floor');
+assert.ok(lowRadius(g) >= 1.5 * g.halfDiag, 'eye-level camera stands back at least 1.5 half-diagonals');
+ok('radius formula');
+
 // 6. Wiring: only the autoRotate branch drives it; the interactive overview/default pose are untouched
 const src = readFileSync(new URL('../src/home3d-scene.js', import.meta.url), 'utf8');
 const i = src.indexOf('previewPose(autoAngle'); assert.ok(i > 0);

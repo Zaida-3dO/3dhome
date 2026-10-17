@@ -57,12 +57,17 @@ export function lowRadius(g) {
  *   behaviour: rotation only, no height change).
  */
 export function previewPose(t, g) {
-  const lapSec = (2 * Math.PI) / g.rotateSpeed;
-  const e = g.still ? 0 : lowness(t / lapSec);
+  // A zero / non-finite speed is "frozen" (?rotateSpeed=0): hold today's top
+  // pose at the start azimuth. A negative speed spins the other way at the
+  // same lap length.
+  const speed = Number.isFinite(g.rotateSpeed) ? g.rotateSpeed : 0;
+  const frozen = speed === 0 || !Number.isFinite(t);
+  const lapSec = frozen ? Infinity : (2 * Math.PI) / Math.abs(speed);
+  const e = g.still || frozen ? 0 : lowness(t / lapSec);
   const topH = g.rTop * Math.sin(g.phTop), topY = g.rTop * Math.cos(g.phTop);
   const h = topH + (lowRadius(g) - topH) * e;
   const y = topY + (EYE_HEIGHT_M - topY) * e;       // camera height above the ground
   const tgtY = g.midY * e;
   const dy = y - tgtY;
-  return { th: g.th0 + g.rotateSpeed * t, ph: Math.atan2(h, dy), r: Math.hypot(h, dy), tgtY, camY: y, horiz: h };
+  return { th: frozen ? g.th0 : g.th0 + speed * t, ph: Math.atan2(h, dy), r: Math.hypot(h, dy), tgtY, camY: y, horiz: h };
 }
