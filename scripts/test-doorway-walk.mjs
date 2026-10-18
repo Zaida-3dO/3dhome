@@ -870,13 +870,13 @@ section('wiring');
   const scene = read('src/home3d-scene.js');
   const fly = scene.slice(scene.indexOf('    function flyTo(pose, opts) {'), scene.indexOf('    function cancelFlight() {'));
   check('flyTo: a walk between two in-house views, its own duration', fly.includes("if (ra && rb) {") &&
-    fly.includes('const plan = planWalk(navGraph(), from, ra, to, rb, { obstacles: walkObstacles() });') &&
+    fly.includes('const plan = planWalk(navGraph(), from, ra, to, rb, { obstacles: walkObstacles(), options: walkOptions((HOUSE.camera || DEFAULT_CAMERA)) });') &&
     fly.includes('(route.plan ? route.plan.ms :'));
   check('flyTo: the arc only when the walk is impossible or an end is outside', /if \(plan\) return \{ mode: 'walk', plan \};\s*\}\s*return \{ mode: 'arc' \};/.test(fly));
   check('reduced motion (or ms 0) still jumps, and lets the doors go', fly.includes('if (!(ms > 0) || reducedMotion()) { applyPose(pose); releaseWalkDoors(); wake(250); return Promise.resolve(\'landed\'); }'));
   const route = scene.slice(scene.indexOf('    function flightRoute(from, to) {'), scene.indexOf('    function walkReport('));
   check('one room, a straight line: timed and turned like a walk (planGlide) -- a turn on the spot for a shared eye',
-    /\{\s*const plan = planGlide\(from, to\);\s*lastWalk = walkReport\(ra, rb, plan\);\s*return \{ mode: 'eye', plan \};/.test(route));
+    /\{\s*const plan = planGlide\(from, to, \{ options: walkOptions\(\(HOUSE\.camera \|\| DEFAULT_CAMERA\)\) \}\);\s*lastWalk = walkReport\(ra, rb, plan\);\s*return \{ mode: 'eye', plan \};/.test(route));
   const rv = scene.slice(scene.indexOf('    function roomView(id, opts) {'), scene.indexOf('    function sharedRoomView(id, opts) {'));
   check('a room view: authored first, then a vantage shared with an open-plan neighbour, then its own in-room view',
     rv.indexOf('const v = ROOMS[id].view;') < rv.indexOf('const shared = sharedRoomView(id, opts);') &&

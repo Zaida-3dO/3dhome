@@ -29,6 +29,7 @@
 
 import { insidePoly } from './footstep-walk.js';
 import { compileFocusView } from './camera-focus.js';
+import { resolveCameraConfig } from './camera-config.js';
 import { RUG_PATTERN_DEFAULTS, RUG_PATTERNS, RUG_PATTERN_HOUSE_KEYS, RUG_PATTERN_ACROSS } from './rug-pattern.js';
 import { FINISHES, FINISH_TYPES, GRID_ANCHORS, resolveTileLook, outsideVector, faceNormalToward, compassVector } from './wall-finish.js';
 
@@ -1547,6 +1548,11 @@ export const HouseLoader = (() => {
       });
     }
 
+    // ---- Camera motion (schemaVersion 1.7) -------------------------------
+    // The optional `camera` block, resolved to a complete config: every key
+    // absent is today's value, a bad one warns and falls back (camera-config.js).
+    const camera = resolveCameraConfig(geo.camera, warn);
+
     const centre = Array.isArray(geo.viewCentre) && geo.viewCentre.length === 2
       ? [geo.viewCentre[0], geo.viewCentre[1]]
       : [(footprint.minX + footprint.maxX) / 2, (footprint.minY + footprint.maxY) / 2];
@@ -1584,6 +1590,9 @@ export const HouseLoader = (() => {
       // { order: [room ids] }: the authored prev / next tour, empty when the
       // profile has none (then the arrows follow roomOrder).
       navigation: navigation,
+      // How the camera moves (walk speed, preview cycle, flight times): the
+      // resolved camera-config.js object, never null.
+      camera: camera,
       doors: doors,
       windows: windows,
       curtains: curtains,

@@ -746,6 +746,8 @@ jobs:
         run: node scripts/test-doorway-walk.mjs
       - name: Preview orbit rise and fall -- height schedule, eased, outside the footprint, aimed at the centre, overview unchanged
         run: node scripts/test-preview-orbit.mjs
+      - name: Camera motion config -- defaults == today, each key does what it says, clamping, URL > profile > default, wiring
+        run: node scripts/test-camera-config.mjs
       - name: Edit mode -- never imported at boot, offered and drafts applied only outside preview / HA popup / iframes
         run: node scripts/test-edit-mode-boot.mjs
       - name: Profile drafts -- where a draft applies, no token in a draft or export, pose->view round trip, export
@@ -879,6 +881,8 @@ jobs:
         run: python scripts/test-validate-footstep-path.py
       - name: sensors.vacuums schema and validator checks (unknown furniture item, unknown segment room, version)
         run: python scripts/test-validate-vacuum.py
+      - name: geometry camera block schema and validator checks (types, ranges, unknown keys, min/max, version)
+        run: python scripts/test-validate-camera.py
       - name: sensors.plants schema and validator checks (moisture or watering, unknown furniture item, thresholds, version)
         run: python scripts/test-validate-plant.py
       - name: sensors.items schema and validator checks (row domains, regions, unknown furniture item, version)

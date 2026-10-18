@@ -1166,6 +1166,7 @@
     import { pickSpeakerPlayer } from './src/speaker-players.js?v=__VERSION__';
     import { sendScript, createActionButton } from './src/script-call.js?v=__VERSION__';
     import { parseSunTime }   from './src/sun-position.js?v=__VERSION__';
+    import { previewRotateSpeed } from './src/camera-config.js?v=__VERSION__';
     import { createDragSender, curtainSliderCommand, curtainsToRevert, doorRowHtml, motionRowHtml, curtainRowHtml, climateRowHtml,
              haOffline, haOfflineRowHtml, mainLightRowHtml, ambientRowHtml, galaxyRowHtml,
              boundLightChannels, hasAmbientRow, ambientRowLabel, fillRange,
@@ -1262,8 +1263,9 @@
       //   To change the *default* for everyone, edit the fallback expression below.
       //   Note: Home3DScene.create()'s own default is 0.024 rad/s (~262s/turn) — used
       //   when no rotateSpeed is passed at all (e.g. callers in main.js / house pages).
-      const rotateSpeedParam = parseFloat(params.get('rotateSpeed'));
-      const rotateSpeed = Number.isFinite(rotateSpeedParam) ? rotateSpeedParam : (Math.PI * 2) / 120;
+      // (The profile's camera.preview.rotateSecPerLap sits between the URL and the
+      //  120 s default -- URL > profile > default; resolved where the house is known,
+      //  just before the scene is created: previewRotateSpeed, src/camera-config.js.)
 
       // ?camera=<preset> — jump the orbit camera to a named view on load, so
       //   visual-review agents can reach a useful angle without driving
@@ -1803,7 +1805,7 @@
         boundChannels: boundLightChannels(rooms),
         interactive: !isPreview,
         autoRotate: isPreview,
-        rotateSpeed: rotateSpeed,
+        rotateSpeed: previewRotateSpeed(params.get('rotateSpeed'), house.camera),
         shadows: shadows,
         tier: tierParam,
         furniture: furnitureOn,

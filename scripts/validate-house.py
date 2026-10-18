@@ -258,6 +258,7 @@ def check_geometry(geo, report, schema=None):
     check_focus_views(geo, report)
     check_fixture_statics(geo, report)
     check_navigation(geo, room_ids, report)
+    check_camera(geo, report)
 
     seen_channels = set()
     for entry in geo.get("lights", []):
@@ -382,6 +383,33 @@ def check_navigation(geo, room_ids, report):
         report.warn(
             "geometry.json/schemaVersion",
             f"`navigation` needs schemaVersion 1.6 or newer, but this profile declares '{version}' -- bump it",
+        )
+
+
+def check_camera(geo, report):
+    """`camera` (schemaVersion 1.7): camera-motion tuning.
+
+    The schema checks every key's type and range. This checks what it cannot:
+    the declared version, and that the slowest walk is not shorter than the
+    quickest (the engine would quietly use minMoveMs for both).
+    """
+    cam = geo.get("camera")
+    if cam is None:
+        return
+    walk = cam.get("walk") if isinstance(cam, dict) else None
+    if isinstance(walk, dict):
+        lo, hi = walk.get("minMoveMs"), walk.get("maxMoveMs")
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (lo, hi)) and hi < lo:
+            report.error("camera/walk/maxMoveMs", f"maxMoveMs ({hi}) is below minMoveMs ({lo})")
+    version = str(geo.get("schemaVersion") or "")
+    try:
+        major, minor = (int(part) for part in version.split(".", 1))
+    except ValueError:
+        major = minor = -1
+    if (major, minor) < (1, 7):
+        report.warn(
+            "geometry.json/schemaVersion",
+            f"`camera` needs schemaVersion 1.7 or newer, but this profile declares '{version}' -- bump it",
         )
 
 
