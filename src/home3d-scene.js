@@ -33,7 +33,7 @@ import {
 import {
   loadFurnitureModules, buildFurnitureSliced, buildFurnitureSync, scheduleFurnitureAttach, fadeRegistrations, furnitureItemAt,
   wallFadeTarget, wallFadeDepthWrite,
-  disposeFurniture, yieldToMain
+  disposeFurniture
 } from './furniture.js';
 import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
@@ -832,44 +832,76 @@ export const Home3DScene = (() => {
     // once its callback has run -- the cold-start overlay waits on them
     // (src/boot-gate.js), so a wallpaper never pops in after it comes down.
     const textureLoads = [];
+    // Shared loader for the fallback path below (the wallpaper used to have a
+    // private one; one per build is enough -- it is stateless per load).
+    const imgLoader = new THREE.TextureLoader();
+    // three r160's own GLTFLoader refuses ImageBitmap on every Safari and on
+    // Firefox < 98 (vendor/three-r160/addons/loaders/GLTFLoader.js:2541): those
+    // browsers do not honour the imageOrientation option reliably, so the
+    // pre-flipped bitmap below could land upside-down. Same test, same fallback.
+    let useImageBitmap = typeof createImageBitmap !== 'undefined';
+    if (useImageBitmap && typeof navigator !== 'undefined') {
+      const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent) === true;
+      const isFirefox = navigator.userAgent.indexOf('Firefox') > -1;
+      const firefoxVersion = isFirefox ? Number(navigator.userAgent.match(/Firefox\/([0-9]+)\./)[1]) : -1;
+      useImageBitmap = !isSafari && !(isFirefox && firefoxVersion < 98);
+    }
     /**
-     * Decode an image OFF the main thread and hand the callback a THREE.Texture
-     * wrapping the decoded bitmap: fetch -> blob -> createImageBitmap ->
-     * new THREE.Texture(bitmap). THREE.TextureLoader decodes every PNG on the
-     * main thread -- ~0.1 s per 2 MB wallpaper on a mid phone, and real houses
-     * load several -- which stacked onto the boot clump. createImageBitmap runs
-     * the same decode in the browser's thread pool and leaves only the GPU
-     * upload here. imageOrientation:'down' is what keeps the picture right-way-
-     * up: WebGL ignores UNPACK_FLIP_Y_WEBGL for ImageBitmap sources, and the
-     * <img> the old loader produced was righted by exactly that flag at upload,
-     * so the bitmap must arrive pre-flipped to land the same way. Each caller
-     * sets its own per-texture settings (colorSpace, wrapping, the cover-fit
-     * repeat/offset, anisotropy) on the result, exactly as it did with the
-     * TextureLoader's. On fetch or decode failure the tracked promise still
-     * settles and onError warns, so a missing image never strands the overlay.
+     * Decode an image and hand the callback a THREE.Texture. Where the browser
+     * decodes bitmaps properly, it is fetched and decoded OFF the main thread:
+     * fetch -> blob -> createImageBitmap -> new THREE.Texture(bitmap).
+     * THREE.TextureLoader decodes every PNG on the main thread -- ~0.1 s per
+     * 2 MB wallpaper on a mid phone, and real houses load several -- which
+     * stacked onto the boot clump; createImageBitmap runs the same decode in
+     * the browser's thread pool and leaves only the GPU upload here.
+     * imageOrientation:'flipY' (a valid ImageBitmapOptions enum; 'down' is not,
+     * it would reject the whole call) plus tex.flipY = false keeps the picture
+     * right-way-up: WebGL ignores UNPACK_FLIP_Y_WEBGL for ImageBitmap sources,
+     * and the <img> the old loader produced was righted by exactly that flag at
+     * upload, so the bitmap must arrive pre-flipped to land the same way.
+     * premultiplyAlpha:'none' matches the old unpremultiplied upload (three's
+     * Texture.premultiplyAlpha defaults to false, and r160's ImageBitmapLoader
+     * defaults the same way); the bitmap default is implementation-defined and
+     * Chrome would premultiply, fringing alpha PNGs like overlays and rugs.
+     * On Safari, old Firefox and browsers without createImageBitmap, a shared
+     * THREE.TextureLoader does the load instead -- its own <img> flip already
+     * matches the old upload -- still tracked, with the same settle/warn wiring.
+     * Either way each caller sets its own per-texture settings (colorSpace,
+     * wrapping, the cover-fit repeat/offset, anisotropy) on the result, exactly
+     * as it did with the TextureLoader's. On fetch or decode failure the
+     * tracked promise still settles and onError warns, so a missing image
+     * never strands the overlay.
      */
     function loadTracked(url, onLoad, onError) {
       let settle, loaded = false;
       textureLoads.push(new Promise(r => { settle = r; }));
+      const finish = tex => {
+        loaded = true;
+        try { onLoad(tex); } finally { settle(); }
+      };
+      const fail = e => { try { onError(e); } finally { settle(); } };
+      if (!useImageBitmap) {
+        imgLoader.load(url, finish, undefined, fail); // flipY stays at its default true
+        return;
+      }
       fetch(url)
         .then(r => {
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return r.blob();
         })
-        .then(blob => createImageBitmap(blob, { imageOrientation: 'down' }))
+        .then(blob => createImageBitmap(blob, { imageOrientation: 'flipY', premultiplyAlpha: 'none' }))
         .then(bitmap => {
           const tex = new THREE.Texture(bitmap);
           tex.flipY = false; // the bitmap is pre-flipped above; the <img> upload flip does not apply here
           tex.needsUpdate = true;
-          loaded = true;
-          try { onLoad(tex); } finally { settle(); }
+          finish(tex);
         })
         // onError is for FETCH/DECODE failures only (same as the loader's
         // onError). A throwing onLoad has already settled and is rethrown here
         // rather than mis-reported as a missing image.
         .catch(e => {
           if (loaded) throw e;
-          try { onError(e); } finally { settle(); }
+          fail(e);
         });
     }
 
@@ -1455,8 +1487,11 @@ export const Home3DScene = (() => {
                 return;
               }
               overlayPanels.forEach(p => {
-                p.tex.image = img; // a pre-flipped ImageBitmap (see loadTracked), so its upload flip is off
-                p.tex.flipY = false;
+                p.tex.image = img;
+                // follow the texture that was actually decoded: a pre-flipped
+                // ImageBitmap wants flipY off, the TextureLoader fallback's
+                // <img> keeps its default flip
+                p.tex.flipY = loaded.flipY;
                 if ('colorSpace' in p.tex) p.tex.colorSpace = THREE.SRGBColorSpace; // r152+
                 else p.tex.encoding = THREE.sRGBEncoding; // older three.js fallback
                 p.tex.needsUpdate = true;
@@ -2250,7 +2285,6 @@ export const Home3DScene = (() => {
               rugMesh.material.map = loaded;
               rugMesh.material.needsUpdate = true;
             },
-            undefined,
             () => console.warn('[Home3DScene] rug texture "' + rug.textureUrl +
               '" could not be loaded; using the procedural pile instead.')
           );
@@ -4694,20 +4728,7 @@ export const Home3DScene = (() => {
       editFurn = { root, parts: new Map(), items: furnitureItems.slice(), lifted: null, builders, highlight: null };
       const rooms = [];
       editFurn.items.forEach(it => { if (rooms.indexOf(it.room) < 0) rooms.push(it.room); });
-      // Time-sliced like the boot furniture build (buildFurnitureSliced): this
-      // loop rebuilds EVERY room, and on a furnished house it used to land as
-      // one long task that froze the page. One room per slice, so no slice runs
-      // longer than the heaviest room's build. The awaits make the loop
-      // interruptible, so the _disposed/editFurn guards the earlier awaits
-      // already apply must be re-asserted here: a dispose, or an
-      // endFurnitureEdit from the panel, during a yield has to stop the build
-      // rather than keep pushing parts into a root that has just been removed.
-      for (let ri = 0; ri < rooms.length; ri++) {
-        if (_disposed || !editFurn) return { ms: performance.now() - t0 };
-        editBuildPart('room:' + rooms[ri], editRoomItems(rooms[ri]));
-        await yieldToMain();
-      }
-      if (_disposed || !editFurn) return { ms: performance.now() - t0 };
+      rooms.forEach(room => editBuildPart('room:' + room, editRoomItems(room)));
       editCompose();
       return { ms: performance.now() - t0 };
     }

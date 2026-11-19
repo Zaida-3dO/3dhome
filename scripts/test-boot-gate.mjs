@@ -185,6 +185,18 @@ function makeGate(extra) {
   const lt = code.match(/function loadTracked\([^)]*\) \{([\s\S]*?)\n    \}\n/);
   check('loadTracked settles in a finally on load AND on error',
     !!lt && (lt[1].match(/finally \{ settle\(\); \}/g) || []).length === 2, lt && lt[1]);
+  // No CALL passes an `undefined` placeholder: the old 5-arg shape left an
+  // `undefined,` sitting in onError, so a failed image threw instead of warning.
+  let undefArg = false;
+  for (const m of code.matchAll(/(?<!function )loadTracked\(/g)) {
+    let depth = 0, j = m.index + 'loadTracked'.length;
+    for (; j < code.length; j++) {
+      if (code[j] === '(') depth++;
+      else if (code[j] === ')' && --depth === 0) break;
+    }
+    if (/\bundefined\b/.test(code.slice(m.index, j))) undefArg = true;
+  }
+  check('no loadTracked call passes an `undefined` argument', !undefArg);
   // The loop reports frames AFTER drawing.
   const render = code.indexOf('ren.render(scene, cam);');
   const fRend = code.indexOf('bootGate.frameRendered();');
