@@ -828,18 +828,81 @@ export const Home3DScene = (() => {
     // that copied only one tree would still ship them. Profile-relative texture
     // paths retire that hack entirely: a texture lives in the house directory
     // beside the profile that references it.
-    const wallTexLoader = new THREE.TextureLoader();
     // Every image this build loads, as a promise that settles (either way)
     // once its callback has run -- the cold-start overlay waits on them
     // (src/boot-gate.js), so a wallpaper never pops in after it comes down.
     const textureLoads = [];
-    function loadTracked(loader, url, onLoad, onProgress, onError) {
-      let settle;
+    // Shared loader for the fallback path below (the wallpaper used to have a
+    // private one; one per build is enough -- it is stateless per load).
+    const imgLoader = new THREE.TextureLoader();
+    // three r160's own GLTFLoader refuses ImageBitmap on every Safari and on
+    // Firefox < 98 (vendor/three-r160/addons/loaders/GLTFLoader.js:2541): those
+    // browsers do not honour the imageOrientation option reliably, so the
+    // pre-flipped bitmap below could land upside-down. Same test, same fallback.
+    let useImageBitmap = typeof createImageBitmap !== 'undefined';
+    if (useImageBitmap && typeof navigator !== 'undefined') {
+      const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent) === true;
+      const isFirefox = navigator.userAgent.indexOf('Firefox') > -1;
+      const firefoxVersion = isFirefox ? Number(navigator.userAgent.match(/Firefox\/([0-9]+)\./)[1]) : -1;
+      useImageBitmap = !isSafari && !(isFirefox && firefoxVersion < 98);
+    }
+    /**
+     * Decode an image and hand the callback a THREE.Texture. Where the browser
+     * decodes bitmaps properly, it is fetched and decoded OFF the main thread:
+     * fetch -> blob -> createImageBitmap -> new THREE.Texture(bitmap).
+     * THREE.TextureLoader decodes every PNG on the main thread -- ~0.1 s per
+     * 2 MB wallpaper on a mid phone, and real houses load several -- which
+     * stacked onto the boot clump; createImageBitmap runs the same decode in
+     * the browser's thread pool and leaves only the GPU upload here.
+     * imageOrientation:'flipY' (a valid ImageBitmapOptions enum; 'down' is not,
+     * it would reject the whole call) plus tex.flipY = false keeps the picture
+     * right-way-up: WebGL ignores UNPACK_FLIP_Y_WEBGL for ImageBitmap sources,
+     * and the <img> the old loader produced was righted by exactly that flag at
+     * upload, so the bitmap must arrive pre-flipped to land the same way.
+     * premultiplyAlpha:'none' matches the old unpremultiplied upload (three's
+     * Texture.premultiplyAlpha defaults to false, and r160's ImageBitmapLoader
+     * defaults the same way); the bitmap default is implementation-defined and
+     * Chrome would premultiply, fringing alpha PNGs like overlays and rugs.
+     * On Safari, old Firefox and browsers without createImageBitmap, a shared
+     * THREE.TextureLoader does the load instead -- its own <img> flip already
+     * matches the old upload -- still tracked, with the same settle/warn wiring.
+     * Either way each caller sets its own per-texture settings (colorSpace,
+     * wrapping, the cover-fit repeat/offset, anisotropy) on the result, exactly
+     * as it did with the TextureLoader's. On fetch or decode failure the
+     * tracked promise still settles and onError warns, so a missing image
+     * never strands the overlay.
+     */
+    function loadTracked(url, onLoad, onError) {
+      let settle, loaded = false;
       textureLoads.push(new Promise(r => { settle = r; }));
-      loader.load(url,
-        t => { try { onLoad(t); } finally { settle(); } },
-        onProgress,
-        e => { try { onError(e); } finally { settle(); } });
+      const finish = tex => {
+        loaded = true;
+        try { onLoad(tex); } finally { settle(); }
+      };
+      const fail = e => { try { onError(e); } finally { settle(); } };
+      if (!useImageBitmap) {
+        imgLoader.load(url, finish, undefined, fail); // flipY stays at its default true
+        return;
+      }
+      fetch(url)
+        .then(r => {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.blob();
+        })
+        .then(blob => createImageBitmap(blob, { imageOrientation: 'flipY', premultiplyAlpha: 'none' }))
+        .then(bitmap => {
+          const tex = new THREE.Texture(bitmap);
+          tex.flipY = false; // the bitmap is pre-flipped above; the <img> upload flip does not apply here
+          tex.needsUpdate = true;
+          finish(tex);
+        })
+        // onError is for FETCH/DECODE failures only (same as the loader's
+        // onError). A throwing onLoad has already settled and is rethrown here
+        // rather than mis-reported as a missing image.
+        .catch(e => {
+          if (loaded) throw e;
+          fail(e);
+        });
     }
 
     /**
@@ -980,7 +1043,7 @@ export const Home3DScene = (() => {
         roughness: 0.85, side: THREE.DoubleSide,
         transparent: !!isOuter, opacity: 1
       });
-      loadTracked(wallTexLoader, url, (tex) => {
+      loadTracked(url, (tex) => {
         if (!tex.image || !tex.image.width || !tex.image.height) {
           console.warn('[Home3DScene] wall texture "' + url + '" decoded to an empty image; ' +
             'leaving the wall painted.');
@@ -1017,7 +1080,7 @@ export const Home3DScene = (() => {
         wallpaperMat.color.setHex(0xffffff);
         wallpaperMat.map = tex;
         wallpaperMat.needsUpdate = true;
-      }, undefined, () => {
+      }, () => {
         console.warn('[Home3DScene] wall texture "' + url + '" could not be loaded; ' +
           'leaving the wall painted.');
       });
@@ -1415,8 +1478,7 @@ export const Home3DScene = (() => {
         // (Panels are built synchronously above, so this async callback always
         // sees the full set — same pattern as wall #25's wallpaper.)
         if (overlayPanels.length) {
-          loadTracked(new THREE.TextureLoader(),
-            overlayTexUrl,
+          loadTracked(overlayTexUrl,
             (loaded) => {
               const img = loaded.image;
               if (!img || !img.width || !img.height) {
@@ -1426,13 +1488,16 @@ export const Home3DScene = (() => {
               }
               overlayPanels.forEach(p => {
                 p.tex.image = img;
+                // follow the texture that was actually decoded: a pre-flipped
+                // ImageBitmap wants flipY off, the TextureLoader fallback's
+                // <img> keeps its default flip
+                p.tex.flipY = loaded.flipY;
                 if ('colorSpace' in p.tex) p.tex.colorSpace = THREE.SRGBColorSpace; // r152+
                 else p.tex.encoding = THREE.sRGBEncoding; // older three.js fallback
                 p.tex.needsUpdate = true;
                 p.mesh.visible = true;
               });
             },
-            undefined,
             () => console.warn('[Home3DScene] wall overlay texture "' + overlayTexUrl +
               '" could not be loaded; leaving the wall as it is.')
           );
@@ -2212,8 +2277,7 @@ export const Home3DScene = (() => {
           // A profile-supplied rug image replaces the built-in pile texture.
           // Loaded after the mesh exists, so the callback has something to
           // assign to; a failure leaves the procedural pile in place.
-          loadTracked(new THREE.TextureLoader(),
-            rug.textureUrl,
+          loadTracked(rug.textureUrl,
             loaded => {
               loaded.wrapS = loaded.wrapT = THREE.RepeatWrapping;
               loaded.anisotropy = 4;
@@ -2221,7 +2285,6 @@ export const Home3DScene = (() => {
               rugMesh.material.map = loaded;
               rugMesh.material.needsUpdate = true;
             },
-            undefined,
             () => console.warn('[Home3DScene] rug texture "' + rug.textureUrl +
               '" could not be loaded; using the procedural pile instead.')
           );
