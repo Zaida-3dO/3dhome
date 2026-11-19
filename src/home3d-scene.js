@@ -33,7 +33,7 @@ import {
 import {
   loadFurnitureModules, buildFurnitureSliced, buildFurnitureSync, scheduleFurnitureAttach, fadeRegistrations, furnitureItemAt,
   wallFadeTarget, wallFadeDepthWrite,
-  disposeFurniture
+  disposeFurniture, yieldToMain
 } from './furniture.js';
 import { startLiveClock } from './furniture/wall-clock.js';
 import { applyLightPart, isLightPart } from './furniture/light-parts.js';
@@ -828,18 +828,49 @@ export const Home3DScene = (() => {
     // that copied only one tree would still ship them. Profile-relative texture
     // paths retire that hack entirely: a texture lives in the house directory
     // beside the profile that references it.
-    const wallTexLoader = new THREE.TextureLoader();
     // Every image this build loads, as a promise that settles (either way)
     // once its callback has run -- the cold-start overlay waits on them
     // (src/boot-gate.js), so a wallpaper never pops in after it comes down.
     const textureLoads = [];
-    function loadTracked(loader, url, onLoad, onProgress, onError) {
-      let settle;
+    /**
+     * Decode an image OFF the main thread and hand the callback a THREE.Texture
+     * wrapping the decoded bitmap: fetch -> blob -> createImageBitmap ->
+     * new THREE.Texture(bitmap). THREE.TextureLoader decodes every PNG on the
+     * main thread -- ~0.1 s per 2 MB wallpaper on a mid phone, and real houses
+     * load several -- which stacked onto the boot clump. createImageBitmap runs
+     * the same decode in the browser's thread pool and leaves only the GPU
+     * upload here. imageOrientation:'down' is what keeps the picture right-way-
+     * up: WebGL ignores UNPACK_FLIP_Y_WEBGL for ImageBitmap sources, and the
+     * <img> the old loader produced was righted by exactly that flag at upload,
+     * so the bitmap must arrive pre-flipped to land the same way. Each caller
+     * sets its own per-texture settings (colorSpace, wrapping, the cover-fit
+     * repeat/offset, anisotropy) on the result, exactly as it did with the
+     * TextureLoader's. On fetch or decode failure the tracked promise still
+     * settles and onError warns, so a missing image never strands the overlay.
+     */
+    function loadTracked(url, onLoad, onError) {
+      let settle, loaded = false;
       textureLoads.push(new Promise(r => { settle = r; }));
-      loader.load(url,
-        t => { try { onLoad(t); } finally { settle(); } },
-        onProgress,
-        e => { try { onError(e); } finally { settle(); } });
+      fetch(url)
+        .then(r => {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.blob();
+        })
+        .then(blob => createImageBitmap(blob, { imageOrientation: 'down' }))
+        .then(bitmap => {
+          const tex = new THREE.Texture(bitmap);
+          tex.flipY = false; // the bitmap is pre-flipped above; the <img> upload flip does not apply here
+          tex.needsUpdate = true;
+          loaded = true;
+          try { onLoad(tex); } finally { settle(); }
+        })
+        // onError is for FETCH/DECODE failures only (same as the loader's
+        // onError). A throwing onLoad has already settled and is rethrown here
+        // rather than mis-reported as a missing image.
+        .catch(e => {
+          if (loaded) throw e;
+          try { onError(e); } finally { settle(); }
+        });
     }
 
     /**
@@ -980,7 +1011,7 @@ export const Home3DScene = (() => {
         roughness: 0.85, side: THREE.DoubleSide,
         transparent: !!isOuter, opacity: 1
       });
-      loadTracked(wallTexLoader, url, (tex) => {
+      loadTracked(url, (tex) => {
         if (!tex.image || !tex.image.width || !tex.image.height) {
           console.warn('[Home3DScene] wall texture "' + url + '" decoded to an empty image; ' +
             'leaving the wall painted.');
@@ -1017,7 +1048,7 @@ export const Home3DScene = (() => {
         wallpaperMat.color.setHex(0xffffff);
         wallpaperMat.map = tex;
         wallpaperMat.needsUpdate = true;
-      }, undefined, () => {
+      }, () => {
         console.warn('[Home3DScene] wall texture "' + url + '" could not be loaded; ' +
           'leaving the wall painted.');
       });
@@ -1415,8 +1446,7 @@ export const Home3DScene = (() => {
         // (Panels are built synchronously above, so this async callback always
         // sees the full set — same pattern as wall #25's wallpaper.)
         if (overlayPanels.length) {
-          loadTracked(new THREE.TextureLoader(),
-            overlayTexUrl,
+          loadTracked(overlayTexUrl,
             (loaded) => {
               const img = loaded.image;
               if (!img || !img.width || !img.height) {
@@ -1425,14 +1455,14 @@ export const Home3DScene = (() => {
                 return;
               }
               overlayPanels.forEach(p => {
-                p.tex.image = img;
+                p.tex.image = img; // a pre-flipped ImageBitmap (see loadTracked), so its upload flip is off
+                p.tex.flipY = false;
                 if ('colorSpace' in p.tex) p.tex.colorSpace = THREE.SRGBColorSpace; // r152+
                 else p.tex.encoding = THREE.sRGBEncoding; // older three.js fallback
                 p.tex.needsUpdate = true;
                 p.mesh.visible = true;
               });
             },
-            undefined,
             () => console.warn('[Home3DScene] wall overlay texture "' + overlayTexUrl +
               '" could not be loaded; leaving the wall as it is.')
           );
@@ -2212,8 +2242,7 @@ export const Home3DScene = (() => {
           // A profile-supplied rug image replaces the built-in pile texture.
           // Loaded after the mesh exists, so the callback has something to
           // assign to; a failure leaves the procedural pile in place.
-          loadTracked(new THREE.TextureLoader(),
-            rug.textureUrl,
+          loadTracked(rug.textureUrl,
             loaded => {
               loaded.wrapS = loaded.wrapT = THREE.RepeatWrapping;
               loaded.anisotropy = 4;
@@ -4665,7 +4694,20 @@ export const Home3DScene = (() => {
       editFurn = { root, parts: new Map(), items: furnitureItems.slice(), lifted: null, builders, highlight: null };
       const rooms = [];
       editFurn.items.forEach(it => { if (rooms.indexOf(it.room) < 0) rooms.push(it.room); });
-      rooms.forEach(room => editBuildPart('room:' + room, editRoomItems(room)));
+      // Time-sliced like the boot furniture build (buildFurnitureSliced): this
+      // loop rebuilds EVERY room, and on a furnished house it used to land as
+      // one long task that froze the page. One room per slice, so no slice runs
+      // longer than the heaviest room's build. The awaits make the loop
+      // interruptible, so the _disposed/editFurn guards the earlier awaits
+      // already apply must be re-asserted here: a dispose, or an
+      // endFurnitureEdit from the panel, during a yield has to stop the build
+      // rather than keep pushing parts into a root that has just been removed.
+      for (let ri = 0; ri < rooms.length; ri++) {
+        if (_disposed || !editFurn) return { ms: performance.now() - t0 };
+        editBuildPart('room:' + rooms[ri], editRoomItems(rooms[ri]));
+        await yieldToMain();
+      }
+      if (_disposed || !editFurn) return { ms: performance.now() - t0 };
       editCompose();
       return { ms: performance.now() - t0 };
     }
